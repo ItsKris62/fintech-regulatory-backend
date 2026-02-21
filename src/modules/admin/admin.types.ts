@@ -1,0 +1,352 @@
+/**
+ * Admin Module Types
+ * Superadmin capabilities: user management, org oversight, content moderation,
+ * system configuration, platform monitoring, and regulatory framework management.
+ */
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+export const ADMIN_CONSTANTS = {
+  REDIS_KEYS: {
+    FEATURE_FLAGS: 'admin:feature_flags',
+    SYSTEM_CONFIG: 'admin:system_config',
+    MAINTENANCE: 'admin:maintenance',
+    IMPERSONATION: 'admin:impersonate:',
+    CACHE_STATS: 'admin:cache_stats',
+  },
+  CACHE_TTL: {
+    FEATURE_FLAGS: 3600,      // 1 hour
+    SYSTEM_CONFIG: 3600,      // 1 hour
+    IMPERSONATION_TTL: 900,   // 15 minutes
+    STATS: 60,                // 1 minute
+  },
+  SOFT_DELETE_RETENTION_DAYS: 30,
+} as const;
+
+// ============================================================================
+// User Management Types
+// ============================================================================
+
+export interface AdminUserFilters {
+  role?: string;
+  status?: string;
+  organizationId?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+  sortBy?: 'createdAt' | 'email' | 'lastLoginAt';
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface AdminUserDetail {
+  id: string;
+  email: string;
+  fullName: string;
+  phone: string | null;
+  role: string;
+  status: string;
+  emailVerified: boolean;
+  organizationId: string | null;
+  organizationName: string | null;
+  lastLoginAt: Date | null;
+  lastLoginIp: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  sessionCount: number;
+  policyCount: number;
+  queryCount: number;
+}
+
+export interface PaginatedUsers {
+  items: AdminUserDetail[];
+  nextCursor: string | null;
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface ImpersonationToken {
+  token: string;
+  adminId: string;
+  targetUserId: string;
+  expiresAt: Date;
+}
+
+// ============================================================================
+// Organization Management Types
+// ============================================================================
+
+export interface AdminOrgFilters {
+  subscriptionTier?: string;
+  subscriptionStatus?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface AdminOrgDetail {
+  id: string;
+  name: string;
+  type: string;
+  registrationNumber: string | null;
+  subscriptionTier: string;
+  subscriptionStatus: string;
+  trialEndsAt: Date | null;
+  subscriptionEndsAt: Date | null;
+  memberCount: number;
+  documentCount: number;
+  policyCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface PaginatedOrganizations {
+  items: AdminOrgDetail[];
+  nextCursor: string | null;
+  total: number;
+  page: number;
+  limit: number;
+}
+
+// ============================================================================
+// Content Moderation Types
+// ============================================================================
+
+export interface ModerationFilters {
+  status?: string;
+  page?: number;
+  limit?: number;
+}
+
+// ============================================================================
+// System Configuration Types
+// ============================================================================
+
+export interface SystemConfig {
+  maintenanceMode: boolean;
+  maintenanceMessage: string;
+  maxFileUploadMB: number;
+  maxQueriesPerHour: number;
+  maxPoliciesPerHour: number;
+  allowNewRegistrations: boolean;
+  requireEmailVerification: boolean;
+  defaultSubscriptionTier: string;
+  supportEmail: string;
+  [key: string]: unknown;
+}
+
+export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
+  maintenanceMode: false,
+  maintenanceMessage: 'SheriaBot is undergoing scheduled maintenance. We\'ll be back shortly.',
+  maxFileUploadMB: 50,
+  maxQueriesPerHour: 50,
+  maxPoliciesPerHour: 10,
+  allowNewRegistrations: true,
+  requireEmailVerification: true,
+  defaultSubscriptionTier: 'starter',
+  supportEmail: 'support@sheriabot.com',
+};
+
+export interface FeatureFlags {
+  ragEnabled: boolean;
+  aiPolicyGeneration: boolean;
+  documentProcessing: boolean;
+  bulkUpload: boolean;
+  exportFeature: boolean;
+  analyticsEnabled: boolean;
+  notificationsEnabled: boolean;
+  maintenanceMode: boolean;
+  [key: string]: boolean;
+}
+
+export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+  ragEnabled: true,
+  aiPolicyGeneration: true,
+  documentProcessing: true,
+  bulkUpload: true,
+  exportFeature: true,
+  analyticsEnabled: true,
+  notificationsEnabled: true,
+  maintenanceMode: false,
+};
+
+export interface MaintenanceStatus {
+  enabled: boolean;
+  message: string;
+  startedAt: Date | null;
+}
+
+// ============================================================================
+// Platform Monitoring Types
+// ============================================================================
+
+export interface SystemHealth {
+  status: 'healthy' | 'degraded' | 'down';
+  services: {
+    database: ServiceHealth;
+    redis: ServiceHealth;
+    pinecone: ServiceHealth;
+    storage: ServiceHealth;
+  };
+  uptime: number;
+  version: string;
+  checkedAt: Date;
+}
+
+export interface ServiceHealth {
+  status: 'healthy' | 'degraded' | 'down';
+  latencyMs?: number;
+  message?: string;
+}
+
+export interface DatabaseStats {
+  totalUsers: number;
+  totalOrganizations: number;
+  totalPolicies: number;
+  totalDocuments: number;
+  totalAuditLogs: number;
+  dbSizeMB?: number;
+}
+
+export interface CacheStats {
+  memoryUsedMB: number;
+  totalKeys: number;
+  hitRate?: number;
+  status: string;
+}
+
+export interface VectorDBStats {
+  indexName: string;
+  vectorCount: number;
+  dimensionality: number;
+  status: string;
+}
+
+export interface StorageStats {
+  totalFiles: number;
+  totalSizeMB: number;
+  status: string;
+}
+
+export interface ConnectionStats {
+  activeDatabaseConnections: number;
+  activeRedisConnections: number;
+  activeSessions: number;
+}
+
+export interface ErrorLogFilters {
+  level?: 'error' | 'warn';
+  service?: string;
+  dateFrom?: Date;
+  dateTo?: Date;
+  page?: number;
+  limit?: number;
+}
+
+export interface PaginatedErrorLog {
+  items: Array<{
+    id: string;
+    level: string;
+    message: string;
+    service: string;
+    metadata: unknown;
+    createdAt: Date;
+  }>;
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface AuditLogFilters {
+  userId?: string;
+  action?: string;
+  entityType?: string;
+  dateFrom?: Date;
+  dateTo?: Date;
+  page?: number;
+  limit?: number;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  userId: string | null;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  metadata: unknown;
+  ipAddress: string | null;
+  createdAt: Date;
+}
+
+export interface PaginatedAuditLog {
+  items: AuditLogEntry[];
+  nextCursor: string | null;
+  total: number;
+  page: number;
+  limit: number;
+}
+
+// ============================================================================
+// Regulatory Framework Types
+// ============================================================================
+
+export interface RegulatoryFramework {
+  id: string;
+  name: string;
+  description: string;
+  area: string;
+  country: string;
+  effectiveDate: Date | null;
+  status: string;
+  documentIds: string[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface FrameworkParams {
+  name: string;
+  description: string;
+  area: string;
+  country?: string;
+  effectiveDate?: Date;
+  status?: string;
+  documentIds?: string[];
+}
+
+// ============================================================================
+// Invitation Types
+// ============================================================================
+
+export interface PendingInvitation {
+  id: string;
+  email: string;
+  organizationId: string;
+  organizationName: string;
+  role: string;
+  invitedBy: string;
+  expiresAt: Date;
+  createdAt: Date;
+}
+
+// ============================================================================
+// Subscription Types
+// ============================================================================
+
+export type SubscriptionPlan = 'starter' | 'professional' | 'enterprise' | 'trial' | 'canceled';
+
+export interface Subscription {
+  userId: string;
+  organizationId: string;
+  plan: SubscriptionPlan;
+  status: string;
+  updatedAt: Date;
+}
+
+export interface SubscriptionOverview {
+  totalActive: number;
+  byPlan: Record<SubscriptionPlan, number>;
+  trialConversionRate: number;
+  churnRate: number;
+}

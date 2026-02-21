@@ -1,0 +1,472 @@
+import { upsertVectors, queryVectors, deleteByFilter, VectorRecord } from './client';
+import { generateEmbedding, generateBatchEmbeddings } from './embeddings';
+import { chunkDocument, chunkLegalAct, DocumentChunk, ChunkConfig } from './chunking';
+import { logger } from '@/utils/logger';
+import { hashString } from '@/utils/helpers';
+
+/**
+ * Document to index
+ */
+export interface DocumentToIndex {
+  id: string;
+  title: string;
+  content: string;
+  documentType: string;
+  actName?: string;
+  year?: number;
+  regulatoryArea?: string;
+  metadata?: Record<string, any>;
+}
+
+/**
+ * Search result with context
+ */
+export interface SearchResult {
+  documentId: string;
+  documentTitle: string;
+  chunkText: string;
+  section?: string;
+  citation?: string;
+  score: number;
+  rank: number;
+}
+
+/**
+ * Search options
+ */
+export interface SearchOptions {
+  topK?: number;
+  minScore?: number;
+  filter?: Record<string, any>;
+  namespace?: string;
+  includeMetadata?: boolean;
+}
+
+/**
+ * RAG Service
+ * Handles document indexing and semantic search
+ */
+export class RAGService {
+  /**
+   * Index a document into the vector database
+   * @param document Document to index
+   * @param chunkConfig Optional chunk configuration
+   */
+  async indexDocument(
+    document: DocumentToIndex,
+    chunkConfig?: Partial<ChunkConfig>
+  ): Promise<number> {
+    const startTime = Date.now();
+
+    logger.info({
+      type: 'document_indexing_started',
+      documentId: document.id,
+      title: document.title,
+      contentLength: document.content.length,
+    });
+
+    try {
+      // Chunk the document
+      let chunks: DocumentChunk[];
+      
+      if (document.actName && document.year && document.regulatoryArea) {
+        // Special handling for legal acts
+        chunks = chunkLegalAct(
+          document.content,
+          document.actName,
+          document.year,
+          document.regulatoryArea
+        );
+      } else {
+        chunks = chunkDocument(document.content, chunkConfig, document.metadata);
+      }
+
+      // Generate embeddings for all chunks
+      const texts = chunks.map(chunk => chunk.text);
+      const embeddings = await generateBatchEmbeddings(texts);
+
+      // Create vector records
+      const vectors: VectorRecord[] = chunks.map((chunk, index) => ({
+        id: `${document.id}:${chunk.index}`,
+        values: embeddings[index],
+        metadata: {
+          documentId: document.id,
+          documentTitle: document.title,
+          documentType: document.documentType,
+          chunkIndex: chunk.index,
+          chunkText: chunk.text,
+          section: chunk.section,
+          subsection: chunk.subsection,
+          citation: chunk.citation,
+          actName: document.actName,
+          year: document.year,
+          regulatoryArea: document.regulatoryArea,
+          ...chunk.metadata,
+        },
+      }));
+
+      // Upsert to Pinecone
+      await upsertVectors(vectors);
+
+      const duration = Date.now() - startTime;
+
+      logger.info({
+        type: 'document_indexing_complete',
+        documentId: document.id,
+        chunks: chunks.length,
+        duration,
+      });
+
+      return chunks.length;
+    } catch (error: any) {
+      logger.error({
+        type: 'document_indexing_error',
+        documentId: document.id,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Index multiple documents in batch
+   * @param documents Documents to index
+   */
+  async indexDocuments(documents: DocumentToIndex[]): Promise<void> {
+    logger.info({
+      type: 'batch_indexing_started',
+      documentCount: documents.length,
+    });
+
+    let indexed = 0;
+    let failed = 0;
+
+    for (const document of documents) {
+      try {
+        await this.indexDocument(document);
+        indexed++;
+      } catch (error: any) {
+        failed++;
+        logger.error({
+          type: 'batch_indexing_document_failed',
+          documentId: document.id,
+          error: error.message,
+        });
+      }
+    }
+
+    logger.info({
+      type: 'batch_indexing_complete',
+      indexed,
+      failed,
+      total: documents.length,
+    });
+  }
+
+  /**
+   * Search for relevant documents
+   * @param query Search query
+   * @param options Search options
+   */
+  async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
+    const {
+      topK = 10,
+      minScore = 0.7,
+      filter,
+      namespace,
+      includeMetadata: _includeMetadata = true,
+    } = options;
+
+    const startTime = Date.now();
+
+    logger.info({
+      type: 'rag_search_started',
+      query: query.substring(0, 100),
+      topK,
+      minScore,
+    });
+
+    try {
+      // Generate query embedding
+      const queryEmbedding = await generateEmbedding(query);
+
+      // Search Pinecone
+      const results = await queryVectors(
+        queryEmbedding,
+        topK,
+        namespace,
+        filter
+      );
+
+      // Filter by minimum score and format results
+      const searchResults: SearchResult[] = results
+        .filter(result => result.score >= minScore)
+        .map((result, index) => ({
+          documentId: result.metadata.documentId,
+          documentTitle: result.metadata.documentTitle,
+          chunkText: result.metadata.chunkText,
+          section: result.metadata.section,
+          citation: result.metadata.citation,
+          score: result.score,
+          rank: index + 1,
+        }));
+
+      const duration = Date.now() - startTime;
+
+      logger.info({
+        type: 'rag_search_complete',
+        resultsCount: searchResults.length,
+        duration,
+      });
+
+      return searchResults;
+    } catch (error: any) {
+      logger.error({
+        type: 'rag_search_error',
+        query: query.substring(0, 100),
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Search with reranking for better relevance
+   * @param query Search query
+   * @param options Search options
+   */
+  async searchWithReranking(
+    query: string,
+    options: SearchOptions = {}
+  ): Promise<SearchResult[]> {
+    // Get more results initially
+    const extendedOptions = {
+      ...options,
+      topK: (options.topK || 10) * 2,
+    };
+
+    const results = await this.search(query, extendedOptions);
+
+    // Rerank based on multiple factors
+    const reranked = results.map(result => {
+      let rerankScore = result.score;
+
+      // Boost if query terms appear in chunk text
+      const queryTerms = query.toLowerCase().split(/\s+/);
+      const chunkText = result.chunkText.toLowerCase();
+      const termMatches = queryTerms.filter(term => chunkText.includes(term)).length;
+      rerankScore += (termMatches / queryTerms.length) * 0.1;
+
+      // Boost if chunk has citations (indicates more authoritative)
+      if (result.citation) {
+        rerankScore += 0.05;
+      }
+
+      // Boost if section name is relevant
+      if (result.section) {
+        const sectionRelevant = queryTerms.some(term =>
+          result.section!.toLowerCase().includes(term)
+        );
+        if (sectionRelevant) {
+          rerankScore += 0.05;
+        }
+      }
+
+      return { ...result, score: rerankScore };
+    });
+
+    // Sort by reranked score and limit to topK
+    reranked.sort((a, b) => b.score - a.score);
+    const topK = options.topK || 10;
+    
+    return reranked.slice(0, topK).map((result, index) => ({
+      ...result,
+      rank: index + 1,
+    }));
+  }
+
+  /**
+   * Find similar chunks to a given document chunk
+   * @param documentId Document ID
+   * @param chunkIndex Chunk index
+   * @param topK Number of similar chunks to return
+   */
+  async findSimilarChunks(
+    documentId: string,
+    chunkIndex: number,
+    _topK: number = 5
+  ): Promise<SearchResult[]> {
+    logger.info({
+      type: 'similar_chunks_search',
+      documentId,
+      chunkIndex,
+    });
+
+    // This would require fetching the chunk's embedding first
+    // For now, we'll use a simplified approach
+    // In production, you might cache chunk embeddings or fetch from Pinecone
+
+    throw new Error('findSimilarChunks not yet implemented');
+  }
+
+  /**
+   * Delete document from index
+   * @param documentId Document ID
+   */
+  async deleteDocument(documentId: string): Promise<void> {
+    logger.info({
+      type: 'document_deletion_started',
+      documentId,
+    });
+
+    try {
+      await deleteByFilter({ documentId });
+
+      logger.info({
+        type: 'document_deletion_complete',
+        documentId,
+      });
+    } catch (error: any) {
+      logger.error({
+        type: 'document_deletion_error',
+        documentId,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get context for AI prompt from search results
+   * @param results Search results
+   * @param maxChunks Maximum chunks to include
+   * @param maxChars Maximum characters total
+   */
+  getContextForPrompt(
+    results: SearchResult[],
+    maxChunks: number = 5,
+    maxChars: number = 4000
+  ): string {
+    const selectedResults = results.slice(0, maxChunks);
+    let context = '';
+    let totalChars = 0;
+
+    for (const result of selectedResults) {
+      const chunkContext = `
+[Document: ${result.documentTitle}]
+${result.section ? `[Section: ${result.section}]` : ''}
+${result.citation ? `[Citations: ${result.citation}]` : ''}
+
+${result.chunkText}
+
+---
+`;
+
+      if (totalChars + chunkContext.length > maxChars) {
+        break;
+      }
+
+      context += chunkContext;
+      totalChars += chunkContext.length;
+    }
+
+    return context.trim();
+  }
+
+  /**
+   * Extract relevant citations from search results
+   * @param results Search results
+   */
+  extractCitations(results: SearchResult[]): string[] {
+    const citations = new Set<string>();
+
+    for (const result of results) {
+      if (result.citation) {
+        const citationList = result.citation.split(';').map(c => c.trim());
+        citationList.forEach(c => citations.add(c));
+      }
+    }
+
+    return Array.from(citations);
+  }
+
+  /**
+   * Generate search summary
+   * @param query Original query
+   * @param results Search results
+   */
+  generateSearchSummary(query: string, results: SearchResult[]): {
+    query: string;
+    totalResults: number;
+    documentsFound: string[];
+    topSections: string[];
+    citations: string[];
+    avgScore: number;
+  } {
+    const documentsFound = [...new Set(results.map(r => r.documentTitle))];
+    const topSections = [...new Set(
+      results
+        .filter(r => r.section)
+        .slice(0, 5)
+        .map(r => r.section!)
+    )];
+    const citations = this.extractCitations(results);
+    const avgScore = results.length > 0
+      ? results.reduce((sum, r) => sum + r.score, 0) / results.length
+      : 0;
+
+    return {
+      query,
+      totalResults: results.length,
+      documentsFound,
+      topSections,
+      citations,
+      avgScore,
+    };
+  }
+}
+
+/**
+ * Export singleton RAG service instance
+ */
+export const ragService = new RAGService();
+
+/**
+ * Helper: Search and get context for AI
+ */
+export async function searchAndGetContext(
+  query: string,
+  options: SearchOptions = {}
+): Promise<{
+  context: string;
+  results: SearchResult[];
+  citations: string[];
+}> {
+  const results = await ragService.searchWithReranking(query, options);
+  const context = ragService.getContextForPrompt(results);
+  const citations = ragService.extractCitations(results);
+
+  return { context, results, citations };
+}
+
+/**
+ * Helper: Index Kenyan legal act
+ */
+export async function indexKenyanLegalAct(
+  actName: string,
+  year: number,
+  content: string,
+  regulatoryArea: string
+): Promise<number> {
+  const documentId = hashString(`${actName}-${year}`);
+
+  return await ragService.indexDocument({
+    id: documentId,
+    title: `${actName} ${year}`,
+    content,
+    documentType: 'LEGAL_ACT',
+    actName,
+    year,
+    regulatoryArea,
+  });
+}

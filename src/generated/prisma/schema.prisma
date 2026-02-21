@@ -1,0 +1,588 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider   = "prisma-client-js"
+  output     = "../src/generated/prisma"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================
+// USER MANAGEMENT
+// ============================================
+
+enum UserRole {
+  REGULATOR
+  STARTUP
+  ENTERPRISE
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+model User {
+  id              String     @id @default(cuid())
+  email           String     @unique
+  password        String
+  fullName        String
+  phone           String?
+  avatar          String?
+  role            UserRole
+  status          UserStatus @default(PENDING_VERIFICATION)
+  emailVerified   Boolean    @default(false)
+  emailVerifiedAt DateTime?
+
+  // Organization details
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  // Metadata
+  lastLoginAt DateTime?
+  lastLoginIp String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  sessions           Session[]
+  policies           Policy[]
+  complianceQueries  ComplianceQuery[]
+  checklists         Checklist[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  apiKeys            ApiKey[]
+  authoredDocuments  LegalDocument[]   @relation("DocumentAuthor")
+  publishedDocuments LegalDocument[]   @relation("DocumentPublisher")
+
+  @@index([email])
+  @@index([organizationId])
+  @@index([role])
+}
+
+model Organization {
+  id                 String  @id @default(cuid())
+  name               String
+  type               String // Bank, Payment Provider, Digital Lender, etc.
+  registrationNumber String?
+  website            String?
+  industry           String?
+  size               String? // Small, Medium, Large, Enterprise
+
+  // Subscription
+  subscriptionTier   String    @default("starter") // starter, professional, enterprise
+  subscriptionStatus String    @default("trial") // trial, active, canceled, expired
+  trialEndsAt        DateTime?
+  subscriptionEndsAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  users User[]
+
+  @@index([name])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token        String   @unique
+  refreshToken String?  @unique
+  expiresAt    DateTime
+  device       String?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+// ============================================
+// POLICY GENERATION
+// ============================================
+
+enum PolicyStatus {
+  DRAFT
+  PROCESSING
+  COMPLETED
+  FAILED
+  ARCHIVED
+}
+
+model Policy {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // Query details
+  scenario        String   @db.Text
+  regulatoryAreas String[] // Array: ["Data Protection", "Fintech", etc.]
+  urgency         String // low, medium, high, critical
+  stakeholders    String[]
+
+  // Generated content
+  title                  String?
+  executiveSummary       String? @db.Text
+  analysis               String? @db.Text
+  recommendations        Json? // Structured recommendations
+  complianceChecklist    Json?
+  implementationTimeline Json?
+  appendices             Json?
+
+  // Citations
+  citations Citation[]
+
+  // Metadata
+  status         PolicyStatus @default(DRAFT)
+  generationTime Int? // Time in seconds
+  version        Int          @default(1)
+
+  // Collaboration
+  assignedTo String?
+  reviewers  String[]
+  comments   Comment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Citation {
+  id       String @id @default(cuid())
+  policyId String
+  policy   Policy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  actName     String
+  section     String
+  subsection  String?
+  textSnippet String  @db.Text
+  confidence  String // high, medium, low
+  verified    Boolean @default(false)
+
+  // Link to legal corpus
+  documentId String?
+  document   LegalDocument? @relation(fields: [documentId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([policyId])
+  @@index([documentId])
+}
+
+model Comment {
+  id       String @id @default(cuid())
+  policyId String
+  policy   Policy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  userId   String
+  content  String  @db.Text
+  resolved Boolean @default(false)
+  parentId String? // For threaded comments
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([policyId])
+}
+
+// ============================================
+// LEGAL CORPUS MANAGEMENT
+// ============================================
+
+enum DocumentStatus {
+  UPLOADING
+  PROCESSING
+  INDEXED
+  FAILED
+}
+
+enum ContentType {
+  REGULATORY_DOCUMENT
+  BLOG_POST
+  KNOWLEDGE_BASE_ARTICLE
+  POLICY_TEMPLATE
+}
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+  UNDER_REVIEW
+}
+
+model LegalDocument {
+  id String @id @default(cuid())
+
+  // Document metadata
+  actName        String
+  documentType   String // Act, Regulation, Guideline, etc.
+  enactmentDate  DateTime?
+  effectiveDate  DateTime?
+  amendedBy      String[]
+  regulatoryBody String? // CBK, ODPC, CA, etc.
+
+  // File details
+  originalFilename String
+  fileUrl          String
+  fileSize         Int
+  mimeType         String
+
+  // Processing
+  status      DocumentStatus @default(UPLOADING)
+  totalChunks Int?
+  processedAt DateTime?
+
+  // Searchability
+  fullText String?  @db.Text
+  summary  String?  @db.Text
+  keywords String[]
+
+  // Content Classification
+  contentType   ContentType   @default(REGULATORY_DOCUMENT)
+  contentStatus ContentStatus @default(DRAFT)
+
+  // Content Fields (for blogs/KB articles)
+  title       String?
+  slug        String? @unique
+  excerpt     String? @db.Text
+  content     String? @db.Text
+  htmlContent String? @db.Text
+
+  // Organization & Categorization
+  tags        String[] @default([])
+  category    String?
+  subcategory String?
+
+  // SEO & Discovery
+  seoTitle       String?
+  seoDescription String?  @db.Text
+  seoKeywords    String[] @default([])
+
+  // Publishing
+  authorId    String?
+  publishedAt DateTime?
+  publishedBy String?
+
+  // Engagement Metrics
+  viewCount       Int @default(0)
+  helpfulCount    Int @default(0)
+  notHelpfulCount Int @default(0)
+
+  // Content Management
+  version         Int     @default(1)
+  parentId        String?
+  isLatestVersion Boolean @default(true)
+
+  // Soft delete
+  deletedAt DateTime?
+
+  // Organization scope
+  userId         String?
+  organizationId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  chunks    DocumentChunk[]
+  citations Citation[]
+  shares    DocumentShare[]
+  author    User?           @relation("DocumentAuthor", fields: [authorId], references: [id])
+  publisher User?           @relation("DocumentPublisher", fields: [publishedBy], references: [id])
+  parent    LegalDocument?  @relation("DocumentVersions", fields: [parentId], references: [id])
+  versions  LegalDocument[] @relation("DocumentVersions")
+
+  @@index([actName])
+  @@index([status])
+  @@index([contentType, contentStatus])
+  @@index([slug])
+  @@index([category, subcategory])
+  @@index([organizationId, contentType])
+  @@index([authorId])
+}
+
+model DocumentChunk {
+  id         String        @id @default(cuid())
+  documentId String
+  document   LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  // Chunk details
+  chunkIndex    Int
+  sectionNumber String?
+  subsection    String?
+  text          String  @db.Text
+
+  // Vector embedding (stored as array of floats)
+  embedding Float[]
+
+  // Metadata
+  wordCount Int
+
+  createdAt DateTime @default(now())
+
+  @@index([documentId])
+  @@index([sectionNumber])
+}
+
+// ============================================
+// COMPLIANCE (STARTUP FEATURES)
+// ============================================
+
+model ComplianceQuery {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  query           String  @db.Text
+  productCategory String?
+
+  // Response
+  summary      String? @db.Text
+  regulations  Json? // Array of applicable regulations
+  requirements Json? // Compliance requirements
+  gaps         Json? // Regulatory gaps
+
+  status String @default("processing") // processing, completed, failed
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Checklist {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  title       String
+  productType String?
+  description String? @db.Text
+
+  items Json // Array of checklist items with status
+
+  progress Int    @default(0) // Percentage (0-100)
+  status   String @default("in_progress") // in_progress, complete, needs_review
+
+  dueDate     DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ============================================
+// NOTIFICATIONS (SSE)
+// ============================================
+
+enum NotificationType {
+  POLICY_READY
+  COMMENT_ADDED
+  REVIEW_REQUESTED
+  COMPLIANCE_ALERT
+  SYSTEM_UPDATE
+}
+
+model Notification {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  title   String
+  message String           @db.Text
+  link    String?
+
+  read   Boolean   @default(false)
+  readAt DateTime?
+
+  // Metadata
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([read])
+  @@index([createdAt])
+}
+
+// ============================================
+// ADMIN & SYSTEM
+// ============================================
+
+model AuditLog {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  action     String // login, policy_generated, user_created, etc.
+  entityType String? // User, Policy, Document, etc.
+  entityId   String?
+
+  metadata  Json?
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model ApiKey {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name String
+  key  String @unique
+
+  active     Boolean   @default(true)
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([key])
+}
+
+// ============================================
+// ANALYTICS
+// ============================================
+
+model UsageMetric {
+  id String @id @default(cuid())
+
+  date           DateTime
+  organizationId String?
+  userId         String?
+
+  // Metrics
+  policiesGenerated Int    @default(0)
+  queriesProcessed  Int    @default(0)
+  avgGenerationTime Float?
+  citationAccuracy  Float?
+
+  @@unique([date, organizationId, userId])
+  @@index([date])
+  @@index([organizationId])
+}
+
+// ============================================
+// FUTURE: PAYMENTS (Phase 2)
+// ============================================
+
+// Uncomment when ready to implement
+
+// model Payment {
+//   id              String   @id @default(cuid())
+//   organizationId  String
+//   
+//   amount          Float
+//   currency        String   @default("KES")
+//   provider        String   // stripe, mpesa
+//   
+//   status          String   // pending, completed, failed
+//   transactionId   String?  @unique
+//   
+//   metadata        Json?
+//   
+//   createdAt       DateTime @default(now())
+//   
+//   @@index([organizationId])
+//   @@index([status])
+// }
+// ============================================================================
+// DOCUMENT SHARING
+// ============================================================================
+
+model DocumentShare {
+  id         String        @id @default(cuid())
+  documentId String
+  document   LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  token      String        @unique
+  sharedBy   String
+
+  expiresAt    DateTime?
+  maxDownloads Int?
+  downloads    Int       @default(0)
+  revokedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([documentId])
+  @@index([token])
+  @@index([sharedBy])
+}
+
+// ============================================================================
+// ANALYTICS EVENTS
+// ============================================================================
+
+model AnalyticsEvent {
+  id String @id @default(cuid())
+
+  event      String
+  userId     String?
+  orgId      String?
+  resourceId String?
+  metadata   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([event])
+  @@index([userId])
+  @@index([orgId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// ADMIN: FEATURE FLAGS & SYSTEM CONFIG
+// ============================================================================
+
+model FeatureFlag {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  enabled     Boolean @default(false)
+  description String?
+  updatedBy   String?
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@index([name])
+}
+
+model SystemConfig {
+  id          String  @id @default(cuid())
+  key         String  @unique
+  value       String  @db.Text
+  description String?
+  updatedBy   String?
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@index([key])
+}

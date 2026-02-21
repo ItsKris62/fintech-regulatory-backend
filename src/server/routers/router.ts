@@ -1,0 +1,53 @@
+import { router } from '../trpc/trpc';
+import { authRouter } from '../routers/auth.router';
+import { userRouter } from '../routers/user.router';
+import { organizationRouter } from '../routers/organization.router';
+import { policyRouter } from '../routers/policy.router';
+import { complianceRouter } from '../routers/compliance.router';
+import { documentRouter } from '../routers/document.router';
+import { contentRouter } from '../routers/content.router';
+import { adminRouter } from '../routers/admin.router';
+
+/**
+ * Root Application Router
+ *
+ * Combines all sub-routers into a single router.
+ * This is the main entry point for all tRPC procedures.
+ *
+ * Routes:
+ * - /trpc/auth.*         - Authentication (register, login, password reset, etc.)
+ * - /trpc/user.*         - User management (profile, preferences, password, account)
+ * - /trpc/organization.* - Organization CRUD and member management
+ * - /trpc/policy.*       - Policy CRUD + AI generation + export
+ * - /trpc/compliance.*   - Compliance queries with RAG + document search
+ * - /trpc/document.*     - Document upload/download with R2 storage
+ * - /trpc/content.*      - Blog posts, KB articles, and content management
+ * - /trpc/admin.*        - Admin operations (stats, users, health, logs)
+ */
+export const appRouter = router({
+  auth: authRouter,
+  user: userRouter,
+  organization: organizationRouter,
+  policy: policyRouter,
+  compliance: complianceRouter,
+  document: documentRouter,
+  content: contentRouter,
+  admin: adminRouter,
+});
+
+/**
+ * Export type definition of API
+ * 
+ * This type is used on the frontend for end-to-end type safety.
+ * The frontend can import this type to get full autocomplete and
+ * type checking for all API calls.
+ * 
+ * @example
+ * // On frontend:
+ * import type { AppRouter } from '@/server/trpc/router';
+ * 
+ * const client = createTRPCProxyClient<AppRouter>({
+ *   links: [httpBatchLink({ url: 'http://localhost:3001/trpc' })],
+ * });
+ */
+export type AppRouter = typeof appRouter;
