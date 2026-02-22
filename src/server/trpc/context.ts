@@ -21,6 +21,7 @@ export interface User {
   email: string;
   role: string;
   organizationId?: string;
+  sessionId?: string;
 }
 
 /**
@@ -72,6 +73,7 @@ export async function createContext({
         email: string;
         role: string;
         organizationId?: string;
+        sessionId?: string;
       };
 
       user = {
@@ -79,6 +81,7 @@ export async function createContext({
         email: decoded.email,
         role: decoded.role,
         organizationId: decoded.organizationId,
+        sessionId: decoded.sessionId,
       };
 
       logger.debug({

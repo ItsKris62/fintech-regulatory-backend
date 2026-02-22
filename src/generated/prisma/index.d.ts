@@ -315,7 +315,7 @@ export class PrismaClient<
    * ])
    * ```
    * 
-   * Read more in our [docs](https://www.prisma.io/docs/orm/prisma-client/queries/transactions).
+   * Read more in our [docs](https://www.prisma.io/docs/concepts/components/prisma-client/transactions).
    */
   $transaction<P extends Prisma.PrismaPromise<any>[]>(arg: [...P], options?: { isolationLevel?: Prisma.TransactionIsolationLevel }): $Utils.JsPromise<runtime.Types.Utils.UnwrapTuple<P>>
 
@@ -554,8 +554,8 @@ export namespace Prisma {
   export import Exact = $Public.Exact
 
   /**
-   * Prisma Client JS version: 7.4.1
-   * Query Engine version: 55ae170b1ced7fc6ed07a15f110549408c501bb3
+   * Prisma Client JS version: 7.4.0
+   * Query Engine version: ab56fe763f921d033a6c195e7ddeb3e255bdbb57
    */
   export type PrismaVersion = {
     client: string
@@ -2766,6 +2766,8 @@ export namespace Prisma {
     emailVerified: boolean | null
     emailVerifiedAt: Date | null
     organizationId: string | null
+    totpSecret: string | null
+    totpEnabled: boolean | null
     lastLoginAt: Date | null
     lastLoginIp: string | null
     createdAt: Date | null
@@ -2784,6 +2786,8 @@ export namespace Prisma {
     emailVerified: boolean | null
     emailVerifiedAt: Date | null
     organizationId: string | null
+    totpSecret: string | null
+    totpEnabled: boolean | null
     lastLoginAt: Date | null
     lastLoginIp: string | null
     createdAt: Date | null
@@ -2802,6 +2806,9 @@ export namespace Prisma {
     emailVerified: number
     emailVerifiedAt: number
     organizationId: number
+    totpSecret: number
+    totpEnabled: number
+    preferences: number
     lastLoginAt: number
     lastLoginIp: number
     createdAt: number
@@ -2822,6 +2829,8 @@ export namespace Prisma {
     emailVerified?: true
     emailVerifiedAt?: true
     organizationId?: true
+    totpSecret?: true
+    totpEnabled?: true
     lastLoginAt?: true
     lastLoginIp?: true
     createdAt?: true
@@ -2840,6 +2849,8 @@ export namespace Prisma {
     emailVerified?: true
     emailVerifiedAt?: true
     organizationId?: true
+    totpSecret?: true
+    totpEnabled?: true
     lastLoginAt?: true
     lastLoginIp?: true
     createdAt?: true
@@ -2858,6 +2869,9 @@ export namespace Prisma {
     emailVerified?: true
     emailVerifiedAt?: true
     organizationId?: true
+    totpSecret?: true
+    totpEnabled?: true
+    preferences?: true
     lastLoginAt?: true
     lastLoginIp?: true
     createdAt?: true
@@ -2949,6 +2963,9 @@ export namespace Prisma {
     emailVerified: boolean
     emailVerifiedAt: Date | null
     organizationId: string | null
+    totpSecret: string | null
+    totpEnabled: boolean
+    preferences: JsonValue | null
     lastLoginAt: Date | null
     lastLoginIp: string | null
     createdAt: Date
@@ -2984,6 +3001,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: boolean
     organizationId?: boolean
+    totpSecret?: boolean
+    totpEnabled?: boolean
+    preferences?: boolean
     lastLoginAt?: boolean
     lastLoginIp?: boolean
     createdAt?: boolean
@@ -3013,6 +3033,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: boolean
     organizationId?: boolean
+    totpSecret?: boolean
+    totpEnabled?: boolean
+    preferences?: boolean
     lastLoginAt?: boolean
     lastLoginIp?: boolean
     createdAt?: boolean
@@ -3032,6 +3055,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: boolean
     organizationId?: boolean
+    totpSecret?: boolean
+    totpEnabled?: boolean
+    preferences?: boolean
     lastLoginAt?: boolean
     lastLoginIp?: boolean
     createdAt?: boolean
@@ -3051,13 +3077,16 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: boolean
     organizationId?: boolean
+    totpSecret?: boolean
+    totpEnabled?: boolean
+    preferences?: boolean
     lastLoginAt?: boolean
     lastLoginIp?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }
 
-  export type UserOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "email" | "password" | "fullName" | "phone" | "avatar" | "role" | "status" | "emailVerified" | "emailVerifiedAt" | "organizationId" | "lastLoginAt" | "lastLoginIp" | "createdAt" | "updatedAt", ExtArgs["result"]["user"]>
+  export type UserOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "email" | "password" | "fullName" | "phone" | "avatar" | "role" | "status" | "emailVerified" | "emailVerifiedAt" | "organizationId" | "totpSecret" | "totpEnabled" | "preferences" | "lastLoginAt" | "lastLoginIp" | "createdAt" | "updatedAt", ExtArgs["result"]["user"]>
   export type UserInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     organization?: boolean | User$organizationArgs<ExtArgs>
     sessions?: boolean | User$sessionsArgs<ExtArgs>
@@ -3104,6 +3133,9 @@ export namespace Prisma {
       emailVerified: boolean
       emailVerifiedAt: Date | null
       organizationId: string | null
+      totpSecret: string | null
+      totpEnabled: boolean
+      preferences: Prisma.JsonValue | null
       lastLoginAt: Date | null
       lastLoginIp: string | null
       createdAt: Date
@@ -3552,6 +3584,9 @@ export namespace Prisma {
     readonly emailVerified: FieldRef<"User", 'Boolean'>
     readonly emailVerifiedAt: FieldRef<"User", 'DateTime'>
     readonly organizationId: FieldRef<"User", 'String'>
+    readonly totpSecret: FieldRef<"User", 'String'>
+    readonly totpEnabled: FieldRef<"User", 'Boolean'>
+    readonly preferences: FieldRef<"User", 'Json'>
     readonly lastLoginAt: FieldRef<"User", 'DateTime'>
     readonly lastLoginIp: FieldRef<"User", 'String'>
     readonly createdAt: FieldRef<"User", 'DateTime'>
@@ -23952,6 +23987,9 @@ export namespace Prisma {
     emailVerified: 'emailVerified',
     emailVerifiedAt: 'emailVerifiedAt',
     organizationId: 'organizationId',
+    totpSecret: 'totpSecret',
+    totpEnabled: 'totpEnabled',
+    preferences: 'preferences',
     lastLoginAt: 'lastLoginAt',
     lastLoginIp: 'lastLoginIp',
     createdAt: 'createdAt',
@@ -24295,14 +24333,6 @@ export namespace Prisma {
   export type QueryMode = (typeof QueryMode)[keyof typeof QueryMode]
 
 
-  export const NullsOrder: {
-    first: 'first',
-    last: 'last'
-  };
-
-  export type NullsOrder = (typeof NullsOrder)[keyof typeof NullsOrder]
-
-
   export const JsonNullValueFilter: {
     DbNull: typeof DbNull,
     JsonNull: typeof JsonNull,
@@ -24310,6 +24340,14 @@ export namespace Prisma {
   };
 
   export type JsonNullValueFilter = (typeof JsonNullValueFilter)[keyof typeof JsonNullValueFilter]
+
+
+  export const NullsOrder: {
+    first: 'first',
+    last: 'last'
+  };
+
+  export type NullsOrder = (typeof NullsOrder)[keyof typeof NullsOrder]
 
 
   /**
@@ -24510,6 +24548,9 @@ export namespace Prisma {
     emailVerified?: BoolFilter<"User"> | boolean
     emailVerifiedAt?: DateTimeNullableFilter<"User"> | Date | string | null
     organizationId?: StringNullableFilter<"User"> | string | null
+    totpSecret?: StringNullableFilter<"User"> | string | null
+    totpEnabled?: BoolFilter<"User"> | boolean
+    preferences?: JsonNullableFilter<"User">
     lastLoginAt?: DateTimeNullableFilter<"User"> | Date | string | null
     lastLoginIp?: StringNullableFilter<"User"> | string | null
     createdAt?: DateTimeFilter<"User"> | Date | string
@@ -24538,6 +24579,9 @@ export namespace Prisma {
     emailVerified?: SortOrder
     emailVerifiedAt?: SortOrderInput | SortOrder
     organizationId?: SortOrderInput | SortOrder
+    totpSecret?: SortOrderInput | SortOrder
+    totpEnabled?: SortOrder
+    preferences?: SortOrderInput | SortOrder
     lastLoginAt?: SortOrderInput | SortOrder
     lastLoginIp?: SortOrderInput | SortOrder
     createdAt?: SortOrder
@@ -24569,6 +24613,9 @@ export namespace Prisma {
     emailVerified?: BoolFilter<"User"> | boolean
     emailVerifiedAt?: DateTimeNullableFilter<"User"> | Date | string | null
     organizationId?: StringNullableFilter<"User"> | string | null
+    totpSecret?: StringNullableFilter<"User"> | string | null
+    totpEnabled?: BoolFilter<"User"> | boolean
+    preferences?: JsonNullableFilter<"User">
     lastLoginAt?: DateTimeNullableFilter<"User"> | Date | string | null
     lastLoginIp?: StringNullableFilter<"User"> | string | null
     createdAt?: DateTimeFilter<"User"> | Date | string
@@ -24597,6 +24644,9 @@ export namespace Prisma {
     emailVerified?: SortOrder
     emailVerifiedAt?: SortOrderInput | SortOrder
     organizationId?: SortOrderInput | SortOrder
+    totpSecret?: SortOrderInput | SortOrder
+    totpEnabled?: SortOrder
+    preferences?: SortOrderInput | SortOrder
     lastLoginAt?: SortOrderInput | SortOrder
     lastLoginIp?: SortOrderInput | SortOrder
     createdAt?: SortOrder
@@ -24621,6 +24671,9 @@ export namespace Prisma {
     emailVerified?: BoolWithAggregatesFilter<"User"> | boolean
     emailVerifiedAt?: DateTimeNullableWithAggregatesFilter<"User"> | Date | string | null
     organizationId?: StringNullableWithAggregatesFilter<"User"> | string | null
+    totpSecret?: StringNullableWithAggregatesFilter<"User"> | string | null
+    totpEnabled?: BoolWithAggregatesFilter<"User"> | boolean
+    preferences?: JsonNullableWithAggregatesFilter<"User">
     lastLoginAt?: DateTimeNullableWithAggregatesFilter<"User"> | Date | string | null
     lastLoginIp?: StringNullableWithAggregatesFilter<"User"> | string | null
     createdAt?: DateTimeWithAggregatesFilter<"User"> | Date | string
@@ -26181,6 +26234,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -26209,6 +26265,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -26235,6 +26294,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -26263,6 +26325,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -26290,6 +26355,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -26307,6 +26375,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -26325,6 +26396,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -28167,6 +28241,29 @@ export namespace Prisma {
     gte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
     not?: NestedDateTimeNullableFilter<$PrismaModel> | Date | string | null
   }
+  export type JsonNullableFilter<$PrismaModel = never> =
+    | PatchUndefined<
+        Either<Required<JsonNullableFilterBase<$PrismaModel>>, Exclude<keyof Required<JsonNullableFilterBase<$PrismaModel>>, 'path'>>,
+        Required<JsonNullableFilterBase<$PrismaModel>>
+      >
+    | OptionalFlat<Omit<Required<JsonNullableFilterBase<$PrismaModel>>, 'path'>>
+
+  export type JsonNullableFilterBase<$PrismaModel = never> = {
+    equals?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | JsonNullValueFilter
+    path?: string[]
+    mode?: QueryMode | EnumQueryModeFieldRefInput<$PrismaModel>
+    string_contains?: string | StringFieldRefInput<$PrismaModel>
+    string_starts_with?: string | StringFieldRefInput<$PrismaModel>
+    string_ends_with?: string | StringFieldRefInput<$PrismaModel>
+    array_starts_with?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
+    array_ends_with?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
+    array_contains?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
+    lt?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
+    lte?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
+    gt?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
+    gte?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
+    not?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | JsonNullValueFilter
+  }
 
   export type DateTimeFilter<$PrismaModel = never> = {
     equals?: Date | string | DateTimeFieldRefInput<$PrismaModel>
@@ -28281,6 +28378,9 @@ export namespace Prisma {
     emailVerified?: SortOrder
     emailVerifiedAt?: SortOrder
     organizationId?: SortOrder
+    totpSecret?: SortOrder
+    totpEnabled?: SortOrder
+    preferences?: SortOrder
     lastLoginAt?: SortOrder
     lastLoginIp?: SortOrder
     createdAt?: SortOrder
@@ -28299,6 +28399,8 @@ export namespace Prisma {
     emailVerified?: SortOrder
     emailVerifiedAt?: SortOrder
     organizationId?: SortOrder
+    totpSecret?: SortOrder
+    totpEnabled?: SortOrder
     lastLoginAt?: SortOrder
     lastLoginIp?: SortOrder
     createdAt?: SortOrder
@@ -28317,6 +28419,8 @@ export namespace Prisma {
     emailVerified?: SortOrder
     emailVerifiedAt?: SortOrder
     organizationId?: SortOrder
+    totpSecret?: SortOrder
+    totpEnabled?: SortOrder
     lastLoginAt?: SortOrder
     lastLoginIp?: SortOrder
     createdAt?: SortOrder
@@ -28399,6 +28503,32 @@ export namespace Prisma {
     _count?: NestedIntNullableFilter<$PrismaModel>
     _min?: NestedDateTimeNullableFilter<$PrismaModel>
     _max?: NestedDateTimeNullableFilter<$PrismaModel>
+  }
+  export type JsonNullableWithAggregatesFilter<$PrismaModel = never> =
+    | PatchUndefined<
+        Either<Required<JsonNullableWithAggregatesFilterBase<$PrismaModel>>, Exclude<keyof Required<JsonNullableWithAggregatesFilterBase<$PrismaModel>>, 'path'>>,
+        Required<JsonNullableWithAggregatesFilterBase<$PrismaModel>>
+      >
+    | OptionalFlat<Omit<Required<JsonNullableWithAggregatesFilterBase<$PrismaModel>>, 'path'>>
+
+  export type JsonNullableWithAggregatesFilterBase<$PrismaModel = never> = {
+    equals?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | JsonNullValueFilter
+    path?: string[]
+    mode?: QueryMode | EnumQueryModeFieldRefInput<$PrismaModel>
+    string_contains?: string | StringFieldRefInput<$PrismaModel>
+    string_starts_with?: string | StringFieldRefInput<$PrismaModel>
+    string_ends_with?: string | StringFieldRefInput<$PrismaModel>
+    array_starts_with?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
+    array_ends_with?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
+    array_contains?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
+    lt?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
+    lte?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
+    gt?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
+    gte?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
+    not?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | JsonNullValueFilter
+    _count?: NestedIntNullableFilter<$PrismaModel>
+    _min?: NestedJsonNullableFilter<$PrismaModel>
+    _max?: NestedJsonNullableFilter<$PrismaModel>
   }
 
   export type DateTimeWithAggregatesFilter<$PrismaModel = never> = {
@@ -28521,29 +28651,6 @@ export namespace Prisma {
     hasSome?: string[] | ListStringFieldRefInput<$PrismaModel>
     isEmpty?: boolean
   }
-  export type JsonNullableFilter<$PrismaModel = never> =
-    | PatchUndefined<
-        Either<Required<JsonNullableFilterBase<$PrismaModel>>, Exclude<keyof Required<JsonNullableFilterBase<$PrismaModel>>, 'path'>>,
-        Required<JsonNullableFilterBase<$PrismaModel>>
-      >
-    | OptionalFlat<Omit<Required<JsonNullableFilterBase<$PrismaModel>>, 'path'>>
-
-  export type JsonNullableFilterBase<$PrismaModel = never> = {
-    equals?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | JsonNullValueFilter
-    path?: string[]
-    mode?: QueryMode | EnumQueryModeFieldRefInput<$PrismaModel>
-    string_contains?: string | StringFieldRefInput<$PrismaModel>
-    string_starts_with?: string | StringFieldRefInput<$PrismaModel>
-    string_ends_with?: string | StringFieldRefInput<$PrismaModel>
-    array_starts_with?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
-    array_ends_with?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
-    array_contains?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
-    lt?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
-    lte?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
-    gt?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
-    gte?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
-    not?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | JsonNullValueFilter
-  }
 
   export type EnumPolicyStatusFilter<$PrismaModel = never> = {
     equals?: $Enums.PolicyStatus | EnumPolicyStatusFieldRefInput<$PrismaModel>
@@ -28657,32 +28764,6 @@ export namespace Prisma {
   export type PolicySumOrderByAggregateInput = {
     generationTime?: SortOrder
     version?: SortOrder
-  }
-  export type JsonNullableWithAggregatesFilter<$PrismaModel = never> =
-    | PatchUndefined<
-        Either<Required<JsonNullableWithAggregatesFilterBase<$PrismaModel>>, Exclude<keyof Required<JsonNullableWithAggregatesFilterBase<$PrismaModel>>, 'path'>>,
-        Required<JsonNullableWithAggregatesFilterBase<$PrismaModel>>
-      >
-    | OptionalFlat<Omit<Required<JsonNullableWithAggregatesFilterBase<$PrismaModel>>, 'path'>>
-
-  export type JsonNullableWithAggregatesFilterBase<$PrismaModel = never> = {
-    equals?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | JsonNullValueFilter
-    path?: string[]
-    mode?: QueryMode | EnumQueryModeFieldRefInput<$PrismaModel>
-    string_contains?: string | StringFieldRefInput<$PrismaModel>
-    string_starts_with?: string | StringFieldRefInput<$PrismaModel>
-    string_ends_with?: string | StringFieldRefInput<$PrismaModel>
-    array_starts_with?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
-    array_ends_with?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
-    array_contains?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | null
-    lt?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
-    lte?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
-    gt?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
-    gte?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
-    not?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | JsonNullValueFilter
-    _count?: NestedIntNullableFilter<$PrismaModel>
-    _min?: NestedJsonNullableFilter<$PrismaModel>
-    _max?: NestedJsonNullableFilter<$PrismaModel>
   }
 
   export type EnumPolicyStatusWithAggregatesFilter<$PrismaModel = never> = {
@@ -30784,27 +30865,6 @@ export namespace Prisma {
     _min?: NestedDateTimeNullableFilter<$PrismaModel>
     _max?: NestedDateTimeNullableFilter<$PrismaModel>
   }
-
-  export type NestedDateTimeWithAggregatesFilter<$PrismaModel = never> = {
-    equals?: Date | string | DateTimeFieldRefInput<$PrismaModel>
-    in?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel>
-    notIn?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel>
-    lt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
-    lte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
-    gt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
-    gte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
-    not?: NestedDateTimeWithAggregatesFilter<$PrismaModel> | Date | string
-    _count?: NestedIntFilter<$PrismaModel>
-    _min?: NestedDateTimeFilter<$PrismaModel>
-    _max?: NestedDateTimeFilter<$PrismaModel>
-  }
-
-  export type NestedEnumPolicyStatusFilter<$PrismaModel = never> = {
-    equals?: $Enums.PolicyStatus | EnumPolicyStatusFieldRefInput<$PrismaModel>
-    in?: $Enums.PolicyStatus[] | ListEnumPolicyStatusFieldRefInput<$PrismaModel>
-    notIn?: $Enums.PolicyStatus[] | ListEnumPolicyStatusFieldRefInput<$PrismaModel>
-    not?: NestedEnumPolicyStatusFilter<$PrismaModel> | $Enums.PolicyStatus
-  }
   export type NestedJsonNullableFilter<$PrismaModel = never> =
     | PatchUndefined<
         Either<Required<NestedJsonNullableFilterBase<$PrismaModel>>, Exclude<keyof Required<NestedJsonNullableFilterBase<$PrismaModel>>, 'path'>>,
@@ -30827,6 +30887,27 @@ export namespace Prisma {
     gt?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
     gte?: InputJsonValue | JsonFieldRefInput<$PrismaModel>
     not?: InputJsonValue | JsonFieldRefInput<$PrismaModel> | JsonNullValueFilter
+  }
+
+  export type NestedDateTimeWithAggregatesFilter<$PrismaModel = never> = {
+    equals?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    in?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel>
+    notIn?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel>
+    lt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    lte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    not?: NestedDateTimeWithAggregatesFilter<$PrismaModel> | Date | string
+    _count?: NestedIntFilter<$PrismaModel>
+    _min?: NestedDateTimeFilter<$PrismaModel>
+    _max?: NestedDateTimeFilter<$PrismaModel>
+  }
+
+  export type NestedEnumPolicyStatusFilter<$PrismaModel = never> = {
+    equals?: $Enums.PolicyStatus | EnumPolicyStatusFieldRefInput<$PrismaModel>
+    in?: $Enums.PolicyStatus[] | ListEnumPolicyStatusFieldRefInput<$PrismaModel>
+    notIn?: $Enums.PolicyStatus[] | ListEnumPolicyStatusFieldRefInput<$PrismaModel>
+    not?: NestedEnumPolicyStatusFilter<$PrismaModel> | $Enums.PolicyStatus
   }
 
   export type NestedEnumPolicyStatusWithAggregatesFilter<$PrismaModel = never> = {
@@ -31886,6 +31967,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -31912,6 +31996,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -31968,6 +32055,9 @@ export namespace Prisma {
     emailVerified?: BoolFilter<"User"> | boolean
     emailVerifiedAt?: DateTimeNullableFilter<"User"> | Date | string | null
     organizationId?: StringNullableFilter<"User"> | string | null
+    totpSecret?: StringNullableFilter<"User"> | string | null
+    totpEnabled?: BoolFilter<"User"> | boolean
+    preferences?: JsonNullableFilter<"User">
     lastLoginAt?: DateTimeNullableFilter<"User"> | Date | string | null
     lastLoginIp?: StringNullableFilter<"User"> | string | null
     createdAt?: DateTimeFilter<"User"> | Date | string
@@ -31985,6 +32075,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -32012,6 +32105,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -32053,6 +32149,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -32080,6 +32179,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -32105,6 +32207,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -32132,6 +32237,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -32237,6 +32345,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -32264,6 +32375,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -32889,6 +33003,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -32916,6 +33033,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -32946,6 +33066,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -32973,6 +33096,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -33307,6 +33433,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -33334,6 +33463,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -33370,6 +33502,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -33397,6 +33532,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -33765,6 +33903,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -33792,6 +33933,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -33833,6 +33977,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -33860,6 +34007,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -33885,6 +34035,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -33912,6 +34065,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -33953,6 +34109,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -33980,6 +34139,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -34005,6 +34167,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -34032,6 +34197,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -34073,6 +34241,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -34100,6 +34271,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -34125,6 +34299,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -34152,6 +34329,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -34193,6 +34373,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -34220,6 +34403,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -34245,6 +34431,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -34272,6 +34461,9 @@ export namespace Prisma {
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
     organizationId?: string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -34313,6 +34505,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -34340,6 +34535,9 @@ export namespace Prisma {
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     organizationId?: NullableStringFieldUpdateOperationsInput | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -35341,6 +35539,9 @@ export namespace Prisma {
     status?: $Enums.UserStatus
     emailVerified?: boolean
     emailVerifiedAt?: Date | string | null
+    totpSecret?: string | null
+    totpEnabled?: boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: Date | string | null
     lastLoginIp?: string | null
     createdAt?: Date | string
@@ -35358,6 +35559,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -35384,6 +35588,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -35410,6 +35617,9 @@ export namespace Prisma {
     status?: EnumUserStatusFieldUpdateOperationsInput | $Enums.UserStatus
     emailVerified?: BoolFieldUpdateOperationsInput | boolean
     emailVerifiedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    totpSecret?: NullableStringFieldUpdateOperationsInput | string | null
+    totpEnabled?: BoolFieldUpdateOperationsInput | boolean
+    preferences?: NullableJsonNullValueInput | InputJsonValue
     lastLoginAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     lastLoginIp?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string

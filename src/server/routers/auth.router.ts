@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import jwt from 'jsonwebtoken';
 import { randomBytes } from 'crypto';
+import { nanoid } from 'nanoid';
 
 // tRPC setup
 import { router, publicProcedure, protectedProcedure } from '../trpc/trpc';
@@ -39,6 +40,28 @@ interface JWTPayload {
   email: string;
   role: string;
   organizationId?: string;
+  sessionId?: string;
+}
+
+/** Parse a human-readable device label from a user-agent string */
+function parseDeviceLabel(userAgent: string | undefined): string {
+  if (!userAgent) return 'Unknown Device';
+  if (/iPhone|iPad/.test(userAgent)) return 'iOS Device';
+  if (/Android/.test(userAgent)) return 'Android Device';
+  if (/Windows/.test(userAgent)) {
+    if (/Chrome/.test(userAgent)) return 'Chrome on Windows';
+    if (/Firefox/.test(userAgent)) return 'Firefox on Windows';
+    if (/Edge/.test(userAgent)) return 'Edge on Windows';
+    return 'Windows Browser';
+  }
+  if (/Mac OS/.test(userAgent)) {
+    if (/Chrome/.test(userAgent)) return 'Chrome on macOS';
+    if (/Firefox/.test(userAgent)) return 'Firefox on macOS';
+    if (/Safari/.test(userAgent)) return 'Safari on macOS';
+    return 'macOS Browser';
+  }
+  if (/Linux/.test(userAgent)) return 'Linux Browser';
+  return 'Unknown Device';
 }
 
 /**
@@ -303,21 +326,45 @@ export const authRouter = router({
           });
         }
 
-        // Generate JWT tokens
+        // Create session record in database
+        let dbSessionId: string | undefined;
+        try {
+          const sessionToken = nanoid(64);
+          const session = await ctx.prisma.session.create({
+            data: {
+              userId: user.id,
+              token: sessionToken,
+              expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+              device: parseDeviceLabel(ctx.req.headers['user-agent']),
+              ipAddress: ctx.req.ip || 'Unknown',
+              userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
+            },
+          });
+          dbSessionId = session.id;
+        } catch (sessionError: any) {
+          logger.warn({
+            type: 'auth_login_session_create_failed',
+            userId: user.id,
+            error: sessionError.message,
+          });
+        }
+
+        // Generate JWT tokens (include sessionId for session management)
         const tokenPayload: JWTPayload = {
           userId: user.id,
           email: user.email,
           role: user.role,
           organizationId: user.organizationId || undefined,
+          sessionId: dbSessionId,
         };
 
         const accessToken = generateAccessToken(tokenPayload);
         const refreshToken = generateRefreshToken(tokenPayload);
 
-        // Store session in Redis cache
-        const sessionId = `session:${user.id}:${Date.now()}`;
+        // Store session in Redis cache (legacy, non-critical)
+        const redisSessionId = `session:${user.id}:${Date.now()}`;
         try {
-          await sessionCache.set(sessionId, {
+          await sessionCache.set(redisSessionId, {
             userId: user.id,
             email: user.email,
             role: user.role,
@@ -325,7 +372,6 @@ export const authRouter = router({
             createdAt: new Date().toISOString(),
           });
         } catch (cacheError: any) {
-          // Log but don't fail login if cache fails
           logger.warn({
             type: 'auth_login_cache_failed',
             userId: user.id,
@@ -396,9 +442,15 @@ export const authRouter = router({
         userId: ctx.user!.id,
       });
 
-      // Note: In a production system, you'd want to maintain a list of session IDs
-      // For now, we'll just return success as JWT tokens are stateless
-      // The client should delete the token
+      // Delete current session from Prisma if we have a session ID
+      if (ctx.user!.sessionId) {
+        await ctx.prisma.session.deleteMany({
+          where: {
+            id: ctx.user!.sessionId,
+            userId: ctx.user!.id,
+          },
+        });
+      }
 
       return {
         success: true,
