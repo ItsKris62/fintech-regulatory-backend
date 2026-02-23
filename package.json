@@ -5,8 +5,10 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon --exec tsx src/index.ts",
+    "generate": "prisma generate",
+    "postinstall": "prisma generate",
     "build": "tsc",
-    "build:prod": "tsc -p tsconfig.prod.json || true && tsc-alias -p tsconfig.prod.json",
+    "build:prod": "tsc -p tsconfig.prod.json && tsc-alias -p tsconfig.prod.json",
     "start": "node dist/index.js",
     "start:prod": "node dist/index.js",
     "prestart:prod": "pnpm run db:migrate:prod",

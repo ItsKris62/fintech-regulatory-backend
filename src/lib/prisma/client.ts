@@ -1,4 +1,4 @@
-import { PrismaClient, Prisma } from '../../generated/prisma';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { databaseConfig, getRetryDelay } from '@/config/database.config';
 import { appConfig } from '@/config/app.config';
 import { logger, logDatabaseQuery } from '@/utils/logger';

@@ -3,7 +3,7 @@
  * Type definitions for user profile and account operations
  */
 
-import type { UserRole } from '@/generated/prisma';
+import type { UserRole } from '@prisma/client';
 
 // ============================================================================
 // Profile Types
