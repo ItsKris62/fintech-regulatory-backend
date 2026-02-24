@@ -14,6 +14,7 @@
     "prestart:prod": "pnpm run db:migrate:prod",
     "db:migrate:prod": "prisma migrate deploy",
     "db:seed:prod": "tsx src/scripts/seed.ts",
+    "ingest": "tsx src/scripts/ingest-documents.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts",
     "lint:ci": "eslint . --ext .ts --max-warnings 0",
