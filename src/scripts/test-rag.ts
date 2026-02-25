@@ -7,7 +7,7 @@
 
 import { ragService } from '../lib/rag/rag.service';
 import { getIndexStats, checkPineconeHealth } from '../lib/rag/client';
-import { getEmbeddingConfig, getEmbeddingStats, generateEmbedding } from '../lib/rag/embeddings';
+import { getEmbeddingConfig, getEmbeddingStats } from '../lib/rag/embeddings';
 import { chunkDocument, previewChunks } from '../lib/rag/chunking';
 
 interface TestResult {
@@ -107,7 +107,7 @@ async function testPineconeHealth() {
 
     return {
       success: true,
-      message: `Pinecone healthy (${stats.totalVectorCount} vectors, ${stats.dimension}d)`,
+      message: `Pinecone healthy (${stats.totalRecordCount} vectors, ${stats.dimension}d)`,
     };
   });
 }
@@ -117,21 +117,11 @@ async function testPineconeHealth() {
  */
 async function testEmbeddings() {
   return runTest('Embedding Generation', async () => {
-    const text = 'The Data Protection Act 2019 governs personal data processing in Kenya.';
-    const embedding = await generateEmbedding(text);
-
     const config = getEmbeddingConfig();
-
-    if (embedding.length !== config.dimension) {
-      return {
-        success: false,
-        message: `Expected ${config.dimension}d, got ${embedding.length}d`,
-      };
-    }
-
+    // Integrated mode: Pinecone handles embedding generation during upsert/search
     return {
       success: true,
-      message: `Generated ${embedding.length}d embedding`,
+      message: `Integrated embeddings enabled — model: ${config.model} (${config.dimension}d, managed by Pinecone)`,
     };
   });
 }
@@ -338,20 +328,20 @@ async function testIndexStats() {
     const stats = await getIndexStats();
 
     console.log('\n   📈 Index Stats:');
-    console.log(`   Total Vectors: ${stats.totalVectorCount}`);
+    console.log(`   Total Vectors: ${stats.totalRecordCount}`);
     console.log(`   Dimension: ${stats.dimension}`);
-    console.log(`   Fullness: ${(stats.indexFullness * 100).toFixed(2)}%`);
-    
+    console.log(`   Fullness: ${((stats.indexFullness ?? 0) * 100).toFixed(2)}%`);
+
     if (stats.namespaces && Object.keys(stats.namespaces).length > 0) {
       console.log(`   Namespaces:`);
       Object.entries(stats.namespaces).forEach(([ns, info]) => {
-        console.log(`     - ${ns}: ${info.vectorCount} vectors`);
+        console.log(`     - ${ns}: ${info.recordCount} vectors`);
       });
     }
 
     return {
       success: true,
-      message: `Index has ${stats.totalVectorCount} vectors`,
+      message: `Index has ${stats.totalRecordCount} vectors`,
     };
   });
 }
