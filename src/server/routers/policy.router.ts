@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
 import { rateLimited } from '../trpc/middleware';
 import {
@@ -694,7 +695,7 @@ export const policyRouter = router({
         }
 
         // Verify citations with AI — verifyCitations takes string[]
-        const citationTexts = policy.citations.map((c) => c.textSnippet);
+        const citationTexts = policy.citations.map((c: any) => c.textSnippet);
         const verificationResults = await ctx.aiService.verifyCitations(citationTexts);
 
         logger.info({
@@ -720,6 +721,170 @@ export const policyRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to verify citations',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get policy generation status (poll endpoint)
+   *
+   * Used by the frontend to poll status after calling `generate`.
+   * Returns status + progress so the UI can show a progress bar.
+   *
+   * @protected
+   */
+  getStatus: protectedProcedure
+    .input(z.object({ policyId: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const policy = await (ctx.prisma.policy.findUnique as any)({
+          where: { id: input.policyId },
+          select: {
+            id: true,
+            status: true,
+            userId: true,
+            title: true,
+            generationMetadata: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
+
+        if (!policy || policy.deletedAt) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Policy not found',
+          });
+        }
+
+        // Access control
+        if (ctx.user!.role !== 'ADMIN' && policy.userId !== ctx.user!.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Access denied to this policy',
+          });
+        }
+
+        // Derive a numeric progress from the status
+        const progressMap: Record<string, number> = {
+          DRAFT: 0,
+          GENERATING: 50,
+          COMPLETED: 100,
+          FAILED: 0,
+          ARCHIVED: 100,
+        };
+
+        const meta = policy.generationMetadata as Record<string, any> | null;
+
+        return {
+          policyId: policy.id,
+          title: policy.title,
+          status: policy.status,
+          progress: progressMap[policy.status] ?? 0,
+          isComplete: policy.status === 'COMPLETED',
+          isFailed: policy.status === 'FAILED',
+          errorMessage: meta?.error ?? null,
+          generatedAt: meta?.generatedAt ?? null,
+          tokensUsed: meta?.tokensUsed ?? null,
+          updatedAt: policy.updatedAt,
+        };
+      } catch (error: any) {
+        logger.error({
+          type: 'policy_get_status_error',
+          userId: ctx.user!.id,
+          policyId: input.policyId,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get policy status',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get version history for a policy
+   *
+   * Returns the chain of versions linked via the parentId relation on Policy.
+   *
+   * @protected
+   */
+  getVersionHistory: protectedProcedure
+    .input(z.object({ policyId: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const policy = await (ctx.prisma.policy.findUnique as any)({
+          where: { id: input.policyId },
+          select: {
+            id: true,
+            userId: true,
+            parentId: true,
+            version: true,
+          },
+        });
+
+        if (!policy || policy.deletedAt) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Policy not found',
+          });
+        }
+
+        // Access control
+        if (ctx.user!.role !== 'ADMIN' && policy.userId !== ctx.user!.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Access denied to this policy',
+          });
+        }
+
+        // Resolve root policy ID (walk up parentId chain if needed)
+        const rootId = policy.parentId ?? policy.id;
+
+        // Fetch all versions in the family
+        const versions = await (ctx.prisma.policy.findMany as any)({
+          where: {
+            OR: [
+              { id: rootId },
+              { parentId: rootId },
+            ],
+            deletedAt: null,
+          },
+          orderBy: { version: 'asc' },
+          select: {
+            id: true,
+            title: true,
+            version: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true,
+            isLatestVersion: true,
+          },
+        });
+
+        return {
+          policyId: input.policyId,
+          rootId,
+          versions,
+        };
+      } catch (error: any) {
+        logger.error({
+          type: 'policy_version_history_error',
+          userId: ctx.user!.id,
+          policyId: input.policyId,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get policy version history',
           cause: error,
         });
       }

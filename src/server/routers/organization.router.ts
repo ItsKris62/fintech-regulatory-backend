@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
 import {
   createOrganizationSchema,
@@ -471,6 +472,107 @@ export const organizationRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to get members',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Update a member's role within the organization
+   *
+   * Admin or org owner can change a user's role. The user must already belong
+   * to this organization. Updates the global `role` field on the User record.
+   *
+   * @protected — must be ADMIN, or a member of the same organization
+   */
+  updateMemberRole: protectedProcedure
+    .input(
+      z.object({
+        userId: z.string().min(1),
+        role: z.enum(['REGULATOR', 'STARTUP', 'ENTERPRISE', 'ADMIN']),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        // Only admins or org members can update roles
+        const callerOrgId = ctx.user!.organizationId;
+
+        // Fetch target user
+        const targetUser = await ctx.prisma.user.findUnique({
+          where: { id: input.userId },
+          select: {
+            id: true,
+            organizationId: true,
+            role: true,
+            email: true,
+            fullName: true,
+          },
+        });
+
+        if (!targetUser) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'User not found',
+          });
+        }
+
+        // Non-admins may only update members within their own org
+        if (ctx.user!.role !== 'ADMIN') {
+          if (!callerOrgId || targetUser.organizationId !== callerOrgId) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'You can only update roles for members of your organization',
+            });
+          }
+
+          // Non-admins cannot grant ADMIN role
+          if (input.role === 'ADMIN') {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Only platform admins can grant the ADMIN role',
+            });
+          }
+        }
+
+        const updatedUser = await ctx.prisma.user.update({
+          where: { id: input.userId },
+          data: { role: input.role as any },
+          select: {
+            id: true,
+            email: true,
+            fullName: true,
+            role: true,
+            organizationId: true,
+          },
+        });
+
+        logger.info({
+          type: 'org_member_role_updated',
+          updatedBy: ctx.user!.id,
+          targetUserId: input.userId,
+          previousRole: targetUser.role,
+          newRole: input.role,
+          orgId: targetUser.organizationId,
+        });
+
+        return {
+          success: true,
+          user: updatedUser,
+          message: `${updatedUser.fullName || updatedUser.email}'s role updated to ${input.role}`,
+        };
+      } catch (error: any) {
+        logger.error({
+          type: 'org_member_role_update_error',
+          updatedBy: ctx.user!.id,
+          targetUserId: input.userId,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update member role',
           cause: error,
         });
       }

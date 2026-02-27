@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
 import { rateLimited } from '../trpc/middleware';
 import {
@@ -10,6 +11,7 @@ import {
   quickCheckSchema,
 } from '../schemas/compliance.schema';
 import { searchAndGetContext } from '@/lib/rag/rag.service';
+import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
 
 /**
@@ -445,6 +447,346 @@ export const complianceRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to perform quick check',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get compliance score for the user's organization
+   *
+   * @protected
+   */
+  getScore: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const orgId = ctx.user!.organizationId;
+
+      if (!orgId) {
+        return { score: 0, grade: 'N/A', areas: [], calculatedAt: new Date().toISOString() };
+      }
+
+      const score = await complianceModule.calculateComplianceScore(ctx.user!.id, orgId);
+
+      logger.info({
+        type: 'compliance_score_retrieved',
+        userId: ctx.user!.id,
+        orgId,
+      });
+
+      return score;
+    } catch (error: any) {
+      logger.error({
+        type: 'compliance_score_error',
+        userId: ctx.user!.id,
+        error: error.message,
+      });
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get compliance score',
+        cause: error,
+      });
+    }
+  }),
+
+  /**
+   * Get compliance score history
+   *
+   * @protected
+   */
+  getScoreHistory: protectedProcedure
+    .input(z.object({ days: z.number().min(7).max(365).default(90) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const orgId = ctx.user!.organizationId;
+
+        if (!orgId) {
+          return [];
+        }
+
+        const history = await complianceModule.getComplianceScoreHistory(
+          ctx.user!.id,
+          orgId,
+          input.days
+        );
+
+        logger.info({
+          type: 'compliance_score_history_retrieved',
+          userId: ctx.user!.id,
+          orgId,
+          days: input.days,
+        });
+
+        return history;
+      } catch (error: any) {
+        logger.error({
+          type: 'compliance_score_history_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get compliance score history',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Analyze compliance gaps for the organization
+   *
+   * @protected
+   * @rate-limited
+   */
+  getGapAnalysis: protectedProcedure
+    .use(rateLimited('complianceQuery'))
+    .query(async ({ ctx }) => {
+      try {
+        const orgId = ctx.user!.organizationId;
+
+        if (!orgId) {
+          return [];
+        }
+
+        const gaps = await complianceModule.analyzeComplianceGaps(ctx.user!.id, orgId);
+
+        logger.info({
+          type: 'compliance_gap_analysis_retrieved',
+          userId: ctx.user!.id,
+          orgId,
+          gapCount: gaps.length,
+        });
+
+        return gaps;
+      } catch (error: any) {
+        logger.error({
+          type: 'compliance_gap_analysis_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get compliance gap analysis',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get compliance recommendations
+   *
+   * @protected
+   */
+  getRecommendations: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const orgId = ctx.user!.organizationId;
+
+      if (!orgId) {
+        return [];
+      }
+
+      const recommendations = await complianceModule.getRecommendations(ctx.user!.id, orgId);
+
+      logger.info({
+        type: 'compliance_recommendations_retrieved',
+        userId: ctx.user!.id,
+        orgId,
+      });
+
+      return recommendations;
+    } catch (error: any) {
+      logger.error({
+        type: 'compliance_recommendations_error',
+        userId: ctx.user!.id,
+        error: error.message,
+      });
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get compliance recommendations',
+        cause: error,
+      });
+    }
+  }),
+
+  /**
+   * Get requirements for the organization
+   *
+   * @protected
+   */
+  getRequirements: protectedProcedure
+    .input(
+      z.object({
+        page: z.number().min(1).default(1),
+        limit: z.number().min(1).max(100).default(20),
+        status: z.string().optional(),
+        area: z.string().optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const orgId = ctx.user!.organizationId;
+
+        if (!orgId) {
+          return { requirements: [], total: 0, page: 1, limit: 20, totalPages: 0 };
+        }
+
+        const result = await complianceModule.getRequirements(ctx.user!.id, orgId, {
+          page: input.page,
+          limit: input.limit,
+          status: input.status as any,
+          area: input.area as any,
+        });
+
+        logger.info({
+          type: 'compliance_requirements_retrieved',
+          userId: ctx.user!.id,
+          orgId,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'compliance_requirements_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get compliance requirements',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Update a requirement's status
+   *
+   * @protected
+   */
+  updateRequirement: protectedProcedure
+    .input(
+      z.object({
+        requirementId: z.string(),
+        status: z.enum(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'WAIVED', 'OVERDUE']),
+        notes: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const updated = await complianceModule.updateRequirementStatus(
+          ctx.user!.id,
+          input.requirementId,
+          input.status as any,
+          input.notes
+        );
+
+        logger.info({
+          type: 'compliance_requirement_updated',
+          userId: ctx.user!.id,
+          requirementId: input.requirementId,
+          status: input.status,
+        });
+
+        return updated;
+      } catch (error: any) {
+        logger.error({
+          type: 'compliance_requirement_update_error',
+          userId: ctx.user!.id,
+          requirementId: input.requirementId,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update requirement',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get upcoming compliance deadlines
+   *
+   * @protected
+   */
+  getDeadlines: protectedProcedure
+    .input(z.object({ daysAhead: z.number().min(1).max(365).default(30) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const orgId = ctx.user!.organizationId;
+
+        if (!orgId) {
+          return [];
+        }
+
+        const deadlines = await complianceModule.checkDeadlines(
+          ctx.user!.id,
+          orgId,
+          input.daysAhead
+        );
+
+        logger.info({
+          type: 'compliance_deadlines_retrieved',
+          userId: ctx.user!.id,
+          orgId,
+          count: deadlines.length,
+        });
+
+        return deadlines;
+      } catch (error: any) {
+        logger.error({
+          type: 'compliance_deadlines_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get compliance deadlines',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Generate a compliance roadmap
+   *
+   * @protected
+   * @rate-limited
+   */
+  getRoadmap: protectedProcedure
+    .use(rateLimited('complianceQuery'))
+    .query(async ({ ctx }) => {
+      try {
+        const orgId = ctx.user!.organizationId;
+
+        if (!orgId) {
+          return { phases: [], estimatedDays: 0, priority: [] };
+        }
+
+        const roadmap = await complianceModule.generateRoadmap(ctx.user!.id, orgId);
+
+        logger.info({
+          type: 'compliance_roadmap_generated',
+          userId: ctx.user!.id,
+          orgId,
+        });
+
+        return roadmap;
+      } catch (error: any) {
+        logger.error({
+          type: 'compliance_roadmap_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to generate compliance roadmap',
           cause: error,
         });
       }

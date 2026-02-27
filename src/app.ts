@@ -35,8 +35,22 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerSecurityMiddleware(app);
 
   // ── CORS ─────────────────────────────────────────────────────────────────
+  // Support comma-separated FRONTEND_URL for multiple origins
+  // (e.g. production + Vercel preview deployments)
+  const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   await app.register(cors, {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: (origin, cb) => {
+      // Allow requests with no origin (server-to-server, Postman, curl)
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      // Allow all Vercel preview deployment subdomains
+      if (/^https:\/\/[^.]+\.vercel\.app$/.test(origin)) return cb(null, true);
+      cb(new Error(`CORS: origin '${origin}' not allowed`), false);
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],

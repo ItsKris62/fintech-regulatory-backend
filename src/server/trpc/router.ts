@@ -7,6 +7,8 @@ import { complianceRouter } from '../routers/compliance.router';
 import { documentRouter } from '../routers/document.router';
 import { contentRouter } from '../routers/content.router';
 import { adminRouter } from '../routers/admin.router';
+import { notificationRouter } from '../routers/notification.router';
+import { analyticsRouter } from '../routers/analytics.router';
 
 /**
  * Root Application Router
@@ -22,6 +24,8 @@ import { adminRouter } from '../routers/admin.router';
  * - /trpc/compliance.*   - Compliance queries with RAG
  * - /trpc/document.*     - Document upload/download
  * - /trpc/admin.*        - Admin operations
+ * - /trpc/notification.* - Notifications (list, mark-read, preferences)
+ * - /trpc/analytics.*    - Analytics dashboards and reports
  */
 export const appRouter = router({
   auth: authRouter,
@@ -32,6 +36,8 @@ export const appRouter = router({
   document: documentRouter,
   content: contentRouter,
   admin: adminRouter,
+  notification: notificationRouter,
+  analytics: analyticsRouter,
 });
 
 /**

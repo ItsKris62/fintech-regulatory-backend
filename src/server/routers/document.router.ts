@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { z } from 'zod';
+import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
 import {
   getUploadUrlSchema,
   confirmUploadSchema,
@@ -8,6 +9,8 @@ import {
   getDownloadUrlSchema,
   deleteDocumentSchema,
 } from '../schemas/document.schema';
+import { deleteByFilter } from '@/lib/rag/client';
+import { documentIngestionService } from '@/lib/ingestion/document-processor';
 import { logger } from '@/utils/logger';
 
 /**
@@ -422,19 +425,22 @@ export const documentRouter = router({
           // Continue even if storage deletion fails
         }
 
-        // Remove from RAG index if it was indexed
-        if (document.documentType === 'LEGAL_DOCUMENT') {
-          try {
-            // TODO: Implement RAG removal
-            // await ctx.ragService.removeDocument(document.id);
-          } catch (ragError: any) {
-            logger.warn({
-              type: 'document_rag_remove_error',
-              userId: ctx.user.id,
-              documentId: input.id,
-              error: ragError.message,
-            });
-          }
+        // Remove vectors from Pinecone for all chunk types
+        try {
+          await deleteByFilter({ documentId: input.id });
+          logger.info({
+            type: 'document_rag_vectors_deleted',
+            userId: ctx.user.id,
+            documentId: input.id,
+          });
+        } catch (ragError: any) {
+          logger.warn({
+            type: 'document_rag_remove_error',
+            userId: ctx.user.id,
+            documentId: input.id,
+            error: ragError.message,
+          });
+          // Continue — soft delete still proceeds even if vector removal fails
         }
 
         // Soft delete from database
@@ -468,6 +474,164 @@ export const documentRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to delete document',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get document processing status
+   *
+   * Returns the indexing status and chunk count for a document.
+   * Useful for polling after upload to know when RAG indexing is complete.
+   *
+   * @protected
+   */
+  getProcessingStatus: protectedProcedure
+    .input(z.object({ documentId: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const document = await ctx.prisma.legalDocument.findUnique({
+          where: { id: input.documentId },
+          select: {
+            id: true,
+            status: true,
+            totalChunks: true,
+            processedAt: true,
+            deletedAt: true,
+            userId: true,
+            organizationId: true,
+          },
+        });
+
+        if (!document || document.deletedAt) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Document not found',
+          });
+        }
+
+        // Access control
+        if (ctx.user!.role !== 'ADMIN') {
+          const hasAccess =
+            document.userId === ctx.user!.id ||
+            document.organizationId === ctx.user!.organizationId;
+
+          if (!hasAccess) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Access denied to this document',
+            });
+          }
+        }
+
+        const chunkCount = await ctx.prisma.documentChunk.count({
+          where: { documentId: input.documentId },
+        });
+
+        return {
+          documentId: document.id,
+          status: document.status,
+          totalChunks: document.totalChunks ?? chunkCount,
+          processedChunks: chunkCount,
+          processedAt: document.processedAt,
+          isComplete: document.status === 'INDEXED',
+          isFailed: document.status === 'FAILED',
+        };
+      } catch (error: any) {
+        logger.error({
+          type: 'document_processing_status_error',
+          userId: ctx.user!.id,
+          documentId: input.documentId,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get document processing status',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Re-ingest a document into the RAG pipeline (admin only)
+   *
+   * Clears existing Pinecone vectors and DB chunks, then re-runs the full
+   * ingestion pipeline. Useful after pipeline changes or failed indexing.
+   *
+   * @admin
+   */
+  reingest: adminProcedure
+    .input(z.object({ documentId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const document = await ctx.prisma.legalDocument.findUnique({
+          where: { id: input.documentId },
+          select: {
+            id: true,
+            fileUrl: true,
+            deletedAt: true,
+            status: true,
+          },
+        });
+
+        if (!document || document.deletedAt) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Document not found',
+          });
+        }
+
+        // Mark as processing immediately so callers can poll status
+        await ctx.prisma.legalDocument.update({
+          where: { id: input.documentId },
+          data: { status: 'PROCESSING', processedAt: null, totalChunks: null },
+        });
+
+        logger.info({
+          type: 'document_reingest_started',
+          adminId: ctx.user!.id,
+          documentId: input.documentId,
+        });
+
+        // Run re-ingestion in background — do not await so the response is fast
+        void (documentIngestionService as any)
+          .reingestDocument(input.documentId, document.fileUrl)
+          .then(() => {
+            logger.info({
+              type: 'document_reingest_complete',
+              documentId: input.documentId,
+            });
+          })
+          .catch((err: any) => {
+            logger.error({
+              type: 'document_reingest_error',
+              documentId: input.documentId,
+              error: err.message,
+            });
+          });
+
+        return {
+          success: true,
+          message: 'Document re-ingestion started. Poll getProcessingStatus for progress.',
+          documentId: input.documentId,
+        };
+      } catch (error: any) {
+        logger.error({
+          type: 'document_reingest_initiation_error',
+          adminId: ctx.user!.id,
+          documentId: input.documentId,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to initiate document re-ingestion',
           cause: error,
         });
       }

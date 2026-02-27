@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { router, adminProcedure } from '../trpc/trpc';
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
+import { adminModule } from '@/modules/admin';
 
 /**
  * Admin Router
@@ -356,32 +357,41 @@ export const adminRouter = router({
   }),
 
   /**
-   * Get recent application logs
+   * Get audit logs with filtering and pagination
    *
    * @admin
    */
   getLogs: adminProcedure
     .input(
       z.object({
+        page: z.number().min(1).default(1),
         limit: z.number().min(1).max(100).default(50),
-        level: z.enum(['error', 'warn', 'info', 'debug']).optional(),
-        type: z.string().optional(),
+        userId: z.string().optional(),
+        action: z.string().optional(),
+        entityType: z.string().optional(),
+        dateFrom: z.string().datetime().optional(),
+        dateTo: z.string().datetime().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
       try {
-        // TODO: Implement log retrieval from logging service
-        // For now, return a message
         logger.info({
-          type: 'admin_logs_requested',
+          type: 'admin_audit_logs_requested',
           userId: ctx.user!.id,
           params: input,
         });
 
-        return {
-          logs: [],
-          message: 'Log retrieval not yet implemented. Check server logs directly.',
-        };
+        const result = await adminModule.getAuditLog({
+          page: input.page,
+          limit: input.limit,
+          userId: input.userId,
+          action: input.action,
+          entityType: input.entityType,
+          dateFrom: input.dateFrom ? new Date(input.dateFrom) : undefined,
+          dateTo: input.dateTo ? new Date(input.dateTo) : undefined,
+        });
+
+        return result;
       } catch (error: any) {
         logger.error({
           type: 'admin_get_logs_error',
@@ -391,7 +401,7 @@ export const adminRouter = router({
 
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
-          message: 'Failed to retrieve logs',
+          message: 'Failed to retrieve audit logs',
           cause: error,
         });
       }
@@ -449,4 +459,509 @@ export const adminRouter = router({
         });
       }
     }),
+
+  /**
+   * Suspend a user account (admin only)
+   *
+   * @admin
+   */
+  suspendUser: adminProcedure
+    .input(z.object({ userId: z.string(), reason: z.string().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        if (input.userId === ctx.user!.id) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot suspend your own account' });
+        }
+
+        const result = await adminModule.suspendUser(
+          ctx.user!.id,
+          input.userId,
+          input.reason ?? 'Suspended by administrator'
+        );
+
+        logger.info({
+          type: 'admin_user_suspended',
+          adminUserId: ctx.user!.id,
+          targetUserId: input.userId,
+          reason: input.reason,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_suspend_user_error',
+          userId: ctx.user!.id,
+          targetUserId: input.userId,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to suspend user',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Reactivate a suspended user account (admin only)
+   *
+   * @admin
+   */
+  reactivateUser: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.reactivateUser(ctx.user!.id, input.userId);
+
+        logger.info({
+          type: 'admin_user_reactivated',
+          adminUserId: ctx.user!.id,
+          targetUserId: input.userId,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_reactivate_user_error',
+          userId: ctx.user!.id,
+          targetUserId: input.userId,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to reactivate user',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get all organizations (admin only)
+   *
+   * @admin
+   */
+  getAllOrganizations: adminProcedure
+    .input(
+      z.object({
+        page: z.number().min(1).default(1),
+        limit: z.number().min(1).max(100).default(20),
+        search: z.string().optional(),
+        status: z.string().optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.getAllOrganizations({
+          page: input.page,
+          limit: input.limit,
+          search: input.search,
+          subscriptionStatus: input.status,
+        });
+
+        logger.info({
+          type: 'admin_organizations_listed',
+          adminId: ctx.user!.id,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_list_organizations_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to list organizations',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get organization details (admin only)
+   *
+   * @admin
+   */
+  getOrgDetails: adminProcedure
+    .input(z.object({ orgId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const org = await adminModule.getOrganizationDetails(input.orgId);
+
+        logger.info({
+          type: 'admin_org_details_retrieved',
+          adminId: ctx.user!.id,
+          orgId: input.orgId,
+        });
+
+        return org;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_get_org_details_error',
+          userId: ctx.user!.id,
+          orgId: input.orgId,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get organization details',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Suspend an organization (admin only)
+   *
+   * @admin
+   */
+  suspendOrganization: adminProcedure
+    .input(z.object({ orgId: z.string(), reason: z.string().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.suspendOrganization(
+          ctx.user!.id,
+          input.orgId,
+          input.reason ?? 'Suspended by administrator'
+        );
+
+        logger.info({
+          type: 'admin_org_suspended',
+          adminId: ctx.user!.id,
+          orgId: input.orgId,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_suspend_org_error',
+          userId: ctx.user!.id,
+          orgId: input.orgId,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to suspend organization',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Reactivate a suspended organization (admin only)
+   *
+   * @admin
+   */
+  reactivateOrganization: adminProcedure
+    .input(z.object({ orgId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.reactivateOrganization(ctx.user!.id, input.orgId);
+
+        logger.info({
+          type: 'admin_org_reactivated',
+          adminId: ctx.user!.id,
+          orgId: input.orgId,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_reactivate_org_error',
+          userId: ctx.user!.id,
+          orgId: input.orgId,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to reactivate organization',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get system configuration (admin only)
+   *
+   * @admin
+   */
+  getSystemConfig: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const config = await adminModule.getSystemConfig();
+
+      logger.info({
+        type: 'admin_system_config_retrieved',
+        adminId: ctx.user!.id,
+      });
+
+      return config;
+    } catch (error: any) {
+      logger.error({
+        type: 'admin_get_system_config_error',
+        userId: ctx.user!.id,
+        error: error.message,
+      });
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get system configuration',
+        cause: error,
+      });
+    }
+  }),
+
+  /**
+   * Update system configuration (admin only)
+   *
+   * @admin
+   */
+  updateSystemConfig: adminProcedure
+    .input(z.object({ config: z.record(z.string(), z.unknown()) }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const updated = await adminModule.updateSystemConfig(
+          ctx.user!.id,
+          input.config as any
+        );
+
+        logger.info({
+          type: 'admin_system_config_updated',
+          adminId: ctx.user!.id,
+          keys: Object.keys(input.config),
+        });
+
+        return updated;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_update_system_config_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update system configuration',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get all feature flags (admin only)
+   *
+   * @admin
+   */
+  getFeatureFlags: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const flags = await adminModule.getFeatureFlags();
+
+      logger.info({
+        type: 'admin_feature_flags_retrieved',
+        adminId: ctx.user!.id,
+      });
+
+      return flags;
+    } catch (error: any) {
+      logger.error({
+        type: 'admin_get_feature_flags_error',
+        userId: ctx.user!.id,
+        error: error.message,
+      });
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get feature flags',
+        cause: error,
+      });
+    }
+  }),
+
+  /**
+   * Update a feature flag (admin only)
+   *
+   * @admin
+   */
+  updateFeatureFlag: adminProcedure
+    .input(z.object({ flag: z.string(), enabled: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const flags = await adminModule.updateFeatureFlag(
+          ctx.user!.id,
+          input.flag,
+          input.enabled
+        );
+
+        logger.info({
+          type: 'admin_feature_flag_updated',
+          adminId: ctx.user!.id,
+          flag: input.flag,
+          enabled: input.enabled,
+        });
+
+        return flags;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_update_feature_flag_error',
+          userId: ctx.user!.id,
+          flag: input.flag,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update feature flag',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Set maintenance mode (admin only)
+   *
+   * @admin
+   */
+  setMaintenanceMode: adminProcedure
+    .input(z.object({ enabled: z.boolean(), message: z.string().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const status = await adminModule.setMaintenanceMode(
+          ctx.user!.id,
+          input.enabled,
+          input.message
+        );
+
+        logger.info({
+          type: 'admin_maintenance_mode_changed',
+          adminId: ctx.user!.id,
+          enabled: input.enabled,
+        });
+
+        return status;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_maintenance_mode_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to set maintenance mode',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get full system health details (admin only)
+   * More detailed than the existing getSystemHealth
+   *
+   * @admin
+   */
+  /**
+   * Get a single user's details (admin only)
+   *
+   * @admin
+   */
+  getUser: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const user = await adminModule.getUserDetails(input.userId);
+
+        logger.info({
+          type: 'admin_user_detail_viewed',
+          adminId: ctx.user!.id,
+          targetUserId: input.userId,
+        });
+
+        return user;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_get_user_error',
+          userId: ctx.user!.id,
+          targetUserId: input.userId,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to retrieve user details',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get a user's audit log (admin only)
+   *
+   * @admin
+   */
+  getUserActivityLog: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const logs = await adminModule.getUserAuditLog(input.userId);
+        return logs;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_get_user_activity_error',
+          userId: ctx.user!.id,
+          targetUserId: input.userId,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to retrieve user activity',
+          cause: error,
+        });
+      }
+    }),
+
+  getDetailedHealth: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const [health, cacheStats, storageStats, connections] = await Promise.all([
+        adminModule.getSystemHealth(),
+        adminModule.getCacheStats(),
+        adminModule.getStorageStats(),
+        adminModule.getActiveConnections(),
+      ]);
+
+      logger.info({
+        type: 'admin_detailed_health_check',
+        adminId: ctx.user!.id,
+      });
+
+      return {
+        ...health,
+        cache: cacheStats,
+        storage: storageStats,
+        connections,
+      };
+    } catch (error: any) {
+      logger.error({
+        type: 'admin_detailed_health_error',
+        userId: ctx.user!.id,
+        error: error.message,
+      });
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get system health details',
+        cause: error,
+      });
+    }
+  }),
 });

@@ -261,7 +261,7 @@ export const userRouter = router({
         },
       });
 
-      return sessions.map((s) => ({
+      return sessions.map((s: any) => ({
         id: s.id,
         device: s.device || 'Unknown Device',
         ipAddress: s.ipAddress || 'Unknown',
