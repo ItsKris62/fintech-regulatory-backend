@@ -26,6 +26,43 @@ import {
 } from '@/utils/error'
 
 // ============================================================================
+// Types
+// ============================================================================
+
+export interface DocumentIngestionInput {
+  filePath: string;
+  fileName?: string;
+  title: string;
+  source: string;
+  category: string;
+  jurisdiction: string;
+  documentType: string;
+  effectiveDate?: Date;
+  version?: string;
+}
+
+export interface IngestionResult {
+  documentId: string;
+  chunkCount: number;
+  totalCharacters: number;
+  storageKey: string;
+  skipped: boolean;
+  reason?: string;
+}
+
+export interface DeleteDocumentOptions {
+  deleteVectors?: boolean;
+  deleteStorage?: boolean;
+}
+
+export interface DocumentStats {
+  total: number;
+  byStatus: Record<string, number>;
+  byCategory: Record<string, number>;
+  byJurisdiction: Record<string, number>;
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 
@@ -251,10 +288,11 @@ async function processDocument(
 
     batch.forEach((chunk, idx) => {
       chunkRows.push({
-        vectorId: `${doc.id}-chunk-${i + idx}`,
+        pineconeId: `${doc.id}-chunk-${i + idx}`,
         chunkIndex: i + idx,
         content: chunk.text,
         section: chunk.section ?? null,
+        tokenCount: Math.ceil(chunk.text.length / 4),
       })
     })
   }
@@ -272,22 +310,38 @@ async function processDocument(
 // ============================================================================
 
 export class DocumentIngestionService {
-  async ingestDocument(input: any) {
-    const { size } = assertFileReadable(input.filePath)
+  async ingestDocument(input: DocumentIngestionInput): Promise<IngestionResult> {
+    assertFileReadable(input.filePath)
 
     // MEMORY SAFE READ (stream → buffer)
-    const chunks: Buffer[] = []
+    const bufChunks: Buffer[] = []
     const stream = fs.createReadStream(input.filePath)
 
     await new Promise<void>((resolve, reject) => {
-      stream.on('data', (chunk) => chunks.push(chunk))
+      stream.on('data', (chunk) => bufChunks.push(chunk as Buffer))
       stream.on('end', resolve)
       stream.on('error', reject)
     })
 
-    const buffer = Buffer.concat(chunks)
+    const buffer = Buffer.concat(bufChunks)
 
     const checksum = computeChecksum(buffer)
+
+    // Checksum deduplication — skip if already indexed
+    const existing = await (prisma as any).regulatoryDocument.findFirst({
+      where: { checksum, status: { not: 'FAILED' } },
+    })
+
+    if (existing) {
+      return {
+        documentId: existing.id,
+        chunkCount: existing.chunkCount ?? 0,
+        totalCharacters: existing.totalCharacters ?? 0,
+        storageKey: existing.storageKey,
+        skipped: true,
+        reason: `Duplicate — already indexed as "${existing.title}"`,
+      }
+    }
 
     const fileName = input.fileName ?? path.basename(input.filePath)
     const fileExt = getFileExt(fileName)
@@ -296,13 +350,15 @@ export class DocumentIngestionService {
       input.jurisdiction
     )}/${fileName}`
 
-    const doc = await prisma.regulatoryDocument.create({
+    const doc = await (prisma as any).regulatoryDocument.create({
       data: {
         title: input.title,
         source: input.source,
         category: input.category,
         jurisdiction: input.jurisdiction,
         documentType: input.documentType,
+        effectiveDate: input.effectiveDate,
+        version: input.version,
         fileName,
         fileType: fileExt,
         storageKey,
@@ -315,17 +371,18 @@ export class DocumentIngestionService {
       const processing = await processDocument(doc, buffer, fileExt)
 
       await prisma.$transaction(async (tx) => {
-        await tx.regulatoryDocumentChunk.createMany({
+        await (tx as any).regulatoryDocumentChunk.createMany({
           data: processing.chunkRows.map((r) => ({
             documentId: doc.id,
-            vectorId: r.vectorId,
+            pineconeId: r.pineconeId,
             chunkIndex: r.chunkIndex,
             content: r.content,
             section: r.section,
+            tokenCount: r.tokenCount,
           })),
         })
 
-        await tx.regulatoryDocument.update({
+        await (tx as any).regulatoryDocument.update({
           where: { id: doc.id },
           data: {
             status: 'ACTIVE',
@@ -344,7 +401,7 @@ export class DocumentIngestionService {
         skipped: false,
       }
     } catch (error: any) {
-      await prisma.regulatoryDocument.update({
+      await (prisma as any).regulatoryDocument.update({
         where: { id: doc.id },
         data: {
           status: 'FAILED',

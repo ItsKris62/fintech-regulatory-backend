@@ -10,6 +10,7 @@ export interface VectorMetadata {
   documentTitle: string;
   documentType: string;
   chunkIndex: number;
+  chunk_text?: string;
   section?: string;
   subsection?: string;
   actName?: string;
