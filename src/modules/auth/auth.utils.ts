@@ -175,10 +175,10 @@ export const emailSchema = z
 export const passwordSchema = z
   .string()
   .min(8, 'Password must be at least 8 characters')
-  .max(128, 'Password too long')
+  .max(128, 'Password does not meet complexity requirements')
   .regex(
     /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/,
-    'Password must contain uppercase, lowercase, number, and special character'
+    'Password does not meet complexity requirements'
   );
 
 /**

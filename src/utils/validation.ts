@@ -49,21 +49,27 @@ export const phoneSchema = z
  * - At least one lowercase letter
  * - At least one number
  * - Optional special characters
+ *
+ * Security note: regex error messages intentionally use a generic string to
+ * prevent password-policy enumeration via client-visible Zod error responses.
+ * The minimum-length message is the only specific constraint surfaced because
+ * length alone is acceptable UX feedback (it carries no exploitable detail).
  */
 export const passwordSchema = z
   .string()
   .min(8, 'Password must be at least 8 characters')
-  .max(128, 'Password too long')
-  .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-  .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
-  .regex(/[0-9]/, 'Password must contain at least one number');
+  .max(128, 'Password does not meet complexity requirements')
+  .regex(/[A-Z]/, 'Password does not meet complexity requirements')
+  .regex(/[a-z]/, 'Password does not meet complexity requirements')
+  .regex(/[0-9]/, 'Password does not meet complexity requirements');
 
 /**
- * Strong password schema (optional special characters)
+ * Strong password schema (requires special characters)
+ * Security note: generic error message prevents policy enumeration.
  */
 export const strongPasswordSchema = passwordSchema.regex(
   /[!@#$%^&*(),.?":{}|<>]/,
-  'Password must contain at least one special character'
+  'Password does not meet complexity requirements'
 );
 
 /**

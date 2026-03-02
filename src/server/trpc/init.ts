@@ -1,21 +1,86 @@
 import { initTRPC } from '@trpc/server';
+import { ZodError } from 'zod';
 import { Context } from './context';
 
 /**
- * Initialize tRPC with context type
- * We also add a custom error formatter to handle validation errors gracefully.
+ * Password-related field names whose validation errors must be kept generic.
+ * Exposing specific rule failures (e.g. "must contain uppercase") discloses
+ * the backend password policy and aids credential stuffing optimisation.
+ */
+const PASSWORD_FIELD_NAMES = new Set([
+  'password',
+  'newPassword',
+  'currentPassword',
+  'confirmPassword',
+]);
+
+/**
+ * Build sanitized field-level errors from a ZodError for client consumption.
+ *
+ * Rules:
+ *  - Password fields: only the minimum-length constraint may be surfaced
+ *    specifically; all other failures collapse to a single generic message.
+ *  - All other fields: retain their Zod message for actionable form feedback.
+ *  - Regex patterns, internal codes and validation metadata are never exposed.
+ */
+function buildSafeFieldErrors(zodError: ZodError): Record<string, string> {
+  const fieldErrors: Record<string, string> = {};
+
+  for (const issue of zodError.issues) {
+    const path = issue.path.join('.') || '_root';
+    const fieldName = String(issue.path[issue.path.length - 1] ?? '');
+
+    if (PASSWORD_FIELD_NAMES.has(fieldName)) {
+      // Length constraint is acceptable to surface — it guides UX without
+      // disclosing complexity rules.
+      if (issue.code === 'too_small') {
+        fieldErrors[path] = 'Password must be at least 8 characters';
+      } else {
+        // Any other failure (regex, custom, etc.) gets a single generic message.
+        fieldErrors[path] = 'Password does not meet complexity requirements';
+      }
+    } else {
+      fieldErrors[path] = issue.message;
+    }
+  }
+
+  return fieldErrors;
+}
+
+/**
+ * Initialize tRPC with a hardened error formatter.
+ *
+ * Security guarantees:
+ *  1. Stack traces are stripped in production.
+ *  2. Raw ZodError messages (which include regex patterns) are never forwarded.
+ *  3. Password field errors are collapsed to generic messages.
+ *  4. The `cause` of any TRPCError is never serialised to the response.
+ *  5. Prisma / internal error metadata stays server-side.
  */
 const t = initTRPC.context<Context>().create({
   errorFormatter({ shape, error }) {
+    const isProd = process.env.NODE_ENV === 'production';
+
+    let safeMessage = shape.message;
+    let fieldErrors: Record<string, string> | null = null;
+
+    if (error.cause instanceof ZodError) {
+      // Build sanitized field errors for form UX.
+      fieldErrors = buildSafeFieldErrors(error.cause);
+      // Replace the raw ZodError JSON message (which leaks rule details)
+      // with a safe, generic string.
+      safeMessage = 'Validation failed. Please check your input.';
+    }
+
     return {
       ...shape,
+      message: safeMessage,
       data: {
         ...shape.data,
-        // If you use Zod for validation, this passes the specific field errors to the frontend
-        zodError:
-          error.code === 'BAD_REQUEST' && error.cause instanceof Error
-            ? error.cause.message
-            : null,
+        // Strip stack traces in production — never expose implementation details.
+        stack: isProd ? undefined : shape.data?.stack,
+        // Sanitized field errors for client-side form validation display.
+        fieldErrors,
       },
     };
   },

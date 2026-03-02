@@ -91,8 +91,15 @@ class AuthModule {
       // 2. Validate password strength
       const passwordValidation = validatePasswordStrength(params.password);
       if (!passwordValidation.isValid) {
+        // Log specific failures internally — never expose rule details to clients.
+        logger.warn({
+          type: 'auth_register_password_weak',
+          email: params.email,
+          reasons: passwordValidation.errors,
+          score: passwordValidation.score,
+        });
         throw new AuthError(
-          passwordValidation.errors[0],
+          'Password does not meet complexity requirements',
           'PASSWORD_TOO_WEAK',
           400
         );
@@ -323,7 +330,8 @@ class AuthModule {
       });
 
       if (!user) {
-        throw new AuthError('User not found', 'USER_NOT_FOUND', 404);
+        // Do not reveal whether the account exists — treat as an invalid token.
+        throw new AuthError('Invalid refresh token', 'INVALID_REFRESH_TOKEN', 401);
       }
 
       // 5. Rotate refresh token (invalidate old, create new)
@@ -492,8 +500,15 @@ class AuthModule {
       // 3. Validate new password strength
       const passwordValidation = validatePasswordStrength(newPassword);
       if (!passwordValidation.isValid) {
+        // Log specific failures internally — never expose rule details to clients.
+        logger.warn({
+          type: 'auth_password_reset_weak',
+          userId: resetTokenData.userId,
+          reasons: passwordValidation.errors,
+          score: passwordValidation.score,
+        });
         throw new AuthError(
-          passwordValidation.errors[0],
+          'Password does not meet complexity requirements',
           'PASSWORD_TOO_WEAK',
           400
         );
@@ -696,8 +711,15 @@ class AuthModule {
       // 3. Validate new password
       const passwordValidation = validatePasswordStrength(newPassword);
       if (!passwordValidation.isValid) {
+        // Log specific failures internally — never expose rule details to clients.
+        logger.warn({
+          type: 'auth_password_change_weak',
+          userId,
+          reasons: passwordValidation.errors,
+          score: passwordValidation.score,
+        });
         throw new AuthError(
-          passwordValidation.errors[0],
+          'Password does not meet complexity requirements',
           'PASSWORD_TOO_WEAK',
           400
         );
