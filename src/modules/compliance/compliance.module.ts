@@ -137,16 +137,16 @@ class ComplianceModule {
       );
 
       // 9. Save query to database
-      const savedQuery = await (prisma as any).complianceQuery.create({
+      const savedQuery = await prisma.complianceQuery.create({
         data: {
           userId,
-          organizationId: validated.organizationId,
+          organizationId: validated.organizationId ?? null,
           query: validated.query,
           response: aiResponse.answer,
-          citations: citations,
+          citations: citations.length > 0 ? citations : undefined,
           regulatoryAreas: detectedAreas,
-          confidence: aiResponse.confidence || 0.85,
-          recommendations: aiResponse.recommendations,
+          confidence: aiResponse.confidence ?? 0.85,
+          recommendations: aiResponse.recommendations ?? null,
           processingTimeMs: Date.now() - startTime,
         },
       });
@@ -226,16 +226,16 @@ class ComplianceModule {
       // Build context with original Q&A
       const context = `
 Previous Question: ${originalQuery.query}
-Previous Answer: ${(originalQuery as any).response}
+Previous Answer: ${originalQuery.response ?? ''}
 
 Follow-up Question: ${followUp}
 `;
 
       return await this.submitQuery(userId, {
         query: followUp,
-        regulatoryAreas: (originalQuery as any).regulatoryAreas as RegulatoryArea[],
+        regulatoryAreas: (originalQuery.regulatoryAreas as RegulatoryArea[]) ?? [],
         context,
-        organizationId: (originalQuery as any).organizationId || undefined,
+        organizationId: originalQuery.organizationId ?? undefined,
       });
     } catch (error: any) {
       logger.error({
@@ -340,7 +340,17 @@ Follow-up Question: ${followUp}
     ]);
 
     return {
-      queries: queries.map(function(q) { return toComplianceQueryResult(q as any); }),
+      queries: queries.map((q) =>
+        toComplianceQueryResult({
+          ...q,
+          response: q.response ?? '',
+          citations: Array.isArray(q.citations) ? q.citations : [],
+          regulatoryAreas: q.regulatoryAreas,
+          confidence: q.confidence ?? undefined,
+          recommendations: Array.isArray(q.recommendations) ? q.recommendations : undefined,
+          processingTimeMs: q.processingTimeMs ?? undefined,
+        })
+      ),
       total,
       page,
       limit,
