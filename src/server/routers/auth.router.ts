@@ -190,7 +190,7 @@ export const authRouter = router({
           await (ctx.mailer.sendWelcomeEmail as any)({
             name: (user as any).fullName || user.email,
             email: user.email,
-            verificationUrl: `${process.env.APP_URL || ''}/verify-email?token=${verificationToken}`,
+            verificationUrl: `${process.env.FRONTEND_URL || ''}/verify-email?token=${verificationToken}`,
             role: user.role,
           });
 
@@ -583,7 +583,7 @@ export const authRouter = router({
           await (ctx.mailer.sendPasswordResetEmail as any)({
             name: user.fullName || user.email,
             email: user.email,
-            resetUrl: `${process.env.APP_URL || ''}/reset-password?token=${resetToken}`,
+            resetUrl: `${process.env.FRONTEND_URL || ''}/reset-password?token=${resetToken}`,
             expiresIn: '1 hour',
           });
 
