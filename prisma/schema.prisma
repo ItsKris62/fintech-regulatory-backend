@@ -217,21 +217,31 @@ model DocumentChunk {
 }
 
 model ComplianceQuery {
-  id              String   @id @default(cuid())
-  userId          String
-  query           String
-  productCategory String?
-  summary         String?
-  regulations     Json?
-  requirements    Json?
-  gaps            Json?
-  status          String   @default("processing")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  user            User     @relation(fields: [userId], references: [id])
+  id               String   @id @default(cuid())
+  userId           String
+  organizationId   String?
+  query            String
+  response         String?
+  citations        Json?
+  regulatoryAreas  Json?
+  confidence       Float?
+  recommendations  Json?
+  processingTimeMs Int?
+  metadata         Json?
+  productCategory  String?
+  summary          String?
+  regulations      Json?
+  requirements     Json?
+  gaps             Json?
+  status           String   @default("processing")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([createdAt])
+  @@index([organizationId])
+  @@index([status])
 }
 
 model Checklist {

@@ -233,7 +233,7 @@ Follow-up Question: ${followUp}
 
       return await this.submitQuery(userId, {
         query: followUp,
-        regulatoryAreas: (originalQuery.regulatoryAreas as RegulatoryArea[]) ?? [],
+        regulatoryAreas: this.narrowJsonStringArray(originalQuery.regulatoryAreas) as RegulatoryArea[],
         context,
         organizationId: originalQuery.organizationId ?? undefined,
       });
@@ -345,9 +345,11 @@ Follow-up Question: ${followUp}
           ...q,
           response: q.response ?? '',
           citations: Array.isArray(q.citations) ? q.citations : [],
-          regulatoryAreas: q.regulatoryAreas,
+          regulatoryAreas: this.narrowJsonStringArray(q.regulatoryAreas),
           confidence: q.confidence ?? undefined,
-          recommendations: Array.isArray(q.recommendations) ? q.recommendations : undefined,
+          recommendations: Array.isArray(q.recommendations)
+            ? this.narrowJsonStringArray(q.recommendations)
+            : undefined,
           processingTimeMs: q.processingTimeMs ?? undefined,
         })
       ),
@@ -1112,6 +1114,16 @@ Follow-up Question: ${followUp}
     }
 
     return recommendations;
+  }
+
+  /**
+   * Safely narrow a Prisma JsonValue (stored as JSON in the DB) to string[].
+   * Returns an empty array for any non-array or mixed-type value so callers
+   * always get a clean string[] without unsafe casts.
+   */
+  private narrowJsonStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is string => typeof item === 'string');
   }
 }
 
