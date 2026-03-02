@@ -54,12 +54,46 @@ export const complianceRouter = router({
           context: input.context,
         });
 
-        // Save query to database
+        // Build RAG source citations for JSON storage.
+        //
+        // ARCHITECTURAL NOTE: Citation.policyId is a FK → Policy.id.
+        // ComplianceQuery is NOT a Policy. Inserting Citation rows with
+        // policyId = complianceQuery.id violates Citation_policyId_fkey.
+        // Additionally, source.documentId from the vector store is a content
+        // hash (not a LegalDocument.id DB primary key), so it cannot safely
+        // be used as Citation.documentId either.
+        //
+        // Correct pattern: store RAG source references as JSON directly on
+        // ComplianceQuery.citations (Json? column). This preserves full
+        // auditability and AI explainability without FK dependencies.
+        const queryCitations = ragContext.results.map((source: any) => ({
+          documentId: source.documentId ?? null,
+          documentTitle: source.documentTitle || 'Unknown',
+          section: source.section || '',
+          textSnippet: (source.chunkText || '').slice(0, 500),
+          score: source.score ?? 0,
+          citation: source.citation ?? null,
+        }));
+
+        // Guard: warn if RAG chunks are missing documentIds (ingestion gap)
+        const missingDocIds = queryCitations.filter(c => !c.documentId).length;
+        if (missingDocIds > 0) {
+          logger.warn({
+            type: 'compliance_query_citations_missing_doc_ids',
+            userId: ctx.user!.id,
+            missingCount: missingDocIds,
+            totalCount: queryCitations.length,
+          });
+        }
+
+        // Persist query with citations stored atomically as JSON
         const query = await (ctx.prisma.complianceQuery.create as any)({
           data: {
             query: input.question,
             userId: ctx.user!.id,
-            organizationId: ctx.user!.organizationId,
+            organizationId: ctx.user!.organizationId ?? null,
+            response: answer.content,
+            citations: queryCitations.length > 0 ? queryCitations : undefined,
             metadata: {
               model: answer.model,
               tokensUsed: answer.inputTokens + answer.outputTokens,
@@ -71,23 +105,6 @@ export const complianceRouter = router({
           },
         });
 
-        // Create citations from RAG sources
-        const citations = await Promise.all(
-          ragContext.results.map((source: any) =>
-            (ctx.prisma.citation.create as any)({
-              data: {
-                policyId: query.id,
-                actName: source.documentTitle || 'Unknown',
-                section: source.section || '',
-                textSnippet: source.chunkText || '',
-                confidence: 'high',
-                verified: true,
-                documentId: source.documentId,
-              },
-            })
-          )
-        );
-
         const duration = Date.now() - startTime;
 
         logger.info({
@@ -96,13 +113,13 @@ export const complianceRouter = router({
           queryId: query.id,
           duration,
           tokensUsed: answer.inputTokens + answer.outputTokens,
-          citationsCount: citations.length,
+          citationsCount: queryCitations.length,
         });
 
         return {
           queryId: query.id,
           answer: answer.content,
-          citations,
+          citations: queryCitations,
           confidence: null,
           suggestedFollowUps: [],
         };
@@ -172,12 +189,26 @@ export const complianceRouter = router({
           input.question
         );
 
-        // Save follow-up query
+        // Same citation pattern as the primary query mutation:
+        // store RAG source references as JSON on ComplianceQuery, not in
+        // the Citation table (which has a FK constraint to Policy.id).
+        const queryCitations = ragContext.results.map((source: any) => ({
+          documentId: source.documentId ?? null,
+          documentTitle: source.documentTitle || 'Unknown',
+          section: source.section || '',
+          textSnippet: (source.chunkText || '').slice(0, 500),
+          score: source.score ?? 0,
+          citation: source.citation ?? null,
+        }));
+
+        // Save follow-up query with citations as JSON
         const query = await (ctx.prisma.complianceQuery.create as any)({
           data: {
             query: input.question,
             userId: ctx.user!.id,
-            organizationId: ctx.user!.organizationId,
+            organizationId: ctx.user!.organizationId ?? null,
+            response: answer.content,
+            citations: queryCitations.length > 0 ? queryCitations : undefined,
             metadata: {
               followUpTo: input.originalQueryId,
               model: answer.model,
@@ -186,33 +217,18 @@ export const complianceRouter = router({
           },
         });
 
-        // Create citations
-        const citations = await Promise.all(
-          ragContext.results.map((source: any) =>
-            (ctx.prisma.citation.create as any)({
-              data: {
-                policyId: query.id,
-                actName: source.documentTitle || 'Unknown',
-                section: source.section || '',
-                textSnippet: source.chunkText || '',
-                confidence: 'high',
-                verified: true,
-              },
-            })
-          )
-        );
-
         logger.info({
           type: 'compliance_followup_success',
           userId: ctx.user!.id,
           queryId: query.id,
           originalQueryId: input.originalQueryId,
+          citationsCount: queryCitations.length,
         });
 
         return {
           queryId: query.id,
           answer: answer.content,
-          citations,
+          citations: queryCitations,
         };
       } catch (error: any) {
         logger.error({
