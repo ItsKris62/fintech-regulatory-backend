@@ -429,6 +429,116 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     effectiveDate: new Date('2018-05-16'),
     version: '2018',
   },
+
+  // ── Kenya: Cloud & Digital Infrastructure ────────────────────────────────
+
+  {
+    // ✅ File present
+    fileName: 'kenya/Kenya Cloud Policy - 2024.pdf',
+    title: 'Kenya Cloud Policy, 2024',
+    source: 'ICT Authority of Kenya',
+    category: 'CYBERSECURITY' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'framework',
+    effectiveDate: new Date('2024-01-01'),
+    version: '2024',
+  },
+
+  // ── International: AI Governance ─────────────────────────────────────────
+
+  {
+    // ✅ File present
+    fileName: 'international/Artificial Intelligence Act EU.pdf',
+    title: 'Artificial Intelligence Act (EU AI Act) — Regulation (EU) 2024/1689',
+    source: 'European Union',
+    category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
+    jurisdiction: 'EU',
+    documentType: 'regulation',
+    effectiveDate: new Date('2024-08-01'),
+    version: '2024/1689',
+  },
+  {
+    // ✅ File present
+    fileName: 'international/Artificial Intelligence Risk Management.pdf',
+    title: 'NIST AI Risk Management Framework (AI RMF 1.0)',
+    source: 'NIST',
+    category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
+    jurisdiction: 'International',
+    documentType: 'framework',
+    effectiveDate: new Date('2023-01-26'),
+    version: '1.0',
+  },
+
+  // ── International: Privacy & Data Management ──────────────────────────────
+
+  {
+    // ✅ File present
+    fileName: 'international/Privacy Information Management with ISO IEC 27701.pdf',
+    title: 'ISO/IEC 27701:2019 — Privacy Information Management System (PIMS)',
+    source: 'ISO/IEC',
+    category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
+    jurisdiction: 'International',
+    documentType: 'standard',
+    effectiveDate: new Date('2019-08-06'),
+    version: '2019',
+  },
+
+  // ── International: Security Assurance & Auditing ──────────────────────────
+
+  {
+    // ✅ File present
+    fileName: 'international/033144-1A-soc2-system-organization-controls-reporting-whitepaper-v6-secured.pdf',
+    title: 'SOC 2 — System and Organisation Controls Reporting (AICPA Whitepaper v6)',
+    source: 'AICPA',
+    category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
+    jurisdiction: 'International',
+    documentType: 'framework',
+    version: 'v6',
+  },
+  {
+    // ✅ File present
+    fileName: 'international/pcissc_overview.pdf',
+    title: 'PCI Security Standards Council — Overview of Payment Security Standards',
+    source: 'PCI Security Standards Council',
+    category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
+    jurisdiction: 'International',
+    documentType: 'framework',
+  },
+  {
+    // ✅ File present
+    fileName: 'international/Secure-Software-Program-Guide-v1.pdf',
+    title: 'Secure Software Program Guide v1.0',
+    source: 'PCI Security Standards Council',
+    category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
+    jurisdiction: 'International',
+    documentType: 'guideline',
+    version: 'v1.0',
+  },
+
+  // ── International: Web Accessibility ─────────────────────────────────────
+
+  {
+    // ✅ File present
+    fileName: 'international/Global-Web-Content-Accessibility-Guidelines-WCAG-2.1.pdf',
+    title: 'Web Content Accessibility Guidelines (WCAG) 2.1',
+    source: 'W3C',
+    category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
+    jurisdiction: 'International',
+    documentType: 'standard',
+    effectiveDate: new Date('2018-06-05'),
+    version: '2.1',
+  },
+  {
+    // ✅ File present
+    fileName: 'international/wcag20-guidelines-20081211-a4.pdf',
+    title: 'Web Content Accessibility Guidelines (WCAG) 2.0',
+    source: 'W3C',
+    category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
+    jurisdiction: 'International',
+    documentType: 'standard',
+    effectiveDate: new Date('2008-12-11'),
+    version: '2.0',
+  },
 ];
 
 // ============================================================================
