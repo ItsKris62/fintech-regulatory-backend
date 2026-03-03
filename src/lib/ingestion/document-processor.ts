@@ -1,8 +1,6 @@
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import { pipeline } from 'stream/promises'
-
 import mammoth from 'mammoth'
 import { PDFParse } from 'pdf-parse'
 
@@ -11,7 +9,6 @@ import { logger } from '@/utils/logger'
 
 import {
   upsertVectors,
-  deleteVectors,
   type IntegratedVectorRecord,
 } from '@/lib/rag/client'
 

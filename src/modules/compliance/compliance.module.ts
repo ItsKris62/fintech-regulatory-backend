@@ -17,10 +17,18 @@ import { aiService } from '@/lib/ai/ai.service';
 import { ragService } from '@/lib/rag/rag.service';
 import { mailer as _mailer } from '@/lib/email/mailer.service';
 import { sendEmail } from '@/lib/email/client';
+import { storageService } from '@/lib/storage/storage.service';
 import { logger } from '@/utils/logger';
 import { complianceScorer } from './compliance-scorer';
 import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
+import type { GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
+import type { GapAnalysisResult } from '@/lib/ai/prompts/gap-analysis';
+// pdf-parse and mammoth are CommonJS modules
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
 import {
   toComplianceQueryResult,
   complianceQuerySchema,
@@ -1124,6 +1132,676 @@ Follow-up Question: ${followUp}
   private narrowJsonStringArray(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
     return value.filter((item): item is string => typeof item === 'string');
+  }
+
+  // ==========================================================================
+  // CHECKLIST OPERATIONS
+  // ==========================================================================
+
+  /**
+   * Generate an AI+RAG compliance checklist for a fintech.
+   * Saves result to DB; returns the full checklist record.
+   */
+  async generateChecklist(
+    userId: string,
+    params: {
+      productType: string;
+      businessStage: string;
+      targetSegments: string[];
+      servicesOffered: string[];
+      additionalConcerns?: string;
+      organizationId?: string;
+    }
+  ): Promise<{
+    id: string;
+    title: string;
+    status: string;
+    checklistData: GeneratedChecklist;
+    itemProgress: Record<string, string>;
+    progress: number;
+    createdAt: Date;
+  }> {
+    logger.info({
+      type: 'checklist_generate_started',
+      userId,
+      productType: params.productType,
+      businessStage: params.businessStage,
+    });
+
+    const startTime = Date.now();
+
+    try {
+      // 1. Create a placeholder record with GENERATING status
+      const record = await prisma.checklist.create({
+        data: {
+          userId,
+          organizationId: params.organizationId ?? null,
+          title: `${params.productType} — ${params.businessStage}`,
+          productType: params.productType,
+          businessStage: params.businessStage,
+          targetSegments: params.targetSegments,
+          servicesOffered: params.servicesOffered,
+          additionalConcerns: params.additionalConcerns ?? null,
+          items: [], // Legacy field — kept for schema compat
+          itemProgress: {},
+          progress: 0,
+          status: 'GENERATING',
+        },
+      });
+
+      // 2. Build RAG query from product + services
+      const ragQuery = `Kenya fintech compliance requirements for ${params.productType} offering ${params.servicesOffered.join(', ')} at ${params.businessStage} stage`;
+
+      let ragContext: string | undefined;
+      try {
+        const ragResults = await ragService.search(ragQuery, { topK: 12, minScore: 0.6 });
+        if (ragResults.length > 0) {
+          ragContext = ragResults
+            .map((r, i) =>
+              `[REGULATORY CONTEXT ${i + 1} — ${r.documentTitle || 'Kenyan Regulation'}]\n${r.chunkText}`
+            )
+            .join('\n\n---\n\n');
+        }
+      } catch (ragErr: unknown) {
+        logger.warn({
+          type: 'checklist_rag_search_failed',
+          userId,
+          error: (ragErr as Error).message,
+        });
+        // Continue without RAG context — AI uses its training knowledge
+      }
+
+      // 3. Generate checklist with Claude AI
+      const generatedChecklist = await aiService.generateComplianceChecklist({
+        productType: params.productType,
+        businessStage: params.businessStage,
+        targetSegments: params.targetSegments,
+        servicesOffered: params.servicesOffered,
+        additionalConcerns: params.additionalConcerns,
+        ragContext,
+      });
+
+      // 4. Build initial itemProgress (all items NOT_STARTED)
+      const itemProgress: Record<string, string> = {};
+      for (const category of generatedChecklist.categories) {
+        for (const item of category.items) {
+          itemProgress[item.id] = 'NOT_STARTED';
+        }
+      }
+
+      // 5. Update DB record to COMPLETED
+      const updated = await prisma.checklist.update({
+        where: { id: record.id },
+        data: {
+          checklistData: generatedChecklist as unknown as Record<string, unknown>,
+          itemProgress,
+          progress: 0,
+          status: 'COMPLETED',
+        },
+      });
+
+      logger.info({
+        type: 'checklist_generate_success',
+        userId,
+        checklistId: record.id,
+        totalItems: generatedChecklist.metadata.totalItems,
+        durationMs: Date.now() - startTime,
+      });
+
+      return {
+        id: updated.id,
+        title: updated.title,
+        status: updated.status,
+        checklistData: generatedChecklist,
+        itemProgress,
+        progress: 0,
+        createdAt: updated.createdAt,
+      };
+    } catch (error: unknown) {
+      logger.error({
+        type: 'checklist_generate_error',
+        userId,
+        error: (error as Error).message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * List all checklists for a user.
+   */
+  async getUserChecklists(userId: string): Promise<{
+    id: string;
+    title: string;
+    productType: string | null;
+    businessStage: string | null;
+    progress: number;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+    totalItems: number;
+    criticalItems: number;
+  }[]> {
+    const checklists = await prisma.checklist.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        title: true,
+        productType: true,
+        businessStage: true,
+        progress: true,
+        status: true,
+        checklistData: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return checklists.map((c) => {
+      const data = c.checklistData as GeneratedChecklist | null;
+      return {
+        id: c.id,
+        title: c.title,
+        productType: c.productType,
+        businessStage: c.businessStage,
+        progress: c.progress,
+        status: c.status,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+        totalItems: data?.metadata?.totalItems ?? 0,
+        criticalItems: data?.metadata?.criticalItems ?? 0,
+      };
+    });
+  }
+
+  /**
+   * Get a single checklist by ID.
+   * Ensures the requesting user owns the checklist.
+   */
+  async getChecklist(userId: string, checklistId: string): Promise<{
+    id: string;
+    title: string;
+    productType: string | null;
+    businessStage: string | null;
+    targetSegments: unknown;
+    servicesOffered: unknown;
+    additionalConcerns: string | null;
+    checklistData: GeneratedChecklist | null;
+    itemProgress: Record<string, string>;
+    progress: number;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    const checklist = await prisma.checklist.findUnique({
+      where: { id: checklistId },
+    });
+
+    if (!checklist) {
+      throw new Error('Checklist not found');
+    }
+
+    // RBAC: only owner or admin can view
+    if (checklist.userId !== userId) {
+      // Check if user is admin
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+      if (user?.role !== 'ADMIN') {
+        throw new Error('Access denied to this checklist');
+      }
+    }
+
+    return {
+      id: checklist.id,
+      title: checklist.title,
+      productType: checklist.productType,
+      businessStage: checklist.businessStage,
+      targetSegments: checklist.targetSegments,
+      servicesOffered: checklist.servicesOffered,
+      additionalConcerns: checklist.additionalConcerns,
+      checklistData: (checklist.checklistData as unknown as GeneratedChecklist) ?? null,
+      itemProgress: (checklist.itemProgress as Record<string, string>) ?? {},
+      progress: checklist.progress,
+      status: checklist.status,
+      createdAt: checklist.createdAt,
+      updatedAt: checklist.updatedAt,
+    };
+  }
+
+  /**
+   * Update the per-item progress states and recalculate overall progress %.
+   */
+  async updateChecklistProgress(
+    userId: string,
+    checklistId: string,
+    itemProgress: Record<string, string>
+  ): Promise<{ progress: number; itemProgress: Record<string, string> }> {
+    const checklist = await prisma.checklist.findUnique({
+      where: { id: checklistId },
+      select: { userId: true, checklistData: true },
+    });
+
+    if (!checklist) throw new Error('Checklist not found');
+    if (checklist.userId !== userId) {
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+      if (user?.role !== 'ADMIN') throw new Error('Access denied');
+    }
+
+    // Validate that item IDs belong to this checklist
+    const data = checklist.checklistData as GeneratedChecklist | null;
+    if (data) {
+      const validIds = new Set(data.categories.flatMap((c) => c.items.map((i) => i.id)));
+      for (const key of Object.keys(itemProgress)) {
+        if (!validIds.has(key)) {
+          throw new Error(`Invalid item ID: ${key}`);
+        }
+      }
+    }
+
+    // Validate status values
+    const validStatuses = new Set(['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED']);
+    for (const val of Object.values(itemProgress)) {
+      if (!validStatuses.has(val)) {
+        throw new Error(`Invalid status value: ${val}. Must be NOT_STARTED, IN_PROGRESS, or COMPLETED`);
+      }
+    }
+
+    // Calculate progress %
+    const totalItems = Object.keys(itemProgress).length;
+    const completedItems = Object.values(itemProgress).filter((v) => v === 'COMPLETED').length;
+    const progress = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
+
+    const updated = await prisma.checklist.update({
+      where: { id: checklistId },
+      data: {
+        itemProgress,
+        progress,
+        completedAt: progress === 100 ? new Date() : null,
+      },
+    });
+
+    logger.info({
+      type: 'checklist_progress_updated',
+      userId,
+      checklistId,
+      progress,
+      completedItems,
+      totalItems,
+    });
+
+    return {
+      progress: updated.progress,
+      itemProgress: (updated.itemProgress as Record<string, string>) ?? {},
+    };
+  }
+
+  /**
+   * Delete a checklist (hard delete — user confirms intent).
+   */
+  async deleteChecklist(userId: string, checklistId: string): Promise<void> {
+    const checklist = await prisma.checklist.findUnique({
+      where: { id: checklistId },
+      select: { userId: true },
+    });
+
+    if (!checklist) throw new Error('Checklist not found');
+    if (checklist.userId !== userId) {
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+      if (user?.role !== 'ADMIN') throw new Error('Access denied');
+    }
+
+    await prisma.checklist.delete({ where: { id: checklistId } });
+
+    logger.info({ type: 'checklist_deleted', userId, checklistId });
+  }
+
+  // ==========================================================================
+  // GAP ANALYSIS OPERATIONS
+  // ==========================================================================
+
+  /**
+   * Extract plain text from a file buffer based on its type.
+   */
+  private async extractTextFromFile(
+    fileBuffer: Buffer,
+    fileType: string
+  ): Promise<string> {
+    const ext = fileType.toLowerCase().replace('.', '');
+
+    if (ext === 'pdf') {
+      const result = await pdfParse(fileBuffer);
+      return result.text;
+    }
+
+    if (ext === 'docx' || ext === 'doc') {
+      const result = await mammoth.extractRawText({ buffer: fileBuffer });
+      return result.value;
+    }
+
+    if (ext === 'txt') {
+      return fileBuffer.toString('utf-8');
+    }
+
+    throw new Error(`Unsupported file type: ${ext}. Supported types: pdf, docx, txt`);
+  }
+
+  /**
+   * Run a full AI+RAG gap analysis on an uploaded policy document.
+   * Handles: upload to R2, text extraction, RAG retrieval, AI analysis, DB save.
+   */
+  async runGapAnalysis(
+    userId: string,
+    params: {
+      fileName: string;
+      fileType: string;
+      fileContent: string; // base64-encoded file content
+      regulatoryFrameworks: string[];
+      analysisDepth: 'quick' | 'standard' | 'deep';
+      focusAreas?: string[];
+      organizationId?: string;
+    }
+  ): Promise<{
+    id: string;
+    status: string;
+    results: GapAnalysisResult | null;
+    overallScore: number | null;
+    documentName: string;
+    createdAt: Date;
+  }> {
+    logger.info({
+      type: 'gap_analysis_run_started',
+      userId,
+      fileName: params.fileName,
+      frameworks: params.regulatoryFrameworks,
+      analysisDepth: params.analysisDepth,
+    });
+
+    const startTime = Date.now();
+
+    // Validate file size (base64 → actual size)
+    const estimatedBytes = Math.round((params.fileContent.length * 3) / 4);
+    const maxBytes = 10 * 1024 * 1024; // 10MB
+    if (estimatedBytes > maxBytes) {
+      throw new Error(`File too large. Maximum size is 10MB (estimated: ${(estimatedBytes / 1024 / 1024).toFixed(1)}MB)`);
+    }
+
+    // Validate file type
+    const allowedTypes = ['pdf', 'docx', 'doc', 'txt'];
+    const ext = params.fileName.split('.').pop()?.toLowerCase() ?? '';
+    if (!allowedTypes.includes(ext)) {
+      throw new Error(`Unsupported file type .${ext}. Allowed: ${allowedTypes.join(', ')}`);
+    }
+
+    // 1. Create placeholder record with UPLOADING status
+    const record = await (prisma as unknown as {
+      gapAnalysis: {
+        create: (args: { data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date }>;
+        update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date }>;
+      };
+    }).gapAnalysis.create({
+      data: {
+        userId,
+        organizationId: params.organizationId ?? null,
+        documentName: params.fileName,
+        documentUrl: '',
+        documentType: ext,
+        regulatoryFrameworks: params.regulatoryFrameworks,
+        analysisDepth: params.analysisDepth,
+        focusAreas: params.focusAreas ?? [],
+        status: 'UPLOADING',
+      },
+    });
+
+    try {
+      // 2. Upload to R2
+      const fileBuffer = Buffer.from(params.fileContent, 'base64');
+      const uploadResult = await storageService.uploadDocument(
+        fileBuffer,
+        params.fileName,
+        userId,
+        { purpose: 'gap_analysis', analysisId: record.id }
+      );
+
+      // Update document URL
+      const gapAnalysisTable = (prisma as unknown as {
+        gapAnalysis: {
+          update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date }>;
+        };
+      }).gapAnalysis;
+
+      await gapAnalysisTable.update({
+        where: { id: record.id },
+        data: { documentUrl: uploadResult.key, status: 'ANALYZING' },
+      });
+
+      // 3. Extract text from document
+      const policyText = await this.extractTextFromFile(fileBuffer, ext);
+
+      if (!policyText || policyText.trim().length < 50) {
+        throw new Error('Could not extract meaningful text from the document. Please ensure it is not encrypted or image-only.');
+      }
+
+      // 4. Build RAG query from frameworks + focus areas
+      const frameworkNames = params.regulatoryFrameworks.join(', ');
+      const focusText = params.focusAreas?.length ? ` focusing on ${params.focusAreas.join(', ')}` : '';
+      const ragQuery = `${frameworkNames} compliance requirements Kenya${focusText}`;
+
+      let ragContext: string | undefined;
+      try {
+        const ragResults = await ragService.search(ragQuery, { topK: 15, minScore: 0.6 });
+        if (ragResults.length > 0) {
+          ragContext = ragResults
+            .map((r, i) => {
+              const label = r.documentTitle || 'Kenyan Regulation';
+              return `[REGULATORY CONTEXT ${i + 1} — ${label}]\n${r.chunkText}`;
+            })
+            .join('\n\n---\n\n');
+        }
+      } catch (ragErr: unknown) {
+        logger.warn({
+          type: 'gap_analysis_rag_search_failed',
+          userId,
+          error: (ragErr as Error).message,
+        });
+      }
+
+      // 5. Run AI gap analysis
+      const gapResults = await aiService.performGapAnalysis({
+        policyText,
+        documentName: params.fileName,
+        documentType: ext,
+        regulatoryFrameworks: params.regulatoryFrameworks,
+        analysisDepth: params.analysisDepth,
+        focusAreas: params.focusAreas,
+        ragContext,
+      });
+
+      // 6. Save completed results
+      const completed = await gapAnalysisTable.update({
+        where: { id: record.id },
+        data: {
+          results: gapResults as unknown as Record<string, unknown>,
+          overallScore: gapResults.overallScore,
+          status: 'COMPLETED',
+        },
+      });
+
+      logger.info({
+        type: 'gap_analysis_run_success',
+        userId,
+        analysisId: record.id,
+        overallScore: gapResults.overallScore,
+        totalGaps: gapResults.metadata.totalGaps,
+        durationMs: Date.now() - startTime,
+      });
+
+      return {
+        id: completed.id,
+        status: completed.status,
+        results: completed.results as GapAnalysisResult,
+        overallScore: completed.overallScore as number | null,
+        documentName: completed.documentName,
+        createdAt: completed.createdAt,
+      };
+    } catch (error: unknown) {
+      // Mark as FAILED and propagate
+      const gapAnalysisTable = (prisma as unknown as {
+        gapAnalysis: {
+          update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<void>;
+        };
+      }).gapAnalysis;
+
+      await gapAnalysisTable.update({
+        where: { id: record.id },
+        data: {
+          status: 'FAILED',
+          errorMessage: (error as Error).message,
+        },
+      });
+
+      logger.error({
+        type: 'gap_analysis_run_error',
+        userId,
+        analysisId: record.id,
+        error: (error as Error).message,
+      });
+
+      throw error;
+    }
+  }
+
+  /**
+   * List all gap analyses for a user (summary list).
+   */
+  async getUserGapAnalyses(userId: string): Promise<{
+    id: string;
+    documentName: string;
+    documentType: string;
+    regulatoryFrameworks: unknown;
+    analysisDepth: string;
+    overallScore: number | null;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }[]> {
+    const analyses = await (prisma as unknown as {
+      gapAnalysis: {
+        findMany: (args: { where: { userId: string }; orderBy: { createdAt: string }; select: Record<string, boolean> }) => Promise<{
+          id: string;
+          documentName: string;
+          documentType: string;
+          regulatoryFrameworks: unknown;
+          analysisDepth: string;
+          overallScore: number | null;
+          status: string;
+          createdAt: Date;
+          updatedAt: Date;
+        }[]>;
+      };
+    }).gapAnalysis.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        documentName: true,
+        documentType: true,
+        regulatoryFrameworks: true,
+        analysisDepth: true,
+        overallScore: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return analyses;
+  }
+
+  /**
+   * Get a single gap analysis result by ID.
+   */
+  async getGapAnalysisResult(userId: string, analysisId: string): Promise<{
+    id: string;
+    documentName: string;
+    documentType: string;
+    documentUrl: string;
+    regulatoryFrameworks: unknown;
+    analysisDepth: string;
+    focusAreas: unknown;
+    results: GapAnalysisResult | null;
+    overallScore: number | null;
+    status: string;
+    errorMessage: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    const analysis = await (prisma as unknown as {
+      gapAnalysis: {
+        findUnique: (args: { where: { id: string } }) => Promise<{
+          id: string;
+          userId: string;
+          documentName: string;
+          documentType: string;
+          documentUrl: string;
+          regulatoryFrameworks: unknown;
+          analysisDepth: string;
+          focusAreas: unknown;
+          results: unknown;
+          overallScore: number | null;
+          status: string;
+          errorMessage: string | null;
+          createdAt: Date;
+          updatedAt: Date;
+        } | null>;
+      };
+    }).gapAnalysis.findUnique({ where: { id: analysisId } });
+
+    if (!analysis) throw new Error('Gap analysis not found');
+
+    if (analysis.userId !== userId) {
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+      if (user?.role !== 'ADMIN') throw new Error('Access denied');
+    }
+
+    return {
+      ...analysis,
+      results: (analysis.results as GapAnalysisResult) ?? null,
+    };
+  }
+
+  /**
+   * Delete a gap analysis record (and R2 file).
+   */
+  async deleteGapAnalysis(userId: string, analysisId: string): Promise<void> {
+    const analysis = await (prisma as unknown as {
+      gapAnalysis: {
+        findUnique: (args: { where: { id: string }; select: Record<string, boolean> }) => Promise<{ userId: string; documentUrl: string } | null>;
+        delete: (args: { where: { id: string } }) => Promise<void>;
+      };
+    }).gapAnalysis.findUnique({
+      where: { id: analysisId },
+      select: { userId: true, documentUrl: true },
+    });
+
+    if (!analysis) throw new Error('Gap analysis not found');
+    if (analysis.userId !== userId) {
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+      if (user?.role !== 'ADMIN') throw new Error('Access denied');
+    }
+
+    // Delete R2 file if it exists
+    if (analysis.documentUrl) {
+      try {
+        await storageService.deleteFile(analysis.documentUrl);
+      } catch {
+        logger.warn({ type: 'gap_analysis_r2_delete_failed', analysisId });
+      }
+    }
+
+    await (prisma as unknown as { gapAnalysis: { delete: (args: { where: { id: string } }) => Promise<void> } })
+      .gapAnalysis.delete({ where: { id: analysisId } });
+
+    logger.info({ type: 'gap_analysis_deleted', userId, analysisId });
   }
 }
 

@@ -28,6 +28,7 @@ model User {
   apiKeys            ApiKey[]
   auditLogs          AuditLog[]
   checklists         Checklist[]
+  gapAnalyses        GapAnalysis[]
   complianceQueries  ComplianceQuery[]
   authoredDocuments  LegalDocument[]   @relation("DocumentAuthor")
   publishedDocuments LegalDocument[]   @relation("DocumentPublisher")
@@ -245,22 +246,54 @@ model ComplianceQuery {
 }
 
 model Checklist {
-  id          String    @id @default(cuid())
-  userId      String
-  title       String
-  productType String?
-  description String?
-  items       Json
-  progress    Int       @default(0)
-  status      String    @default("in_progress")
-  dueDate     DateTime?
-  completedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  user        User      @relation(fields: [userId], references: [id])
+  id                 String    @id @default(cuid())
+  userId             String
+  organizationId     String?
+  title              String
+  productType        String?
+  businessStage      String?
+  targetSegments     Json?
+  servicesOffered    Json?
+  additionalConcerns String?
+  description        String?
+  items              Json
+  checklistData      Json?
+  itemProgress       Json?
+  progress           Int       @default(0)
+  status             String    @default("GENERATING")
+  dueDate            DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  user               User      @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([status])
+  @@index([organizationId])
+}
+
+model GapAnalysis {
+  id                   String   @id @default(cuid())
+  userId               String
+  organizationId       String?
+  documentName         String
+  documentUrl          String
+  documentType         String
+  regulatoryFrameworks Json
+  analysisDepth        String   @default("standard")
+  focusAreas           Json?
+  results              Json?
+  overallScore         Int?
+  status               String   @default("UPLOADING")
+  errorMessage         String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([organizationId])
+  @@index([createdAt])
 }
 
 model Notification {

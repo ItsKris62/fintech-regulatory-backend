@@ -549,46 +549,6 @@ export const complianceRouter = router({
       }
     }),
 
-  /**
-   * Analyze compliance gaps for the organization
-   *
-   * @protected
-   * @rate-limited
-   */
-  getGapAnalysis: protectedProcedure
-    .use(rateLimited('complianceQuery'))
-    .query(async ({ ctx }) => {
-      try {
-        const orgId = ctx.user!.organizationId;
-
-        if (!orgId) {
-          return [];
-        }
-
-        const gaps = await complianceModule.analyzeComplianceGaps(ctx.user!.id, orgId);
-
-        logger.info({
-          type: 'compliance_gap_analysis_retrieved',
-          userId: ctx.user!.id,
-          orgId,
-          gapCount: gaps.length,
-        });
-
-        return gaps;
-      } catch (error: any) {
-        logger.error({
-          type: 'compliance_gap_analysis_error',
-          userId: ctx.user!.id,
-          error: error.message,
-        });
-
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Failed to get compliance gap analysis',
-          cause: error,
-        });
-      }
-    }),
 
   /**
    * Get compliance recommendations
@@ -803,6 +763,442 @@ export const complianceRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to generate compliance roadmap',
+          cause: error,
+        });
+      }
+    }),
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // COMPLIANCE CHECKLIST PROCEDURES
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Generate an AI+RAG compliance checklist.
+   * Requires authentication. RBAC: STARTUP, ENTERPRISE, ADMIN.
+   *
+   * @protected
+   * @rate-limited
+   */
+  generateChecklist: protectedProcedure
+    .use(rateLimited('complianceQuery'))
+    .input(
+      z.object({
+        productType: z.string().min(1).max(100),
+        businessStage: z.string().min(1).max(100),
+        targetSegments: z.array(z.string()).min(1).max(10),
+        servicesOffered: z.array(z.string()).min(1).max(20),
+        additionalConcerns: z.string().max(1000).optional(),
+        organizationId: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        // RBAC: Regulators cannot generate checklists (they issue them)
+        if (ctx.user!.role === 'REGULATOR') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Regulators cannot generate compliance checklists',
+          });
+        }
+
+        logger.info({
+          type: 'checklist_generate_request',
+          userId: ctx.user!.id,
+          productType: input.productType,
+          businessStage: input.businessStage,
+        });
+
+        const result = await complianceModule.generateChecklist(ctx.user!.id, {
+          productType: input.productType,
+          businessStage: input.businessStage,
+          targetSegments: input.targetSegments,
+          servicesOffered: input.servicesOffered,
+          additionalConcerns: input.additionalConcerns,
+          organizationId: input.organizationId ?? ctx.user!.organizationId ?? undefined,
+        });
+
+        logger.info({
+          type: 'checklist_generate_success',
+          userId: ctx.user!.id,
+          checklistId: result.id,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'checklist_generate_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error.message || 'Failed to generate compliance checklist',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * List all checklists for the current user.
+   *
+   * @protected
+   */
+  getUserChecklists: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const checklists = await complianceModule.getUserChecklists(ctx.user!.id);
+
+      logger.info({
+        type: 'user_checklists_retrieved',
+        userId: ctx.user!.id,
+        count: checklists.length,
+      });
+
+      return checklists;
+    } catch (error: any) {
+      logger.error({
+        type: 'user_checklists_error',
+        userId: ctx.user!.id,
+        error: error.message,
+      });
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to retrieve checklists',
+        cause: error,
+      });
+    }
+  }),
+
+  /**
+   * Get a single checklist by ID.
+   *
+   * @protected
+   */
+  getChecklist: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const checklist = await complianceModule.getChecklist(ctx.user!.id, input.id);
+
+        logger.info({
+          type: 'checklist_retrieved',
+          userId: ctx.user!.id,
+          checklistId: input.id,
+        });
+
+        return checklist;
+      } catch (error: any) {
+        logger.error({
+          type: 'checklist_retrieve_error',
+          userId: ctx.user!.id,
+          checklistId: input.id,
+          error: error.message,
+        });
+
+        if (error.message === 'Checklist not found') {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Checklist not found' });
+        }
+        if (error.message.includes('Access denied')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this checklist' });
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to retrieve checklist',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Update checklist item progress states.
+   * Maps item IDs to NOT_STARTED | IN_PROGRESS | COMPLETED.
+   *
+   * @protected
+   */
+  updateChecklistProgress: protectedProcedure
+    .input(
+      z.object({
+        checklistId: z.string().min(1),
+        itemProgress: z.record(
+          z.string(),
+          z.enum(['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED'])
+        ),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await complianceModule.updateChecklistProgress(
+          ctx.user!.id,
+          input.checklistId,
+          input.itemProgress
+        );
+
+        logger.info({
+          type: 'checklist_progress_update_success',
+          userId: ctx.user!.id,
+          checklistId: input.checklistId,
+          progress: result.progress,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'checklist_progress_update_error',
+          userId: ctx.user!.id,
+          checklistId: input.checklistId,
+          error: error.message,
+        });
+
+        if (error.message === 'Checklist not found') {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Checklist not found' });
+        }
+        if (error.message.includes('Access denied')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        }
+        if (error.message.includes('Invalid')) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update checklist progress',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Delete a checklist.
+   *
+   * @protected
+   */
+  deleteChecklist: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        await complianceModule.deleteChecklist(ctx.user!.id, input.id);
+
+        logger.info({
+          type: 'checklist_deleted',
+          userId: ctx.user!.id,
+          checklistId: input.id,
+        });
+
+        return { success: true };
+      } catch (error: any) {
+        logger.error({
+          type: 'checklist_delete_error',
+          userId: ctx.user!.id,
+          checklistId: input.id,
+          error: error.message,
+        });
+
+        if (error.message === 'Checklist not found') {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Checklist not found' });
+        }
+        if (error.message.includes('Access denied')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to delete checklist',
+          cause: error,
+        });
+      }
+    }),
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // GAP ANALYSIS PROCEDURES
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Run a full AI+RAG gap analysis on an uploaded policy document.
+   * Accepts base64-encoded file content (max 10MB), uploads to R2,
+   * extracts text, retrieves regulatory context from Pinecone, and
+   * generates a structured gap analysis via Claude AI.
+   *
+   * @protected
+   * @rate-limited
+   */
+  runGapAnalysis: protectedProcedure
+    .use(rateLimited('complianceQuery'))
+    .input(
+      z.object({
+        fileName: z.string().min(1).max(255),
+        fileType: z.enum(['pdf', 'docx', 'doc', 'txt']),
+        fileContent: z.string().min(1), // base64-encoded
+        regulatoryFrameworks: z.array(z.string()).min(1).max(10),
+        analysisDepth: z.enum(['quick', 'standard', 'deep']).default('standard'),
+        focusAreas: z.array(z.string()).max(10).optional(),
+        organizationId: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        // RBAC: Regulators cannot run gap analyses on client documents
+        if (ctx.user!.role === 'REGULATOR') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Regulators cannot run gap analyses on uploaded documents',
+          });
+        }
+
+        logger.info({
+          type: 'gap_analysis_request',
+          userId: ctx.user!.id,
+          fileName: input.fileName,
+          frameworks: input.regulatoryFrameworks,
+          depth: input.analysisDepth,
+        });
+
+        const result = await complianceModule.runGapAnalysis(ctx.user!.id, {
+          fileName: input.fileName,
+          fileType: input.fileType,
+          fileContent: input.fileContent,
+          regulatoryFrameworks: input.regulatoryFrameworks,
+          analysisDepth: input.analysisDepth,
+          focusAreas: input.focusAreas,
+          organizationId: input.organizationId ?? ctx.user!.organizationId ?? undefined,
+        });
+
+        logger.info({
+          type: 'gap_analysis_request_success',
+          userId: ctx.user!.id,
+          analysisId: result.id,
+          overallScore: result.overallScore,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'gap_analysis_request_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error.message || 'Failed to run gap analysis',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get the most recent gap analysis result for the current user.
+   * Replaces the legacy requirements-based getGapAnalysis.
+   *
+   * @protected
+   */
+  getGapAnalysis: protectedProcedure
+    .input(z.object({ id: z.string().optional() }).optional())
+    .query(async ({ input, ctx }) => {
+      try {
+        if (input?.id) {
+          // Return specific analysis by ID
+          return await complianceModule.getGapAnalysisResult(ctx.user!.id, input.id);
+        }
+
+        // Return list of all analyses for this user
+        const analyses = await complianceModule.getUserGapAnalyses(ctx.user!.id);
+
+        logger.info({
+          type: 'gap_analysis_list_retrieved',
+          userId: ctx.user!.id,
+          count: analyses.length,
+        });
+
+        return analyses;
+      } catch (error: any) {
+        logger.error({
+          type: 'gap_analysis_retrieve_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        if (error.message === 'Gap analysis not found') {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
+        }
+        if (error.message.includes('Access denied')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to retrieve gap analysis',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get a specific gap analysis result by ID.
+   *
+   * @protected
+   */
+  getGapAnalysisResult: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const result = await complianceModule.getGapAnalysisResult(ctx.user!.id, input.id);
+
+        logger.info({
+          type: 'gap_analysis_result_retrieved',
+          userId: ctx.user!.id,
+          analysisId: input.id,
+        });
+
+        return result;
+      } catch (error: any) {
+        if (error.message === 'Gap analysis not found') {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
+        }
+        if (error.message.includes('Access denied')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to retrieve gap analysis',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Delete a gap analysis record and its R2 file.
+   *
+   * @protected
+   */
+  deleteGapAnalysis: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        await complianceModule.deleteGapAnalysis(ctx.user!.id, input.id);
+
+        logger.info({
+          type: 'gap_analysis_deleted',
+          userId: ctx.user!.id,
+          analysisId: input.id,
+        });
+
+        return { success: true };
+      } catch (error: any) {
+        logger.error({
+          type: 'gap_analysis_delete_error',
+          userId: ctx.user!.id,
+          analysisId: input.id,
+          error: error.message,
+        });
+
+        if (error.message === 'Gap analysis not found') {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
+        }
+        if (error.message.includes('Access denied')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to delete gap analysis',
           cause: error,
         });
       }

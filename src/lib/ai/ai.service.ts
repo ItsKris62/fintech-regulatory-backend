@@ -18,6 +18,20 @@ import {
   extractAnswerSections,
   generateCitationValidationPrompt,
 } from './prompts/compliance-query';
+import {
+  ChecklistGenerationParams,
+  GeneratedChecklist,
+  generateChecklistSystemPrompt,
+  generateChecklistUserPrompt,
+  parseChecklistOutput,
+} from './prompts/checklist-generation';
+import {
+  GapAnalysisParams,
+  GapAnalysisResult,
+  generateGapAnalysisSystemPrompt,
+  generateGapAnalysisUserPrompt,
+  parseGapAnalysisOutput,
+} from './prompts/gap-analysis';
 import { aiConfig } from '@/config/ai.config';
 import { logger } from '@/utils/logger';
 import { policyProgressPubSub } from '@/lib/redis/pubsub';
@@ -498,6 +512,137 @@ export class AIService {
     });
 
     return result;
+  }
+
+  /**
+   * Generate a RAG-grounded compliance checklist for a Kenyan fintech.
+   * @param params Checklist generation parameters including product type, stage, services
+   */
+  async generateComplianceChecklist(
+    params: ChecklistGenerationParams
+  ): Promise<GeneratedChecklist> {
+    const startTime = Date.now();
+
+    logger.info({
+      type: 'checklist_generation_started',
+      productType: params.productType,
+      businessStage: params.businessStage,
+      ragContextLength: params.ragContext?.length ?? 0,
+    });
+
+    const systemPrompt = generateChecklistSystemPrompt();
+    const userPrompt = generateChecklistUserPrompt(params);
+
+    // Use higher token limit — checklists are dense
+    const result = await complete(
+      {
+        prompt: userPrompt,
+        systemPrompt,
+        maxTokens: 8000,
+        temperature: 0.2, // Low temperature for factual legal content
+      },
+      'policy'
+    );
+
+    // Parse and validate the JSON response
+    let checklist: GeneratedChecklist;
+    try {
+      checklist = parseChecklistOutput(result.content);
+    } catch (parseError: unknown) {
+      // Retry once with a simplified prompt on parse failure
+      logger.warn({
+        type: 'checklist_parse_retry',
+        error: (parseError as Error).message,
+      });
+      const retryResult = await complete(
+        {
+          prompt: userPrompt + '\n\nIMPORTANT: Return ONLY valid JSON, starting with { and ending with }. No other text.',
+          systemPrompt,
+          maxTokens: 8000,
+          temperature: 0.1,
+        },
+        'policy'
+      );
+      checklist = parseChecklistOutput(retryResult.content);
+    }
+
+    logger.info({
+      type: 'checklist_generation_complete',
+      totalItems: checklist.metadata.totalItems,
+      criticalItems: checklist.metadata.criticalItems,
+      durationMs: Date.now() - startTime,
+      cost: result.cost,
+    });
+
+    return checklist;
+  }
+
+  /**
+   * Perform AI-powered gap analysis comparing a policy document
+   * against Kenyan regulatory requirements.
+   * @param params Gap analysis parameters including policy text and frameworks
+   */
+  async performGapAnalysis(
+    params: GapAnalysisParams
+  ): Promise<GapAnalysisResult> {
+    const startTime = Date.now();
+
+    logger.info({
+      type: 'gap_analysis_started',
+      documentName: params.documentName,
+      frameworks: params.regulatoryFrameworks,
+      analysisDepth: params.analysisDepth,
+      policyTextLength: params.policyText.length,
+      ragContextLength: params.ragContext?.length ?? 0,
+    });
+
+    const systemPrompt = generateGapAnalysisSystemPrompt();
+    const userPrompt = generateGapAnalysisUserPrompt(params);
+
+    // Deep analysis gets more tokens; quick gets fewer
+    const maxTokens = params.analysisDepth === 'deep' ? 8000 : params.analysisDepth === 'standard' ? 5000 : 3000;
+
+    const result = await complete(
+      {
+        prompt: userPrompt,
+        systemPrompt,
+        maxTokens,
+        temperature: 0.2,
+      },
+      'policy'
+    );
+
+    // Parse and validate JSON response
+    let gapAnalysis: GapAnalysisResult;
+    try {
+      gapAnalysis = parseGapAnalysisOutput(result.content);
+    } catch (parseError: unknown) {
+      logger.warn({
+        type: 'gap_analysis_parse_retry',
+        error: (parseError as Error).message,
+      });
+      const retryResult = await complete(
+        {
+          prompt: userPrompt + '\n\nIMPORTANT: Return ONLY valid JSON, starting with { and ending with }. No other text.',
+          systemPrompt,
+          maxTokens,
+          temperature: 0.1,
+        },
+        'policy'
+      );
+      gapAnalysis = parseGapAnalysisOutput(retryResult.content);
+    }
+
+    logger.info({
+      type: 'gap_analysis_complete',
+      overallScore: gapAnalysis.overallScore,
+      totalGaps: gapAnalysis.metadata.totalGaps,
+      criticalGaps: gapAnalysis.metadata.criticalGaps,
+      durationMs: Date.now() - startTime,
+      cost: result.cost,
+    });
+
+    return gapAnalysis;
   }
 }
 
