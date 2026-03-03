@@ -17,6 +17,10 @@ export interface VectorMetadata {
   year?: number;
   regulatoryArea?: string;
   citation?: string;
+  /** ISO jurisdiction label used by RAG filter auto-detection (e.g. "Kenya", "International", "EU") */
+  jurisdiction?: string;
+  /** Prisma RegulatoryDocumentCategory value used by RAG filter auto-detection */
+  category?: string;
 }
 
 /**

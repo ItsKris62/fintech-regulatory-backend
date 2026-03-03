@@ -59,10 +59,10 @@ interface RegistryEntry extends Omit<DocumentIngestionInput, 'filePath' | 'categ
 }
 
 const DOCUMENT_REGISTRY: RegistryEntry[] = [
-  // ── Kenyan Data Protection ────────────────────────────────────────────────
+  // ── Kenya: Data Protection & Privacy ─────────────────────────────────────
 
   {
-    // ✅ File present: TheDataProtectionAct__No24of2019.pdf
+    // ✅ File present
     fileName: 'kenya/TheDataProtectionAct__No24of2019.pdf',
     title: 'Kenya Data Protection Act, 2019 (No. 24 of 2019)',
     source: 'Parliament of Kenya',
@@ -73,7 +73,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2019',
   },
   {
-    // ✅ File present: THE-DATA-PROTECTION-REGISTRATION-OF-DATA-CONTROLLERS-AND-DATA-PROCESSORS-REGULATIONS-2021.pdf
+    // ✅ File present
     fileName: 'kenya/THE-DATA-PROTECTION-REGISTRATION-OF-DATA-CONTROLLERS-AND-DATA-PROCESSORS-REGULATIONS-2021.pdf',
     title: 'Data Protection (Registration of Data Controllers and Data Processors) Regulations, 2021',
     source: 'Office of Data Protection Commissioner',
@@ -84,7 +84,18 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2021',
   },
   {
-    // ✅ File present: ODPC-Guidance-Note-on-Registration-of-Data-Controllers-and-Data-Processors.pdf
+    // ✅ File present
+    fileName: 'kenya/24-06-2024-The-Data-Protection-Compliance-audit-Regulations-2024_.pdf',
+    title: 'Data Protection (Compliance Audit) Regulations, 2024',
+    source: 'Office of Data Protection Commissioner',
+    category: 'DATA_PROTECTION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'regulation',
+    effectiveDate: new Date('2024-06-24'),
+    version: '2024',
+  },
+  {
+    // ✅ File present
     fileName: 'kenya/ODPC-Guidance-Note-on-Registration-of-Data-Controllers-and-Data-Processors.pdf',
     title: 'ODPC Guidance Note on Registration of Data Controllers and Data Processors',
     source: 'Office of Data Protection Commissioner',
@@ -93,7 +104,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'guideline',
   },
   {
-    // ✅ File present: ODPC-Guidance-Note-for-Digital-Credit-Providers.pdf
+    // ✅ File present
     fileName: 'kenya/ODPC-Guidance-Note-for-Digital-Credit-Providers.pdf',
     title: 'ODPC Guidance Note for Digital Credit Providers',
     source: 'Office of Data Protection Commissioner',
@@ -102,7 +113,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'guideline',
   },
   {
-    // ✅ File present: ODPC-Guidance-Note-on-Data-Protection-Impact-Assessment-1.pdf
+    // ✅ File present
     fileName: 'kenya/ODPC-Guidance-Note-on-Data-Protection-Impact-Assessment-1.pdf',
     title: 'ODPC Guidance Note on Data Protection Impact Assessment (DPIA)',
     source: 'Office of Data Protection Commissioner',
@@ -110,20 +121,31 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     jurisdiction: 'Kenya',
     documentType: 'guideline',
   },
-
-  // ── Kenyan Cybersecurity & ICT ────────────────────────────────────────────
-
   {
-    // ✅ File present: GuidelinesonCybersecurityforPSPs.pdf
-    fileName: 'kenya/GuidelinesonCybersecurityforPSPs.pdf',
-    title: 'Guidelines on Cybersecurity for Payment Service Providers',
-    source: 'Central Bank of Kenya',
-    category: 'PAYMENT_SYSTEMS' as DocumentCategory,
+    // ✅ File present
+    fileName: 'kenya/ODPC-–-Guidance-Note-on-Processing-by-MSMEs.pdf',
+    title: 'ODPC Guidance Note on Data Processing by MSMEs',
+    source: 'Office of Data Protection Commissioner',
+    category: 'DATA_PROTECTION' as DocumentCategory,
     jurisdiction: 'Kenya',
     documentType: 'guideline',
   },
+
+  // ── Kenya: Cybersecurity & ICT ────────────────────────────────────────────
+
   {
-    // ✅ File present: Guidelines-for-Network-RedundancyResilience-and-Diversity-for-ICT-Networks-in-Kenya-1.pdf
+    // ✅ File present
+    fileName: 'kenya/KenyaInformationandCommunicationsAct(No2of1998).pdf',
+    title: 'Kenya Information and Communications Act (No. 2 of 1998)',
+    source: 'Parliament of Kenya',
+    category: 'CYBERSECURITY' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'act',
+    effectiveDate: new Date('1998-01-01'),
+    version: '1998',
+  },
+  {
+    // ✅ File present
     fileName: 'kenya/Guidelines-for-Network-RedundancyResilience-and-Diversity-for-ICT-Networks-in-Kenya-1.pdf',
     title: 'Guidelines for Network Redundancy, Resilience and Diversity for ICT Networks in Kenya',
     source: 'Communications Authority of Kenya',
@@ -132,7 +154,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'guideline',
   },
   {
-    // ✅ File present: Guidelines-for-Undertaking-ICT-Infrastructure-Works.pdf
+    // ✅ File present
     fileName: 'kenya/Guidelines-for-Undertaking-ICT-Infrastructure-Works.pdf',
     title: 'Guidelines for Undertaking ICT Infrastructure Works',
     source: 'Communications Authority of Kenya',
@@ -140,101 +162,206 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     jurisdiction: 'Kenya',
     documentType: 'guideline',
   },
-
-  // ── Kenyan Legislation (files not yet added — will be skipped) ────────────
-
   {
-    // ⏭️ File not present yet — add kenya/computer-misuse-cybercrimes-act-2018.pdf
-    fileName: 'kenya/computer-misuse-cybercrimes-act-2018.pdf',
-    title: 'Computer Misuse and Cybercrimes Act, 2018',
-    source: 'Parliament of Kenya',
+    // ✅ File present
+    fileName: 'kenya/Environmental and Social Impact Assessment Guidelines for ICT Projects 2025.pdf',
+    title: 'Environmental and Social Impact Assessment Guidelines for ICT Projects, 2025',
+    source: 'Communications Authority of Kenya',
     category: 'CYBERSECURITY' as DocumentCategory,
     jurisdiction: 'Kenya',
-    documentType: 'act',
-    effectiveDate: new Date('2018-05-16'),
-    version: '2018',
+    documentType: 'guideline',
+    effectiveDate: new Date('2025-01-01'),
+    version: '2025',
   },
   {
-    // ⏭️ File not present yet — add kenya/cbk-prudential-guidelines-digital-lending.pdf
-    fileName: 'kenya/cbk-prudential-guidelines-digital-lending.pdf',
-    title: 'CBK Prudential Guidelines for Digital Lending',
+    // ✅ File present
+    fileName: 'kenya/Framework for CO2 Reduction in the ICT Sector 2025.pdf',
+    title: 'Framework for CO2 Reduction in the ICT Sector, 2025',
+    source: 'Communications Authority of Kenya',
+    category: 'CYBERSECURITY' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'framework',
+    effectiveDate: new Date('2025-01-01'),
+    version: '2025',
+  },
+
+  // ── Kenya: Payment Systems ────────────────────────────────────────────────
+
+  {
+    // ✅ File present
+    fileName: 'kenya/GuidelinesonCybersecurityforPSPs.pdf',
+    title: 'Guidelines on Cybersecurity for Payment Service Providers',
     source: 'Central Bank of Kenya',
-    category: 'FINTECH_REGULATION' as DocumentCategory,
+    category: 'PAYMENT_SYSTEMS' as DocumentCategory,
     jurisdiction: 'Kenya',
     documentType: 'guideline',
-    version: '2022',
   },
   {
-    // ⏭️ File not present yet — add kenya/national-payment-systems-act.pdf
-    fileName: 'kenya/national-payment-systems-act.pdf',
-    title: 'National Payment Systems Act & Regulations',
+    // ✅ File present
+    fileName: 'kenya/National Payment System Act.pdf',
+    title: 'National Payment Systems Act',
     source: 'Parliament of Kenya',
     category: 'PAYMENT_SYSTEMS' as DocumentCategory,
     jurisdiction: 'Kenya',
     documentType: 'act',
     version: '2011',
   },
+
+  // ── Kenya: Fintech & Banking Regulation ───────────────────────────────────
+
   {
-    // ⏭️ File not present yet — add kenya/cbk-regulatory-sandbox-guidelines.pdf
-    fileName: 'kenya/cbk-regulatory-sandbox-guidelines.pdf',
-    title: 'CBK Regulatory Sandbox Guidelines',
+    // ✅ File present
+    fileName: 'kenya/Banking Act.pdf',
+    title: 'Banking Act (Cap. 488)',
+    source: 'Parliament of Kenya',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'act',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/PRUDENTIAL-GUIDELINES.pdf',
+    title: 'CBK Prudential Guidelines for Institutions Licensed under the Banking Act',
     source: 'Central Bank of Kenya',
     category: 'FINTECH_REGULATION' as DocumentCategory,
     jurisdiction: 'Kenya',
     documentType: 'guideline',
   },
   {
-    // ⏭️ File not present yet — add kenya/aml-cft-guidelines.pdf
-    fileName: 'kenya/aml-cft-guidelines.pdf',
-    title: 'AML/CFT Guidelines',
-    source: 'Financial Reporting Centre',
-    category: 'AML_CFT' as DocumentCategory,
+    // ✅ File present
+    fileName: 'kenya/L-.N.-No.-46-Central-Bank-of-Kenya-Digital-Credit-Providers-Regulations-2022.pdf',
+    title: 'Central Bank of Kenya (Digital Credit Providers) Regulations, 2022 (L.N. No. 46)',
+    source: 'Central Bank of Kenya',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'regulation',
+    effectiveDate: new Date('2022-03-18'),
+    version: '2022',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/Draft-Regulatory-Sandbox-Policy-Guidance-Note-2018.pdf',
+    title: 'CBK Draft Regulatory Sandbox Policy Guidance Note, 2018',
+    source: 'Central Bank of Kenya',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
     jurisdiction: 'Kenya',
     documentType: 'guideline',
+    effectiveDate: new Date('2018-01-01'),
+    version: '2018',
   },
   {
-    // ⏭️ File not present yet — add kenya/kenya-information-communications-act.pdf
-    fileName: 'kenya/kenya-information-communications-act.pdf',
-    title: 'Kenya Information and Communications Act',
-    source: 'Parliament of Kenya',
-    category: 'CYBERSECURITY' as DocumentCategory,
-    jurisdiction: 'Kenya',
-    documentType: 'act',
-    version: '1998',
-  },
-  {
-    // ⏭️ File not present yet — add kenya/central-bank-of-kenya-act.pdf
-    fileName: 'kenya/central-bank-of-kenya-act.pdf',
-    title: 'Central Bank of Kenya Act (Fintech Sections)',
+    // ✅ File present
+    fileName: 'kenya/Finance Act 2023.pdf',
+    title: 'Finance Act, 2023',
     source: 'Parliament of Kenya',
     category: 'FINTECH_REGULATION' as DocumentCategory,
     jurisdiction: 'Kenya',
     documentType: 'act',
-    version: '2014',
+    effectiveDate: new Date('2023-06-26'),
+    version: '2023',
   },
   {
-    // ⏭️ File not present yet — add kenya/cma-regulatory-sandbox-guidelines.pdf
-    fileName: 'kenya/cma-regulatory-sandbox-guidelines.pdf',
-    title: 'CMA Regulatory Sandbox Guidelines',
-    source: 'Capital Markets Authority',
+    // ✅ File present
+    fileName: 'kenya/Draft-Banking-Penalties-Regulations-2024.pdf',
+    title: 'Draft Banking (Penalties) Regulations, 2024',
+    source: 'Central Bank of Kenya',
     category: 'FINTECH_REGULATION' as DocumentCategory,
     jurisdiction: 'Kenya',
-    documentType: 'guideline',
+    documentType: 'regulation',
+    effectiveDate: new Date('2024-01-01'),
+    version: '2024 (Draft)',
   },
   {
-    // ⏭️ File not present yet — add kenya/ira-insurtech-guidelines.pdf
-    fileName: 'kenya/ira-insurtech-guidelines.pdf',
-    title: 'IRA Insurtech Guidelines',
+    // ✅ File present
+    fileName: 'kenya/Kenya-National-Financial-Inclusion-Strategy-2025-2028.pdf',
+    title: 'Kenya National Financial Inclusion Strategy 2025–2028',
+    source: 'National Treasury of Kenya',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'framework',
+    effectiveDate: new Date('2025-01-01'),
+    version: '2025–2028',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/Insurance (Bancassurance) Regulations 2020.pdf',
+    title: 'Insurance (Bancassurance) Regulations, 2020',
     source: 'Insurance Regulatory Authority',
     category: 'FINTECH_REGULATION' as DocumentCategory,
     jurisdiction: 'Kenya',
-    documentType: 'guideline',
+    documentType: 'regulation',
+    effectiveDate: new Date('2020-01-01'),
+    version: '2020',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/The Capital Markets (InvestmentBased Crowdfunding) Regulations.pdf',
+    title: 'Capital Markets (Investment-Based Crowdfunding) Regulations',
+    source: 'Capital Markets Authority',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'regulation',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/Virtual Asset Service Providers Act.pdf',
+    title: 'Virtual Asset Service Providers Act',
+    source: 'Parliament of Kenya',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'act',
+  },
+
+  // ── Kenya: Tax & Digital Commerce ─────────────────────────────────────────
+
+  {
+    // ✅ File present
+    fileName: 'kenya/The Value Added Tax (Electronic Internet and Digital Marketplace Supply) Regulations 2023.pdf',
+    title: 'Value Added Tax (Electronic, Internet and Digital Marketplace Supply) Regulations, 2023',
+    source: 'Kenya Revenue Authority',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'regulation',
+    effectiveDate: new Date('2023-01-01'),
+    version: '2023',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/The Tax Procedures (Electronic Tax Invoice) Regulations.pdf',
+    title: 'Tax Procedures (Electronic Tax Invoice) Regulations',
+    source: 'Kenya Revenue Authority',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'regulation',
+  },
+
+  // ── Kenya: AML/CFT ────────────────────────────────────────────────────────
+
+  {
+    // ✅ File present
+    fileName: 'kenya/Proceeds-of-Crime-and-Anti-Money-Laundering-Act-No-9-of-2009-Revised-2022.pdf',
+    title: 'Proceeds of Crime and Anti-Money Laundering Act (No. 9 of 2009, Revised 2022)',
+    source: 'Parliament of Kenya',
+    category: 'AML_CFT' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'act',
+    effectiveDate: new Date('2009-06-01'),
+    version: '2022 Revision',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/POCAMLA-REGULATIONS.pdf',
+    title: 'Proceeds of Crime and Anti-Money Laundering (POCAMLA) Regulations',
+    source: 'Financial Reporting Centre',
+    category: 'AML_CFT' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'regulation',
   },
 
   // ── International Standards ───────────────────────────────────────────────
 
   {
-    // ✅ File present: NIST.CSWP.29.pdf (NIST CSF 2.0 core document)
+    // ✅ File present
     fileName: 'international/NIST.CSWP.29.pdf',
     title: 'NIST Cybersecurity Framework 2.0',
     source: 'NIST',
@@ -245,7 +372,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2.0',
   },
   {
-    // ✅ File present: NIST CSF 2.0 Implementation Examples.pdf
+    // ✅ File present
     fileName: 'international/NIST CSF 2.0 Implementation Examples.pdf',
     title: 'NIST Cybersecurity Framework 2.0 — Implementation Examples',
     source: 'NIST',
@@ -256,7 +383,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2.0',
   },
   {
-    // ✅ File present: ISO_IEC-270012022-ed.3.pdf (ISO 27001:2022 Third Edition)
+    // ✅ File present
     fileName: 'international/ISO_IEC-270012022-ed.3.pdf',
     title: 'ISO/IEC 27001:2022 — Information Security Management Systems',
     source: 'ISO/IEC',
@@ -266,26 +393,41 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     effectiveDate: new Date('2022-10-25'),
     version: '2022 (3rd edition)',
   },
+
+  // ── International: Payment Card Industry ─────────────────────────────────
+
   {
-    // ⏭️ File not present yet — add international/pci-dss-requirements.pdf
-    fileName: 'international/pci-dss-requirements.pdf',
-    title: 'PCI DSS Requirements',
+    // ✅ File present
+    fileName: 'international/PCI-DSS-v4-0-SAQ-A.pdf',
+    title: 'PCI DSS v4.0 — Self-Assessment Questionnaire A (SAQ A)',
     source: 'PCI Security Standards Council',
     category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
     jurisdiction: 'International',
     documentType: 'standard',
+    effectiveDate: new Date('2022-03-01'),
     version: 'v4.0',
   },
   {
-    // ⏭️ File not present yet — add international/gdpr-full-text.pdf
-    fileName: 'international/gdpr-full-text.pdf',
-    title: 'GDPR Full Text',
+    // ✅ File present
+    fileName: 'international/General Data Protection Regulation.pdf',
+    title: 'General Data Protection Regulation (GDPR) — Regulation (EU) 2016/679',
     source: 'European Union',
     category: 'DATA_PROTECTION' as DocumentCategory,
     jurisdiction: 'EU',
     documentType: 'regulation',
     effectiveDate: new Date('2018-05-25'),
     version: '2016/679',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/Computer Misuse and Cybercrimes Act 2018.pdf',
+    title: 'Computer Misuse and Cybercrimes Act, 2018',
+    source: 'Parliament of Kenya',
+    category: 'CYBERSECURITY' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'act',
+    effectiveDate: new Date('2018-05-16'),
+    version: '2018',
   },
 ];
 

@@ -275,6 +275,13 @@ async function processDocument(
         documentType: doc.documentType,
         chunkIndex,
         section: chunk.section ?? undefined,
+        // Metadata used by RAG filter auto-detection
+        jurisdiction: doc.jurisdiction,
+        category: doc.category,
+        year: doc.effectiveDate
+          ? new Date(doc.effectiveDate).getFullYear()
+          : undefined,
+        regulatoryArea: doc.category,
       }
     })
 
