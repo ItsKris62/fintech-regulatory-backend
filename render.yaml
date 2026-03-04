@@ -8,13 +8,80 @@ services:
     startCommand: pnpm run start:prod
     healthCheckPath: /health
     envVars:
+      # ── Application ──────────────────────────────────────────────────
       - key: NODE_ENV
         value: production
+      - key: LOG_LEVEL
+        value: info
+
+      # ── URLs (set in Render dashboard) ──────────────────────────────
+      # FRONTEND_URL  → your Vercel app URL, e.g. https://my-app.vercel.app
+      #               → supports comma-separated list for multiple origins
+      # APP_URL       → this Render service URL, e.g. https://fintech-regulatory-backend.onrender.com
+      - key: FRONTEND_URL
+        sync: false
+      - key: APP_URL
+        sync: false
+
+      # ── Database ─────────────────────────────────────────────────────
       - key: DATABASE_URL
         sync: false
+
+      # ── Redis ────────────────────────────────────────────────────────
       - key: REDIS_URL
         sync: false
+
+      # ── JWT Authentication ───────────────────────────────────────────
+      # Both access and refresh tokens use JWT_SECRET
       - key: JWT_SECRET
         sync: false
-      - key: JWT_REFRESH_SECRET
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: REFRESH_TOKEN_EXPIRES_IN
+        value: 30d
+
+      # ── Email (Resend) ───────────────────────────────────────────────
+      - key: RESEND_API_KEY
         sync: false
+      - key: FROM_EMAIL
+        sync: false
+
+      # ── AI (Anthropic Claude) ────────────────────────────────────────
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-6
+
+      # ── Vector Database (Pinecone) ───────────────────────────────────
+      - key: PINECONE_API_KEY
+        sync: false
+      - key: PINECONE_ENVIRONMENT
+        sync: false
+      - key: PINECONE_INDEX_NAME
+        value: sheriabot-legal-docs
+
+      # ── File Storage (Cloudflare R2) ─────────────────────────────────
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: sheria-bot-saas
+      - key: R2_PUBLIC_URL
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+
+      # ── Embeddings (HuggingFace) ─────────────────────────────────────
+      - key: EMBEDDING_PROVIDER
+        value: huggingface
+      - key: HUGGINGFACE_API_KEY
+        sync: false
+
+      # ── Rate Limiting ────────────────────────────────────────────────
+      - key: RATE_LIMIT_MAX
+        value: "100"
+      - key: RATE_LIMIT_WINDOW
+        value: 15m
