@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
 import {
   updateProfileSchema,
@@ -608,6 +609,97 @@ export const userRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to delete account',
+          cause: error,
+        });
+      }
+    }),
+
+  // ─── NOTIFICATION PREFERENCES ─────────────────────────────────────────────
+
+  /**
+   * Get the current user's notification preferences
+   */
+  getNotificationPreferences: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const prefs = await ctx.prisma.notificationPreference.findUnique({
+        where: { userId: ctx.user.id },
+      });
+
+      // Return defaults if no record exists yet
+      if (!prefs) {
+        return {
+          paymentDueReminder: true,
+          complianceQueryReady: true,
+          policyDocumentReady: true,
+          documentIngestionComplete: true,
+        };
+      }
+
+      return {
+        paymentDueReminder: prefs.paymentDueReminder,
+        complianceQueryReady: prefs.complianceQueryReady,
+        policyDocumentReady: prefs.policyDocumentReady,
+        documentIngestionComplete: prefs.documentIngestionComplete,
+      };
+    } catch (error: any) {
+      logger.error({
+        type: 'user_get_notification_prefs_error',
+        userId: ctx.user.id,
+        error: error.message,
+      });
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get notification preferences',
+        cause: error,
+      });
+    }
+  }),
+
+  /**
+   * Update the current user's notification preferences
+   */
+  updateNotificationPreferences: protectedProcedure
+    .input(
+      z.object({
+        paymentDueReminder: z.boolean().optional(),
+        complianceQueryReady: z.boolean().optional(),
+        policyDocumentReady: z.boolean().optional(),
+        documentIngestionComplete: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const prefs = await ctx.prisma.notificationPreference.upsert({
+          where: { userId: ctx.user.id },
+          create: {
+            userId: ctx.user.id,
+            ...input,
+          },
+          update: input,
+        });
+
+        logger.info({
+          type: 'user_notification_prefs_updated',
+          userId: ctx.user.id,
+        });
+
+        return {
+          paymentDueReminder: prefs.paymentDueReminder,
+          complianceQueryReady: prefs.complianceQueryReady,
+          policyDocumentReady: prefs.policyDocumentReady,
+          documentIngestionComplete: prefs.documentIngestionComplete,
+        };
+      } catch (error: any) {
+        logger.error({
+          type: 'user_update_notification_prefs_error',
+          userId: ctx.user.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update notification preferences',
           cause: error,
         });
       }

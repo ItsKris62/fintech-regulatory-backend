@@ -23,6 +23,19 @@ import { authRateLimiter } from '@/lib/redis/rate-limiter';
 import { sessionCache } from '@/lib/redis/cache.service';
 import { logger } from '@/utils/logger';
 
+// Verification service
+import {
+  isFreeEmailDomain,
+  FREE_EMAIL_ERROR_MESSAGE,
+  isRegulatorDomain,
+  findValidInvitation,
+  consumeInvitation,
+  initializeNotificationPreferences,
+} from '@/lib/verification/verification.service';
+
+// React Email mailer
+import { reactMailer } from '@/lib/email/react-mailer.service';
+
 // Environment variables
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -143,6 +156,29 @@ export const authRouter = router({
           });
         }
 
+        // Free email domain check (block gmail, yahoo, etc. for org accounts)
+        if (input.role !== 'REGULATOR' && isFreeEmailDomain(input.email)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: FREE_EMAIL_ERROR_MESSAGE,
+          });
+        }
+
+        // Check for a valid invitation first (allows bypassing domain checks)
+        const invitation = await findValidInvitation(input.email);
+
+        // Regulator domain validation
+        if (input.role === 'REGULATOR' && !invitation) {
+          const domainCheck = await isRegulatorDomain(input.email);
+          if (!domainCheck.isRegulator) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                'Regulator accounts require a verified government email address. Please use your official institutional email.',
+            });
+          }
+        }
+
         // Validate organization if provided
         if (input.organizationId) {
           const organization = await ctx.prisma.organization.findUnique({
@@ -165,15 +201,25 @@ export const authRouter = router({
         const verificationExpiry = new Date();
         verificationExpiry.setHours(verificationExpiry.getHours() + 24); // 24 hours
 
+        // Determine account status based on role
+        // Regulators go to pending_approval after email verification; others go to active
+        const initialAccountStatus = 'pending'; // Will become active or pending_approval after email verify
+
+        // Determine role: invitation overrides submitted role
+        const resolvedRole = invitation ? (invitation.role as 'REGULATOR' | 'STARTUP' | 'ENTERPRISE') : input.role;
+
         // Create user in database
         const user = await ctx.prisma.user.create({
           data: {
             email: input.email,
             password: hashedPassword,
             fullName: input.name || input.email,
-            role: input.role,
+            role: resolvedRole,
             phone: input.phone,
-            organizationId: input.organizationId,
+            organizationId: invitation?.organizationId || input.organizationId,
+            emailVerificationToken: verificationToken,
+            emailVerificationExpiry: verificationExpiry,
+            accountStatus: initialAccountStatus,
           } as any,
           select: {
             id: true,
@@ -185,13 +231,23 @@ export const authRouter = router({
           },
         });
 
-        // Send welcome email with verification link
+        // Consume invitation if present
+        if (invitation) {
+          await consumeInvitation(invitation.id).catch((err: any) =>
+            logger.warn({ type: 'invitation_consume_failed', invitationId: invitation.id, error: err.message })
+          );
+        }
+
+        // Initialize notification preferences (non-blocking)
+        initializeNotificationPreferences(user.id).catch(() => {});
+
+        // Send verification email (React Email template)
+        const verificationUrl = `${process.env.FRONTEND_URL || ''}/verify-email?token=${verificationToken}`;
         try {
-          await (ctx.mailer.sendWelcomeEmail as any)({
-            name: (user as any).fullName || user.email,
-            email: user.email,
-            verificationUrl: `${process.env.FRONTEND_URL || ''}/verify-email?token=${verificationToken}`,
-            role: user.role,
+          await reactMailer.sendVerificationEmail(user.email, {
+            userName: (user as any).fullName || user.email,
+            verificationUrl,
+            expiresInHours: 24,
           });
 
           logger.info({
@@ -578,26 +634,25 @@ export const authRouter = router({
           } as any,
         });
 
-        // Send password reset email
-        try {
-          await (ctx.mailer.sendPasswordResetEmail as any)({
-            name: user.fullName || user.email,
-            email: user.email,
-            resetUrl: `${process.env.FRONTEND_URL || ''}/reset-password?token=${resetToken}`,
-            expiresIn: '1 hour',
-          });
-
-          logger.info({
-            type: 'auth_password_reset_email_sent',
-            userId: user.id,
-          });
-        } catch (emailError: any) {
+        // Send password reset email via React Email
+        const resetUrl = `${process.env.FRONTEND_URL || ''}/reset-password?token=${resetToken}`;
+        reactMailer.sendPasswordResetEmail(user.email, {
+          userName: user.fullName || user.email,
+          resetUrl,
+          expiresInMinutes: 60,
+          ipAddress: (ctx.req as any)?.ip,
+        }).catch((err: any) => {
           logger.error({
             type: 'auth_password_reset_email_failed',
             userId: user.id,
-            error: emailError.message,
+            error: err.message,
           });
-        }
+        });
+
+        logger.info({
+          type: 'auth_password_reset_email_sent',
+          userId: user.id,
+        });
 
         return {
           success: true,
@@ -723,24 +778,46 @@ export const authRouter = router({
           });
         }
 
+        // Determine new accountStatus based on role
+        // Regulators need admin approval, everyone else goes active
+        const newAccountStatus = user.role === 'REGULATOR' ? 'pending_approval' : 'active';
+
         // Mark email as verified
         await ctx.prisma.user.update({
           where: { id: user.id },
           data: {
             emailVerified: true,
+            emailVerifiedAt: new Date(),
             emailVerificationToken: null,
             emailVerificationExpiry: null,
+            accountStatus: newAccountStatus,
           } as any,
         });
+
+        const dashboardUrl = `${process.env.FRONTEND_URL || ''}/dashboard`;
+
+        // Send welcome email for non-regulators (regulators still need approval)
+        if (user.role !== 'REGULATOR') {
+          reactMailer.sendWelcomeEmail(user.email, {
+            userName: user.fullName || user.email,
+            role: user.role,
+            dashboardUrl,
+          }).catch(() => {});
+        }
 
         logger.info({
           type: 'auth_email_verification_success',
           userId: user.id,
+          accountStatus: newAccountStatus,
         });
 
         return {
           success: true,
-          message: 'Email verified successfully. You can now access all features.',
+          message:
+            user.role === 'REGULATOR'
+              ? 'Email verified successfully. Your account is pending admin approval.'
+              : 'Email verified successfully. You can now access all features.',
+          requiresApproval: user.role === 'REGULATOR',
         };
       } catch (error: any) {
         logger.error({
@@ -759,6 +836,74 @@ export const authRouter = router({
         });
       }
     }),
+
+  /**
+   * Resend email verification link
+   *
+   * @protected
+   * @rate-limited — max 3 resends per hour (Redis)
+   */
+  resendVerification: protectedProcedure.mutation(async ({ ctx }) => {
+    const userId = ctx.user!.id;
+    try {
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, email: true, fullName: true, emailVerified: true },
+      });
+
+      if (!user) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
+      }
+
+      if (user.emailVerified) {
+        return { success: true, message: 'Email is already verified.' };
+      }
+
+      // Rate limit: max 3 resends per hour
+      const { redis } = await import('@/lib/redis/client');
+      const rateLimitKey = `email_resend:${userId}`;
+      const count = await redis.incr(rateLimitKey);
+      if (count === 1) await redis.expire(rateLimitKey, 3600);
+      if (count > 3) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Too many verification email requests. Please try again in an hour.',
+        });
+      }
+
+      // Generate new token (overwrites previous)
+      const newToken = generateVerificationToken();
+      const newExpiry = new Date();
+      newExpiry.setHours(newExpiry.getHours() + 24);
+
+      await ctx.prisma.user.update({
+        where: { id: userId },
+        data: {
+          emailVerificationToken: newToken,
+          emailVerificationExpiry: newExpiry,
+        } as any,
+      });
+
+      const verificationUrl = `${process.env.FRONTEND_URL || ''}/verify-email?token=${newToken}`;
+      await reactMailer.sendVerificationEmail(user.email, {
+        userName: user.fullName || user.email,
+        verificationUrl,
+        expiresInHours: 24,
+      });
+
+      logger.info({ type: 'auth_resend_verification_success', userId });
+
+      return { success: true, message: 'Verification email sent.' };
+    } catch (error: any) {
+      logger.error({ type: 'auth_resend_verification_error', userId, error: error.message });
+      if (error instanceof TRPCError) throw error;
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to resend verification email',
+        cause: error,
+      });
+    }
+  }),
 
   /**
    * Refresh access token

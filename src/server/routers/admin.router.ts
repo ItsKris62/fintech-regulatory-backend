@@ -964,4 +964,409 @@ export const adminRouter = router({
       });
     }
   }),
+
+  // ─── INVITATION MANAGEMENT ────────────────────────────────────────────────
+
+  /**
+   * Create an invitation for a user
+   *
+   * @admin
+   */
+  createInvitation: adminProcedure
+    .input(
+      z.object({
+        email: z.string().email(),
+        role: z.enum(['REGULATOR', 'STARTUP', 'ENTERPRISE']),
+        organizationId: z.string().optional(),
+        expiresInDays: z.number().min(1).max(30).default(7),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const { randomBytes } = await import('crypto');
+        const token = randomBytes(32).toString('hex');
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + input.expiresInDays);
+
+        const invitation = await ctx.prisma.invitation.create({
+          data: {
+            email: input.email.toLowerCase(),
+            role: input.role,
+            token,
+            expiresAt,
+            invitedBy: ctx.user!.id,
+            organizationId: input.organizationId,
+          },
+        });
+
+        // Send invitation email
+        try {
+          const { reactMailer } = await import('@/lib/email/react-mailer.service');
+          const inviter = await ctx.prisma.user.findUnique({
+            where: { id: ctx.user!.id },
+            select: { fullName: true },
+          });
+          const inviteUrl = `${process.env.FRONTEND_URL || ''}/register?token=${token}&email=${encodeURIComponent(input.email)}`;
+          await reactMailer.sendInvitationEmail(input.email, {
+            inviterName: inviter?.fullName || 'SheriaBot Admin',
+            role: input.role,
+            inviteUrl,
+            expiresInDays: input.expiresInDays,
+          });
+        } catch (emailErr: any) {
+          logger.warn({ type: 'admin_invitation_email_failed', error: emailErr.message });
+        }
+
+        logger.info({
+          type: 'admin_invitation_created',
+          adminId: ctx.user!.id,
+          email: input.email,
+          role: input.role,
+        });
+
+        return {
+          success: true,
+          invitationId: invitation.id,
+          email: invitation.email,
+          role: invitation.role,
+          expiresAt: invitation.expiresAt,
+        };
+      } catch (error: any) {
+        logger.error({ type: 'admin_create_invitation_error', error: error.message });
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create invitation', cause: error });
+      }
+    }),
+
+  /**
+   * List all invitations (with optional filters)
+   *
+   * @admin
+   */
+  listInvitations: adminProcedure
+    .input(
+      z.object({
+        used: z.boolean().optional(),
+        role: z.enum(['REGULATOR', 'STARTUP', 'ENTERPRISE']).optional(),
+        page: z.number().min(1).default(1),
+        limit: z.number().min(1).max(100).default(20),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const where: Record<string, unknown> = {};
+        if (input.used !== undefined) where['used'] = input.used;
+        if (input.role) where['role'] = input.role;
+
+        const [items, total] = await Promise.all([
+          ctx.prisma.invitation.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            skip: (input.page - 1) * input.limit,
+            take: input.limit,
+            select: {
+              id: true,
+              email: true,
+              role: true,
+              used: true,
+              usedAt: true,
+              expiresAt: true,
+              invitedBy: true,
+              organizationId: true,
+              createdAt: true,
+            },
+          }),
+          ctx.prisma.invitation.count({ where }),
+        ]);
+
+        return { items, total, page: input.page, limit: input.limit };
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to list invitations', cause: error });
+      }
+    }),
+
+  // ─── USER APPROVAL (REGULATORS) ───────────────────────────────────────────
+
+  /**
+   * List users pending admin approval
+   *
+   * @admin
+   */
+  listPendingUsers: adminProcedure
+    .input(z.object({ page: z.number().min(1).default(1), limit: z.number().min(1).max(100).default(20) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const where = { accountStatus: 'pending_approval' } as any;
+        const [users, total] = await Promise.all([
+          ctx.prisma.user.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            skip: (input.page - 1) * input.limit,
+            take: input.limit,
+            select: {
+              id: true,
+              email: true,
+              fullName: true,
+              role: true,
+              accountStatus: true,
+              emailVerified: true,
+              createdAt: true,
+              organization: { select: { id: true, name: true } },
+            },
+          }),
+          ctx.prisma.user.count({ where }),
+        ]);
+
+        return { users, total, page: input.page, limit: input.limit };
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to list pending users', cause: error });
+      }
+    }),
+
+  /**
+   * Approve a user account (e.g., regulators after email verification)
+   *
+   * @admin
+   */
+  approveUser: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: input.userId },
+          select: { id: true, email: true, fullName: true, role: true, accountStatus: true },
+        });
+
+        if (!user) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
+        }
+
+        await ctx.prisma.user.update({
+          where: { id: input.userId },
+          data: { accountStatus: 'active' } as any,
+        });
+
+        // Write audit log
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'USER_APPROVED',
+            entityType: 'User',
+            entityId: input.userId,
+            metadata: { targetEmail: user.email, role: user.role },
+          },
+        });
+
+        // Send approval email
+        try {
+          const { reactMailer } = await import('@/lib/email/react-mailer.service');
+          await reactMailer.sendAccountApprovedEmail(user.email, {
+            userName: user.fullName || user.email,
+            role: user.role,
+            dashboardUrl: `${process.env.FRONTEND_URL || ''}/dashboard`,
+          });
+        } catch (emailErr: any) {
+          logger.warn({ type: 'admin_approve_user_email_failed', error: emailErr.message });
+        }
+
+        logger.info({ type: 'admin_user_approved', adminId: ctx.user!.id, userId: input.userId });
+        return { success: true };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to approve user', cause: error });
+      }
+    }),
+
+  /**
+   * Reject a user account application
+   *
+   * @admin
+   */
+  rejectUser: adminProcedure
+    .input(z.object({ userId: z.string(), reason: z.string().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: input.userId },
+          select: { id: true, email: true, fullName: true, role: true },
+        });
+
+        if (!user) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
+        }
+
+        await ctx.prisma.user.update({
+          where: { id: input.userId },
+          data: { accountStatus: 'rejected' } as any,
+        });
+
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'USER_REJECTED',
+            entityType: 'User',
+            entityId: input.userId,
+            metadata: { targetEmail: user.email, reason: input.reason },
+          },
+        });
+
+        // Send rejection email
+        try {
+          const { reactMailer } = await import('@/lib/email/react-mailer.service');
+          await reactMailer.sendAccountRejectedEmail(user.email, {
+            userName: user.fullName || user.email,
+            reason: input.reason,
+            supportEmail: process.env.EMAIL_SUPPORT_ADDRESS || 'support@sheriabot.com',
+          });
+        } catch (emailErr: any) {
+          logger.warn({ type: 'admin_reject_user_email_failed', error: emailErr.message });
+        }
+
+        logger.info({ type: 'admin_user_rejected', adminId: ctx.user!.id, userId: input.userId });
+        return { success: true };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to reject user', cause: error });
+      }
+    }),
+
+  // ─── ORGANIZATION VERIFICATION ────────────────────────────────────────────
+
+  /**
+   * List organizations pending verification
+   *
+   * @admin
+   */
+  listPendingOrganizations: adminProcedure
+    .input(z.object({ page: z.number().min(1).default(1), limit: z.number().min(1).max(100).default(20) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const where = { verificationStatus: 'pending' } as any;
+        const [orgs, total] = await Promise.all([
+          ctx.prisma.organization.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            skip: (input.page - 1) * input.limit,
+            take: input.limit,
+            select: {
+              id: true,
+              name: true,
+              type: true,
+              organizationType: true,
+              registrationNumber: true,
+              cbkLicenseNumber: true,
+              verificationStatus: true,
+              createdAt: true,
+              users: { select: { id: true, email: true, fullName: true, role: true }, take: 5 },
+            },
+          }),
+          ctx.prisma.organization.count({ where }),
+        ]);
+
+        return { orgs, total, page: input.page, limit: input.limit };
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to list pending orgs', cause: error });
+      }
+    }),
+
+  /**
+   * Verify an organization (grant full access)
+   *
+   * @admin
+   */
+  verifyOrganization: adminProcedure
+    .input(z.object({ orgId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const org = await ctx.prisma.organization.findUnique({
+          where: { id: input.orgId },
+          include: { users: { select: { id: true, email: true, fullName: true }, take: 1 } },
+        });
+
+        if (!org) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization not found' });
+        }
+
+        await ctx.prisma.organization.update({
+          where: { id: input.orgId },
+          data: {
+            verificationStatus: 'verified',
+            verifiedAt: new Date(),
+            verifiedBy: ctx.user!.id,
+          } as any,
+        });
+
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'ORG_VERIFIED',
+            entityType: 'Organization',
+            entityId: input.orgId,
+            metadata: { orgName: org.name },
+          },
+        });
+
+        // Notify first org member
+        if (org.users.length > 0) {
+          const firstUser = org.users[0];
+          try {
+            const { reactMailer } = await import('@/lib/email/react-mailer.service');
+            await reactMailer.sendOrgVerifiedEmail(firstUser.email, {
+              userName: firstUser.fullName || firstUser.email,
+              organizationName: org.name,
+              dashboardUrl: `${process.env.FRONTEND_URL || ''}/dashboard`,
+            });
+          } catch (emailErr: any) {
+            logger.warn({ type: 'admin_verify_org_email_failed', error: emailErr.message });
+          }
+        }
+
+        logger.info({ type: 'admin_org_verified', adminId: ctx.user!.id, orgId: input.orgId });
+        return { success: true };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to verify organization', cause: error });
+      }
+    }),
+
+  /**
+   * Reject an organization's verification request
+   *
+   * @admin
+   */
+  rejectOrganization: adminProcedure
+    .input(z.object({ orgId: z.string(), reason: z.string().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const org = await ctx.prisma.organization.findUnique({
+          where: { id: input.orgId },
+          select: { id: true, name: true },
+        });
+
+        if (!org) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization not found' });
+        }
+
+        await ctx.prisma.organization.update({
+          where: { id: input.orgId },
+          data: { verificationStatus: 'rejected' } as any,
+        });
+
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'ORG_REJECTED',
+            entityType: 'Organization',
+            entityId: input.orgId,
+            metadata: { orgName: org.name, reason: input.reason },
+          },
+        });
+
+        logger.info({ type: 'admin_org_rejected', adminId: ctx.user!.id, orgId: input.orgId });
+        return { success: true };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to reject organization', cause: error });
+      }
+    }),
 });

@@ -1,0 +1,325 @@
+/**
+ * React Email Mailer Service
+ *
+ * Extends the existing email client with typed send methods for all
+ * React Email templates. Each method:
+ *   1. Checks notification preferences (for toggleable emails)
+ *   2. Renders the React Email template to HTML
+ *   3. Sends via Resend (using the existing sendEmail client)
+ *   4. Logs the attempt
+ *   5. Handles errors gracefully — email failures never crash the app
+ */
+
+import * as React from 'react';
+import { sendEmail } from './client';
+import { renderEmailToHtml, renderEmailToText } from '@/emails/render';
+import { logger } from '@/utils/logger';
+import { prisma } from '@/lib/prisma/client';
+
+// ─── Template Imports ────────────────────────────────────────────────────────
+
+import {
+  VerificationEmail,
+  VerificationEmailSubject,
+  PasswordResetEmail,
+  PasswordResetEmailSubject,
+  WelcomeEmail,
+  WelcomeEmailSubject,
+  PaymentReceiptEmail,
+  getPaymentReceiptSubject,
+  PaymentDueEmail,
+  getPaymentDueSubject,
+  PaymentFailedEmail,
+  PaymentFailedEmailSubject,
+  ComplianceQueryReadyEmail,
+  ComplianceQueryReadyEmailSubject,
+  PolicyDocumentReadyEmail,
+  PolicyDocumentReadyEmailSubject,
+  DocumentIngestionCompleteEmail,
+  DocumentIngestionCompleteEmailSubject,
+  InvitationEmail,
+  InvitationEmailSubject,
+  AccountApprovedEmail,
+  AccountApprovedEmailSubject,
+  AccountRejectedEmail,
+  AccountRejectedEmailSubject,
+  RoleChangeEmail,
+  RoleChangeEmailSubject,
+  OrgVerifiedEmail,
+  OrgVerifiedEmailSubject,
+} from '@/emails';
+
+import type {
+  VerificationEmailProps,
+  PasswordResetEmailProps,
+  WelcomeEmailProps,
+  PaymentReceiptEmailProps,
+  PaymentDueEmailProps,
+  PaymentFailedEmailProps,
+  ComplianceQueryReadyEmailProps,
+  PolicyDocumentReadyEmailProps,
+  DocumentIngestionCompleteEmailProps,
+  InvitationEmailProps,
+  AccountApprovedEmailProps,
+  AccountRejectedEmailProps,
+  RoleChangeEmailProps,
+  OrgVerifiedEmailProps,
+} from '@/emails';
+
+// ─── Notification Preference Keys ────────────────────────────────────────────
+
+type ToggleableNotificationType =
+  | 'paymentDueReminder'
+  | 'complianceQueryReady'
+  | 'policyDocumentReady'
+  | 'documentIngestionComplete';
+
+/**
+ * Check whether a user has enabled a specific toggleable notification type.
+ * Defaults to true if the preference record doesn't exist yet.
+ */
+async function shouldSendNotification(
+  userId: string,
+  notificationType: ToggleableNotificationType
+): Promise<boolean> {
+  try {
+    const prefs = await prisma.notificationPreference.findUnique({
+      where: { userId },
+      select: { [notificationType]: true },
+    });
+
+    if (!prefs) return true; // Default to enabled if no preferences set
+
+    return (prefs as Record<string, boolean>)[notificationType] ?? true;
+  } catch (error: any) {
+    logger.warn({
+      type: 'notification_preference_check_failed',
+      userId,
+      notificationType,
+      error: error.message,
+    });
+    return true; // Fail open
+  }
+}
+
+// ─── Helper ──────────────────────────────────────────────────────────────────
+
+async function sendReactEmail(opts: {
+  to: string;
+  subject: string;
+  element: React.ReactElement;
+  tags?: Array<{ name: string; value: string }>;
+  logType: string;
+}): Promise<void> {
+  try {
+    const [html, text] = await Promise.all([
+      renderEmailToHtml(opts.element),
+      renderEmailToText(opts.element),
+    ]);
+
+    const result = await sendEmail({
+      to: opts.to,
+      subject: opts.subject,
+      html,
+      text,
+      tags: opts.tags,
+    });
+
+    if (!result.success) {
+      logger.error({
+        type: `${opts.logType}_failed`,
+        to: opts.to,
+        error: result.error,
+      });
+    }
+  } catch (error: any) {
+    // Email failures must never crash the application
+    logger.error({
+      type: `${opts.logType}_error`,
+      to: opts.to,
+      error: error.message,
+    });
+  }
+}
+
+// ─── React Email Mailer ───────────────────────────────────────────────────────
+
+class ReactMailerService {
+  // ── AUTH EMAILS (always sent, no preference check) ──
+
+  async sendVerificationEmail(to: string, props: VerificationEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: VerificationEmailSubject,
+      element: React.createElement(VerificationEmail, props),
+      tags: [{ name: 'category', value: 'auth' }, { name: 'type', value: 'verification' }],
+      logType: 'verification_email',
+    });
+  }
+
+  async sendPasswordResetEmail(to: string, props: PasswordResetEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: PasswordResetEmailSubject,
+      element: React.createElement(PasswordResetEmail, props),
+      tags: [{ name: 'category', value: 'auth' }, { name: 'type', value: 'password_reset' }],
+      logType: 'password_reset_email',
+    });
+  }
+
+  async sendWelcomeEmail(to: string, props: WelcomeEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: WelcomeEmailSubject,
+      element: React.createElement(WelcomeEmail, props),
+      tags: [{ name: 'category', value: 'auth' }, { name: 'type', value: 'welcome' }],
+      logType: 'welcome_email',
+    });
+  }
+
+  // ── BILLING EMAILS ──
+
+  /** Mandatory — always sent */
+  async sendPaymentReceiptEmail(to: string, props: PaymentReceiptEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getPaymentReceiptSubject(props.amount, props.invoiceNumber),
+      element: React.createElement(PaymentReceiptEmail, props),
+      tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'receipt' }],
+      logType: 'payment_receipt_email',
+    });
+  }
+
+  /** Toggleable */
+  async sendPaymentDueEmail(to: string, userId: string, props: PaymentDueEmailProps): Promise<void> {
+    const enabled = await shouldSendNotification(userId, 'paymentDueReminder');
+    if (!enabled) return;
+
+    await sendReactEmail({
+      to,
+      subject: getPaymentDueSubject(props.planName),
+      element: React.createElement(PaymentDueEmail, props),
+      tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'payment_due' }],
+      logType: 'payment_due_email',
+    });
+  }
+
+  /** Mandatory */
+  async sendPaymentFailedEmail(to: string, props: PaymentFailedEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: PaymentFailedEmailSubject,
+      element: React.createElement(PaymentFailedEmail, props),
+      tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'payment_failed' }],
+      logType: 'payment_failed_email',
+    });
+  }
+
+  // ── COMPLIANCE EMAILS (toggleable) ──
+
+  async sendComplianceQueryReadyEmail(
+    to: string,
+    userId: string,
+    props: ComplianceQueryReadyEmailProps
+  ): Promise<void> {
+    const enabled = await shouldSendNotification(userId, 'complianceQueryReady');
+    if (!enabled) return;
+
+    await sendReactEmail({
+      to,
+      subject: ComplianceQueryReadyEmailSubject,
+      element: React.createElement(ComplianceQueryReadyEmail, props),
+      tags: [{ name: 'category', value: 'compliance' }, { name: 'type', value: 'query_ready' }],
+      logType: 'compliance_query_ready_email',
+    });
+  }
+
+  async sendPolicyDocumentReadyEmail(
+    to: string,
+    userId: string,
+    props: PolicyDocumentReadyEmailProps
+  ): Promise<void> {
+    const enabled = await shouldSendNotification(userId, 'policyDocumentReady');
+    if (!enabled) return;
+
+    await sendReactEmail({
+      to,
+      subject: PolicyDocumentReadyEmailSubject,
+      element: React.createElement(PolicyDocumentReadyEmail, props),
+      tags: [{ name: 'category', value: 'compliance' }, { name: 'type', value: 'policy_ready' }],
+      logType: 'policy_document_ready_email',
+    });
+  }
+
+  async sendDocumentIngestionCompleteEmail(
+    to: string,
+    userId: string,
+    props: DocumentIngestionCompleteEmailProps
+  ): Promise<void> {
+    const enabled = await shouldSendNotification(userId, 'documentIngestionComplete');
+    if (!enabled) return;
+
+    await sendReactEmail({
+      to,
+      subject: DocumentIngestionCompleteEmailSubject,
+      element: React.createElement(DocumentIngestionCompleteEmail, props),
+      tags: [{ name: 'category', value: 'compliance' }, { name: 'type', value: 'doc_ingested' }],
+      logType: 'document_ingestion_complete_email',
+    });
+  }
+
+  // ── ACCOUNT EMAILS (mandatory) ──
+
+  async sendInvitationEmail(to: string, props: InvitationEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: InvitationEmailSubject,
+      element: React.createElement(InvitationEmail, props),
+      tags: [{ name: 'category', value: 'account' }, { name: 'type', value: 'invitation' }],
+      logType: 'invitation_email',
+    });
+  }
+
+  async sendAccountApprovedEmail(to: string, props: AccountApprovedEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: AccountApprovedEmailSubject,
+      element: React.createElement(AccountApprovedEmail, props),
+      tags: [{ name: 'category', value: 'account' }, { name: 'type', value: 'approved' }],
+      logType: 'account_approved_email',
+    });
+  }
+
+  async sendAccountRejectedEmail(to: string, props: AccountRejectedEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: AccountRejectedEmailSubject,
+      element: React.createElement(AccountRejectedEmail, props),
+      tags: [{ name: 'category', value: 'account' }, { name: 'type', value: 'rejected' }],
+      logType: 'account_rejected_email',
+    });
+  }
+
+  async sendRoleChangeEmail(to: string, props: RoleChangeEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: RoleChangeEmailSubject,
+      element: React.createElement(RoleChangeEmail, props),
+      tags: [{ name: 'category', value: 'account' }, { name: 'type', value: 'role_change' }],
+      logType: 'role_change_email',
+    });
+  }
+
+  async sendOrgVerifiedEmail(to: string, props: OrgVerifiedEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: OrgVerifiedEmailSubject,
+      element: React.createElement(OrgVerifiedEmail, props),
+      tags: [{ name: 'category', value: 'account' }, { name: 'type', value: 'org_verified' }],
+      logType: 'org_verified_email',
+    });
+  }
+}
+
+export const reactMailer = new ReactMailerService();
+export { ReactMailerService };

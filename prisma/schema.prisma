@@ -7,46 +7,55 @@ datasource db {
 }
 
 model User {
-  id                 String            @id @default(cuid())
-  email              String            @unique
-  password           String
-  fullName           String
-  phone              String?
-  avatar             String?
-  role               UserRole
-  status             UserStatus        @default(PENDING_VERIFICATION)
-  emailVerified      Boolean           @default(false)
-  emailVerifiedAt    DateTime?
-  organizationId     String?
-  lastLoginAt        DateTime?
-  lastLoginIp        String?
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  preferences        Json?
-  totpEnabled        Boolean           @default(false)
-  totpSecret         String?
-  apiKeys            ApiKey[]
-  auditLogs          AuditLog[]
-  checklists         Checklist[]
-  gapAnalyses        GapAnalysis[]
-  complianceQueries  ComplianceQuery[]
-  authoredDocuments  LegalDocument[]   @relation("DocumentAuthor")
-  publishedDocuments LegalDocument[]   @relation("DocumentPublisher")
-  notifications      Notification[]
-  policies           Policy[]
-  sessions           Session[]
-  organization       Organization?     @relation(fields: [organizationId], references: [id])
+  id                       String                   @id @default(cuid())
+  email                    String                   @unique
+  password                 String
+  fullName                 String
+  phone                    String?
+  avatar                   String?
+  role                     UserRole
+  status                   UserStatus               @default(PENDING_VERIFICATION)
+  accountStatus            String                   @default("pending") // "pending" | "active" | "suspended" | "rejected" | "pending_approval"
+  emailVerified            Boolean                  @default(false)
+  emailVerifiedAt          DateTime?
+  emailVerificationToken   String?                  @unique
+  emailVerificationExpiry  DateTime?
+  passwordResetToken       String?                  @unique
+  passwordResetExpiry      DateTime?
+  organizationId           String?
+  lastLoginAt              DateTime?
+  lastLoginIp              String?
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  preferences              Json?
+  totpEnabled              Boolean                  @default(false)
+  totpSecret               String?
+  apiKeys                  ApiKey[]
+  auditLogs                AuditLog[]
+  checklists               Checklist[]
+  gapAnalyses              GapAnalysis[]
+  complianceQueries        ComplianceQuery[]
+  authoredDocuments        LegalDocument[]          @relation("DocumentAuthor")
+  publishedDocuments       LegalDocument[]          @relation("DocumentPublisher")
+  notifications            Notification[]
+  notificationPreferences  NotificationPreference?
+  policies                 Policy[]
+  sessions                 Session[]
+  organization             Organization?            @relation(fields: [organizationId], references: [id])
 
   @@index([email])
   @@index([organizationId])
   @@index([role])
+  @@index([accountStatus])
 }
 
 model Organization {
   id                 String    @id @default(cuid())
   name               String
   type               String
+  organizationType   String    @default("startup") // "regulator" | "startup" | "enterprise"
   registrationNumber String?
+  cbkLicenseNumber   String?
   website            String?
   industry           String?
   size               String?
@@ -54,11 +63,15 @@ model Organization {
   subscriptionStatus String    @default("trial")
   trialEndsAt        DateTime?
   subscriptionEndsAt DateTime?
+  verificationStatus String    @default("pending") // "pending" | "verified" | "rejected"
+  verifiedAt         DateTime?
+  verifiedBy         String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   users              User[]
 
   @@index([name])
+  @@index([verificationStatus])
 }
 
 model Session {
@@ -415,6 +428,49 @@ model SystemConfig {
   createdAt   DateTime @default(now())
 
   @@index([key])
+}
+
+model Invitation {
+  id             String    @id @default(cuid())
+  email          String
+  role           String    // Target role: REGULATOR, STARTUP, ENTERPRISE
+  token          String    @unique
+  expiresAt      DateTime
+  used           Boolean   @default(false)
+  usedAt         DateTime?
+  invitedBy      String    // Admin user ID
+  organizationId String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([email])
+  @@index([token])
+}
+
+model EmailDomainWhitelist {
+  id        String   @id @default(cuid())
+  domain    String   @unique
+  orgType   String   // "regulator"
+  orgName   String   // "Central Bank of Kenya"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model NotificationPreference {
+  id                        String  @id @default(cuid())
+  userId                    String  @unique
+  user                      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Billing notifications (toggleable)
+  paymentDueReminder        Boolean @default(true)
+
+  // Compliance/system notifications (toggleable)
+  complianceQueryReady      Boolean @default(true)
+  policyDocumentReady       Boolean @default(true)
+  documentIngestionComplete Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 enum UserRole {
