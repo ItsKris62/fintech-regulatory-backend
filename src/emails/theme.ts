@@ -33,7 +33,7 @@ export const EMAIL_THEME = {
   },
 } as const;
 
-export const LOGO_URL = `${FRONTEND_URL}/transparent-logo.png`;
+export const LOGO_URL = `${FRONTEND_URL}/email-signature-logo.png`;
 
 export const APP_NAME = 'SheriaBot';
 export const SUPPORT_EMAIL = process.env.EMAIL_SUPPORT_ADDRESS || 'support@sheriabot.com';
