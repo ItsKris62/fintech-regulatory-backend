@@ -68,7 +68,9 @@ model Organization {
   verifiedBy         String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
-  users              User[]
+  users                   User[]
+  complianceItems         ComplianceItem[]
+  complianceSnapshots     ComplianceScoreSnapshot[]
 
   @@index([name])
   @@index([verificationStatus])
@@ -580,4 +582,48 @@ enum RegulatoryDocumentStatus {
   ACTIVE
   FAILED
   SUPERSEDED
+}
+
+// ============================================================================
+// Compliance Dashboard Models
+// ============================================================================
+
+enum ComplianceCategory {
+  DATA_PROTECTION
+  AML_KYC
+  CONSUMER_PROTECTION
+  CBK_LICENSING
+  CYBERSECURITY
+}
+
+model ComplianceItem {
+  id             String             @id @default(cuid())
+  organizationId String
+  category       ComplianceCategory
+  title          String
+  description    String
+  isCompleted    Boolean            @default(false)
+  completedAt    DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, category])
+}
+
+model ComplianceScoreSnapshot {
+  id                    String   @id @default(cuid())
+  organizationId        String
+  overallScore          Float
+  dataProtectionScore   Float
+  amlKycScore           Float
+  consumerProtectionScore Float
+  cbkLicensingScore     Float
+  cybersecurityScore    Float
+  calculatedAt          DateTime @default(now())
+  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, calculatedAt])
 }
