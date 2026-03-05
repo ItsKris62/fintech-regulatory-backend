@@ -92,6 +92,8 @@ export interface StorageService {
   ) => Promise<FileMetadata>;
 
   downloadFile: (key: string) => Promise<Buffer>;
+  /** Download only the first `maxBytes` bytes of a file (magic-byte inspection). */
+  downloadFileChunk: (key: string, maxBytes: number) => Promise<Buffer>;
   deleteFile: (key: string) => Promise<void>;
   fileExists: (key: string) => Promise<boolean>;
   getFileMetadata: (key: string) => Promise<FileMetadata | null>;
@@ -484,6 +486,33 @@ export function createStorageService(deps?: {
     });
   }
 
+  async function downloadFileChunk(key: string, maxBytes: number): Promise<Buffer> {
+    const span = tracer.startSpan('storage.downloadFileChunk', { attributes: { key, maxBytes } });
+    return await context.with(trace.setSpan(context.active(), span), async () => {
+      try {
+        const cmd = new GetObjectCommand({
+          Bucket: bucketName(),
+          Key: key,
+          Range: `bytes=0-${maxBytes - 1}`,
+        });
+        const response = await withRetry('GetObjectChunk', () => s3.send(cmd));
+
+        if (!response.Body) throw new StorageServiceError('No file content received');
+
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of response.Body as any) chunks.push(chunk);
+        span.setStatus({ code: SpanStatusCode.OK });
+        return Buffer.concat(chunks);
+      } catch (e: any) {
+        span.recordException(e);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: e?.message });
+        throw new StorageServiceError(`Chunk download failed: ${e?.message}`);
+      } finally {
+        span.end();
+      }
+    });
+  }
+
   async function deleteFile(key: string): Promise<void> {
     const span = tracer.startSpan('storage.deleteFile', { attributes: { key } });
     return await context.with(trace.setSpan(context.active(), span), async () => {
@@ -577,6 +606,7 @@ export function createStorageService(deps?: {
     uploadBuffer,
     uploadStream,
     downloadFile,
+    downloadFileChunk,
     deleteFile,
     fileExists,
     getFileMetadata,

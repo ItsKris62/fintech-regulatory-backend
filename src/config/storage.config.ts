@@ -1,4 +1,5 @@
 import { appConfig } from './app.config';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Storage configuration for Cloudflare R2
@@ -308,17 +309,14 @@ export function generateUniqueFilename(
   originalName: string,
   preserveExtension: boolean = true
 ): string {
-  const timestamp = Date.now();
-  const randomId = Math.random().toString(36).substring(2, 15);
+  const uuid = randomUUID();
 
-  let filename = `${timestamp}-${randomId}`;
-
-  if (preserveExtension) {
-    const extension = originalName.substring(originalName.lastIndexOf('.'));
-    filename += extension;
+  if (preserveExtension && originalName.includes('.')) {
+    const extension = originalName.substring(originalName.lastIndexOf('.')).toLowerCase();
+    return `${uuid}${extension}`;
   }
 
-  return filename;
+  return uuid;
 }
 
 /**

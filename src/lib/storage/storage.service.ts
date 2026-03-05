@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { createStorageService, FileMetadata } from './client';
 import { storageConfig, isFileTypeAllowed, generateUniqueFilename, getMaxFileSize, getPublicUrl } from '@/config/storage.config';
 import { logger } from '@/utils/logger';
@@ -358,6 +359,25 @@ export class StorageService {
   }
 
   /**
+   * Download only the first `maxBytes` bytes of a file.
+   * Used for magic-byte inspection without loading the entire file into memory.
+   * @param key File key
+   * @param maxBytes Number of bytes to fetch (default: 8192)
+   */
+  async downloadFileChunk(key: string, maxBytes: number = 8192): Promise<Buffer> {
+    try {
+      return await storageClient.downloadFileChunk(key, maxBytes);
+    } catch (error: any) {
+      logger.error({
+        type: 'file_chunk_download_error',
+        key,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Delete file
    * @param key File key
    */
@@ -384,11 +404,13 @@ export class StorageService {
    * @param key File key
    * @param expiresIn Expiry in seconds
    * @param inline Whether to display inline or download
+   * @param originalFilename Original user-provided filename for Content-Disposition header
    */
   async getDownloadUrl(
     key: string,
     expiresIn?: number,
-    inline: boolean = false
+    inline: boolean = false,
+    originalFilename?: string
   ): Promise<string> {
     try {
       const metadata = await storageClient.getFileMetadata(key);
@@ -397,9 +419,14 @@ export class StorageService {
         throw new StorageServiceError('File not found');
       }
 
+      // Use the original filename if available; fall back to the key's basename.
+      // Strip any path components and sanitize double-quotes to prevent header injection.
+      const rawName = originalFilename ?? path.basename(key);
+      const safeFilename = path.basename(rawName).replace(/"/g, '_');
+
       const contentDisposition = inline
         ? 'inline'
-        : `attachment; filename="${key.split('/').pop()}"`;
+        : `attachment; filename="${safeFilename}"`;
 
       const url = await storageClient.getPresignedDownloadUrl(key, {
         expiresIn,
@@ -420,18 +447,20 @@ export class StorageService {
 
   /**
    * Get presigned upload URL
-   * @param filename Filename
+   * @param filename Filename (used to derive extension if explicitKey is not provided)
    * @param contentType Content type
-   * @param path Storage path
+   * @param storagePath Storage path prefix (ignored when explicitKey is set)
+   * @param explicitKey If provided, use this exact key instead of auto-generating one.
+   *   Callers that pre-generate document IDs (Task 2/5) should pass the full key here.
    */
   async getUploadUrl(
     filename: string,
     contentType: string,
-    path: string = storageConfig.paths.userUploads
+    storagePath: string = storageConfig.paths.userUploads,
+    explicitKey?: string
   ): Promise<{ url: string; key: string }> {
     try {
-      const uniqueFilename = generateUniqueFilename(filename);
-      const key = `${path}${uniqueFilename}`;
+      const key = explicitKey ?? `${storagePath}${generateUniqueFilename(filename)}`;
 
       const url = await storageClient.getPresignedUploadUrl(key, {
         contentType,

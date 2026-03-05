@@ -27,6 +27,12 @@ export const confirmUploadSchema = z.object({
   fileType: z.string(),
   fileSize: z.number(),
   documentType: z.string().default('LEGAL_DOCUMENT'),
+  /**
+   * Pre-generated document ID returned by getUploadUrl.
+   * When provided, the created DB record uses this exact ID so the key path
+   * (which embeds the ID) stays consistent with the database record.
+   */
+  documentId: z.string().optional(),
   description: z.string().max(1000).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });

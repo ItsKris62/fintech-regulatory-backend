@@ -1,5 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
 import {
   getUploadUrlSchema,
@@ -11,6 +13,8 @@ import {
 } from '../schemas/document.schema';
 import { deleteByFilter } from '@/lib/rag/client';
 import { documentIngestionService } from '@/lib/ingestion/document-processor';
+import { validateFileMagicBytes } from '@/utils/file-validation';
+import { storageConfig } from '@/config/storage.config';
 import { logger } from '@/utils/logger';
 
 /**
@@ -52,18 +56,31 @@ export const documentRouter = router({
           });
         }
 
-        // Generate storage key prefix
-        const timestamp = Date.now();
-        const sanitizedFilename = input.filename.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const keyName = `${input.documentType.toLowerCase()}/${ctx.user.id}/${timestamp}-${sanitizedFilename}`;
+        // Pre-generate a document ID so the R2 key can embed it.
+        // confirmUpload will create the DB record with this same ID.
+        const documentId = randomUUID();
 
-        // Get presigned upload URL from storage service (requires filename + contentType)
-        const uploadResult = await ctx.storageService.getUploadUrl(keyName, input.fileType);
+        // UUID-named file — never expose the original filename in the R2 key.
+        const ext = path.extname(input.filename).toLowerCase().slice(0, 10); // e.g. ".pdf"
+        const uuidFilename = `${randomUUID()}${ext}`;
+
+        // Per-org isolation: documents/{orgId}/{docId}/{uuid}.ext
+        const orgId = ctx.user.organizationId ?? ctx.user.id;
+        const storageKey = `documents/${orgId}/${documentId}/${uuidFilename}`;
+
+        // Get presigned upload URL using the pre-constructed key
+        const uploadResult = await ctx.storageService.getUploadUrl(
+          input.filename,
+          input.fileType,
+          undefined,
+          storageKey,
+        );
 
         logger.info({
           type: 'document_upload_url_generated',
           userId: ctx.user.id,
-          filename: input.filename,
+          organizationId: orgId,
+          documentId,
           fileSize: input.fileSize,
           documentType: input.documentType,
         });
@@ -71,7 +88,10 @@ export const documentRouter = router({
         return {
           uploadUrl: uploadResult.url,
           key: uploadResult.key,
-          expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(), // 1 hour
+          documentId, // Return pre-generated ID so confirmUpload can use it
+          expiresAt: new Date(
+            Date.now() + storageConfig.presignedUrls.expiry.upload * 1000,
+          ).toISOString(),
         };
       } catch (error: any) {
         logger.error({
@@ -100,51 +120,90 @@ export const documentRouter = router({
   confirmUpload: protectedProcedure
     .input(confirmUploadSchema)
     .mutation(async ({ input, ctx }) => {
+      // Strip any path components from the original filename before storing —
+      // prevents path traversal in metadata (e.g. "../../etc/passwd.pdf" → "passwd.pdf").
+      const safeOriginalFilename = path.basename(input.filename);
+
       try {
-        // Create document record in database
-        const document = await ctx.prisma.legalDocument.create({
-          data: {
-            actName: input.filename,
-            originalFilename: input.filename,
-            fileUrl: input.key, // Store the key, not the presigned URL
-            fileSize: input.fileSize,
-            mimeType: input.fileType,
-            documentType: input.documentType,
-            userId: ctx.user.id,
-            organizationId: ctx.user.organizationId,
-            keywords: [],
-            amendedBy: [],
-          } as any,
-        });
+        // ── Magic-byte validation ─────────────────────────────────────────
+        // Download the first 8 KB of the file (already in R2) and validate
+        // the actual content type against our allowlist. If validation fails,
+        // delete the file from R2 immediately and reject the request.
+        let fileChunk: Buffer;
+        try {
+          fileChunk = await ctx.storageService.downloadFileChunk(input.key, 8192);
+        } catch (downloadError: any) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Could not retrieve uploaded file for validation',
+            cause: downloadError,
+          });
+        }
 
-        // If it's a legal document, index it in RAG
-        if (input.documentType === 'LEGAL_DOCUMENT') {
+        const validation = await validateFileMagicBytes(
+          fileChunk,
+          safeOriginalFilename,
+          input.fileType,
+        );
+
+        if (!validation.valid) {
+          // Delete the invalid file from R2 before rejecting
           try {
-            // Download file content — stored for future RAG indexing
-            await ctx.storageService.getDownloadUrl(input.key);
-            // TODO: Extract text from file and index in RAG
-
-            logger.info({
-              type: 'document_indexed_rag',
-              userId: ctx.user.id,
-              documentId: document.id,
-            });
-          } catch (ragError: any) {
-            // Log but don't fail upload
+            await ctx.storageService.deleteFile(input.key);
+          } catch (cleanupError: any) {
             logger.error({
-              type: 'document_rag_index_error',
+              type: 'file_validation_cleanup_error',
               userId: ctx.user.id,
-              documentId: document.id,
-              error: ragError.message,
+              key: input.key,
+              error: cleanupError.message,
             });
           }
+
+          logger.warn({
+            type: 'file_validation_rejected',
+            userId: ctx.user.id,
+            key: input.key,
+            claimedType: input.fileType,
+            detectedType: validation.detectedType,
+            reason: validation.reason,
+          });
+
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `File type not allowed. ${validation.reason ?? 'Accepted types: PDF, DOCX, TXT, Markdown'}`,
+          });
         }
+
+        // ── Create document record ────────────────────────────────────────
+        const createData: Record<string, unknown> = {
+          actName: safeOriginalFilename,
+          originalFilename: safeOriginalFilename,
+          fileUrl: input.key, // Store the R2 key, not a presigned URL
+          fileSize: input.fileSize,
+          mimeType: input.fileType,
+          documentType: input.documentType,
+          userId: ctx.user.id,
+          organizationId: ctx.user.organizationId,
+          keywords: [],
+          amendedBy: [],
+        };
+
+        // Use the pre-generated ID from getUploadUrl if provided, so the DB
+        // record ID matches the document ID embedded in the R2 key path.
+        if (input.documentId) {
+          createData.id = input.documentId;
+        }
+
+        const document = await ctx.prisma.legalDocument.create({
+          data: createData as any,
+        });
 
         logger.info({
           type: 'document_upload_confirmed',
           userId: ctx.user.id,
           documentId: document.id,
           documentType: input.documentType,
+          detectedMimeType: validation.detectedType,
         });
 
         return {
@@ -158,6 +217,10 @@ export const documentRouter = router({
           userId: ctx.user.id,
           error: error.message,
         });
+
+        if (error instanceof TRPCError) {
+          throw error;
+        }
 
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
@@ -185,23 +248,35 @@ export const documentRouter = router({
           contentType: 'REGULATORY_DOCUMENT',
         };
 
-        // Filter by organization unless admin
+        // Build AND conditions so org filter and search can coexist without
+        // overwriting each other's OR clauses (bug fix).
+        const andConditions: object[] = [];
+
+        // Filter by organization unless admin — always scoped to DB, never in JS
         if (ctx.user.role !== 'ADMIN') {
-          where.OR = [
-            { userId: ctx.user.id },
-            { organizationId: ctx.user.organizationId },
-          ];
+          andConditions.push({
+            OR: [
+              { userId: ctx.user.id },
+              { organizationId: ctx.user.organizationId },
+            ],
+          });
+        }
+
+        if (search) {
+          andConditions.push({
+            OR: [
+              { title: { contains: search, mode: 'insensitive' } },
+              { actName: { contains: search, mode: 'insensitive' } },
+            ],
+          });
+        }
+
+        if (andConditions.length > 0) {
+          where.AND = andConditions;
         }
 
         if (documentType) {
           where.documentType = documentType;
-        }
-
-        if (search) {
-          where.OR = [
-            { title: { contains: search, mode: 'insensitive' } },
-            { actName: { contains: search, mode: 'insensitive' } },
-          ];
         }
 
         const [documents, total] = await Promise.all([
@@ -288,6 +363,13 @@ export const documentRouter = router({
             document.organizationId === ctx.user.organizationId;
 
           if (!hasAccess) {
+            logger.warn({
+              type: 'document_unauthorized_access',
+              userId: ctx.user.id,
+              userOrgId: ctx.user.organizationId,
+              documentId: input.id,
+              documentOrgId: document.organizationId,
+            });
             throw new TRPCError({
               code: 'FORBIDDEN',
               message: 'Access denied to this document',
@@ -343,6 +425,13 @@ export const documentRouter = router({
             document.organizationId === ctx.user.organizationId;
 
           if (!hasAccess) {
+            logger.warn({
+              type: 'document_unauthorized_download',
+              userId: ctx.user.id,
+              userOrgId: ctx.user.organizationId,
+              documentId: input.id,
+              documentOrgId: document.organizationId,
+            });
             throw new TRPCError({
               code: 'FORBIDDEN',
               message: 'Access denied to this document',
@@ -350,8 +439,14 @@ export const documentRouter = router({
           }
         }
 
-        // Get presigned download URL — use fileUrl as the storage key
-        const downloadUrl = await ctx.storageService.getDownloadUrl(document.fileUrl);
+        // Get presigned download URL — pass original filename so the
+        // Content-Disposition header shows the human-readable name, not the UUID.
+        const downloadUrl = await ctx.storageService.getDownloadUrl(
+          document.fileUrl,
+          storageConfig.presignedUrls.expiry.download,
+          false,
+          document.originalFilename,
+        );
 
         logger.info({
           type: 'document_download_url_generated',
@@ -361,8 +456,10 @@ export const documentRouter = router({
 
         return {
           downloadUrl,
-          filename: document.title || document.originalFilename,
-          expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(), // 1 hour
+          filename: document.title ?? document.originalFilename,
+          expiresAt: new Date(
+            Date.now() + storageConfig.presignedUrls.expiry.download * 1000,
+          ).toISOString(),
         };
       } catch (error: any) {
         logger.error({
@@ -406,26 +503,20 @@ export const documentRouter = router({
 
         // Check access
         if (ctx.user.role !== 'ADMIN' && document.userId !== ctx.user.id) {
+          logger.warn({
+            type: 'document_unauthorized_delete',
+            userId: ctx.user.id,
+            userOrgId: ctx.user.organizationId,
+            documentId: input.id,
+            documentOrgId: document.organizationId,
+          });
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Access denied to this document',
           });
         }
 
-        // Delete from R2 storage
-        try {
-          await ctx.storageService.deleteFile(document.fileUrl);
-        } catch (storageError: any) {
-          logger.warn({
-            type: 'document_storage_delete_error',
-            userId: ctx.user.id,
-            documentId: input.id,
-            error: storageError.message,
-          });
-          // Continue even if storage deletion fails
-        }
-
-        // Remove vectors from Pinecone for all chunk types
+        // Remove vectors from Pinecone (derived data — safe to clear on soft delete)
         try {
           await deleteByFilter({ documentId: input.id });
           logger.info({
@@ -440,17 +531,19 @@ export const documentRouter = router({
             documentId: input.id,
             error: ragError.message,
           });
-          // Continue — soft delete still proceeds even if vector removal fails
+          // Continue — soft delete proceeds even if vector removal fails
         }
 
-        // Soft delete from database
+        // Soft delete: set deletedAt timestamp only. The R2 object is intentionally
+        // retained for the retention period and permanently removed by the scheduled
+        // cleanup script (src/scripts/cleanup-deleted-documents.ts).
         await ctx.prisma.legalDocument.update({
           where: { id: input.id },
           data: { deletedAt: new Date() },
         });
 
         logger.info({
-          type: 'document_deleted',
+          type: 'document_soft_deleted',
           userId: ctx.user.id,
           documentId: input.id,
         });
@@ -474,6 +567,69 @@ export const documentRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to delete document',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Restore a soft-deleted document
+   *
+   * Sets deletedAt back to null. Only the document owner or an admin can restore.
+   * Note: Pinecone vectors are not restored automatically — if the document needs
+   * to be searchable again, trigger a re-ingest via the `reingest` procedure.
+   *
+   * @protected
+   */
+  restore: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const document = await ctx.prisma.legalDocument.findUnique({
+          where: { id: input.id },
+          select: { id: true, deletedAt: true, userId: true, organizationId: true },
+        });
+
+        if (!document) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Document not found' });
+        }
+
+        if (!document.deletedAt) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Document is not deleted',
+          });
+        }
+
+        if (ctx.user.role !== 'ADMIN' && document.userId !== ctx.user.id) {
+          logger.warn({
+            type: 'document_unauthorized_restore',
+            userId: ctx.user.id,
+            documentId: input.id,
+          });
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the document owner or an admin can restore a deleted document',
+          });
+        }
+
+        await ctx.prisma.legalDocument.update({
+          where: { id: input.id },
+          data: { deletedAt: null },
+        });
+
+        logger.info({
+          type: 'document_restored',
+          userId: ctx.user.id,
+          documentId: input.id,
+        });
+
+        return { success: true, message: 'Document restored successfully' };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to restore document',
           cause: error,
         });
       }

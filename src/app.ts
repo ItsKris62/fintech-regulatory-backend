@@ -28,13 +28,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     trustProxy: true, // Required behind Railway's reverse proxy
   });
 
-  // ── Security headers (production-hardened Helmet) ─────────────────────
-  await app.register(securityPlugin);
-
-  // ── Runtime security middleware ───────────────────────────────────────
-  registerSecurityMiddleware(app);
-
-  // ── CORS ─────────────────────────────────────────────────────────────────
+  // ── CORS — must be registered before Helmet so security headers don't ──
+  // conflict with CORS preflight handling.
   // Support comma-separated FRONTEND_URL for multiple origins
   // (e.g. production + Vercel preview deployments)
   const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
@@ -55,6 +50,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
+
+  // ── Security headers (production-hardened Helmet) ─────────────────────
+  // Registered after CORS so CORS headers are already set when Helmet runs.
+  await app.register(securityPlugin);
+
+  // ── Runtime security middleware ───────────────────────────────────────
+  registerSecurityMiddleware(app);
 
   // ── tRPC – all procedures exposed under /trpc ────────────────────────────
   await app.register(fastifyTRPCPlugin, {

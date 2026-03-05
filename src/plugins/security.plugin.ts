@@ -48,10 +48,11 @@ async function securityPlugin(app: FastifyInstance): Promise<void> {
     // XSS filter
     xssFilter: true,
 
-    // Don't embed in other origins
+    // Cross-origin policies — must allow cross-origin resource loading because
+    // the frontend (Vercel) and backend (Render) are on different domains.
     crossOriginEmbedderPolicy: false, // false for APIs that serve to browsers
     crossOriginOpenerPolicy: { policy: 'same-origin' },
-    crossOriginResourcePolicy: { policy: 'same-origin' },
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
 
     // Hide Fastify / Express identifier
     hidePoweredBy: true,
