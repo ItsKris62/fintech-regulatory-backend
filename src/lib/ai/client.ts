@@ -236,15 +236,24 @@ export async function complete(
         },
       ];
 
-      const response = await anthropic.messages.create({
-        model,
-        max_tokens: maxTokens,
-        temperature,
-        system: options.systemPrompt,
-        messages,
-        stop_sequences: options.stopSequences,
-        metadata: options.metadata,
-      });
+      // Use a per-request timeout; checklist/policy generation can take 90-120s
+      const timeoutMs =
+        useCase === 'policy'
+          ? aiConfig.timeout.policyGeneration
+          : aiConfig.timeout.default;
+
+      const response = await anthropic.messages.create(
+        {
+          model,
+          max_tokens: maxTokens,
+          temperature,
+          system: options.systemPrompt,
+          messages,
+          stop_sequences: options.stopSequences,
+          metadata: options.metadata,
+        },
+        { timeout: timeoutMs }
+      );
 
       // Extract content
       const content = response.content

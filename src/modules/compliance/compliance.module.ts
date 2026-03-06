@@ -1169,10 +1169,11 @@ Follow-up Question: ${followUp}
     });
 
     const startTime = Date.now();
+    let record: { id: string } | null = null;
 
     try {
       // 1. Create a placeholder record with GENERATING status
-      const record = await prisma.checklist.create({
+      record = await prisma.checklist.create({
         data: {
           userId,
           organizationId: params.organizationId ?? null,
@@ -1189,29 +1190,64 @@ Follow-up Question: ${followUp}
         },
       });
 
-      // 2. Build RAG query from product + services
-      const ragQuery = `Kenya fintech compliance requirements for ${params.productType} offering ${params.servicesOffered.join(', ')} at ${params.businessStage} stage`;
+      logger.info({
+        type: 'checklist_generate_record_created',
+        userId,
+        checklistId: record.id,
+        productType: params.productType,
+      });
+
+      // 2. Build rich RAG query from product + services + stage
+      const ragQuery = [
+        'Kenya fintech compliance requirements',
+        params.productType,
+        params.servicesOffered.join(' '),
+        params.businessStage,
+        'licensing KYC AML data protection CBK regulations',
+      ].join(' ');
 
       let ragContext: string | undefined;
       try {
-        const ragResults = await ragService.search(ragQuery, { topK: 12, minScore: 0.6 });
+        const ragResults = await ragService.search(ragQuery, { topK: 15, minScore: 0.5 });
         if (ragResults.length > 0) {
-          ragContext = ragResults
+          // Deduplicate by chunkText to avoid repetitive context
+          const seen = new Set<string>();
+          const deduplicated = ragResults.filter((r) => {
+            const key = r.chunkText.slice(0, 100);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          ragContext = deduplicated
             .map((r, i) =>
               `[REGULATORY CONTEXT ${i + 1} — ${r.documentTitle || 'Kenyan Regulation'}]\n${r.chunkText}`
             )
             .join('\n\n---\n\n');
+          logger.info({
+            type: 'checklist_rag_retrieved',
+            userId,
+            checklistId: record.id,
+            resultsCount: deduplicated.length,
+          });
         }
       } catch (ragErr: unknown) {
         logger.warn({
           type: 'checklist_rag_search_failed',
           userId,
+          checklistId: record.id,
           error: (ragErr as Error).message,
         });
         // Continue without RAG context — AI uses its training knowledge
       }
 
       // 3. Generate checklist with Claude AI
+      logger.info({
+        type: 'checklist_ai_generation_start',
+        userId,
+        checklistId: record.id,
+        hasRagContext: !!ragContext,
+      });
+
       const generatedChecklist = await aiService.generateComplianceChecklist({
         productType: params.productType,
         businessStage: params.businessStage,
@@ -1229,10 +1265,16 @@ Follow-up Question: ${followUp}
         }
       }
 
-      // 5. Update DB record to COMPLETED
+      // 5. Update DB record to COMPLETED with full checklist data
+      const checklistTitle =
+        generatedChecklist.metadata.productType
+          ? `${generatedChecklist.metadata.productType} — ${generatedChecklist.metadata.businessStage}`
+          : `${params.productType} — ${params.businessStage}`;
+
       const updated = await prisma.checklist.update({
         where: { id: record.id },
         data: {
+          title: checklistTitle,
           checklistData: generatedChecklist as unknown as Record<string, unknown>,
           itemProgress,
           progress: 0,
@@ -1245,6 +1287,7 @@ Follow-up Question: ${followUp}
         userId,
         checklistId: record.id,
         totalItems: generatedChecklist.metadata.totalItems,
+        criticalItems: generatedChecklist.metadata.criticalItems,
         durationMs: Date.now() - startTime,
       });
 
@@ -1258,11 +1301,31 @@ Follow-up Question: ${followUp}
         createdAt: updated.createdAt,
       };
     } catch (error: unknown) {
+      const errMsg = (error as Error).message ?? 'Unknown error';
       logger.error({
         type: 'checklist_generate_error',
         userId,
-        error: (error as Error).message,
+        checklistId: record?.id ?? null,
+        error: errMsg,
+        durationMs: Date.now() - startTime,
       });
+
+      // Mark the stuck GENERATING record as FAILED so it doesn't linger
+      if (record?.id) {
+        try {
+          await prisma.checklist.update({
+            where: { id: record.id },
+            data: { status: 'FAILED' },
+          });
+        } catch (updateErr: unknown) {
+          logger.warn({
+            type: 'checklist_failed_status_update_error',
+            checklistId: record.id,
+            error: (updateErr as Error).message,
+          });
+        }
+      }
+
       throw error;
     }
   }

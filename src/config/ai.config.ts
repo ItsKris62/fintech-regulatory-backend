@@ -22,20 +22,20 @@ export const aiConfig = {
     // Default model for most operations
     default: appConfig.ai.model,
 
-    // Policy generation (use Sonnet for balance of speed/quality)
-    policyGeneration: 'claude-3-sonnet-20240229',
+    // Policy generation (Sonnet 4.6 for balance of speed/quality)
+    policyGeneration: 'claude-sonnet-4-6',
 
-    // Compliance queries (use Haiku for speed)
-    complianceQuery: 'claude-3-haiku-20240307',
+    // Compliance queries (Haiku 4.5 for speed and cost efficiency)
+    complianceQuery: 'claude-haiku-4-5-20251001',
 
-    // Citation verification (use Haiku for cost efficiency)
-    citationVerification: 'claude-3-haiku-20240307',
+    // Citation verification (Haiku 4.5 for cost efficiency)
+    citationVerification: 'claude-haiku-4-5-20251001',
 
-    // Complex analysis (use Opus for highest quality)
-    complexAnalysis: 'claude-3-opus-20240229',
+    // Complex analysis (Opus 4.6 for highest quality)
+    complexAnalysis: 'claude-opus-4-6',
 
-    // Embedding generation (if using Claude for embeddings)
-    embedding: 'claude-3-haiku-20240307',
+    // Embedding generation (Haiku 4.5 for cost efficiency)
+    embedding: 'claude-haiku-4-5-20251001',
   },
 
   /**
@@ -127,9 +127,9 @@ export const aiConfig = {
 
     // Model pricing (USD per 1M tokens)
     pricing: {
-      'claude-3-opus-20240229': { input: 15.0, output: 75.0 },
-      'claude-3-sonnet-20240229': { input: 3.0, output: 15.0 },
-      'claude-3-haiku-20240307': { input: 0.25, output: 1.25 },
+      'claude-opus-4-6': { input: 15.0, output: 75.0 },
+      'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
+      'claude-haiku-4-5-20251001': { input: 0.8, output: 4.0 },
     },
 
     // Warning threshold (USD)
