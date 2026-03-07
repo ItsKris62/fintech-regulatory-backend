@@ -68,6 +68,11 @@ const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
 const MIN_EXTRACTABLE_TEXT = 100
 const MIN_CHUNK_SIZE = 100
 
+// Pinecone metadata limit is 40,960 bytes per vector.
+// Reserve ~8 KB for all other metadata fields; cap chunk_text at ~30 KB.
+const MAX_CHUNK_TEXT_BYTES = 30_000
+const MAX_SECTION_BYTES = 500
+
 const VECTOR_UPSERT_MAX_RETRIES = 4
 const VECTOR_UPSERT_BASE_DELAY_MS = 400
 
@@ -264,14 +269,27 @@ async function processDocument(
       const id = `${doc.id}-chunk-${chunkIndex}`
       vectorIds.push(id)
 
+      // Truncate fields to stay within Pinecone's 40,960-byte metadata limit
+      const chunkTextBytes = Buffer.byteLength(chunk.text, 'utf8')
+      const safeChunkText =
+        chunkTextBytes > MAX_CHUNK_TEXT_BYTES
+          ? chunk.text.slice(0, MAX_CHUNK_TEXT_BYTES) + '…'
+          : chunk.text
+
+      const rawSection = chunk.section ?? undefined
+      const safeSection =
+        rawSection && Buffer.byteLength(rawSection, 'utf8') > MAX_SECTION_BYTES
+          ? rawSection.slice(0, MAX_SECTION_BYTES) + '…'
+          : rawSection
+
       return {
         id,
-        chunk_text: chunk.text,
+        chunk_text: safeChunkText,
         documentId: doc.id,
         documentTitle: doc.title,
         documentType: doc.documentType,
         chunkIndex,
-        section: chunk.section ?? undefined,
+        section: safeSection,
         // Metadata used by RAG filter auto-detection
         jurisdiction: doc.jurisdiction,
         category: doc.category,

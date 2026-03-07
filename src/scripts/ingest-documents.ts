@@ -335,6 +335,64 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'regulation',
   },
 
+  // ── Kenya: Cybersecurity (Additional) ────────────────────────────────────
+
+  {
+    // ✅ File present
+    fileName: 'kenya/CYBER-SECURITY-GUIDELINES-FOR-PSP-AUGUST-2018.pdf',
+    title: 'CBK Cyber Security Guidelines for Payment Service Providers, August 2018',
+    source: 'Central Bank of Kenya',
+    category: 'PAYMENT_SYSTEMS' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'guideline',
+    effectiveDate: new Date('2018-08-01'),
+    version: '2018',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/Computer Misuse and Cybercrimes (Amendment) Act, 2025.pdf',
+    title: 'Computer Misuse and Cybercrimes (Amendment) Act, 2025',
+    source: 'Parliament of Kenya',
+    category: 'CYBERSECURITY' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'act',
+    effectiveDate: new Date('2025-01-01'),
+    version: '2025',
+  },
+  {
+    // ✅ File present (alternate filename — deduplicated by SHA-256 if identical)
+    fileName: 'kenya/Computer-Misuse-and-Cybercrimes-Amendment-Act-2025.pdf',
+    title: 'Computer Misuse and Cybercrimes (Amendment) Act, 2025 (alternate copy)',
+    source: 'Parliament of Kenya',
+    category: 'CYBERSECURITY' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'act',
+    effectiveDate: new Date('2025-01-01'),
+    version: '2025',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/NATIONAL-ICT-POLICY-2019.pdf',
+    title: 'National ICT Policy, 2019',
+    source: 'Ministry of ICT, Innovation and Youth Affairs',
+    category: 'CYBERSECURITY' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'framework',
+    effectiveDate: new Date('2019-01-01'),
+    version: '2019',
+  },
+  {
+    // ✅ File present
+    fileName: 'kenya/The-Computer-Misuse-and-Cybercrime-Regulations-LN44_2024.pdf',
+    title: 'Computer Misuse and Cybercrimes (General) Regulations, 2024 (L.N. No. 44)',
+    source: 'ICT Cabinet Secretary / Parliament of Kenya',
+    category: 'CYBERSECURITY' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'regulation',
+    effectiveDate: new Date('2024-01-01'),
+    version: '2024',
+  },
+
   // ── Kenya: AML/CFT ────────────────────────────────────────────────────────
 
   {

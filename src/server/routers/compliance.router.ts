@@ -1361,4 +1361,217 @@ export const complianceRouter = router({
         });
       }
     }),
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // QUERY FEEDBACK
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Submit or toggle feedback (thumbs up / thumbs down) on a compliance query.
+   *
+   * Toggle semantics (server-side):
+   *  - No existing feedback  → create with given rating
+   *  - Existing same rating  → delete (toggle off), return null
+   *  - Existing diff rating  → update to new rating
+   *
+   * @protected
+   */
+  submitFeedback: protectedProcedure
+    .input(
+      z.object({
+        queryId: z.string().min(1),
+        rating: z.enum(['up', 'down']),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+
+      // Verify query exists and caller has access
+      const query = await ctx.prisma.complianceQuery.findUnique({
+        where: { id: input.queryId },
+        select: { id: true, userId: true },
+      });
+
+      if (!query) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Query not found' });
+      }
+
+      if (ctx.user!.role !== 'ADMIN' && query.userId !== userId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this query' });
+      }
+
+      const existing = await ctx.prisma.queryFeedback.findUnique({
+        where: { queryId_userId: { queryId: input.queryId, userId } },
+        select: { rating: true },
+      });
+
+      let newRating: 'up' | 'down' | null;
+
+      if (existing && existing.rating === input.rating) {
+        // Same rating clicked again → toggle off
+        await ctx.prisma.queryFeedback.delete({
+          where: { queryId_userId: { queryId: input.queryId, userId } },
+        });
+        newRating = null;
+      } else {
+        // Create or switch to new rating
+        await ctx.prisma.queryFeedback.upsert({
+          where: { queryId_userId: { queryId: input.queryId, userId } },
+          create: { queryId: input.queryId, userId, rating: input.rating },
+          update: { rating: input.rating },
+        });
+        newRating = input.rating;
+      }
+
+      logger.info({
+        type: 'query_feedback_submitted',
+        userId,
+        queryId: input.queryId,
+        rating: newRating,
+      });
+
+      return { rating: newRating };
+    }),
+
+  /**
+   * Get the current user's feedback rating for a specific query.
+   *
+   * @protected
+   */
+  getFeedbackStatus: protectedProcedure
+    .input(z.object({ queryId: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+
+      const feedback = await ctx.prisma.queryFeedback.findUnique({
+        where: { queryId_userId: { queryId: input.queryId, userId } },
+        select: { rating: true },
+      });
+
+      return { rating: (feedback?.rating ?? null) as 'up' | 'down' | null };
+    }),
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SAVED RESPONSES
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Toggle save/bookmark status for a compliance query response.
+   *
+   *  - Not saved → save it, return { saved: true }
+   *  - Already saved → unsave it, return { saved: false }
+   *
+   * @protected
+   */
+  toggleSave: protectedProcedure
+    .input(
+      z.object({
+        queryId: z.string().min(1),
+        notes: z.string().max(500).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+
+      const query = await ctx.prisma.complianceQuery.findUnique({
+        where: { id: input.queryId },
+        select: { id: true, userId: true },
+      });
+
+      if (!query) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Query not found' });
+      }
+
+      if (ctx.user!.role !== 'ADMIN' && query.userId !== userId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this query' });
+      }
+
+      const existing = await ctx.prisma.savedResponse.findUnique({
+        where: { queryId_userId: { queryId: input.queryId, userId } },
+        select: { id: true },
+      });
+
+      if (existing) {
+        await ctx.prisma.savedResponse.delete({
+          where: { queryId_userId: { queryId: input.queryId, userId } },
+        });
+
+        logger.info({ type: 'response_unsaved', userId, queryId: input.queryId });
+        return { saved: false, savedAt: null as Date | null };
+      }
+
+      const record = await ctx.prisma.savedResponse.create({
+        data: { queryId: input.queryId, userId, notes: input.notes ?? null },
+        select: { createdAt: true },
+      });
+
+      logger.info({ type: 'response_saved', userId, queryId: input.queryId });
+      return { saved: true, savedAt: record.createdAt as Date };
+    }),
+
+  /**
+   * Get save status for a specific query response.
+   *
+   * @protected
+   */
+  getSavedStatus: protectedProcedure
+    .input(z.object({ queryId: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+
+      const record = await ctx.prisma.savedResponse.findUnique({
+        where: { queryId_userId: { queryId: input.queryId, userId } },
+        select: { createdAt: true, notes: true },
+      });
+
+      return {
+        saved: !!record,
+        savedAt: (record?.createdAt ?? null) as Date | null,
+        notes: (record?.notes ?? null) as string | null,
+      };
+    }),
+
+  /**
+   * List all saved responses for the current user, paginated.
+   *
+   * @protected
+   */
+  listSavedResponses: protectedProcedure
+    .input(
+      z.object({
+        page: z.number().min(1).default(1),
+        limit: z.number().min(1).max(50).default(20),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+      const skip = (input.page - 1) * input.limit;
+
+      const [items, total] = await Promise.all([
+        ctx.prisma.savedResponse.findMany({
+          where: { userId },
+          skip,
+          take: input.limit,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            query: {
+              select: { id: true, query: true, response: true, createdAt: true },
+            },
+          },
+        }),
+        ctx.prisma.savedResponse.count({ where: { userId } }),
+      ]);
+
+      logger.info({ type: 'saved_responses_listed', userId, count: items.length, total });
+
+      return {
+        items,
+        pagination: {
+          page: input.page,
+          limit: input.limit,
+          total,
+          pages: Math.ceil(total / input.limit),
+        },
+      };
+    }),
 });

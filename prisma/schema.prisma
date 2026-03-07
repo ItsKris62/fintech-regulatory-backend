@@ -42,6 +42,8 @@ model User {
   policies                 Policy[]
   sessions                 Session[]
   organization             Organization?            @relation(fields: [organizationId], references: [id])
+  queryFeedbacks           QueryFeedback[]
+  savedResponses           SavedResponse[]
 
   @@index([email])
   @@index([organizationId])
@@ -253,6 +255,8 @@ model ComplianceQuery {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   user             User     @relation(fields: [userId], references: [id])
+  feedbacks        QueryFeedback[]
+  saves            SavedResponse[]
 
   @@index([userId])
   @@index([createdAt])
@@ -610,6 +614,39 @@ model ComplianceItem {
 
   @@index([organizationId])
   @@index([organizationId, category])
+}
+
+// ============================================================================
+// Query Feedback + Saved Responses
+// ============================================================================
+
+model QueryFeedback {
+  id        String          @id @default(cuid())
+  queryId   String
+  userId    String
+  rating    String          // "up" | "down"
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  query     ComplianceQuery @relation(fields: [queryId], references: [id], onDelete: Cascade)
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([queryId, userId])
+  @@index([userId])
+  @@index([queryId])
+}
+
+model SavedResponse {
+  id        String          @id @default(cuid())
+  queryId   String
+  userId    String
+  notes     String?
+  createdAt DateTime        @default(now())
+  query     ComplianceQuery @relation(fields: [queryId], references: [id], onDelete: Cascade)
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([queryId, userId])
+  @@index([userId])
+  @@index([queryId])
 }
 
 model ComplianceScoreSnapshot {
