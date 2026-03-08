@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import jwt from 'jsonwebtoken';
+import jwt, { JwtPayload } from 'jsonwebtoken';
 import { prisma } from '@/lib/prisma/client';
 import { aiService } from '@/lib/ai/ai.service';
 import { ragService } from '@/lib/rag/rag.service';
@@ -68,13 +68,14 @@ export async function createContext({
     
     try {
       // Verify and decode JWT
-      const decoded = jwt.verify(token, JWT_SECRET!) as unknown as {
+      interface JwtTokenPayload extends JwtPayload {
         userId: string;
         email: string;
         role: string;
         organizationId?: string;
         sessionId?: string;
-      };
+      }
+      const decoded = jwt.verify(token, JWT_SECRET!) as JwtTokenPayload;
 
       user = {
         id: decoded.userId,
