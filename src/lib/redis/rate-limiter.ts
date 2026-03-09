@@ -59,7 +59,7 @@ export class RateLimiter {
       pipeline.zcard(key);
 
       // 3. Add current request timestamp
-      pipeline.zadd(key, now, `${now}`);
+      pipeline.zadd(key, { score: now, member: `${now}` });
 
       // 4. Set expiration on key
       pipeline.expire(key, windowSeconds);
@@ -73,9 +73,12 @@ export class RateLimiter {
       const remaining = Math.max(0, max - count - 1);
 
       // Calculate reset time
-      const oldestTimestamp = await redis.zrange(key, 0, 0, 'WITHSCORES');
-      const oldestTime = oldestTimestamp.length > 1 
-        ? parseInt(oldestTimestamp[1]) 
+      // Upstash zrange with withScores returns { member, score }[] objects
+      const oldestEntries = await redis.zrange<{ member: string; score: number }[]>(
+        key, 0, 0, { withScores: true }
+      );
+      const oldestTime = oldestEntries.length > 0
+        ? Number(oldestEntries[0].score)
         : now;
       const resetAt = new Date(oldestTime + windowSeconds * 1000);
 
@@ -204,7 +207,7 @@ export class RateLimiter {
     const blockKey = `${getRateLimitKey(identifier, action)}:blocked`;
 
     try {
-      await redis.setex(blockKey, durationSeconds, '1');
+      await redis.set(blockKey, '1', { ex: durationSeconds });
       
       logger.warn({
         type: 'rate_limit_blocked',

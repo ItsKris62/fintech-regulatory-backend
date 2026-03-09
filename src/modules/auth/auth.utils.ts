@@ -5,14 +5,12 @@
 
 import { randomBytes, scrypt, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
-import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import type {
-  JWTPayload,
   SafeUser,
   SessionData,
 } from './auth.types';
-import { AUTH_CONSTANTS, AuthError } from './auth.types';
+import { AUTH_CONSTANTS } from './auth.types';
 
 const scryptAsync = promisify(scrypt);
 
@@ -90,63 +88,6 @@ export function generateSessionId(): string {
  */
 export function generateRefreshTokenId(): string {
   return `rt_${randomBytes(32).toString('hex')}`;
-}
-
-// ============================================================================
-// JWT Utilities
-// ============================================================================
-
-/**
- * Generate JWT access token
- */
-export function generateAccessToken(
-  user: SafeUser,
-  sessionId: string,
-  secret: string
-): string {
-  const payload: Omit<JWTPayload, 'iat' | 'exp'> = {
-    sub: user.id,
-    email: user.email,
-    role: user.role,
-    organizationId: user.organizationId,
-    sessionId,
-  };
-  
-  return jwt.sign(payload, secret, {
-    expiresIn: AUTH_CONSTANTS.ACCESS_TOKEN_EXPIRY,
-  });
-}
-
-/**
- * Generate JWT refresh token
- */
-export function generateRefreshToken(
-  userId: string,
-  refreshTokenId: string,
-  secret: string
-): string {
-  return jwt.sign(
-    { sub: userId, jti: refreshTokenId },
-    secret,
-    { expiresIn: AUTH_CONSTANTS.REFRESH_TOKEN_EXPIRY }
-  );
-}
-
-/**
- * Verify and decode JWT token
- */
-export function verifyToken<T = JWTPayload>(
-  token: string,
-  secret: string
-): T {
-  try {
-    return jwt.verify(token, secret) as T;
-  } catch (error: any) {
-    if (error.name === 'TokenExpiredError') {
-      throw new AuthError('Token has expired', 'TOKEN_EXPIRED', 401);
-    }
-    throw new AuthError('Invalid token', 'INVALID_TOKEN', 401);
-  }
 }
 
 // ============================================================================

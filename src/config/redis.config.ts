@@ -2,61 +2,17 @@ import { appConfig } from './app.config';
 
 /**
  * Redis configuration for caching and session management
- * Optimized for Railway Redis deployment
+ * Optimized for Upstash Redis (HTTP/REST-based)
  */
 export const redisConfig = {
   /**
-   * Redis connection configuration
+   * Upstash Redis connection configuration (HTTP-based, no persistent TCP pool)
    */
   connection: {
-    url: appConfig.redis.url,
+    restUrl: appConfig.redis.restUrl,
+    restToken: appConfig.redis.restToken,
 
-    // Connection pool settings
-    pool: {
-      // Maximum number of connections
-      maxConnections: 10,
-
-      // Minimum number of idle connections
-      minIdleConnections: 2,
-
-      // Idle connection timeout (ms)
-      idleTimeout: 30000,
-
-      // Connection acquisition timeout (ms)
-      acquireTimeout: 10000,
-    },
-
-    // Connection options
-    options: {
-      // Maximum number of retries per request
-      maxRetriesPerRequest: 3,
-
-      // Enable ready check before allowing commands
-      enableReadyCheck: true,
-
-      // Connect lazily (only when first command is issued)
-      lazyConnect: false,
-
-      // Reconnect on error
-      enableOfflineQueue: true,
-
-      // Keep alive
-      keepAlive: 30000, // 30 seconds
-
-      // Connection timeout
-      connectTimeout: 10000, // 10 seconds
-
-      // Command timeout
-      commandTimeout: 5000, // 5 seconds
-
-      // Enable auto-pipelining for better performance
-      enableAutoPipelining: true,
-
-      // Auto-resize connection pool based on load
-      autoResizeWriteBuffer: true,
-    },
-
-    // Retry strategy
+    // Retry strategy for HTTP requests
     retry: {
       maxAttempts: 5,
       initialDelay: 500, // ms

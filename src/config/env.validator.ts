@@ -24,29 +24,38 @@ const envSchema = z.object({
       message: 'DATABASE_URL must be a valid PostgreSQL connection string',
     }),
 
-  // ── Redis ────────────────────────────────────────────────────────────────
-  REDIS_URL: z
+  // Optional direct connection URL for Prisma migrations (Supabase requires this)
+  DIRECT_URL: z
     .string()
-    .min(1, 'REDIS_URL is required')
-    .refine((url) => url.startsWith('redis://') || url.startsWith('rediss://'), {
-      message: 'REDIS_URL must be a valid Redis connection string',
+    .optional()
+    .refine((url) => !url || url.startsWith('postgresql://') || url.startsWith('postgres://'), {
+      message: 'DIRECT_URL must be a valid PostgreSQL connection string',
     }),
 
-  // ── JWT ──────────────────────────────────────────────────────────────────
-  JWT_SECRET: z
+  // ── Upstash Redis ────────────────────────────────────────────────────────
+  UPSTASH_REDIS_REST_URL: z
     .string()
-    .min(32, 'JWT_SECRET must be at least 32 characters')
-    .refine((s) => !isProduction || !s.includes('change-this'), {
-      message: 'JWT_SECRET must not contain placeholder values in production',
+    .min(1, 'UPSTASH_REDIS_REST_URL is required')
+    .refine((url) => url.startsWith('https://'), {
+      message: 'UPSTASH_REDIS_REST_URL must be a valid HTTPS URL',
     }),
-  JWT_EXPIRES_IN: z.string().default('7d'),
-  REFRESH_TOKEN_SECRET: z
+  UPSTASH_REDIS_REST_TOKEN: z
     .string()
-    .min(32, 'REFRESH_TOKEN_SECRET must be at least 32 characters')
-    .refine((s) => !isProduction || !s.includes('change-this'), {
-      message: 'REFRESH_TOKEN_SECRET must not contain placeholder values in production',
-    }),
-  REFRESH_TOKEN_EXPIRES_IN: z.string().default('30d'),
+    .min(1, 'UPSTASH_REDIS_REST_TOKEN is required'),
+
+  // ── Supabase Auth ────────────────────────────────────────────────────────
+  SUPABASE_URL: z
+    .string()
+    .url('SUPABASE_URL must be a valid URL'),
+  SUPABASE_ANON_KEY: z
+    .string()
+    .min(1, 'SUPABASE_ANON_KEY is required'),
+  SUPABASE_SERVICE_ROLE_KEY: z
+    .string()
+    .min(1, 'SUPABASE_SERVICE_ROLE_KEY is required'),
+  SUPABASE_JWT_SECRET: z
+    .string()
+    .min(32, 'SUPABASE_JWT_SECRET must be at least 32 characters'),
 
   // ── Email (Resend) ──────────────────────────────────────────────────────
   RESEND_API_KEY: z.string().startsWith('re_', 'RESEND_API_KEY must start with re_'),
@@ -54,7 +63,7 @@ const envSchema = z.object({
 
   // ── AI (Anthropic Claude) ───────────────────────────────────────────────
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-', 'ANTHROPIC_API_KEY must start with sk-ant-'),
-  ANTHROPIC_MODEL: z.string().default('claude-3-haiku-20240307'),
+  ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
 
   // ── Vector Database (Pinecone) ──────────────────────────────────────────
   PINECONE_API_KEY: z.string().min(1, 'PINECONE_API_KEY is required'),
@@ -102,7 +111,7 @@ export function validateEnvironment(): EnvConfig {
           ...errors,
           '',
           `Total errors: ${errors.length}`,
-          'Fix the above variables in your .env file or Railway dashboard.',
+          'Fix the above variables in your .env file or Render/Supabase dashboard.',
           '',
         ].join('\n')
       );
@@ -124,15 +133,16 @@ export function printEnvSummary(env: EnvConfig): void {
     [
       '',
       '── Environment Summary ──────────────────────────────',
-      `  NODE_ENV:       ${env.NODE_ENV}`,
-      `  PORT:           ${env.PORT}`,
-      `  APP_URL:        ${env.APP_URL}`,
-      `  DATABASE_URL:   ${mask(env.DATABASE_URL)}`,
-      `  REDIS_URL:      ${mask(env.REDIS_URL)}`,
-      `  ANTHROPIC:      ${mask(env.ANTHROPIC_API_KEY)}`,
-      `  PINECONE:       ${mask(env.PINECONE_API_KEY)}`,
-      `  RESEND:         ${mask(env.RESEND_API_KEY)}`,
-      `  R2 BUCKET:      ${env.R2_BUCKET_NAME}`,
+      `  NODE_ENV:         ${env.NODE_ENV}`,
+      `  PORT:             ${env.PORT}`,
+      `  APP_URL:          ${env.APP_URL}`,
+      `  DATABASE_URL:     ${mask(env.DATABASE_URL)}`,
+      `  SUPABASE_URL:     ${env.SUPABASE_URL}`,
+      `  UPSTASH_URL:      ${mask(env.UPSTASH_REDIS_REST_URL)}`,
+      `  ANTHROPIC:        ${mask(env.ANTHROPIC_API_KEY)}`,
+      `  PINECONE:         ${mask(env.PINECONE_API_KEY)}`,
+      `  RESEND:           ${mask(env.RESEND_API_KEY)}`,
+      `  R2 BUCKET:        ${env.R2_BUCKET_NAME}`,
       '────────────────────────────────────────────────────',
       '',
     ].join('\n')

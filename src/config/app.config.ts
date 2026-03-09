@@ -17,15 +17,17 @@ const envSchema = z.object({
 
   // Database
   DATABASE_URL: z.string().min(1, 'Database URL is required'),
+  DIRECT_URL: z.string().optional(),
 
-  // Redis
-  REDIS_URL: z.string().min(1, 'Redis URL is required'),
+  // Upstash Redis
+  UPSTASH_REDIS_REST_URL: z.string().min(1, 'Upstash Redis REST URL is required'),
+  UPSTASH_REDIS_REST_TOKEN: z.string().min(1, 'Upstash Redis REST token is required'),
 
-  // JWT
-  JWT_SECRET: z.string().min(32, 'JWT secret must be at least 32 characters'),
-  JWT_EXPIRES_IN: z.string().default('7d'),
-  REFRESH_TOKEN_SECRET: z.string().min(32, 'Refresh token secret must be at least 32 characters'),
-  REFRESH_TOKEN_EXPIRES_IN: z.string().default('30d'),
+  // Supabase Auth
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_ANON_KEY: z.string().min(1, 'Supabase anon key is required'),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, 'Supabase service role key is required'),
+  SUPABASE_JWT_SECRET: z.string().min(32, 'Supabase JWT secret must be at least 32 characters'),
 
   // Email
   RESEND_API_KEY: z.string().startsWith('re_', 'Invalid Resend API key'),
@@ -90,19 +92,21 @@ export const appConfig = {
   // Database
   database: {
     url: env.DATABASE_URL,
+    directUrl: env.DIRECT_URL,
   },
 
-  // Redis
+  // Redis (Upstash)
   redis: {
-    url: env.REDIS_URL,
+    restUrl: env.UPSTASH_REDIS_REST_URL,
+    restToken: env.UPSTASH_REDIS_REST_TOKEN,
   },
 
-  // JWT
-  jwt: {
-    secret: env.JWT_SECRET,
-    expiresIn: env.JWT_EXPIRES_IN,
-    refreshSecret: env.REFRESH_TOKEN_SECRET,
-    refreshExpiresIn: env.REFRESH_TOKEN_EXPIRES_IN,
+  // Supabase Auth
+  supabase: {
+    url: env.SUPABASE_URL,
+    anonKey: env.SUPABASE_ANON_KEY,
+    serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
+    jwtSecret: env.SUPABASE_JWT_SECRET,
   },
 
   // Email

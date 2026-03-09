@@ -1,12 +1,8 @@
 import { TRPCError } from '@trpc/server';
-import jwt from 'jsonwebtoken';
 import { randomBytes } from 'crypto';
 import { nanoid } from 'nanoid';
 
-// tRPC setup
 import { router, publicProcedure, protectedProcedure } from '../trpc/trpc';
-
-// Schemas
 import {
   registerSchema,
   loginSchema,
@@ -16,14 +12,13 @@ import {
   refreshTokenSchema,
 } from '../schemas/auth.schema';
 
-// Phase 1 services and utilities
 import { prisma } from '@/lib/prisma/client';
-import { hashPassword, verifyPassword } from '@/utils/helpers';
+import { redis } from '@/lib/redis/client';
+import { hashPassword } from '@/utils/helpers';
 import { authRateLimiter } from '@/lib/redis/rate-limiter';
-import { sessionCache } from '@/lib/redis/cache.service';
 import { logger } from '@/utils/logger';
+import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
 
-// Verification service
 import {
   isFreeEmailDomain,
   FREE_EMAIL_ERROR_MESSAGE,
@@ -32,97 +27,29 @@ import {
   consumeInvitation,
   initializeNotificationPreferences,
 } from '@/lib/verification/verification.service';
-
-// React Email mailer
 import { reactMailer } from '@/lib/email/react-mailer.service';
 
-// Environment variables
-const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || '30d';
+// ── helpers ───────────────────────────────────────────────────────────────
 
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET environment variable is required');
-}
-
-/**
- * JWT Payload structure
- */
-interface JWTPayload {
-  userId: string;
-  email: string;
-  role: string;
-  organizationId?: string;
-  sessionId?: string;
-}
-
-/** Parse a human-readable device label from a user-agent string */
-function parseDeviceLabel(userAgent: string | undefined): string {
-  if (!userAgent) return 'Unknown Device';
-  if (/iPhone|iPad/.test(userAgent)) return 'iOS Device';
-  if (/Android/.test(userAgent)) return 'Android Device';
-  if (/Windows/.test(userAgent)) {
-    if (/Chrome/.test(userAgent)) return 'Chrome on Windows';
-    if (/Firefox/.test(userAgent)) return 'Firefox on Windows';
-    if (/Edge/.test(userAgent)) return 'Edge on Windows';
-    return 'Windows Browser';
-  }
-  if (/Mac OS/.test(userAgent)) {
-    if (/Chrome/.test(userAgent)) return 'Chrome on macOS';
-    if (/Firefox/.test(userAgent)) return 'Firefox on macOS';
-    if (/Safari/.test(userAgent)) return 'Safari on macOS';
-    return 'macOS Browser';
-  }
-  if (/Linux/.test(userAgent)) return 'Linux Browser';
-  return 'Unknown Device';
-}
-
-/**
- * Generate JWT access token
- */
-function generateAccessToken(payload: JWTPayload): string {
-  return (jwt.sign as any)(payload, JWT_SECRET, {
-    expiresIn: JWT_EXPIRES_IN,
-  });
-}
-
-/**
- * Generate JWT refresh token
- */
-function generateRefreshToken(payload: JWTPayload): string {
-  return (jwt.sign as any)(payload, JWT_SECRET, {
-    expiresIn: REFRESH_TOKEN_EXPIRES_IN,
-  });
-}
-
-/**
- * Generate random verification/reset token
- */
 function generateVerificationToken(): string {
   return randomBytes(32).toString('hex');
 }
 
-/**
- * Authentication Router
- *
- * Handles user registration, login, password management, and email verification.
- * All sensitive operations are rate-limited using authRateLimiter from Phase 1.
- */
+function parseDeviceLabel(userAgent: string | undefined): string {
+  if (!userAgent) return 'Unknown Device';
+  if (/iPhone|iPad/.test(userAgent)) return 'iOS Device';
+  if (/Android/.test(userAgent)) return 'Android Device';
+  if (/Windows/.test(userAgent)) return 'Windows Browser';
+  if (/Mac OS/.test(userAgent)) return 'macOS Browser';
+  if (/Linux/.test(userAgent)) return 'Linux Browser';
+  return 'Unknown Device';
+}
+
+// ── router ────────────────────────────────────────────────────────────────
+
 export const authRouter = router({
   /**
-   * Register new user
-   *
-   * @public
-   * @rate-limited
-   *
-   * Flow:
-   * 1. Check rate limit
-   * 2. Validate email not already taken
-   * 3. Hash password
-   * 4. Create user in database
-   * 5. Generate verification token
-   * 6. Send welcome email
-   * 7. Return success with userId
+   * Register — creates a Supabase auth user AND a Prisma user profile.
    */
   register: publicProcedure
     .input(registerSchema)
@@ -130,149 +57,96 @@ export const authRouter = router({
       const startTime = Date.now();
 
       try {
-        // Rate limiting - prevent abuse
         await authRateLimiter.register(input.email);
+        logger.info({ type: 'auth_register_attempt', email: input.email, role: input.role });
 
-        logger.info({
-          type: 'auth_register_attempt',
-          email: input.email,
-          role: input.role,
-        });
-
-        // Check if email already exists
-        const existingUser = await ctx.prisma.user.findUnique({
-          where: { email: input.email },
-        });
-
+        const existingUser = await ctx.prisma.user.findUnique({ where: { email: input.email } });
         if (existingUser) {
-          logger.warn({
-            type: 'auth_register_duplicate_email',
-            email: input.email,
-          });
-
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'Email already registered',
-          });
+          throw new TRPCError({ code: 'CONFLICT', message: 'Email already registered' });
         }
 
-        // Free email domain check (block gmail, yahoo, etc. for org accounts)
         if (input.role !== 'REGULATOR' && isFreeEmailDomain(input.email)) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: FREE_EMAIL_ERROR_MESSAGE,
-          });
+          throw new TRPCError({ code: 'BAD_REQUEST', message: FREE_EMAIL_ERROR_MESSAGE });
         }
 
-        // Check for a valid invitation first (allows bypassing domain checks)
         const invitation = await findValidInvitation(input.email);
 
-        // Regulator domain validation
         if (input.role === 'REGULATOR' && !invitation) {
           const domainCheck = await isRegulatorDomain(input.email);
           if (!domainCheck.isRegulator) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message:
-                'Regulator accounts require a verified government email address. Please use your official institutional email.',
+              message: 'Regulator accounts require a verified government email address.',
             });
           }
         }
 
-        // Validate organization if provided
         if (input.organizationId) {
-          const organization = await ctx.prisma.organization.findUnique({
-            where: { id: input.organizationId },
-          });
-
-          if (!organization) {
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'Invalid organization ID',
-            });
-          }
+          const org = await ctx.prisma.organization.findUnique({ where: { id: input.organizationId } });
+          if (!org) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid organization ID' });
         }
 
-        // Hash password using Phase 1 helper
-        const hashedPassword = await hashPassword(input.password);
+        const resolvedRole = invitation
+          ? (invitation.role as 'REGULATOR' | 'STARTUP' | 'ENTERPRISE')
+          : input.role;
 
-        // Generate email verification token
+        // Create Supabase auth user (backend-controlled via admin API)
+        const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+          email: input.email,
+          password: input.password,
+          email_confirm: false,
+          user_metadata: { role: resolvedRole, fullName: input.name || input.email },
+        });
+
+        if (authError || !authData.user) {
+          logger.error({ type: 'auth_register_supabase_error', email: input.email, error: authError?.message });
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: authError?.message || 'Failed to create auth account',
+          });
+        }
+
+        // Store hashed password in Prisma (migration safety / fallback)
+        const hashedPw = await hashPassword(input.password);
+
         const verificationToken = generateVerificationToken();
         const verificationExpiry = new Date();
-        verificationExpiry.setHours(verificationExpiry.getHours() + 24); // 24 hours
+        verificationExpiry.setHours(verificationExpiry.getHours() + 24);
 
-        // Determine account status based on role
-        // Regulators go to pending_approval after email verification; others go to active
-        const initialAccountStatus = 'pending'; // Will become active or pending_approval after email verify
-
-        // Determine role: invitation overrides submitted role
-        const resolvedRole = invitation ? (invitation.role as 'REGULATOR' | 'STARTUP' | 'ENTERPRISE') : input.role;
-
-        // Create user in database
         const user = await ctx.prisma.user.create({
           data: {
+            supabaseAuthId: authData.user.id,
             email: input.email,
-            password: hashedPassword,
+            password: hashedPw,
             fullName: input.name || input.email,
             role: resolvedRole,
             phone: input.phone,
             organizationId: invitation?.organizationId || input.organizationId,
             emailVerificationToken: verificationToken,
             emailVerificationExpiry: verificationExpiry,
-            accountStatus: initialAccountStatus,
+            accountStatus: 'pending',
           } as any,
-          select: {
-            id: true,
-            email: true,
-            fullName: true,
-            role: true,
-            organizationId: true,
-            createdAt: true,
-          },
+          select: { id: true, email: true, fullName: true, role: true, organizationId: true, createdAt: true },
         });
 
-        // Consume invitation if present
         if (invitation) {
           await consumeInvitation(invitation.id).catch((err: any) =>
             logger.warn({ type: 'invitation_consume_failed', invitationId: invitation.id, error: err.message })
           );
         }
 
-        // Initialize notification preferences (non-blocking)
         initializeNotificationPreferences(user.id).catch(() => {});
 
-        // Send verification email (React Email template)
         const verificationUrl = `${process.env.FRONTEND_URL || ''}/verify-email?token=${verificationToken}`;
-        try {
-          await reactMailer.sendVerificationEmail(user.email, {
-            userName: (user as any).fullName || user.email,
-            verificationUrl,
-            expiresInHours: 24,
-          });
-
-          logger.info({
-            type: 'auth_register_email_sent',
-            userId: user.id,
-            email: user.email,
-          });
-        } catch (emailError: any) {
-          // Log error but don't fail registration
-          logger.error({
-            type: 'auth_register_email_failed',
-            userId: user.id,
-            error: emailError.message,
-          });
-        }
-
-        const duration = Date.now() - startTime;
-
-        logger.info({
-          type: 'auth_register_success',
-          userId: user.id,
-          email: user.email,
-          role: user.role,
-          duration,
+        reactMailer.sendVerificationEmail(user.email, {
+          userName: (user as any).fullName || user.email,
+          verificationUrl,
+          expiresInHours: 24,
+        }).catch((err: any) => {
+          logger.error({ type: 'auth_register_email_failed', userId: user.id, error: err.message });
         });
+
+        logger.info({ type: 'auth_register_success', userId: user.id, email: user.email, duration: Date.now() - startTime });
 
         return {
           success: true,
@@ -281,42 +155,15 @@ export const authRouter = router({
           message: 'Registration successful. Please check your email to verify your account.',
         };
       } catch (error: any) {
-        const duration = Date.now() - startTime;
-
-        logger.error({
-          type: 'auth_register_error',
-          email: input.email,
-          error: error.message,
-          duration,
-        });
-
-        // Re-throw TRPCError as is
-        if (error instanceof TRPCError) {
-          throw error;
-        }
-
-        // Wrap other errors
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Registration failed. Please try again.',
-          cause: error,
-        });
+        logger.error({ type: 'auth_register_error', email: input.email, error: error.message, duration: Date.now() - startTime });
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Registration failed. Please try again.', cause: error });
       }
     }),
 
   /**
-   * Login with email and password
-   *
-   * @public
-   * @rate-limited
-   *
-   * Flow:
-   * 1. Check rate limit
-   * 2. Find user by email
-   * 3. Verify password
-   * 4. Generate JWT tokens
-   * 5. Cache session in Redis
-   * 6. Return tokens and user data
+   * Login — proxies credentials to Supabase and returns Supabase session tokens.
+   * The frontend must store and send the access_token as Bearer on all requests.
    */
   login: publicProcedure
     .input(loginSchema)
@@ -324,136 +171,63 @@ export const authRouter = router({
       const startTime = Date.now();
 
       try {
-        // Rate limiting - prevent brute force
         await authRateLimiter.login(input.email);
+        logger.info({ type: 'auth_login_attempt', email: input.email });
 
-        logger.info({
-          type: 'auth_login_attempt',
+        const { data: authData, error: authError } = await supabaseClient.auth.signInWithPassword({
           email: input.email,
+          password: input.password,
         });
 
-        // Find user by email
+        if (authError || !authData.session || !authData.user) {
+          logger.warn({ type: 'auth_login_supabase_failed', email: input.email, error: authError?.message });
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid email or password' });
+        }
+
         const user = await ctx.prisma.user.findUnique({
-          where: { email: input.email },
-          include: {
-            organization: {
-              select: {
-                id: true,
-                name: true,
-                type: true,
-              },
-            },
-          },
+          where: { supabaseAuthId: authData.user.id },
+          include: { organization: { select: { id: true, name: true, type: true } } },
         });
 
-        if (!user) {
-          logger.warn({
-            type: 'auth_login_user_not_found',
-            email: input.email,
-          });
-
-          throw new TRPCError({
-            code: 'UNAUTHORIZED',
-            message: 'Invalid email or password',
-          });
+        if (!user || (user as any).deletedAt) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Account has been deactivated' });
         }
 
-        // Verify password using Phase 1 helper
-        const validPassword = await verifyPassword(input.password, user.password);
-
-        if (!validPassword) {
-          logger.warn({
-            type: 'auth_login_invalid_password',
-            userId: user.id,
-            email: input.email,
-          });
-
-          throw new TRPCError({
-            code: 'UNAUTHORIZED',
-            message: 'Invalid email or password',
-          });
-        }
-
-        // Check if user is active (not soft deleted)
-        if ((user as any).deletedAt) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Account has been deactivated',
-          });
-        }
-
-        // Create session record in database
         let dbSessionId: string | undefined;
         try {
-          const sessionToken = nanoid(64);
           const session = await ctx.prisma.session.create({
             data: {
               userId: user.id,
-              token: sessionToken,
-              expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+              token: nanoid(64),
+              expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
               device: parseDeviceLabel(ctx.req.headers['user-agent']),
               ipAddress: ctx.req.ip || 'Unknown',
               userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
             },
           });
           dbSessionId = session.id;
-        } catch (sessionError: any) {
-          logger.warn({
-            type: 'auth_login_session_create_failed',
-            userId: user.id,
-            error: sessionError.message,
-          });
+        } catch (err: any) {
+          logger.warn({ type: 'auth_login_session_create_failed', userId: user.id, error: err.message });
         }
 
-        // Generate JWT tokens (include sessionId for session management)
-        const tokenPayload: JWTPayload = {
-          userId: user.id,
+        // Cache user profile in Upstash for fast context lookups (1 hour)
+        const userProfile = {
+          id: user.id,
           email: user.email,
           role: user.role,
-          organizationId: user.organizationId || undefined,
+          organizationId: user.organizationId ?? undefined,
+          supabaseAuthId: authData.user.id,
           sessionId: dbSessionId,
         };
+        await redis.set(`user:session:${authData.user.id}`, JSON.stringify(userProfile), { ex: 3600 });
 
-        const accessToken = generateAccessToken(tokenPayload);
-        const refreshToken = generateRefreshToken(tokenPayload);
+        await ctx.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
-        // Store session in Redis cache (legacy, non-critical)
-        const redisSessionId = `session:${user.id}:${Date.now()}`;
-        try {
-          await sessionCache.set(redisSessionId, {
-            userId: user.id,
-            email: user.email,
-            role: user.role,
-            organizationId: user.organizationId,
-            createdAt: new Date().toISOString(),
-          });
-        } catch (cacheError: any) {
-          logger.warn({
-            type: 'auth_login_cache_failed',
-            userId: user.id,
-            error: cacheError.message,
-          });
-        }
-
-        // Update last login timestamp
-        await ctx.prisma.user.update({
-          where: { id: user.id },
-          data: { lastLoginAt: new Date() },
-        });
-
-        const duration = Date.now() - startTime;
-
-        logger.info({
-          type: 'auth_login_success',
-          userId: user.id,
-          email: user.email,
-          role: user.role,
-          duration,
-        });
+        logger.info({ type: 'auth_login_success', userId: user.id, duration: Date.now() - startTime });
 
         return {
-          accessToken,
-          refreshToken,
+          accessToken: authData.session.access_token,
+          refreshToken: authData.session.refresh_token,
           user: {
             id: user.id,
             email: user.email,
@@ -465,94 +239,46 @@ export const authRouter = router({
           },
         };
       } catch (error: any) {
-        const duration = Date.now() - startTime;
-
-        logger.error({
-          type: 'auth_login_error',
-          email: input.email,
-          error: error.message,
-          duration,
-        });
-
-        if (error instanceof TRPCError) {
-          throw error;
-        }
-
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Login failed. Please try again.',
-          cause: error,
-        });
+        logger.error({ type: 'auth_login_error', email: input.email, error: error.message, duration: Date.now() - startTime });
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Login failed. Please try again.', cause: error });
       }
     }),
 
   /**
-   * Logout - invalidate session
-   *
-   * @protected
+   * Logout — deletes DB session and invalidates the Upstash Redis user cache.
    */
   logout: protectedProcedure.mutation(async ({ ctx }) => {
     try {
-      logger.info({
-        type: 'auth_logout',
-        userId: ctx.user!.id,
-      });
+      const userId = ctx.user!.id;
+      const supabaseAuthId = ctx.user!.supabaseAuthId;
 
-      // Delete current session from Prisma if we have a session ID
+      logger.info({ type: 'auth_logout', userId });
+
       if (ctx.user!.sessionId) {
-        await ctx.prisma.session.deleteMany({
-          where: {
-            id: ctx.user!.sessionId,
-            userId: ctx.user!.id,
-          },
-        });
+        await ctx.prisma.session.deleteMany({ where: { id: ctx.user!.sessionId, userId } });
       }
 
-      return {
-        success: true,
-        message: 'Logged out successfully',
-      };
-    } catch (error: any) {
-      logger.error({
-        type: 'auth_logout_error',
-        userId: ctx.user!.id,
-        error: error.message,
-      });
+      // Invalidate Redis user cache so next request forces a fresh DB lookup
+      await redis.del(`user:session:${supabaseAuthId}`);
 
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: 'Logout failed',
-        cause: error,
-      });
+      return { success: true, message: 'Logged out successfully' };
+    } catch (error: any) {
+      logger.error({ type: 'auth_logout_error', userId: ctx.user!.id, error: error.message });
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Logout failed', cause: error });
     }
   }),
 
-  /**
-   * Get current user (me)
-   *
-   * @protected
-   */
+  /** Get current authenticated user */
   me: protectedProcedure.query(async ({ ctx }) => {
     try {
       const user = await ctx.prisma.user.findUnique({
         where: { id: ctx.user!.id },
-        include: {
-          organization: {
-            select: {
-              id: true,
-              name: true,
-              type: true,
-              registrationNumber: true,
-            },
-          },
-        },
+        include: { organization: { select: { id: true, name: true, type: true, registrationNumber: true } } },
       });
 
       if (!user || (user as any).deletedAt) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'User not found',
-        });
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
       }
 
       return {
@@ -568,221 +294,93 @@ export const authRouter = router({
         lastLoginAt: user.lastLoginAt,
       };
     } catch (error: any) {
-      logger.error({
-        type: 'auth_me_error',
-        userId: ctx.user!.id,
-        error: error.message,
-      });
-
-      if (error instanceof TRPCError) {
-        throw error;
-      }
-
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: 'Failed to fetch user data',
-        cause: error,
-      });
+      if (error instanceof TRPCError) throw error;
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to fetch user data', cause: error });
     }
   }),
 
   /**
-   * Request password reset
-   *
-   * @public
-   * @rate-limited
+   * Request password reset — triggers Supabase built-in reset email.
    */
   requestPasswordReset: publicProcedure
     .input(resetPasswordRequestSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       try {
-        await authRateLimiter.resetPassword(input.email);
-
-        logger.info({
-          type: 'auth_password_reset_request',
-          email: input.email,
+        const { error } = await supabaseAdmin.auth.resetPasswordForEmail(input.email, {
+          redirectTo: `${process.env.FRONTEND_URL || ''}/reset-password`,
         });
 
-        const user = await ctx.prisma.user.findUnique({
-          where: { email: input.email },
-        });
-
-        // Don't reveal if user exists - always return success
-        if (!user || (user as any).deletedAt) {
-          logger.info({
-            type: 'auth_password_reset_user_not_found',
-            email: input.email,
-          });
-
-          return {
-            success: true,
-            message: 'If an account exists with this email, you will receive a password reset link.',
-          };
+        if (error) {
+          logger.warn({ type: 'auth_password_reset_supabase_warn', email: input.email, error: error.message });
         }
-
-        // Generate reset token
-        const resetToken = generateVerificationToken();
-        const resetExpiry = new Date();
-        resetExpiry.setHours(resetExpiry.getHours() + 1); // 1 hour
-
-        // Save token to database
-        await ctx.prisma.user.update({
-          where: { id: user.id },
-          data: {
-            passwordResetToken: resetToken,
-            passwordResetExpiry: resetExpiry,
-          } as any,
-        });
-
-        // Send password reset email via React Email
-        const resetUrl = `${process.env.FRONTEND_URL || ''}/reset-password?token=${resetToken}`;
-        reactMailer.sendPasswordResetEmail(user.email, {
-          userName: user.fullName || user.email,
-          resetUrl,
-          expiresInMinutes: 60,
-          ipAddress: (ctx.req as any)?.ip,
-        }).catch((err: any) => {
-          logger.error({
-            type: 'auth_password_reset_email_failed',
-            userId: user.id,
-            error: err.message,
-          });
-        });
-
-        logger.info({
-          type: 'auth_password_reset_email_sent',
-          userId: user.id,
-        });
 
         return {
           success: true,
           message: 'If an account exists with this email, you will receive a password reset link.',
         };
       } catch (error: any) {
-        logger.error({
-          type: 'auth_password_reset_request_error',
-          email: input.email,
-          error: error.message,
-        });
-
-        if (error instanceof TRPCError) {
-          throw error;
-        }
-
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Password reset request failed',
-          cause: error,
-        });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Password reset request failed', cause: error });
       }
     }),
 
   /**
-   * Reset password with token
-   *
-   * @public
+   * Reset password with DB token (Phase 7 compatible).
+   * Also updates the Supabase auth password and invalidates the Redis cache.
    */
   resetPassword: publicProcedure
     .input(resetPasswordSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        logger.info({
-          type: 'auth_password_reset_attempt',
-        });
-
-        // Find user with valid reset token
         const user = await ctx.prisma.user.findFirst({
-          where: {
-            passwordResetToken: input.token,
-            passwordResetExpiry: {
-              gt: new Date(), // Not expired
-            },
-          } as any,
+          where: { passwordResetToken: input.token, passwordResetExpiry: { gt: new Date() } } as any,
         });
 
         if (!user) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Invalid or expired reset token',
-          });
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid or expired reset token' });
         }
 
-        // Hash new password
-        const hashedPassword = await hashPassword(input.newPassword);
+        const hashed = await hashPassword(input.newPassword);
 
-        // Update password and clear reset token
         await ctx.prisma.user.update({
           where: { id: user.id },
-          data: {
-            password: hashedPassword,
-            passwordResetToken: null,
-            passwordResetExpiry: null,
-          } as any,
+          data: { password: hashed, passwordResetToken: null, passwordResetExpiry: null } as any,
         });
 
-        logger.info({
-          type: 'auth_password_reset_success',
-          userId: user.id,
-        });
-
-        return {
-          success: true,
-          message: 'Password reset successful. You can now login with your new password.',
-        };
-      } catch (error: any) {
-        logger.error({
-          type: 'auth_password_reset_error',
-          error: error.message,
-        });
-
-        if (error instanceof TRPCError) {
-          throw error;
+        if ((user as any).supabaseAuthId) {
+          await supabaseAdmin.auth.admin.updateUserById((user as any).supabaseAuthId, {
+            password: input.newPassword,
+          });
+          await redis.del(`user:session:${(user as any).supabaseAuthId}`);
         }
 
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Password reset failed',
-          cause: error,
-        });
+        logger.info({ type: 'auth_password_reset_success', userId: user.id });
+
+        return { success: true, message: 'Password reset successful. You can now log in with your new password.' };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Password reset failed', cause: error });
       }
     }),
 
-  /**
-   * Verify email with token
-   *
-   * @public
-   */
+  /** Verify email with DB token (Phase 7 compatible). */
   verifyEmail: publicProcedure
     .input(verifyEmailSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        logger.info({
-          type: 'auth_email_verification_attempt',
-        });
-
-        // Find user with valid verification token
         const user = await ctx.prisma.user.findFirst({
           where: {
             emailVerificationToken: input.token,
-            emailVerificationExpiry: {
-              gt: new Date(), // Not expired
-            },
+            emailVerificationExpiry: { gt: new Date() },
             emailVerified: false,
           } as any,
         });
 
         if (!user) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Invalid or expired verification token',
-          });
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid or expired verification token' });
         }
 
-        // Determine new accountStatus based on role
-        // Regulators need admin approval, everyone else goes active
         const newAccountStatus = user.role === 'REGULATOR' ? 'pending_approval' : 'active';
 
-        // Mark email as verified
         await ctx.prisma.user.update({
           where: { id: user.id },
           data: {
@@ -794,55 +392,37 @@ export const authRouter = router({
           } as any,
         });
 
-        const dashboardUrl = `${process.env.FRONTEND_URL || ''}/dashboard`;
+        // Confirm email on the Supabase side as well
+        if ((user as any).supabaseAuthId) {
+          await supabaseAdmin.auth.admin.updateUserById((user as any).supabaseAuthId, {
+            email_confirm: true,
+          });
+        }
 
-        // Send welcome email for non-regulators (regulators still need approval)
         if (user.role !== 'REGULATOR') {
           reactMailer.sendWelcomeEmail(user.email, {
             userName: user.fullName || user.email,
             role: user.role,
-            dashboardUrl,
+            dashboardUrl: `${process.env.FRONTEND_URL || ''}/dashboard`,
           }).catch(() => {});
         }
 
-        logger.info({
-          type: 'auth_email_verification_success',
-          userId: user.id,
-          accountStatus: newAccountStatus,
-        });
+        logger.info({ type: 'auth_email_verification_success', userId: user.id, accountStatus: newAccountStatus });
 
         return {
           success: true,
-          message:
-            user.role === 'REGULATOR'
-              ? 'Email verified successfully. Your account is pending admin approval.'
-              : 'Email verified successfully. You can now access all features.',
+          message: user.role === 'REGULATOR'
+            ? 'Email verified successfully. Your account is pending admin approval.'
+            : 'Email verified successfully. You can now access all features.',
           requiresApproval: user.role === 'REGULATOR',
         };
       } catch (error: any) {
-        logger.error({
-          type: 'auth_email_verification_error',
-          error: error.message,
-        });
-
-        if (error instanceof TRPCError) {
-          throw error;
-        }
-
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Email verification failed',
-          cause: error,
-        });
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Email verification failed', cause: error });
       }
     }),
 
-  /**
-   * Resend email verification link
-   *
-   * @protected
-   * @rate-limited — max 3 resends per hour (Redis)
-   */
+  /** Resend email verification — rate-limited at 3/hour via Upstash. */
   resendVerification: protectedProcedure.mutation(async ({ ctx }) => {
     const userId = ctx.user!.id;
     try {
@@ -851,16 +431,9 @@ export const authRouter = router({
         select: { id: true, email: true, fullName: true, emailVerified: true },
       });
 
-      if (!user) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
-      }
+      if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
+      if (user.emailVerified) return { success: true, message: 'Email is already verified.' };
 
-      if (user.emailVerified) {
-        return { success: true, message: 'Email is already verified.' };
-      }
-
-      // Rate limit: max 3 resends per hour
-      const { redis } = await import('@/lib/redis/client');
       const rateLimitKey = `email_resend:${userId}`;
       const count = await redis.incr(rateLimitKey);
       if (count === 1) await redis.expire(rateLimitKey, 3600);
@@ -871,17 +444,13 @@ export const authRouter = router({
         });
       }
 
-      // Generate new token (overwrites previous)
       const newToken = generateVerificationToken();
       const newExpiry = new Date();
       newExpiry.setHours(newExpiry.getHours() + 24);
 
       await ctx.prisma.user.update({
         where: { id: userId },
-        data: {
-          emailVerificationToken: newToken,
-          emailVerificationExpiry: newExpiry,
-        } as any,
+        data: { emailVerificationToken: newToken, emailVerificationExpiry: newExpiry } as any,
       });
 
       const verificationUrl = `${process.env.FRONTEND_URL || ''}/verify-email?token=${newToken}`;
@@ -892,79 +461,26 @@ export const authRouter = router({
       });
 
       logger.info({ type: 'auth_resend_verification_success', userId });
-
       return { success: true, message: 'Verification email sent.' };
     } catch (error: any) {
-      logger.error({ type: 'auth_resend_verification_error', userId, error: error.message });
       if (error instanceof TRPCError) throw error;
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: 'Failed to resend verification email',
-        cause: error,
-      });
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to resend verification email', cause: error });
     }
   }),
 
   /**
-   * Refresh access token
-   *
-   * @public
+   * refreshToken — deprecated endpoint.
+   * Supabase handles token refresh on the frontend automatically.
+   * Call supabase.auth.refreshSession() from your Supabase client instead.
    */
   refreshToken: publicProcedure
     .input(refreshTokenSchema)
-    .mutation(async ({ input }) => {
-      try {
-        // Verify refresh token
-        const decoded = jwt.verify(input.refreshToken, JWT_SECRET) as JWTPayload;
-
-        // Verify user still exists and is active
-        const user = await prisma.user.findUnique({
-          where: { id: decoded.userId },
-        });
-
-        if (!user || (user as any).deletedAt) {
-          throw new TRPCError({
-            code: 'UNAUTHORIZED',
-            message: 'Invalid refresh token',
-          });
-        }
-
-        // Generate new access token
-        const tokenPayload: JWTPayload = {
-          userId: user.id,
-          email: user.email,
-          role: user.role,
-          organizationId: user.organizationId || undefined,
-        };
-
-        const accessToken = generateAccessToken(tokenPayload);
-
-        logger.info({
-          type: 'auth_token_refresh_success',
-          userId: user.id,
-        });
-
-        return {
-          accessToken,
-        };
-      } catch (error: any) {
-        logger.error({
-          type: 'auth_token_refresh_error',
-          error: error.message,
-        });
-
-        if (error instanceof jwt.JsonWebTokenError) {
-          throw new TRPCError({
-            code: 'UNAUTHORIZED',
-            message: 'Invalid refresh token',
-          });
-        }
-
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Token refresh failed',
-          cause: error,
-        });
-      }
+    .mutation(async () => {
+      throw new TRPCError({
+        code: 'METHOD_NOT_SUPPORTED',
+        message:
+          'Token refresh is now handled by Supabase. ' +
+          'Call supabase.auth.refreshSession() from your frontend client.',
+      });
     }),
 });

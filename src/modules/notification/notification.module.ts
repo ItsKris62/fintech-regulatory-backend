@@ -253,7 +253,7 @@ class NotificationModule {
       where: { userId, read: false },
     });
 
-    await redis.setex(cacheKey, CACHE_TTL.UNREAD_COUNT, String(count));
+    await redis.set(cacheKey, String(count), { ex: CACHE_TTL.UNREAD_COUNT });
     return count;
   }
 
@@ -351,7 +351,7 @@ class NotificationModule {
     const persisted = await redis.get(`notif:prefs:persisted:${userId}`);
     if (persisted) {
       const prefs = JSON.parse(persisted) as NotificationPreferences;
-      await redis.setex(cacheKey, CACHE_TTL.PREFERENCES, persisted);
+      await redis.set(cacheKey, persisted, { ex: CACHE_TTL.PREFERENCES });
       return prefs;
     }
 
@@ -360,7 +360,7 @@ class NotificationModule {
       userId,
       ...DEFAULT_NOTIFICATION_PREFERENCES,
     };
-    await redis.setex(cacheKey, CACHE_TTL.PREFERENCES, JSON.stringify(defaults));
+    await redis.set(cacheKey, JSON.stringify(defaults), { ex: CACHE_TTL.PREFERENCES });
     return defaults;
   }
 
@@ -383,7 +383,7 @@ class NotificationModule {
     const serialized = JSON.stringify(updated);
     // Persist and cache
     await redis.set(`notif:prefs:persisted:${userId}`, serialized);
-    await redis.setex(prefsKey(userId), CACHE_TTL.PREFERENCES, serialized);
+    await redis.set(prefsKey(userId), serialized, { ex: CACHE_TTL.PREFERENCES });
 
     logger.info({ type: 'notification_preferences_updated', userId });
     return updated;

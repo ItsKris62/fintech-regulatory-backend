@@ -40,15 +40,14 @@ class ConnectionManager {
       throw err;
     }
 
-    // Redis — important but not blocking
+    // Upstash Redis — important but not blocking (HTTP ping)
     try {
-      await redis.ping();
+      await connectRedis();
       status.redis = true;
-      logger.info({ type: 'connection_manager' }, 'Redis connected');
     } catch (err) {
       logger.warn(
         { type: 'connection_manager', service: 'redis', error: (err as Error).message },
-        'Redis connection failed — running in degraded mode'
+        'Upstash Redis ping failed — running in degraded mode'
       );
     }
 
@@ -70,6 +69,7 @@ class ConnectionManager {
   async disconnectAll(): Promise<void> {
     logger.info({ type: 'connection_manager' }, 'Disconnecting all services...');
 
+    // disconnectRedis is a no-op for Upstash (HTTP — no persistent connection)
     const results = await Promise.allSettled([
       disconnectDatabase(),
       disconnectRedis(),

@@ -48,7 +48,7 @@ export class CacheService {
       const serialized = JSON.stringify(value);
       
       if (ttl) {
-        await redis.setex(key, ttl, serialized);
+        await redis.set(key, serialized, { ex: ttl });
       } else {
         await redis.set(key, serialized);
       }
@@ -292,7 +292,7 @@ export class CacheService {
         const serialized = JSON.stringify(value);
         
         if (ttl) {
-          pipeline.setex(key, ttl, serialized);
+          pipeline.set(key, serialized, { ex: ttl });
         } else {
           pipeline.set(key, serialized);
         }

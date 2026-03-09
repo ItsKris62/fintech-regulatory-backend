@@ -112,14 +112,11 @@ export async function buildApp(): Promise<FastifyInstance> {
       overallStatus = 'degraded';
     }
 
-    // Redis
+    // Upstash Redis (HTTP ping — info() not supported by REST API)
     try {
       const t = Date.now();
       await redis.ping();
-      const info = await redis.info('memory');
-      const memMatch = info.match(/used_memory:(\d+)/);
-      const memMB = memMatch ? Math.round(parseInt(memMatch[1]) / (1024 * 1024)) : 0;
-      checks.redis = { status: 'healthy', latencyMs: Date.now() - t, message: `${memMB}MB used` };
+      checks.redis = { status: 'healthy', latencyMs: Date.now() - t, message: 'Upstash HTTP' };
     } catch (err: unknown) {
       checks.redis = { status: 'down', message: (err as Error).message };
       overallStatus = 'degraded';
