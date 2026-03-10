@@ -84,7 +84,7 @@ class PolicyModule {
     try {
       // Check cache first
       const cacheKey = `${REDIS_KEYS.POLICY}${policyId}`;
-      const cached = await redis.get(cacheKey);
+      const cached = await redis.get<string>(cacheKey);
       
       if (cached) {
         const policy = JSON.parse(cached);
@@ -679,7 +679,7 @@ class PolicyModule {
    */
   async getGenerationProgress(policyId: string): Promise<GenerationProgress | null> {
     const progressKey = `${REDIS_KEYS.GENERATION_PROGRESS}${policyId}`;
-    const data = await redis.get(progressKey);
+    const data = await redis.get<string>(progressKey);
     
     if (!data) return null;
     return JSON.parse(data);
@@ -711,7 +711,7 @@ class PolicyModule {
 
       // Check cache for existing export
       const cacheKey = `${REDIS_KEYS.EXPORT_CACHE}${policyId}:${format}`;
-      const cached = await redis.get(cacheKey);
+      const cached = await redis.get<string>(cacheKey);
       
       if (cached) {
         const cachedResult = JSON.parse(cached);
@@ -1092,7 +1092,7 @@ class PolicyModule {
    */
   private async checkGenerationRateLimit(userId: string): Promise<void> {
     const key = `${REDIS_KEYS.GENERATION_RATE}${userId}`;
-    const count = await redis.get(key);
+    const count = await redis.get<string>(key);
 
     if (count && parseInt(count) >= MAX_GENERATIONS_PER_HOUR) {
       throw new PolicyError(

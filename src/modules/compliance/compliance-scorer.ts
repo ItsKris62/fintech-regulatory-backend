@@ -43,7 +43,7 @@ class ComplianceScorer {
     try {
       // Check cache first
       const cacheKey = `${REDIS_KEYS.SCORE}${orgId}`;
-      const cached = await redis.get(cacheKey);
+      const cached = await redis.get<string>(cacheKey);
       
       if (cached) {
         logger.debug({ type: 'compliance_score_cache_hit', orgId });

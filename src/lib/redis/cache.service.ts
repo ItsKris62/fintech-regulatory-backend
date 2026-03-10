@@ -16,7 +16,7 @@ export class CacheService {
     const startTime = Date.now();
 
     try {
-      const cached = await redis.get(key);
+      const cached = await redis.get<string>(key);
 
       if (!cached) {
         logPerformance('cache_miss', startTime, { key });
@@ -247,7 +247,7 @@ export class CacheService {
     }
 
     try {
-      const values = await redis.mget(...keys);
+      const values = await redis.mget<string[]>(...keys);
 
       keys.forEach((key, index) => {
         const value = values[index];

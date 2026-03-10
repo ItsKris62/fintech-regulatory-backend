@@ -467,7 +467,7 @@ export const userRouter = router({
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const otplib = require('otplib');
 
-        const secret = await redis.get(`${TOTP_PENDING_PREFIX}${ctx.user.id}`);
+        const secret = await redis.get<string>(`${TOTP_PENDING_PREFIX}${ctx.user.id}`);
         if (!secret) {
           throw new TRPCError({
             code: 'BAD_REQUEST',

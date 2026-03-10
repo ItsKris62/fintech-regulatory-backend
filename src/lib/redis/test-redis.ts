@@ -482,7 +482,7 @@ function printSummary() {
 async function main() {
   console.log('🧪 SheriaBot Redis Connection Test');
   console.log('='.repeat(60));
-  console.log(`Redis URL: ${redisConfig.connection.url.split('@')[1] || 'localhost'}`);
+  console.log(`Redis URL: ${redisConfig.connection.restUrl.replace('https://', '').split('.')[0] || 'upstash'}`);
   console.log('='.repeat(60));
 
   try {
@@ -505,7 +505,7 @@ async function main() {
     process.exit(1);
   } finally {
     await pubsub.disconnect();
-    await redis.quit();
+    // Upstash HTTP -- no persistent connection to close
   }
 }
 

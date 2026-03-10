@@ -333,7 +333,7 @@ class DocumentModule {
 
   async getDocument(documentId: string, userId: string): Promise<DocumentSummary> {
     const cacheKey = docCacheKey(documentId);
-    const cached = await redis.get(cacheKey);
+    const cached = await redis.get<string>(cacheKey);
     if (cached) {
       await this.incrementViewCount(documentId);
       return JSON.parse(cached) as DocumentSummary;
@@ -461,7 +461,7 @@ class DocumentModule {
     filters: SearchFilters = {}
   ): Promise<DocumentSearchResult[]> {
     const cacheKey = searchCacheKey(query, orgId);
-    const cached = await redis.get(cacheKey);
+    const cached = await redis.get<string>(cacheKey);
     if (cached) return JSON.parse(cached) as DocumentSearchResult[];
 
     const searchResults = await ragService.search(query, {
@@ -758,7 +758,7 @@ class DocumentModule {
   }
 
   async getSharedDocument(shareToken: string): Promise<DocumentSummary> {
-    const shareData = await redis.get(`${REDIS_KEYS.SHARE}${shareToken}`);
+    const shareData = await redis.get<string>(`${REDIS_KEYS.SHARE}${shareToken}`);
     if (!shareData) throw new NotFoundError('Share link (may have expired)');
 
     const share = JSON.parse(shareData) as {

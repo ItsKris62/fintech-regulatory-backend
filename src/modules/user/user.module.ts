@@ -82,7 +82,7 @@ class UserModule {
     try {
       // 1. Check cache first
       const cacheKey = USER_CACHE_KEYS.PROFILE(userId);
-      const cached = await redis.get(cacheKey);
+      const cached = await redis.get<string>(cacheKey);
       
       if (cached) {
         logger.debug({ type: 'user_profile_cache_hit', userId });
@@ -301,7 +301,7 @@ class UserModule {
     try {
       // 1. Get token data
       const tokenKey = `email_change:${token}`;
-      const tokenData = await redis.get(tokenKey);
+      const tokenData = await redis.get<string>(tokenKey);
 
       if (!tokenData) {
         throw new UserError(
@@ -371,7 +371,7 @@ class UserModule {
     try {
       // 1. Check cache
       const cacheKey = USER_CACHE_KEYS.PREFERENCES(userId);
-      const cached = await redis.get(cacheKey);
+      const cached = await redis.get<string>(cacheKey);
       
       if (cached) {
         return JSON.parse(cached);
@@ -596,7 +596,7 @@ class UserModule {
     try {
       // 1. Check cache
       const cacheKey = USER_CACHE_KEYS.STATS(userId);
-      const cached = await redis.get(cacheKey);
+      const cached = await redis.get<string>(cacheKey);
       
       if (cached) {
         return JSON.parse(cached);
@@ -778,7 +778,7 @@ class UserModule {
       const sessionKeys = await redis.keys(sessionPattern);
       
       for (const key of sessionKeys) {
-        const sessionData = await redis.get(key);
+        const sessionData = await redis.get<string>(key);
         if (sessionData) {
           const session = JSON.parse(sessionData);
           if (session.userId === userId) {

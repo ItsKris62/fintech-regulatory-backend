@@ -3,11 +3,13 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
+  
 }
 
 model User {
   id                       String                   @id @default(cuid())
+  supabaseAuthId           String?                  @unique
   email                    String                   @unique
   password                 String
   fullName                 String
@@ -46,6 +48,7 @@ model User {
   savedResponses           SavedResponse[]
 
   @@index([email])
+  @@index([supabaseAuthId])
   @@index([organizationId])
   @@index([role])
   @@index([accountStatus])

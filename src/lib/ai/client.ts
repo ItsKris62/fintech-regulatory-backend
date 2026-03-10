@@ -59,7 +59,7 @@ async function trackCost(cost: number): Promise<void> {
     await redis.expire(key, 86400 * 7); // Keep for 7 days
 
     // Check if daily limit exceeded
-    const totalCost = parseFloat(await redis.get(key) || '0');
+    const totalCost = parseFloat(await redis.get<string>(key) || '0');
     
     if (totalCost > aiConfig.costs.dailyLimit) {
       logger.error({
@@ -83,7 +83,7 @@ export async function getTodayAICost(): Promise<number> {
   try {
     const today = new Date().toISOString().split('T')[0];
     const key = `ai:cost:${today}`;
-    const cost = await redis.get(key);
+    const cost = await redis.get<string>(key);
     return parseFloat(cost || '0');
   } catch (error) {
     return 0;
@@ -129,7 +129,7 @@ async function getCachedCompletion(
   cacheKey: string
 ): Promise<AICompletionResult | null> {
   try {
-    const cached = await redis.get(cacheKey);
+    const cached = await redis.get<string>(cacheKey);
     
     if (cached) {
       const result = JSON.parse(cached) as AICompletionResult;

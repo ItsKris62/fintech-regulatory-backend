@@ -510,10 +510,10 @@ class AdminModule {
   // ==========================================================================
 
   async getSystemConfig(): Promise<SystemConfig> {
-    const cached = await redis.get(systemConfigKey());
+    const cached = await redis.get<string>(systemConfigKey());
     if (cached) return JSON.parse(cached) as SystemConfig;
 
-    const persisted = await redis.get('admin:system_config:persisted');
+    const persisted = await redis.get<string>('admin:system_config:persisted');
     if (persisted) {
       const config = JSON.parse(persisted) as SystemConfig;
       await redis.setex(systemConfigKey(), CACHE_TTL.SYSTEM_CONFIG, persisted);
@@ -548,10 +548,10 @@ class AdminModule {
   }
 
   async getFeatureFlags(): Promise<FeatureFlags> {
-    const cached = await redis.get(featureFlagsKey());
+    const cached = await redis.get<string>(featureFlagsKey());
     if (cached) return JSON.parse(cached) as FeatureFlags;
 
-    const persisted = await redis.get('admin:feature_flags:persisted');
+    const persisted = await redis.get<string>('admin:feature_flags:persisted');
     if (persisted) {
       const flags = JSON.parse(persisted) as FeatureFlags;
       await redis.setex(featureFlagsKey(), CACHE_TTL.FEATURE_FLAGS, persisted);
@@ -588,7 +588,7 @@ class AdminModule {
   }
 
   async getMaintenanceMode(): Promise<MaintenanceStatus> {
-    const cached = await redis.get(maintenanceKey());
+    const cached = await redis.get<string>(maintenanceKey());
     if (cached) return JSON.parse(cached) as MaintenanceStatus;
 
     return { enabled: false, message: '', startedAt: null };
@@ -687,13 +687,12 @@ class AdminModule {
 
   async getCacheStats(): Promise<CacheStats> {
     try {
-      const info = await redis.info('memory');
-      const memMatch = info.match(/used_memory:(\d+)/);
-      const memMB = memMatch ? Math.round(parseInt(memMatch[1]) / (1024 * 1024)) : 0;
+      // redis.info() is not available on Upstash (HTTP-based managed service)
+      await redis.ping();
       const keyCount = await redis.dbsize();
 
       return {
-        memoryUsedMB: memMB,
+        memoryUsedMB: 0, // Not available via Upstash REST API
         totalKeys: keyCount,
         status: 'healthy',
       };
@@ -790,7 +789,7 @@ class AdminModule {
   // ==========================================================================
 
   async getRegulatoryFrameworks(): Promise<RegulatoryFramework[]> {
-    const cached = await redis.get(frameworksKey());
+    const cached = await redis.get<string>(frameworksKey());
     if (cached) return JSON.parse(cached) as RegulatoryFramework[];
 
     // Frameworks stored in Redis (lightweight — no dedicated DB table needed)
@@ -866,7 +865,7 @@ class AdminModule {
     const invites: PendingInvitation[] = [];
 
     for (const key of keys.slice(0, 100)) {
-      const raw = await redis.get(key);
+      const raw = await redis.get<string>(key);
       if (!raw) continue;
       try {
         const invite = JSON.parse(raw) as Record<string, unknown>;

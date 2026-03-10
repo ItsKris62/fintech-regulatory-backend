@@ -16,7 +16,7 @@ import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { mailer as _mailer } from '@/lib/email/mailer.service';
 import { logger } from '@/utils/logger';
-import { config } from '@/config';
+import { appConfig } from '@/config/app.config';
 import {
   hashPassword,
   verifyPassword,
@@ -24,9 +24,6 @@ import {
   generateToken,
   generateSessionId,
   generateRefreshTokenId,
-  generateAccessToken,
-  generateRefreshToken,
-  verifyToken,
   emailSchema,
   validatePasswordStrength,
   createSessionData,
@@ -37,6 +34,17 @@ import {
   generateWelcomeEmail,
 } from './auth.utils';
 import { sendEmail } from '@/lib/email/client';
+
+// Stubs: JWT token generation replaced by Supabase Auth in auth.router.ts.
+// These methods in AuthModule are legacy/dead code — kept for reference only.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const generateAccessToken = (_user: any, _sessionId: string, _secret: string): string => '';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const generateRefreshToken = (_userId: string, _tokenId: string, _secret: string): string => '';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const verifyToken = <T>(_token: string, _secret: string): T => {
+  throw new Error('JWT auth replaced by Supabase — use auth.router.ts procedures');
+};
 import {
   type RegisterUserInput,
   type AuthResult,
@@ -59,12 +67,10 @@ import {
  * Encapsulates all authentication business logic
  */
 class AuthModule {
-  private readonly jwtSecret: string;
   private readonly appUrl: string;
 
   constructor() {
-    this.jwtSecret = config.jwt.secret;
-    this.appUrl = config.appUrl || 'http://localhost:3000';
+    this.appUrl = appConfig.appUrl || 'http://localhost:3000';
   }
 
   // ==========================================================================
@@ -159,9 +165,9 @@ class AuthModule {
       
       await this.storeSession(sessionId, sessionData);
 
-      const accessToken = generateAccessToken(safeUser, sessionId, this.jwtSecret);
+      const accessToken = generateAccessToken(safeUser, sessionId, (process.env.SUPABASE_JWT_SECRET!));
       const refreshTokenId = generateRefreshTokenId();
-      const refreshToken = generateRefreshToken(user.id, refreshTokenId, this.jwtSecret);
+      const refreshToken = generateRefreshToken(user.id, refreshTokenId, (process.env.SUPABASE_JWT_SECRET!));
       
       await this.storeRefreshToken(refreshTokenId, user.id, sessionId);
 
@@ -255,9 +261,9 @@ class AuthModule {
       await this.storeSession(sessionId, sessionData);
 
       // 7. Generate tokens
-      const accessToken = generateAccessToken(safeUser, sessionId, this.jwtSecret);
+      const accessToken = generateAccessToken(safeUser, sessionId, (process.env.SUPABASE_JWT_SECRET!));
       const refreshTokenId = generateRefreshTokenId();
-      const refreshToken = generateRefreshToken(user.id, refreshTokenId, this.jwtSecret);
+      const refreshToken = generateRefreshToken(user.id, refreshTokenId, (process.env.SUPABASE_JWT_SECRET!));
       
       await this.storeRefreshToken(refreshTokenId, user.id, sessionId);
 
@@ -307,7 +313,7 @@ class AuthModule {
       // 1. Verify and decode refresh token
       const decoded = verifyToken<{ sub: string; jti: string }>(
         refreshTokenString,
-        this.jwtSecret
+        (process.env.SUPABASE_JWT_SECRET!)
       );
 
       // 2. Check if refresh token is valid in Redis
@@ -341,14 +347,14 @@ class AuthModule {
       const newAccessToken = generateAccessToken(
         safeUser,
         refreshTokenData.sessionId,
-        this.jwtSecret
+        (process.env.SUPABASE_JWT_SECRET!)
       );
 
       const newRefreshTokenId = generateRefreshTokenId();
       const newRefreshToken = generateRefreshToken(
         user.id,
         newRefreshTokenId,
-        this.jwtSecret
+        (process.env.SUPABASE_JWT_SECRET!)
       );
 
       await this.storeRefreshToken(
@@ -802,7 +808,7 @@ class AuthModule {
       let revokedCount = 0;
       
       for (const key of sessionKeys) {
-        const sessionData = await redis.get(key);
+        const sessionData = await redis.get<string>(key);
         if (sessionData) {
           const session: SessionData = JSON.parse(sessionData);
           if (session.userId === userId) {
@@ -817,7 +823,7 @@ class AuthModule {
       const refreshKeys = await redis.keys(refreshPattern);
       
       for (const key of refreshKeys) {
-        const tokenData = await redis.get(key);
+        const tokenData = await redis.get<string>(key);
         if (tokenData) {
           const token: RefreshTokenData = JSON.parse(tokenData);
           if (token.userId === userId) {
@@ -870,7 +876,7 @@ class AuthModule {
           continue; // Skip current session
         }
         
-        const sessionData = await redis.get(key);
+        const sessionData = await redis.get<string>(key);
         if (sessionData) {
           const session: SessionData = JSON.parse(sessionData);
           if (session.userId === userId) {
@@ -945,7 +951,7 @@ class AuthModule {
     const sessions: SessionData[] = [];
     
     for (const key of sessionKeys) {
-      const sessionData = await redis.get(key);
+      const sessionData = await redis.get<string>(key);
       if (sessionData) {
         const session: SessionData = JSON.parse(sessionData);
         if (session.userId === userId) {
@@ -972,7 +978,7 @@ class AuthModule {
 
   private async getSession(sessionId: string): Promise<SessionData | null> {
     const key = `${AUTH_CONSTANTS.REDIS_KEYS.SESSION}${sessionId}`;
-    const data = await redis.get(key);
+    const data = await redis.get<string>(key);
     return data ? JSON.parse(data) : null;
   }
 
@@ -1011,7 +1017,7 @@ class AuthModule {
 
   private async getRefreshToken(tokenId: string): Promise<RefreshTokenData | null> {
     const key = `${AUTH_CONSTANTS.REDIS_KEYS.REFRESH_TOKEN}${tokenId}`;
-    const data = await redis.get(key);
+    const data = await redis.get<string>(key);
     return data ? JSON.parse(data) : null;
   }
 
@@ -1026,7 +1032,7 @@ class AuthModule {
 
   private async getLoginAttempts(email: string): Promise<LoginAttempt | null> {
     const key = `${AUTH_CONSTANTS.REDIS_KEYS.LOGIN_ATTEMPTS}${email}`;
-    const data = await redis.get(key);
+    const data = await redis.get<string>(key);
     return data ? JSON.parse(data) : null;
   }
 
@@ -1088,7 +1094,7 @@ class AuthModule {
 
   private async getPasswordResetToken(token: string): Promise<PasswordResetToken | null> {
     const key = `${AUTH_CONSTANTS.REDIS_KEYS.PASSWORD_RESET}${token}`;
-    const data = await redis.get(key);
+    const data = await redis.get<string>(key);
     return data ? JSON.parse(data) : null;
   }
 
@@ -1127,7 +1133,7 @@ class AuthModule {
     token: string
   ): Promise<EmailVerificationToken | null> {
     const key = `${AUTH_CONSTANTS.REDIS_KEYS.EMAIL_VERIFICATION}${token}`;
-    const data = await redis.get(key);
+    const data = await redis.get<string>(key);
     return data ? JSON.parse(data) : null;
   }
 
@@ -1142,7 +1148,7 @@ class AuthModule {
 
   private async getPasswordHistory(userId: string): Promise<string[]> {
     const key = `${AUTH_CONSTANTS.REDIS_KEYS.PASSWORD_HISTORY}${userId}`;
-    const data = await redis.get(key);
+    const data = await redis.get<string>(key);
     
     if (!data) return [];
     
@@ -1155,7 +1161,7 @@ class AuthModule {
     hashedPassword: string
   ): Promise<void> {
     const key = `${AUTH_CONSTANTS.REDIS_KEYS.PASSWORD_HISTORY}${userId}`;
-    const existing = await redis.get(key);
+    const existing = await redis.get<string>(key);
     
     let history: PasswordHistoryEntry[] = existing ? JSON.parse(existing) : [];
     

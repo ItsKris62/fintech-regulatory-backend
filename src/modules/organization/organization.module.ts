@@ -178,7 +178,7 @@ class OrganizationModule {
     try {
       // 1. Check cache
       const cacheKey = `${REDIS_KEYS.ORGANIZATION}${orgId}`;
-      const cached = await redis.get(cacheKey);
+      const cached = await redis.get<string>(cacheKey);
       
       if (cached) {
         logger.debug({ type: 'org_cache_hit', orgId });
@@ -749,7 +749,7 @@ class OrganizationModule {
 
     try {
       // 1. Get invitation from Redis
-      const invitationData = await redis.get(`${REDIS_KEYS.INVITATION}${token}`);
+      const invitationData = await redis.get<string>(`${REDIS_KEYS.INVITATION}${token}`);
       
       if (!invitationData) {
         throw new OrganizationError(
@@ -1308,7 +1308,7 @@ class OrganizationModule {
     try {
       // Check cache
       const cacheKey = `${REDIS_KEYS.STATS}${orgId}`;
-      const cached = await redis.get(cacheKey);
+      const cached = await redis.get<string>(cacheKey);
       
       if (cached) {
         return JSON.parse(cached);

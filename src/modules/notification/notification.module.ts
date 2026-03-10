@@ -246,7 +246,7 @@ class NotificationModule {
 
   async getUnreadCount(userId: string): Promise<number> {
     const cacheKey = unreadCountKey(userId);
-    const cached = await redis.get(cacheKey);
+    const cached = await redis.get<string>(cacheKey);
     if (cached !== null) return parseInt(cached, 10);
 
     const count = await prisma.notification.count({
@@ -343,12 +343,12 @@ class NotificationModule {
 
   async getNotificationPreferences(userId: string): Promise<NotificationPreferences> {
     const cacheKey = prefsKey(userId);
-    const cached = await redis.get(cacheKey);
+    const cached = await redis.get<string>(cacheKey);
     if (cached) return JSON.parse(cached) as NotificationPreferences;
 
     // Store prefs in User.metadata or a standalone key in Redis
     // (No dedicated model — using Redis as the store of record)
-    const persisted = await redis.get(`notif:prefs:persisted:${userId}`);
+    const persisted = await redis.get<string>(`notif:prefs:persisted:${userId}`);
     if (persisted) {
       const prefs = JSON.parse(persisted) as NotificationPreferences;
       await redis.set(cacheKey, persisted, { ex: CACHE_TTL.PREFERENCES });
@@ -511,7 +511,7 @@ class NotificationModule {
 
   async getNotificationTemplates(): Promise<NotificationTemplate[]> {
     // Templates are stored in Redis as a simple list
-    const raw = await redis.get('notif:templates');
+    const raw = await redis.get<string>('notif:templates');
     if (raw) return JSON.parse(raw) as NotificationTemplate[];
     return [];
   }

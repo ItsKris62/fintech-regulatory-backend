@@ -106,7 +106,7 @@ class ComplianceModule {
 
       // 3. Check cache for similar query
       const cacheKey = this.getQueryCacheKey(validated.query, validated.regulatoryAreas);
-      const cached = await redis.get(cacheKey);
+      const cached = await redis.get<string>(cacheKey);
       
       if (cached) {
         logger.debug({ type: 'compliance_query_cache_hit', userId });

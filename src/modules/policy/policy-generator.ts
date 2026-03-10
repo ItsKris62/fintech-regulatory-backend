@@ -169,7 +169,7 @@ export class PolicyGenerator {
 
     // Poll for progress updates
     const pollInterval = setInterval(async () => {
-      const progressData = await redis.get(progressKey);
+      const progressData = await redis.get<string>(progressKey);
       if (progressData) {
         const progress: GenerationProgress = JSON.parse(progressData);
         onProgress(progress);

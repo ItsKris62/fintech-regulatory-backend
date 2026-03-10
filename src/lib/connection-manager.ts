@@ -1,5 +1,5 @@
 import { prisma, connectDatabase, disconnectDatabase } from '@/lib/prisma/client';
-import { redis, disconnectRedis, checkRedisHealth } from '@/lib/redis/client';
+import { connectRedis, disconnectRedis, checkRedisHealth } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 
 export interface ConnectionStatus {

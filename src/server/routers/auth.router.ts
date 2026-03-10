@@ -12,7 +12,6 @@ import {
   refreshTokenSchema,
 } from '../schemas/auth.schema';
 
-import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { hashPassword } from '@/utils/helpers';
 import { authRateLimiter } from '@/lib/redis/rate-limiter';

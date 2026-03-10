@@ -67,7 +67,7 @@ export class RateLimiter {
       const results = await pipeline.exec();
 
       // Extract count from results (second operation)
-      const count = (results?.[1]?.[1] as number) || 0;
+      const count = (results?.[1] as number) || 0;
 
       const allowed = count < max;
       const remaining = Math.max(0, max - count - 1);

@@ -6,8 +6,6 @@ import { z } from 'zod';
  * URL formats, and production-only requirements.
  */
 
-const isProduction = process.env.NODE_ENV === 'production';
-
 const envSchema = z.object({
   // ── Application ──────────────────────────────────────────────────────────
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),

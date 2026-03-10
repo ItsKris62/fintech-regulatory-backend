@@ -257,7 +257,7 @@ class AnalyticsModule {
     dateRange?: DateRange
   ): Promise<OrgDashboard> {
     const cacheKey = orgDashboardKey(orgId);
-    const cached = await redis.get(cacheKey);
+    const cached = await redis.get<string>(cacheKey);
     if (cached) return JSON.parse(cached) as OrgDashboard;
 
     const range = dateRange ?? defaultDateRange(30);
@@ -698,7 +698,7 @@ class AnalyticsModule {
 
   async getPlatformOverview(dateRange?: DateRange): Promise<PlatformOverview> {
     const cacheKey = platformOverviewKey();
-    const cached = await redis.get(cacheKey);
+    const cached = await redis.get<string>(cacheKey);
     if (cached) return JSON.parse(cached) as PlatformOverview;
 
     const range = dateRange ?? defaultDateRange(30);
@@ -784,7 +784,7 @@ class AnalyticsModule {
 
   async getSystemHealthMetrics(): Promise<SystemHealthMetrics> {
     const cacheKey = systemHealthKey();
-    const cached = await redis.get(cacheKey);
+    const cached = await redis.get<string>(cacheKey);
     if (cached) return JSON.parse(cached) as SystemHealthMetrics;
 
     const health: SystemHealthMetrics = {
@@ -811,10 +811,8 @@ class AnalyticsModule {
     try {
       const redisStart = Date.now();
       await redis.ping();
-      const info = await redis.info('memory');
-      const memMatch = info.match(/used_memory:(\d+)/);
-      const memMB = memMatch ? Math.round(parseInt(memMatch[1]) / (1024 * 1024)) : 0;
-      health.redis = { status: 'healthy', latencyMs: Date.now() - redisStart, memoryUsedMB: memMB };
+      // redis.info() not available on Upstash (HTTP-based managed service)
+      health.redis = { status: 'healthy', latencyMs: Date.now() - redisStart, memoryUsedMB: 0 };
     } catch {
       health.redis = { status: 'down', latencyMs: -1, memoryUsedMB: 0 };
       health.status = 'degraded';

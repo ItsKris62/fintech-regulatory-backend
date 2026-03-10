@@ -292,11 +292,10 @@ export async function queueEmail(
       attempts: 0,
     });
 
-    // Add to Redis list (higher priority = lower score)
+    // Add to Redis sorted set (higher priority = lower score)
     await redis.zadd(
       emailConfig.queue.queueName,
-      -priority,
-      queueEntry
+      { score: -priority, member: queueEntry }
     );
 
     logger.info({
@@ -324,7 +323,7 @@ export async function queueEmail(
 export async function processEmailQueue(batchSize: number = 10): Promise<number> {
   try {
     // Get emails from queue (highest priority first)
-    const entries = await redis.zrange(
+    const entries = await redis.zrange<string[]>(
       emailConfig.queue.queueName,
       0,
       batchSize - 1
@@ -372,8 +371,7 @@ export async function processEmailQueue(batchSize: number = 10): Promise<number>
             await redis.zrem(emailConfig.queue.queueName, entry);
             await redis.zadd(
               emailConfig.queue.queueName,
-              -queuedEmail.priority,
-              updatedEntry
+              { score: -queuedEmail.priority, member: updatedEntry }
             );
           }
         }

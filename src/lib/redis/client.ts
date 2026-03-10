@@ -158,7 +158,10 @@ export async function lrange(key: string, start: number, stop: number): Promise<
 }
 
 export async function sadd(key: string, ...members: string[]): Promise<number> {
-  try { return await redis.sadd(key, ...members); }
+  try {
+    if (members.length === 0) return 0;
+    return await redis.sadd(key, ...(members as [string, ...string[]]));
+  }
   catch (error: any) { logger.error({ type: 'redis_sadd_error', key, error: error.message }); return 0; }
 }
 
