@@ -254,8 +254,14 @@ export const adminRouter = router({
             email: true,
             role: true,
             emailVerified: true,
+            supabaseAuthId: true,
           },
         });
+
+        // F5.8 — evict cached user profile so role/status changes take effect immediately
+        if (user.supabaseAuthId) {
+          await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+        }
 
         logger.info({
           type: 'admin_user_updated',
@@ -264,7 +270,8 @@ export const adminRouter = router({
           fields: Object.keys(data),
         });
 
-        return user;
+        const { supabaseAuthId: _sid, ...userOut } = user;
+        return userOut;
       } catch (error: any) {
         logger.error({
           type: 'admin_update_user_error',
@@ -424,11 +431,22 @@ export const adminRouter = router({
           });
         }
 
+        // Look up supabaseAuthId before deletion for cache eviction
+        const targetUser = await ctx.prisma.user.findUnique({
+          where: { id: input.userId },
+          select: { supabaseAuthId: true },
+        });
+
         // Soft delete user
         await ctx.prisma.user.update({
           where: { id: input.userId },
           data: { deletedAt: new Date() } as any,
         });
+
+        // F5.8 — evict cached user profile so deletion takes effect immediately
+        if (targetUser?.supabaseAuthId) {
+          await redis.del(`user:session:${targetUser.supabaseAuthId}`).catch(() => {});
+        }
 
         logger.info({
           type: 'admin_user_deleted',
@@ -473,11 +491,21 @@ export const adminRouter = router({
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot suspend your own account' });
         }
 
+        // F5.8 — capture supabaseAuthId for cache eviction
+        const suspendTarget = await ctx.prisma.user.findUnique({
+          where: { id: input.userId },
+          select: { supabaseAuthId: true },
+        });
+
         const result = await adminModule.suspendUser(
           ctx.user!.id,
           input.userId,
           input.reason ?? 'Suspended by administrator'
         );
+
+        if (suspendTarget?.supabaseAuthId) {
+          await redis.del(`user:session:${suspendTarget.supabaseAuthId}`).catch(() => {});
+        }
 
         logger.info({
           type: 'admin_user_suspended',
@@ -1134,7 +1162,7 @@ export const adminRouter = router({
       try {
         const user = await ctx.prisma.user.findUnique({
           where: { id: input.userId },
-          select: { id: true, email: true, fullName: true, role: true, accountStatus: true },
+          select: { id: true, email: true, fullName: true, role: true, accountStatus: true, supabaseAuthId: true },
         });
 
         if (!user) {
@@ -1145,6 +1173,11 @@ export const adminRouter = router({
           where: { id: input.userId },
           data: { accountStatus: 'active' } as any,
         });
+
+        // F5.8 — evict cached user profile so approval takes effect immediately
+        if (user.supabaseAuthId) {
+          await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+        }
 
         // Write audit log
         await ctx.prisma.auditLog.create({

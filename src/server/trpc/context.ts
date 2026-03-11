@@ -69,12 +69,34 @@ export async function createContext({
       // Cache key for the Prisma user profile
       const cacheKey = `user:session:${supabaseUserId}`;
 
-      // Try Redis cache first
-      const cached = await redis.get<string>(cacheKey);
-      if (cached) {
-        user = JSON.parse(cached) as User;
-      } else {
-        // Cache miss — look up by supabaseAuthId in Prisma
+      // Try Redis cache first.
+      // @upstash/redis auto-parses JSON responses, so the stored JSON string
+      // is returned as an already-deserialized object — use get<User> directly.
+      //
+      // Isolated try/catch: a cache parse failure (e.g. stale pre-migration
+      // entries stored without JSON.stringify, resulting in "[object Object]")
+      // must fall through to Prisma rather than crashing context creation and
+      // leaving every request unauthenticated until the TTL expires.
+      let cacheHit = false;
+      try {
+        const cached = await redis.get<User>(cacheKey);
+        if (cached && typeof cached === 'object') {
+          user = cached;
+          cacheHit = true;
+        }
+      } catch (cacheErr: any) {
+        logger.warn({
+          type: 'context_cache_parse_error',
+          supabaseUserId,
+          error: cacheErr.message,
+          action: 'evicting_corrupt_key_and_falling_through_to_prisma',
+        });
+        // Evict the corrupt key so subsequent requests stop hitting the error
+        await redis.del(cacheKey).catch(() => {});
+      }
+
+      if (!cacheHit) {
+        // Cache miss or corrupt entry — look up by supabaseAuthId in Prisma
         const dbUser = await prisma.user.findUnique({
           where: { supabaseAuthId: supabaseUserId },
           select: {
@@ -97,7 +119,7 @@ export async function createContext({
             // it will be present from the next request once the cache is warm.
           };
 
-          // Cache for subsequent requests
+          // Re-populate cache with well-formed JSON
           await redis.set(cacheKey, JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS });
         }
       }

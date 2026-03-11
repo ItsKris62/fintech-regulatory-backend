@@ -27,6 +27,7 @@ export const registerSchema = z.object({
   role: z.enum(['REGULATOR', 'STARTUP', 'ENTERPRISE'], {
     error: 'Role must be REGULATOR, STARTUP, or ENTERPRISE',
   }),
+  companyName: z.string().min(2, 'Organization name must be at least 2 characters').max(200).optional(),
   organizationId: z.string().optional(),
   phone: phoneSchema.optional(),
 });
