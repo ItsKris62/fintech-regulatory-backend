@@ -45,6 +45,22 @@ function registerShutdownHandlers(app: FastifyInstance): void {
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 
+// Required environment variable guard — fail fast before binding to network
+const REQUIRED_ENV_VARS = [
+  'FRONTEND_URL',
+  'SUPABASE_URL',
+  'SUPABASE_ANON_KEY',
+  'SUPABASE_SERVICE_ROLE_KEY',
+] as const;
+
+for (const key of REQUIRED_ENV_VARS) {
+  if (!process.env[key]) {
+    logger.error({ type: 'missing_required_env_var', key });
+    console.error(`Missing required environment variable: ${key}`);
+    process.exit(1);
+  }
+}
+
 const start = async () => {
   try {
     // 1. Connect all external services (database is critical, Redis is degradable)

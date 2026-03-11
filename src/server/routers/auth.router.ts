@@ -380,6 +380,26 @@ export const authRouter = router({
 
         const newAccountStatus = user.role === 'REGULATOR' ? 'pending_approval' : 'active';
 
+        // Confirm email in Supabase FIRST — if this fails the whole mutation fails,
+        // keeping Prisma consistent (not marked verified when Supabase isn't).
+        if ((user as any).supabaseAuthId) {
+          const { error: supabaseError } = await supabaseAdmin.auth.admin.updateUserById(
+            (user as any).supabaseAuthId,
+            { email_confirm: true },
+          );
+          if (supabaseError) {
+            logger.error({
+              type: 'auth_email_verify_supabase_error',
+              userId: user.id,
+              error: supabaseError.message,
+            });
+            throw new TRPCError({
+              code: 'INTERNAL_SERVER_ERROR',
+              message: 'Failed to confirm email with auth provider. Please try again.',
+            });
+          }
+        }
+
         await ctx.prisma.user.update({
           where: { id: user.id },
           data: {
@@ -390,13 +410,6 @@ export const authRouter = router({
             accountStatus: newAccountStatus,
           } as any,
         });
-
-        // Confirm email on the Supabase side as well
-        if ((user as any).supabaseAuthId) {
-          await supabaseAdmin.auth.admin.updateUserById((user as any).supabaseAuthId, {
-            email_confirm: true,
-          });
-        }
 
         if (user.role !== 'REGULATOR') {
           reactMailer.sendWelcomeEmail(user.email, {

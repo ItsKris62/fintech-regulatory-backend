@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import jwt, { JwtPayload } from 'jsonwebtoken';
+import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { aiService } from '@/lib/ai/ai.service';
@@ -7,12 +7,6 @@ import { ragService } from '@/lib/rag/rag.service';
 import { storageService } from '@/lib/storage/storage.service';
 import { mailer } from '@/lib/email/mailer.service';
 import { logger } from '@/utils/logger';
-
-const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
-
-if (!SUPABASE_JWT_SECRET) {
-  throw new Error('SUPABASE_JWT_SECRET environment variable is required');
-}
 
 /** User shape attached to every authenticated tRPC context. */
 export interface User {
@@ -43,8 +37,9 @@ const USER_CACHE_TTL_SECONDS = 3600;
  *
  * Auth flow:
  * 1. Extract Bearer token from Authorization header.
- * 2. Verify it as a Supabase-issued JWT using SUPABASE_JWT_SECRET.
- * 3. Use decoded.sub (Supabase user UUID) to look up the Prisma User.
+ * 2. Verify it via supabaseAdmin.auth.getUser() — works for both HS256 and RS256
+ *    Supabase project configurations without requiring a local JWT secret.
+ * 3. Use the returned user.id (Supabase user UUID) to look up the Prisma User.
  *    Lookup is cached in Upstash Redis for USER_CACHE_TTL_SECONDS.
  * 4. Attach the full Prisma user (role, organizationId, etc.) to context.
  */
@@ -62,19 +57,14 @@ export async function createContext({
     const token = authHeader.substring(7);
 
     try {
-      // Verify the Supabase JWT locally (fast — no network call)
-      interface SupabaseJwtPayload extends JwtPayload {
-        sub: string;   // Supabase user UUID
-        email: string;
-        role?: string; // Supabase DB role (not our app role)
-        user_metadata?: { role?: string; organizationId?: string };
-        session_id?: string;
+      // Verify the JWT via Supabase — handles HS256 and RS256 transparently
+      const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+      if (authError || !authData?.user?.id) {
+        throw new Error(authError?.message ?? 'Invalid token');
       }
 
-      const decoded = jwt.verify(token, SUPABASE_JWT_SECRET!) as SupabaseJwtPayload;
-      const supabaseUserId = decoded.sub;
-
-      if (!supabaseUserId) throw new Error('JWT missing sub claim');
+      const supabaseUserId = authData.user.id;
 
       // Cache key for the Prisma user profile
       const cacheKey = `user:session:${supabaseUserId}`;
@@ -103,7 +93,8 @@ export async function createContext({
             role: dbUser.role,
             organizationId: dbUser.organizationId ?? undefined,
             supabaseAuthId: dbUser.supabaseAuthId,
-            sessionId: decoded.session_id,
+            // sessionId is populated in the Redis cache by the login handler;
+            // it will be present from the next request once the cache is warm.
           };
 
           // Cache for subsequent requests
