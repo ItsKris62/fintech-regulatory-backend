@@ -42,8 +42,8 @@ export async function buildApp(): Promise<FastifyInstance> {
       // Allow requests with no origin (server-to-server, Postman, curl)
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      // Allow only SheriaBot Vercel preview deployments (project-slug prefix)
-      if (/^https:\/\/fintech-regulatory-platform(-[a-z0-9]+)*\.vercel\.app$/.test(origin)) return cb(null, true);
+      // Allow SheriaBot Vercel preview deployments (project-slug prefix)
+      if (/^https:\/\/sheriabot(-[a-z0-9]+)*\.vercel\.app$/.test(origin)) return cb(null, true);
       cb(new Error(`CORS: origin '${origin}' not allowed`), false);
     },
     credentials: true,
