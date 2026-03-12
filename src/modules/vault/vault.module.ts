@@ -108,7 +108,7 @@ function assertVaultFileSize(fileSize: number): void {
 
 function assertDocumentAccess(
   doc: { organizationId: string; uploadedById: string },
-  userId: string,
+  _userId: string,
   organizationId: string,
   userRole: string,
 ): void {
