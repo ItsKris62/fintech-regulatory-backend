@@ -18,48 +18,64 @@ export interface ComplianceQueryParams {
  * Generate system prompt for compliance queries
  */
 export function generateComplianceSystemPrompt(): string {
-  return `You are an expert AI assistant specializing in Kenyan regulatory compliance. Your role is to provide accurate, actionable answers to compliance questions based on Kenya's laws and regulations.
+  return `You are SheriaBot, an authoritative AI compliance intelligence system specialising in Kenyan regulatory law for the financial services sector. Your audience is compliance officers, legal teams, and fintech founders at licensed and aspiring financial institutions.
 
-EXPERTISE AREAS:
-- Data Protection Act 2019
-- Digital lending regulations (CBK Digital Credit Regulations 2022)
-- National Payment Systems Act and regulations
-- Anti-Money Laundering and Counter-Terrorism Financing laws (POCAMLA 2009)
-- Central Bank of Kenya (CBK) prudential guidelines
-- Kenya Information and Communications Act
+## EXPERTISE AREAS
+- Data Protection Act 2019 and ODPC regulations
+- CBK Digital Credit Providers Regulations 2022 and associated Guidance Notes
+- National Payment Systems Act 2011 and Payment Service Provider (PSP) licensing framework
+- Proceeds of Crime and Anti-Money Laundering Act 2009 (POCAMLA) and AML/CFT Guidelines
+- CBK Prudential Guidelines (Capital Adequacy, Liquidity, Risk Classification)
+- Kenya Information and Communications Act and ICT Authority regulations
 - Consumer Protection Act 2012
-- Banking Act and regulations
-- Insurance Act and regulations
+- Banking Act Cap 488 and associated regulations
+- Insurance Regulatory Authority Act and regulations
+- Capital Markets Authority regulations
 
-RESPONSE STRUCTURE:
-1. **Direct Answer**: Clear, concise answer to the question
-2. **Legal Basis**: Relevant laws and regulations with specific citations
-3. **Requirements**: What must be done to comply
-4. **Practical Guidance**: How to implement in practice
-5. **Timeline**: When compliance is required
-6. **Consequences**: Penalties for non-compliance
-7. **Additional Considerations**: Related requirements or best practices
+## OUTPUT FORMAT
+Structure every response using Markdown. Use level-2 headings (##) for all main sections and level-3 headings (###) for sub-sections within a section. Do not use bold text as headings — use proper Markdown headings only.
 
-CITATION REQUIREMENTS:
-- Always cite specific acts, sections, and clauses
-- Use exact legal terminology
-- Reference the most current versions of laws
-- Distinguish between laws, regulations, and guidelines
-- Note regulatory authorities with jurisdiction
+Required sections, in order:
+1. ## Direct Answer
+2. ## Legal Basis
+3. ## Compliance Requirements
+4. ## Implementation Guidance
+5. ## Timeline
+6. ## Consequences of Non-Compliance
+7. ## Related Considerations
 
-ANSWER STYLE:
-- Professional and authoritative
-- Clear and concise
-- Action-oriented
-- Kenyan context-aware
-- Accessible to non-lawyers
+## TABLES
+Use Markdown GFM tables whenever you are:
+- Comparing multiple regulatory instruments or requirements
+- Listing obligations with corresponding deadlines, penalties, or regulatory authorities
+- Presenting a compliance checklist with status or priority columns
+- Summarising fines, capital thresholds, or transaction limits
 
-IMPORTANT:
-- Only cite laws that actually exist in Kenya
-- If uncertain, say so clearly
-- Distinguish mandatory requirements from recommendations
-- Consider practical implementation in Kenya
-- Flag areas requiring legal counsel`;
+Every table must have a header row and a separator row. Example:
+
+| Requirement | Legal Basis | Deadline | Regulator |
+|---|---|---|---|
+| AML Policy | POCAMLA 2009, s.45 | Before launch | FRC |
+| DPA Registration | DPA 2019, s.17 | Before processing personal data | ODPC |
+
+## CITATION REQUIREMENTS
+- Cite specific Acts, Section numbers, and sub-clauses (e.g., "Data Protection Act 2019, Section 25(1)(a)")
+- Reference CBK Circulars, Guidance Notes, and Prudential Guidelines by number and date where known
+- Distinguish: Acts (primary legislation) | Regulations (statutory instruments) | Guidelines (regulatory guidance) | Circulars (supervisory directives)
+- State which regulatory authority (CBK, FRC, CAK, IRA, CMA, ODPC, NCA) has jurisdiction
+
+## TONE & STYLE
+- Authoritative and precise — write as a senior compliance counsel would
+- Enterprise-ready: suitable for board reports and regulatory submissions
+- Clearly distinguish mandatory requirements from best-practice recommendations
+- Use plain-language explanations alongside legal citations
+- Flag explicitly where independent legal counsel is essential
+
+## ACCURACY
+- Only cite laws that are actually in force in Kenya
+- If uncertain about a specific clause, state the uncertainty explicitly rather than guessing
+- Note where regulations are recently amended, pending, or under consultation
+- Distinguish obligations that apply to banks, MFBs, PSPs, and digital lenders respectively`;
 }
 
 /**
@@ -68,75 +84,62 @@ IMPORTANT:
 export function generateComplianceUserPrompt(params: ComplianceQueryParams): string {
   const { question, organizationType, industry, context, urgency } = params;
 
-  let prompt = `**COMPLIANCE QUESTION:**
-${question}
-`;
+  let prompt = `## Compliance Question\n\n${question}\n`;
 
-  if (organizationType) {
-    prompt += `\n**ORGANIZATION TYPE:**
-${organizationType}
-`;
-  }
-
-  if (industry) {
-    prompt += `\n**INDUSTRY/SECTOR:**
-${industry}
-`;
-  }
-
-  if (context) {
-    prompt += `\n**ADDITIONAL CONTEXT:**
-${context}
-`;
-  }
-
-  if (urgency) {
-    prompt += `\n**URGENCY:**
-${urgency}
-`;
-  }
+  if (organizationType) prompt += `\n**Organisation Type:** ${organizationType}`;
+  if (industry)         prompt += `\n**Industry / Sector:** ${industry}`;
+  if (urgency)          prompt += `\n**Urgency:** ${urgency}`;
+  if (context)          prompt += `\n\n**Additional Context:**\n${context}`;
 
   prompt += `
 
-Please provide a comprehensive answer with the following sections:
+---
 
-1. **DIRECT ANSWER** (2-3 sentences)
-   - Clear answer to the question
-   - Main regulatory requirement
+Provide a comprehensive, enterprise-grade compliance analysis using the exact structure below. Use Markdown tables wherever applicable — especially for requirement comparisons, penalty schedules, and timeline summaries.
 
-2. **LEGAL BASIS**
-   - Relevant Kenyan laws and regulations
-   - Specific sections and clauses
-   - Regulatory authorities
+## Direct Answer
 
-3. **COMPLIANCE REQUIREMENTS**
-   - What must be done
-   - Documentation needed
-   - Processes to implement
-   - Systems/controls required
+State clearly, in 2–3 sentences, what is required and whether this organisation type must comply.
 
-4. **IMPLEMENTATION GUIDANCE**
-   - Step-by-step actions
-   - Practical considerations
-   - Common pitfalls to avoid
-   - Best practices
+## Legal Basis
 
-5. **TIMELINE**
-   - When compliance is required
-   - Any grace periods
-   - Ongoing obligations
+Cite all applicable Kenyan Acts, Regulations, Guidelines, and Circulars with precise section references. Present them in a table:
 
-6. **NON-COMPLIANCE CONSEQUENCES**
-   - Penalties and fines
-   - Other sanctions
-   - Reputational risks
+| Instrument | Section / Clause | Obligation | Regulator |
+|---|---|---|---|
 
-7. **RELATED CONSIDERATIONS**
-   - Connected regulatory requirements
-   - Upcoming regulatory changes
-   - Industry-specific nuances
+## Compliance Requirements
 
-Format your response clearly with headers and bullet points. Cite specific laws and regulations.`;
+List every mandatory obligation. Use ### sub-headings to group by theme (e.g., ### Documentation, ### Systems & Controls, ### Reporting Obligations). Where multiple requirements exist, use a table:
+
+| Requirement | Mandatory? | Deadline | Notes |
+|---|---|---|---|
+
+## Implementation Guidance
+
+Step-by-step actions an organisation should take. Use a numbered list for the main steps. Add ### sub-sections for distinct workstreams where appropriate.
+
+## Timeline
+
+Summarise all deadlines, grace periods, and ongoing obligations in a table:
+
+| Milestone | Deadline | Frequency | Notes |
+|---|---|---|---|
+
+## Consequences of Non-Compliance
+
+State penalties, fines, licence revocations, and reputational risks. Use a table where multiple offence tiers or regulators apply:
+
+| Violation | Penalty / Sanction | Authority | Legal Basis |
+|---|---|---|---|
+
+## Related Considerations
+
+Highlight connected regulatory requirements, upcoming regulatory changes, and any industry-specific nuances relevant to this organisation type.
+
+---
+
+Cite specific laws and regulations throughout. Use authoritative, enterprise-grade language suitable for a board compliance report.`;
 
   return prompt;
 }
@@ -151,22 +154,16 @@ export function generateFollowUpQueryPrompt(
 ): string {
   return `You previously answered a compliance question. The user has a follow-up question.
 
-**ORIGINAL QUESTION:**
+## Original Question
 ${originalQuestion}
 
-**YOUR PREVIOUS ANSWER:**
+## Your Previous Answer
 ${originalAnswer}
 
-**FOLLOW-UP QUESTION:**
+## Follow-up Question
 ${followUpQuestion}
 
-Please answer the follow-up question while:
-1. Building on your previous answer
-2. Maintaining consistency
-3. Providing any additional legal citations needed
-4. Clarifying or expanding as requested
-
-Keep the same professional format and citation style.`;
+Answer the follow-up question while building on the previous answer, maintaining consistency, and providing any additional legal citations needed. Use the same Markdown structure (## headings, tables where applicable) and authoritative compliance tone.`;
 }
 
 /**
@@ -262,7 +259,27 @@ Tailor your answer to the ${industry} context in Kenya.`;
 }
 
 /**
- * Extract answer sections from AI response
+ * Build a map of { lowercase-title → content } by splitting the response
+ * on ## level-2 headings. Robust to extra blank lines and whitespace.
+ */
+function buildSectionMap(response: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  // Split at the start of every line that begins with "## "
+  const chunks = response.split(/^(?=## )/m);
+  for (const chunk of chunks) {
+    const m = chunk.match(/^## ([^\n]+)\n?([\s\S]*)/);
+    if (m) {
+      map[m[1].trim().toLowerCase()] = m[2].trim();
+    }
+  }
+  return map;
+}
+
+/**
+ * Extract answer sections from AI response.
+ *
+ * Supports both the new ## heading format (primary) and the legacy
+ * **BOLD HEADER** format (fallback) so old stored responses still parse.
  */
 export function extractAnswerSections(response: string): {
   directAnswer: string;
@@ -274,67 +291,68 @@ export function extractAnswerSections(response: string): {
   relatedConsiderations: string;
   citations: string[];
 } {
-  const sections = {
-    directAnswer: '',
-    legalBasis: '',
-    requirements: '',
-    guidance: '',
-    timeline: '',
-    consequences: '',
-    relatedConsiderations: '',
-    citations: [] as string[],
+  // ── New format: ## Headings ────────────────────────────────────────────────
+  const map = buildSectionMap(response);
+
+  const get = (...keys: string[]): string => {
+    for (const key of keys) {
+      const val = map[key.toLowerCase()];
+      if (val) return val;
+    }
+    return '';
   };
 
-  // Extract direct answer
-  const directMatch = response.match(/\*\*DIRECT ANSWER\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
-  if (directMatch) {
-    sections.directAnswer = directMatch[1].trim();
-  }
+  const fromMap = {
+    directAnswer:          get('direct answer', 'executive summary', 'overview'),
+    legalBasis:            get('legal basis', 'legal basis & citations', 'legal framework'),
+    requirements:          get('compliance requirements', 'requirements'),
+    guidance:              get('implementation guidance', 'implementation steps', 'guidance'),
+    timeline:              get('timeline', 'timeline & deadlines', 'deadlines'),
+    consequences:          get('consequences of non-compliance', 'non-compliance consequences', 'consequences'),
+    relatedConsiderations: get('related considerations', 'additional considerations'),
+  };
 
-  // Extract legal basis
-  const legalMatch = response.match(/\*\*LEGAL BASIS\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
-  if (legalMatch) {
-    sections.legalBasis = legalMatch[1].trim();
-  }
+  // ── Legacy fallback: **BOLD HEADERS** ─────────────────────────────────────
+  // Used only when the response contains no ## headings (e.g. older stored answers)
+  const hasHeadings = Object.values(fromMap).some((v) => v.length > 0);
 
-  // Extract requirements
-  const reqMatch = response.match(/\*\*COMPLIANCE REQUIREMENTS\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
-  if (reqMatch) {
-    sections.requirements = reqMatch[1].trim();
-  }
+  const legacyGet = (pattern: RegExp): string => {
+    const m = response.match(pattern);
+    return m ? m[1].trim() : '';
+  };
 
-  // Extract guidance
-  const guideMatch = response.match(/\*\*IMPLEMENTATION GUIDANCE\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
-  if (guideMatch) {
-    sections.guidance = guideMatch[1].trim();
-  }
+  const directAnswer = fromMap.directAnswer ||
+    legacyGet(/\*\*DIRECT ANSWER\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
+  const legalBasis = fromMap.legalBasis ||
+    legacyGet(/\*\*LEGAL BASIS\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
+  const requirements = fromMap.requirements ||
+    legacyGet(/\*\*COMPLIANCE REQUIREMENTS\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
+  const guidance = fromMap.guidance ||
+    legacyGet(/\*\*IMPLEMENTATION GUIDANCE\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
+  const timeline = fromMap.timeline ||
+    legacyGet(/\*\*TIMELINE\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
+  const consequences = fromMap.consequences ||
+    legacyGet(/\*\*NON-COMPLIANCE CONSEQUENCES\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
+  const relatedConsiderations = fromMap.relatedConsiderations ||
+    legacyGet(/\*\*RELATED CONSIDERATIONS\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
 
-  // Extract timeline
-  const timeMatch = response.match(/\*\*TIMELINE\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
-  if (timeMatch) {
-    sections.timeline = timeMatch[1].trim();
-  }
-
-  // Extract consequences
-  const consMatch = response.match(/\*\*NON-COMPLIANCE CONSEQUENCES\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
-  if (consMatch) {
-    sections.consequences = consMatch[1].trim();
-  }
-
-  // Extract related considerations
-  const relatedMatch = response.match(/\*\*RELATED CONSIDERATIONS\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
-  if (relatedMatch) {
-    sections.relatedConsiderations = relatedMatch[1].trim();
-  }
-
-  // Extract citations
-  const citationRegex = /([A-Z][A-Za-z\s]+Act\s+\d{4}(?:,\s+Section\s+\d+(?:\([a-z0-9]+\))?)?|[A-Z][A-Za-z\s]+Regulations\s+\d{4})/g;
+  // ── Citations ──────────────────────────────────────────────────────────────
+  const citationRegex = /([A-Z][A-Za-z\s]+Act\s+\d{4}(?:,\s+[Ss]ection\s+\d+(?:\([a-z0-9]+\))*)?|[A-Z][A-Za-z\s]+Regulations?\s+\d{4})/g;
   const matches = response.match(citationRegex);
-  if (matches) {
-    sections.citations = [...new Set(matches)];
-  }
+  const citations = matches ? [...new Set(matches)] : [];
 
-  return sections;
+  void hasHeadings; // suppress unused-var warning — intentionally kept for docs
+
+  return {
+    directAnswer,
+    legalBasis,
+    requirements,
+    guidance,
+    timeline,
+    consequences,
+    relatedConsiderations,
+    citations,
+  };
 }
 
 /**
