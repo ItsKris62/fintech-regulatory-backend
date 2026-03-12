@@ -9,6 +9,7 @@ import { contentRouter } from '../routers/content.router';
 import { adminRouter } from '../routers/admin.router';
 import { notificationRouter } from '../routers/notification.router';
 import { analyticsRouter } from '../routers/analytics.router';
+import { vaultRouter } from '../routers/vault.router';
 
 /**
  * Root Application Router
@@ -26,6 +27,7 @@ import { analyticsRouter } from '../routers/analytics.router';
  * - /trpc/admin.*        - Admin operations
  * - /trpc/notification.* - Notifications (list, mark-read, preferences)
  * - /trpc/analytics.*    - Analytics dashboards and reports
+ * - /trpc/vault.*        - Organisation Document Vault (upload/download/manage compliance docs)
  */
 export const appRouter = router({
   auth: authRouter,
@@ -38,6 +40,7 @@ export const appRouter = router({
   admin: adminRouter,
   notification: notificationRouter,
   analytics: analyticsRouter,
+  vault: vaultRouter,
 });
 
 /**

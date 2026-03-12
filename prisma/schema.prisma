@@ -39,6 +39,7 @@ model User {
   complianceQueries        ComplianceQuery[]
   authoredDocuments        LegalDocument[]          @relation("DocumentAuthor")
   publishedDocuments       LegalDocument[]          @relation("DocumentPublisher")
+  vaultDocuments           VaultDocument[]
   notifications            Notification[]
   notificationPreferences  NotificationPreference?
   policies                 Policy[]
@@ -76,6 +77,7 @@ model Organization {
   users                   User[]
   complianceItems         ComplianceItem[]
   complianceSnapshots     ComplianceScoreSnapshot[]
+  vaultDocuments          VaultDocument[]
 
   @@index([name])
   @@index([verificationStatus])
@@ -666,4 +668,58 @@ model ComplianceScoreSnapshot {
 
   @@index([organizationId])
   @@index([organizationId, calculatedAt])
+}
+
+// ============================================================================
+// Document Vault Models
+// ============================================================================
+
+enum DocumentCategory {
+  CORPORATE
+  COMPLIANCE
+  FINANCIAL
+  LICENSE
+  OPERATIONS
+  TAX
+  OTHER
+}
+
+enum VaultDocumentStatus {
+  PENDING
+  VERIFIED
+  EXPIRED
+}
+
+model VaultDocument {
+  id             String              @id @default(cuid())
+  name           String
+  description    String?
+  fileName       String
+  fileType       String
+  fileExtension  String
+  fileSize       Int
+  storageKey     String
+  category       DocumentCategory
+  status         VaultDocumentStatus @default(PENDING)
+  expiryDate     DateTime?
+  verifiedAt     DateTime?
+  verifiedBy     String?
+  uploadedById   String
+  organizationId String
+  tags           String[]            @default([])
+  version        Int                 @default(1)
+  isArchived     Boolean             @default(false)
+  notes          String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  uploadedBy   User         @relation(fields: [uploadedById], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+  @@index([uploadedById])
+  @@index([category])
+  @@index([status])
+  @@index([organizationId, category])
+  @@index([organizationId, status])
 }

@@ -43,6 +43,7 @@ export const storageConfig = {
       documents: 10 * 1024 * 1024, // 10 MB for legal documents
       images: 5 * 1024 * 1024, // 5 MB for images
       exports: 50 * 1024 * 1024, // 50 MB for exports
+      vault: 25 * 1024 * 1024, // 25 MB for user vault documents
       default: 10 * 1024 * 1024, // 10 MB default
     },
 
@@ -84,6 +85,19 @@ export const storageConfig = {
       extensions: ['.pdf', '.docx', '.xlsx', '.md'],
       description: 'PDF, Word, Excel, Markdown',
     },
+    vault: {
+      mimeTypes: [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/csv',
+        'image/png',
+        'image/jpeg',
+      ],
+      extensions: ['.pdf', '.doc', '.docx', '.xlsx', '.csv', '.png', '.jpg', '.jpeg'],
+      description: 'PDF, Word, Excel, CSV, PNG, JPG',
+    },
   },
 
   /**
@@ -110,6 +124,9 @@ export const storageConfig = {
 
     // Temporary files (auto-deleted after 24 hours)
     temp: 'temp/',
+
+    // Organisation-scoped vault documents (org compliance document storage)
+    vault: 'vault/',
   },
 
   /**
