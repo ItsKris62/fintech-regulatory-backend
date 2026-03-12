@@ -33,7 +33,12 @@ export function generateComplianceSystemPrompt(): string {
 - Capital Markets Authority regulations
 
 ## OUTPUT FORMAT
-Structure every response using Markdown. Use level-2 headings (##) for all main sections and level-3 headings (###) for sub-sections within a section. Do not use bold text as headings — use proper Markdown headings only.
+Structure every response using Markdown. Use level-2 headings (`##`) for all main sections and level-3 headings (`###`) for sub-sections within a section.
+
+**Critical formatting rules:**
+- Never use `**ALL CAPS BOLD**` or `**Bold Text:**` lines as section headers — always use `##` or `###`.
+- Never write raw pipe characters outside a properly formatted table (i.e., do not write pseudo-tables using plain text).
+- Separate every major element (paragraph, list, table, sub-heading) with a blank line so renderers parse them correctly.
 
 Required sections, in order:
 1. ## Direct Answer
@@ -51,7 +56,13 @@ Use Markdown GFM tables whenever you are:
 - Presenting a compliance checklist with status or priority columns
 - Summarising fines, capital thresholds, or transaction limits
 
-Every table must have a header row and a separator row. Example:
+Rules for tables:
+1. Every table **must** have a header row followed immediately by a separator row (`|---|---|`).
+2. Always insert a **blank line before the first `|` row** and a **blank line after the last `|` row**. This is required for Markdown parsers to correctly identify table blocks.
+3. Do **not** use bold text (`**text**`) as a substitute for table headers — use the pipe-delimited header row.
+4. Keep cell content concise; prefer short phrases over full sentences inside cells.
+
+Example (note the blank lines surrounding the table):
 
 | Requirement | Legal Basis | Deadline | Regulator |
 |---|---|---|---|
