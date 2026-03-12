@@ -79,9 +79,17 @@ export const authRouter = router({
 
         logger.info({ type: 'auth_register_attempt', email: input.email, role: input.role });
 
-        const existingUser = await ctx.prisma.user.findUnique({ where: { email: input.email } });
+        const existingUser = await ctx.prisma.user.findUnique({
+          where: { email: input.email },
+          select: { emailVerified: true, accountStatus: true },
+        });
         if (existingUser) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Email already registered' });
+          const hint = !existingUser.emailVerified
+            ? ' Please check your inbox for a verification email, or use the "Resend verification" option on the login page.'
+            : existingUser.accountStatus === 'pending_approval'
+            ? ' Your account is pending admin approval. You will receive an email once it is approved.'
+            : ' Please sign in instead.';
+          throw new TRPCError({ code: 'CONFLICT', message: `An account with this email already exists.${hint}` });
         }
 
         if (input.role !== 'REGULATOR' && isFreeEmailDomain(input.email)) {
@@ -109,15 +117,22 @@ export const authRouter = router({
           ? (invitation.role as 'REGULATOR' | 'STARTUP' | 'ENTERPRISE')
           : input.role;
 
-        // Create Supabase auth user (backend-controlled via admin API)
-        const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+        // Create Supabase auth user AND generate a native OTP verification link.
+        // admin.generateLink does NOT send any email — it returns the link so we
+        // can embed it in our own custom React Email template.
+        // The link is: https://<project>.supabase.co/auth/v1/verify?token=xxx&type=signup&redirect_to=<callback>
+        const appCallbackUrl = process.env.APP_CALLBACK_URL || 'https://sheriabot.com/auth/callback';
+        const { data: authData, error: authError } = await supabaseAdmin.auth.admin.generateLink({
+          type: 'signup',
           email: input.email,
           password: input.password,
-          email_confirm: false,
-          user_metadata: { role: resolvedRole, fullName: input.name || input.email },
+          options: {
+            redirectTo: appCallbackUrl,
+            data: { role: resolvedRole, fullName: input.name || input.email },
+          },
         });
 
-        if (authError || !authData.user) {
+        if (authError || !authData?.user || !authData?.properties?.action_link) {
           logger.error({ type: 'auth_register_supabase_error', email: input.email, error: authError?.message });
           throw new TRPCError({
             code: 'INTERNAL_SERVER_ERROR',
@@ -127,10 +142,6 @@ export const authRouter = router({
 
         // Store hashed password in Prisma (migration safety / fallback)
         const hashedPw = await hashPassword(input.password);
-
-        const verificationToken = generateVerificationToken();
-        const verificationExpiry = new Date();
-        verificationExpiry.setHours(verificationExpiry.getHours() + 24);
 
         // F3.2b — if Prisma creation fails, delete the Supabase user so there
         // are no orphaned auth records that block re-registration.
@@ -145,8 +156,6 @@ export const authRouter = router({
               role: resolvedRole,
               phone: input.phone,
               organizationId: invitation?.organizationId || input.organizationId,
-              emailVerificationToken: verificationToken,
-              emailVerificationExpiry: verificationExpiry,
               accountStatus: 'pending',
             } as any,
             select: { id: true, email: true, fullName: true, role: true, organizationId: true, createdAt: true },
@@ -192,8 +201,10 @@ export const authRouter = router({
 
         initializeNotificationPreferences(user.id).catch(() => {});
 
-        // F3.5 — FRONTEND_URL is validated as a required URL at startup; no fallback needed
-        const verificationUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
+        // Use the Supabase-generated OTP link so that clicking it marks
+        // email_confirmed_at in Supabase natively, then redirects to our
+        // /auth/callback page which syncs Prisma emailVerified.
+        const verificationUrl = authData.properties.action_link;
         reactMailer.sendVerificationEmail(user.email, {
           userName: (user as any).fullName || user.email,
           verificationUrl,
@@ -251,6 +262,28 @@ export const authRouter = router({
 
         if (!user || (user as any).deletedAt) {
           throw new TRPCError({ code: 'FORBIDDEN', message: 'Account has been deactivated' });
+        }
+
+        // Safety-net sync: if Supabase has confirmed the email but Prisma hasn't
+        // been updated yet (e.g. user closed the callback page before sync completed),
+        // reconcile here so login isn't permanently blocked.
+        if (!user.emailVerified && authData.user.email_confirmed_at) {
+          const syncedStatus = user.role === 'REGULATOR' ? 'pending_approval' : 'active';
+          try {
+            await ctx.prisma.user.update({
+              where: { id: user.id },
+              data: {
+                emailVerified: true,
+                emailVerifiedAt: new Date(authData.user.email_confirmed_at),
+                accountStatus: syncedStatus,
+              } as any,
+            });
+            (user as any).emailVerified = true;
+            (user as any).accountStatus = syncedStatus;
+            logger.info({ type: 'auth_login_prisma_email_synced', userId: user.id });
+          } catch (syncErr: any) {
+            logger.warn({ type: 'auth_login_prisma_sync_failed', userId: user.id, error: syncErr.message });
+          }
         }
 
         // F2.3b — block login if email is not yet verified
@@ -634,16 +667,22 @@ export const authRouter = router({
           return { success: true, message: 'This email address is already verified.' };
         }
 
-        const newToken = generateVerificationToken();
-        const newExpiry = new Date();
-        newExpiry.setHours(newExpiry.getHours() + 24);
-
-        await ctx.prisma.user.update({
-          where: { id: user.id },
-          data: { emailVerificationToken: newToken, emailVerificationExpiry: newExpiry } as any,
+        // Generate a Supabase magic-link for the existing unverified user.
+        // This does NOT require the password and produces a real Supabase OTP URL
+        // that sets email_confirmed_at when clicked, then redirects to /auth/callback.
+        const appCallbackUrl = process.env.APP_CALLBACK_URL || 'https://sheriabot.com/auth/callback';
+        const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
+          type: 'magiclink',
+          email: user.email,
+          options: { redirectTo: appCallbackUrl },
         });
 
-        const verificationUrl = `${process.env.FRONTEND_URL}/verify-email?token=${newToken}`;
+        if (linkError || !linkData?.properties?.action_link) {
+          logger.error({ type: 'auth_resend_supabase_link_error', userId: user.id, error: linkError?.message });
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to generate verification link. Please try again.' });
+        }
+
+        const verificationUrl = linkData.properties.action_link;
         await reactMailer.sendVerificationEmail(user.email, {
           userName: user.fullName || user.email,
           verificationUrl,
@@ -655,6 +694,89 @@ export const authRouter = router({
       } catch (error: any) {
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to resend verification email', cause: error });
+      }
+    }),
+
+  /**
+   * Confirm email via Supabase callback.
+   *
+   * Called by the /auth/callback frontend page after the user clicks the
+   * Supabase OTP verification link in their email.  Supabase has already set
+   * email_confirmed_at by the time this is reached; we use the issued
+   * access_token to identify the user and sync Prisma emailVerified.
+   *
+   * Flow:
+   *  1. User clicks Supabase link in email → Supabase verifies → redirects to
+   *     https://sheriabot.com/auth/callback#access_token=xxx&...
+   *  2. Frontend /auth/callback page reads the session via supabase.auth.getSession()
+   *  3. Frontend calls this procedure with the access_token
+   *  4. We verify the token with Supabase admin, find the Prisma user, and mark
+   *     emailVerified = true.
+   */
+  confirmEmailCallback: publicProcedure
+    .input(z.object({ accessToken: z.string().min(1, 'Access token is required') }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        // 1. Verify the access token with Supabase and get the authenticated user
+        const { data: { user: supabaseUser }, error: supabaseError } =
+          await supabaseAdmin.auth.getUser(input.accessToken);
+
+        if (supabaseError || !supabaseUser) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid or expired verification token' });
+        }
+
+        // 2. Find the matching Prisma user
+        const user = await ctx.prisma.user.findUnique({
+          where: { supabaseAuthId: supabaseUser.id },
+          select: { id: true, email: true, fullName: true, role: true, emailVerified: true },
+        });
+
+        if (!user) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'User account not found' });
+        }
+
+        // 3. Idempotent — return early if already verified
+        if (user.emailVerified) {
+          return {
+            success: true,
+            requiresApproval: user.role === 'REGULATOR',
+            alreadyVerified: true,
+          };
+        }
+
+        const newAccountStatus = user.role === 'REGULATOR' ? 'pending_approval' : 'active';
+
+        // 4. Mark Prisma user as verified
+        await ctx.prisma.user.update({
+          where: { id: user.id },
+          data: {
+            emailVerified: true,
+            emailVerifiedAt: new Date(),
+            emailVerificationToken: null,
+            emailVerificationExpiry: null,
+            accountStatus: newAccountStatus,
+          } as any,
+        });
+
+        // 5. Send welcome email for non-regulator users
+        if (user.role !== 'REGULATOR') {
+          reactMailer.sendWelcomeEmail(user.email, {
+            userName: user.fullName || user.email,
+            role: user.role,
+            dashboardUrl: `${process.env.FRONTEND_URL}/dashboard`,
+          }).catch(() => {});
+        }
+
+        logger.info({ type: 'auth_email_callback_verified', userId: user.id, accountStatus: newAccountStatus });
+
+        return {
+          success: true,
+          requiresApproval: user.role === 'REGULATOR',
+          alreadyVerified: false,
+        };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Email confirmation failed', cause: error });
       }
     }),
 
