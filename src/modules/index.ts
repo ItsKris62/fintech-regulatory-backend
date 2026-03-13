@@ -29,3 +29,6 @@ export { analyticsModule, AnalyticsModule } from './analytics';
 
 // Admin
 export { adminModule, AdminModule } from './admin';
+
+// Billing
+export { billingModule, BillingModule } from './billing/billing.module';

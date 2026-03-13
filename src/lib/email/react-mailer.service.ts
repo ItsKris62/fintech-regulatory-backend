@@ -31,6 +31,14 @@ import {
   getPaymentDueSubject,
   PaymentFailedEmail,
   PaymentFailedEmailSubject,
+  PlanActivatedEmail,
+  getPlanActivatedSubject,
+  TrialEndingReminderEmail,
+  getTrialEndingReminderSubject,
+  SubscriptionCancelledEmail,
+  getSubscriptionCancelledSubject,
+  PlanDowngradedEmail,
+  getPlanDowngradedSubject,
   ComplianceQueryReadyEmail,
   ComplianceQueryReadyEmailSubject,
   PolicyDocumentReadyEmail,
@@ -56,6 +64,10 @@ import type {
   PaymentReceiptEmailProps,
   PaymentDueEmailProps,
   PaymentFailedEmailProps,
+  PlanActivatedEmailProps,
+  TrialEndingReminderEmailProps,
+  SubscriptionCancelledEmailProps,
+  PlanDowngradedEmailProps,
   ComplianceQueryReadyEmailProps,
   PolicyDocumentReadyEmailProps,
   DocumentIngestionCompleteEmailProps,
@@ -212,6 +224,50 @@ class ReactMailerService {
       element: React.createElement(PaymentFailedEmail, props),
       tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'payment_failed' }],
       logType: 'payment_failed_email',
+    });
+  }
+
+  /** Mandatory — sent on checkout completion (trial start or direct subscription) */
+  async sendPlanActivatedEmail(to: string, props: PlanActivatedEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getPlanActivatedSubject(props.planName, Boolean(props.trialEndsAt)),
+      element: React.createElement(PlanActivatedEmail, props),
+      tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'plan_activated' }],
+      logType: 'plan_activated_email',
+    });
+  }
+
+  /** Mandatory — sent when Stripe fires customer.subscription.trial_will_end */
+  async sendTrialEndingReminderEmail(to: string, props: TrialEndingReminderEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getTrialEndingReminderSubject(props.planName, props.daysRemaining),
+      element: React.createElement(TrialEndingReminderEmail, props),
+      tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'trial_ending' }],
+      logType: 'trial_ending_reminder_email',
+    });
+  }
+
+  /** Mandatory — sent on subscription cancellation (grace period begins) */
+  async sendSubscriptionCancelledEmail(to: string, props: SubscriptionCancelledEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getSubscriptionCancelledSubject(props.planName),
+      element: React.createElement(SubscriptionCancelledEmail, props),
+      tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'subscription_cancelled' }],
+      logType: 'subscription_cancelled_email',
+    });
+  }
+
+  /** Mandatory — sent when grace period expires and plan is downgraded to free */
+  async sendPlanDowngradedEmail(to: string, props: PlanDowngradedEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getPlanDowngradedSubject(props.previousPlanName),
+      element: React.createElement(PlanDowngradedEmail, props),
+      tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'plan_downgraded' }],
+      logType: 'plan_downgraded_email',
     });
   }
 

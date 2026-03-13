@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
+import { withPlanContext, requirePlanFeature } from '../trpc/middleware';
 import {
   getOrgDashboardSchema,
   getComplianceTrendsSchema,
@@ -26,6 +27,8 @@ export const analyticsRouter = router({
    * @protected
    */
   getUserSummary: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('analytics'))
     .input(getUserGrowthSchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -65,6 +68,8 @@ export const analyticsRouter = router({
    * @protected — uses caller's org if orgId not supplied
    */
   getOrgDashboard: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('analytics'))
     .input(getOrgDashboardSchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -120,7 +125,10 @@ export const analyticsRouter = router({
    *
    * @protected
    */
-  getOrgComplianceScore: protectedProcedure.query(async ({ ctx }) => {
+  getOrgComplianceScore: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('analytics'))
+    .query(async ({ ctx }) => {
     try {
       const orgId = ctx.user!.organizationId;
 
@@ -151,6 +159,8 @@ export const analyticsRouter = router({
    * @protected
    */
   getComplianceTrends: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('analytics'))
     .input(getComplianceTrendsSchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -199,7 +209,10 @@ export const analyticsRouter = router({
    *
    * @protected
    */
-  getGapAnalysis: protectedProcedure.query(async ({ ctx }) => {
+  getGapAnalysis: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('analytics'))
+    .query(async ({ ctx }) => {
     try {
       const orgId = ctx.user!.organizationId;
 
@@ -299,6 +312,8 @@ export const analyticsRouter = router({
    * @protected
    */
   generateReport: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('analytics'))
     .input(generateReportSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -353,6 +368,8 @@ export const analyticsRouter = router({
    * @protected
    */
   exportData: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('analytics'))
     .input(exportAnalyticsSchema)
     .mutation(async ({ input, ctx }) => {
       try {

@@ -1,7 +1,8 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
-import { rateLimited } from '../trpc/middleware';
+import { BillingMetric } from '@prisma/client';
+import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
 import {
   generatePolicySchema,
   listPoliciesSchema,
@@ -188,6 +189,9 @@ export const policyRouter = router({
    */
   generate: protectedProcedure
     .use(rateLimited('policyGeneration'))
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
+    .use(checkUsageLimit(BillingMetric.POLICY_GENERATIONS))
     .input(generatePolicySchema)
     .mutation(async ({ input, ctx }) => {
       const startTime = Date.now();

@@ -1,4 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
+import { SubscriptionPlan } from '@prisma/client';
 import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
@@ -27,6 +28,10 @@ export interface Context {
   mailer: typeof mailer;
   req: FastifyRequest;
   res: FastifyReply;
+  // Populated by withPlanContext middleware (optional — only present after that middleware runs)
+  plan?: SubscriptionPlan;
+  customLimits?: Record<string, unknown> | null;
+  usageInfo?: { metric: string; current: number; limit: number };
 }
 
 /** How long to cache the Prisma user lookup in Upstash (matches Supabase default token TTL). */

@@ -10,13 +10,14 @@ import { adminRouter } from '../routers/admin.router';
 import { notificationRouter } from '../routers/notification.router';
 import { analyticsRouter } from '../routers/analytics.router';
 import { vaultRouter } from '../routers/vault.router';
+import { billingRouter } from '../routers/billing.router';
 
 /**
  * Root Application Router
- * 
+ *
  * Combines all sub-routers into a single router.
  * This is the main entry point for all tRPC procedures.
- * 
+ *
  * Routes:
  * - /trpc/auth.*         - Authentication (register, login, etc.)
  * - /trpc/user.*         - User management (profile, preferences, etc.)
@@ -28,6 +29,7 @@ import { vaultRouter } from '../routers/vault.router';
  * - /trpc/notification.* - Notifications (list, mark-read, preferences)
  * - /trpc/analytics.*    - Analytics dashboards and reports
  * - /trpc/vault.*        - Organisation Document Vault (upload/download/manage compliance docs)
+ * - /trpc/billing.*      - Plan, entitlements and usage data
  */
 export const appRouter = router({
   auth: authRouter,
@@ -41,6 +43,7 @@ export const appRouter = router({
   notification: notificationRouter,
   analytics: analyticsRouter,
   vault: vaultRouter,
+  billing: billingRouter,
 });
 
 /**

@@ -18,6 +18,18 @@ export type { PaymentDueEmailProps } from './templates/billing/PaymentDueEmail';
 export { PaymentFailedEmail, PaymentFailedEmailSubject } from './templates/billing/PaymentFailedEmail';
 export type { PaymentFailedEmailProps } from './templates/billing/PaymentFailedEmail';
 
+export { PlanActivatedEmail, getPlanActivatedSubject } from './templates/billing/PlanActivatedEmail';
+export type { PlanActivatedEmailProps } from './templates/billing/PlanActivatedEmail';
+
+export { TrialEndingReminderEmail, getTrialEndingReminderSubject } from './templates/billing/TrialEndingReminderEmail';
+export type { TrialEndingReminderEmailProps } from './templates/billing/TrialEndingReminderEmail';
+
+export { SubscriptionCancelledEmail, getSubscriptionCancelledSubject } from './templates/billing/SubscriptionCancelledEmail';
+export type { SubscriptionCancelledEmailProps } from './templates/billing/SubscriptionCancelledEmail';
+
+export { PlanDowngradedEmail, getPlanDowngradedSubject } from './templates/billing/PlanDowngradedEmail';
+export type { PlanDowngradedEmailProps } from './templates/billing/PlanDowngradedEmail';
+
 // Compliance templates
 export { ComplianceQueryReadyEmail, ComplianceQueryReadyEmailSubject } from './templates/compliance/ComplianceQueryReadyEmail';
 export type { ComplianceQueryReadyEmailProps } from './templates/compliance/ComplianceQueryReadyEmail';

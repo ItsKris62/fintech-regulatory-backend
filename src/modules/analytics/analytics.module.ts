@@ -714,7 +714,7 @@ class AnalyticsModule {
       prisma.user.count({ where: { status: 'ACTIVE' } }),
       prisma.organization.count(),
       prisma.organization.count({
-        where: { subscriptionStatus: { in: ['active', 'trial'] } },
+        where: { subscriptionStatus: { in: ['ACTIVE', 'TRIALING'] } },
       }),
       prisma.policy.count({ where: { createdAt: { gte: range.from, lte: range.to } } }),
       prisma.complianceQuery.count({ where: { createdAt: { gte: range.from, lte: range.to } } }),
@@ -841,7 +841,7 @@ class AnalyticsModule {
   async getRevenueMetrics(_dateRange?: DateRange): Promise<RevenueMetrics> {
     // Placeholder for M-PESA/Stripe integration
     const orgs = await prisma.organization.findMany({
-      where: { subscriptionStatus: 'active' },
+      where: { subscriptionStatus: 'ACTIVE' },
       select: { subscriptionTier: true },
     });
 

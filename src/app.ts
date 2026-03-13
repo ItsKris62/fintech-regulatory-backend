@@ -9,6 +9,7 @@ import { redis } from './lib/redis/client';
 import { errorTracker } from './lib/error-tracker';
 import securityPlugin from './plugins/security.plugin';
 import { registerSecurityMiddleware } from './middleware/security.middleware';
+import { stripeWebhookService } from './lib/stripe/webhook.service';
 
 /**
  * Build and configure the Fastify application.
@@ -57,6 +58,47 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // ── Runtime security middleware ───────────────────────────────────────
   registerSecurityMiddleware(app);
+
+  // ── Stripe Webhook — raw body required for signature verification ────────
+  // Registered in an encapsulated plugin so the Buffer content-type parser is
+  // scoped only to this route and does NOT override the global JSON parser.
+  await app.register(async (webhookApp) => {
+    // Override application/json parser to return raw Buffer instead of parsed object.
+    // Stripe's constructEvent() needs the exact bytes Stripe signed.
+    webhookApp.addContentTypeParser(
+      'application/json',
+      { parseAs: 'buffer' },
+      (_req, body, done) => done(null, body),
+    );
+
+    webhookApp.post<{ Body: Buffer }>(
+      '/webhooks/stripe',
+      async (request, reply) => {
+        const signature = request.headers['stripe-signature'];
+
+        if (!signature || typeof signature !== 'string') {
+          logger.warn({ type: 'stripe_webhook_missing_signature', ip: request.ip });
+          return reply.status(400).send({ error: 'Missing Stripe-Signature header' });
+        }
+
+        try {
+          await stripeWebhookService.handleEvent(request.body, signature);
+          return reply.status(200).send({ received: true });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Webhook processing error';
+
+          // Signature mismatch → return 400 so Stripe retries with correct secret
+          if (err instanceof Error && err.message.includes('No signatures found')) {
+            logger.warn({ type: 'stripe_webhook_invalid_signature', error: message });
+            return reply.status(400).send({ error: 'Invalid webhook signature' });
+          }
+
+          logger.error({ type: 'stripe_webhook_error', error: message });
+          return reply.status(500).send({ error: 'Webhook handler failed' });
+        }
+      },
+    );
+  });
 
   // ── tRPC – all procedures exposed under /trpc ────────────────────────────
   await app.register(fastifyTRPCPlugin, {

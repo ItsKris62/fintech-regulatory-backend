@@ -334,7 +334,7 @@ class AdminModule {
 
     await prisma.organization.update({
       where: { id: orgId },
-      data: { subscriptionStatus: 'canceled' },
+      data: { subscriptionStatus: 'CANCELLED' },
     });
 
     // Suspend all org members
@@ -355,7 +355,7 @@ class AdminModule {
 
     await prisma.organization.update({
       where: { id: orgId },
-      data: { subscriptionStatus: 'active' },
+      data: { subscriptionStatus: 'ACTIVE' },
     });
 
     await prisma.user.updateMany({
@@ -395,7 +395,7 @@ class AdminModule {
     const before = { subscriptionTier: org.subscriptionTier };
     await prisma.organization.update({
       where: { id: orgId },
-      data: { subscriptionTier: plan, subscriptionStatus: 'active' },
+      data: { subscriptionTier: plan, subscriptionStatus: 'ACTIVE' },
     });
 
     await this.writeAuditLog(adminId, 'admin_update_org_plan', 'Organization', orgId, {
@@ -918,10 +918,10 @@ class AdminModule {
     }
 
     const total = orgs.length;
-    const active = orgs.filter((o) => o.subscriptionStatus === 'active').length;
-    const trials = orgs.filter((o) => o.subscriptionStatus === 'trial').length;
+    const active = orgs.filter((o) => o.subscriptionStatus === 'ACTIVE').length;
+    const trials = orgs.filter((o) => o.subscriptionStatus === 'TRIALING').length;
     const converted = orgs.filter(
-      (o) => o.subscriptionStatus === 'active' && o.subscriptionTier !== 'starter'
+      (o) => o.subscriptionStatus === 'ACTIVE' && o.subscriptionTier !== 'starter'
     ).length;
 
     return {
@@ -946,7 +946,7 @@ class AdminModule {
 
     await prisma.organization.update({
       where: { id: user.organizationId },
-      data: { subscriptionTier: plan, subscriptionStatus: 'active' },
+      data: { subscriptionTier: plan, subscriptionStatus: 'ACTIVE' },
     });
 
     await this.writeAuditLog(adminId, 'admin_update_subscription', 'Organization', user.organizationId, {

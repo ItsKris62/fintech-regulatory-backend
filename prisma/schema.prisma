@@ -56,31 +56,43 @@ model User {
 }
 
 model Organization {
-  id                 String    @id @default(cuid())
+  id                 String           @id @default(cuid())
   name               String
   type               String
-  organizationType   String    @default("startup") // "regulator" | "startup" | "enterprise"
+  organizationType   String           @default("startup") // "regulator" | "startup" | "enterprise"
   registrationNumber String?
   cbkLicenseNumber   String?
   website            String?
   industry           String?
   size               String?
-  subscriptionTier   String    @default("starter")
-  subscriptionStatus String    @default("trial")
+  subscriptionTier   String           @default("starter")
+  subscriptionStatus SubscriptionStatus @default(ACTIVE)
   trialEndsAt        DateTime?
+  gracePeriodEndsAt  DateTime?          // set on cancellation; org keeps plan until this passes
+  cancelledAt        DateTime?          // when the user initiated cancellation
   subscriptionEndsAt DateTime?
-  verificationStatus String    @default("pending") // "pending" | "verified" | "rejected"
+  verificationStatus String           @default("pending") // "pending" | "verified" | "rejected"
   verifiedAt         DateTime?
   verifiedBy         String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  // Plan entitlements (new — additive)
+  plan               SubscriptionPlan @default(REGULATOR)
+  planStartDate      DateTime?
+  planEndDate        DateTime?
+  maxSeats           Int              @default(1)
+  stripeCustomerId   String?          @unique
+  stripeSubId        String?          @unique
+  customLimits       Json?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
   users                   User[]
   complianceItems         ComplianceItem[]
   complianceSnapshots     ComplianceScoreSnapshot[]
   vaultDocuments          VaultDocument[]
+  usageRecords            UsageRecord[]
 
   @@index([name])
   @@index([verificationStatus])
+  @@index([plan])
 }
 
 model Session {
@@ -688,6 +700,50 @@ enum VaultDocumentStatus {
   PENDING
   VERIFIED
   EXPIRED
+}
+
+// ============================================================================
+// Plan Entitlements & Usage Metering
+// ============================================================================
+
+enum SubscriptionStatus {
+  ACTIVE        // Subscription is current and paid
+  TRIALING      // Within the 14-day free trial window
+  PAST_DUE      // Payment failed; Stripe is retrying
+  CANCELLED     // Stripe subscription deleted; immediately enters GRACE_PERIOD
+  GRACE_PERIOD  // Cancelled but within the 7-day grace window; full access retained
+  EXPIRED       // Grace period elapsed; plan has been downgraded to REGULATOR
+}
+
+enum SubscriptionPlan {
+  REGULATOR
+  STARTUP
+  BUSINESS
+  ENTERPRISE
+}
+
+enum BillingMetric {
+  COMPLIANCE_QUERIES
+  CHECKLIST_GENERATIONS
+  API_CALLS
+  DOCUMENT_STORAGE_MB
+  GAP_ANALYSES
+  POLICY_GENERATIONS
+}
+
+model UsageRecord {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  metric         BillingMetric
+  count          Int             @default(0)
+  periodStart    DateTime
+  periodEnd      DateTime
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([organizationId, metric, periodStart])
+  @@index([organizationId, metric])
 }
 
 model VaultDocument {

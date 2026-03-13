@@ -52,6 +52,11 @@ const envSchema = z.object({
   // Rate Limiting
   RATE_LIMIT_MAX: z.string().transform(Number).pipe(z.number().positive()).default(100),
   RATE_LIMIT_WINDOW: z.string().default('15m'),
+
+  // Stripe
+  STRIPE_SECRET_KEY: z.string().min(1, 'Stripe secret key is required'),
+  STRIPE_PUBLISHABLE_KEY: z.string().min(1, 'Stripe publishable key is required'),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1, 'Stripe webhook secret is required'),
 });
 
 /**
@@ -142,6 +147,13 @@ export const appConfig = {
   rateLimit: {
     max: env.RATE_LIMIT_MAX,
     window: env.RATE_LIMIT_WINDOW,
+  },
+
+  // Stripe
+  stripe: {
+    secretKey: env.STRIPE_SECRET_KEY,
+    publishableKey: env.STRIPE_PUBLISHABLE_KEY,
+    webhookSecret: env.STRIPE_WEBHOOK_SECRET,
   },
 } as const;
 

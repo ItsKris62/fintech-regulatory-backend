@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../trpc/trpc';
+import { withPlanContext, requirePlanFeature } from '../trpc/middleware';
 import { vaultModule } from '@/modules/vault';
 import {
   vaultGetUploadUrlSchema,
@@ -25,6 +26,8 @@ export const vaultRouter = router({
    * Returns uploadUrl, storageKey, and documentId for use in confirmUpload.
    */
   getUploadUrl: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('documentRepository'))
     .input(vaultGetUploadUrlSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -46,6 +49,8 @@ export const vaultRouter = router({
    * Step 2: Create DB record after the client successfully PUT the file to R2.
    */
   confirmUpload: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('documentRepository'))
     .input(vaultConfirmUploadSchema)
     .mutation(async ({ input, ctx }) => {
       try {

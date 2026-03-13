@@ -1,7 +1,8 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
-import { rateLimited } from '../trpc/middleware';
+import { BillingMetric } from '@prisma/client';
+import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
 import {
   complianceQuerySchema,
   searchDocumentsSchema,
@@ -29,6 +30,8 @@ export const complianceRouter = router({
    */
   query: protectedProcedure
     .use(rateLimited('complianceQuery'))
+    .use(withPlanContext)
+    .use(checkUsageLimit(BillingMetric.COMPLIANCE_QUERIES))
     .input(complianceQuerySchema)
     .mutation(async ({ input, ctx }) => {
       const startTime = Date.now();
@@ -781,6 +784,9 @@ export const complianceRouter = router({
    */
   generateChecklist: protectedProcedure
     .use(rateLimited('complianceQuery'))
+    .use(withPlanContext)
+    .use(requirePlanFeature('checklistGenerations'))
+    .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS))
     .input(
       z.object({
         productType: z.string().min(1).max(100),
@@ -1022,6 +1028,8 @@ export const complianceRouter = router({
    */
   runGapAnalysis: protectedProcedure
     .use(rateLimited('complianceQuery'))
+    .use(withPlanContext)
+    .use(requirePlanFeature('gapAnalysis'))
     .input(
       z.object({
         fileName: z.string().min(1).max(255),
