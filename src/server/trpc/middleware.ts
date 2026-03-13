@@ -298,7 +298,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     void (async () => {
       try {
         const contact = await prisma.user.findFirst({
-          where:   { organizationId: orgId },
+          where:   { organizationId: orgId, role: { in: ['ADMIN', 'STARTUP', 'ENTERPRISE'] } },
           select:  { email: true, fullName: true },
           orderBy: { createdAt: 'asc' },
         });

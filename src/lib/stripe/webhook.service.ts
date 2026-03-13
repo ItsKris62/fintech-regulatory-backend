@@ -473,7 +473,7 @@ class StripeWebhookService {
     orgId: string,
   ): Promise<{ email: string; fullName: string } | null> {
     const user = await prisma.user.findFirst({
-      where:  { organizationId: orgId, role: { in: ['OWNER', 'ADMIN', 'STARTUP', 'ENTERPRISE', 'FINTECH_USER'] } },
+      where:  { organizationId: orgId, role: { in: ['ADMIN', 'STARTUP', 'ENTERPRISE'] } },
       select: { email: true, fullName: true },
       orderBy: { createdAt: 'asc' }, // oldest user = most likely the account owner
     });
