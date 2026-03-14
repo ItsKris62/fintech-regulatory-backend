@@ -32,6 +32,7 @@ const envSchema = z.object({
   // Email
   RESEND_API_KEY: z.string().startsWith('re_', 'Invalid Resend API key'),
   FROM_EMAIL: z.string().email(),
+  SUPPORT_EMAIL_RECIPIENT: z.string().email().optional().default('support@sheriabot.com'),
 
   // Anthropic Claude
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-', 'Invalid Anthropic API key'),
@@ -119,6 +120,7 @@ export const appConfig = {
     apiKey: env.RESEND_API_KEY,
     from: env.FROM_EMAIL,
     fromName: 'SheriaBot',
+    supportRecipient: env.SUPPORT_EMAIL_RECIPIENT,
   },
 
   // AI

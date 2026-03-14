@@ -19,6 +19,14 @@ import { prisma } from '@/lib/prisma/client';
 // ─── Template Imports ────────────────────────────────────────────────────────
 
 import {
+  NewTicketAdminEmail,
+  getNewTicketAdminSubject,
+  TicketConfirmationEmail,
+  getTicketConfirmationSubject,
+  TicketStatusUpdateEmail,
+  getTicketStatusUpdateSubject,
+  TicketResponseEmail,
+  getTicketResponseSubject,
   VerificationEmail,
   VerificationEmailSubject,
   PasswordResetEmail,
@@ -58,6 +66,10 @@ import {
 } from '@/emails';
 
 import type {
+  NewTicketAdminEmailProps,
+  TicketConfirmationEmailProps,
+  TicketStatusUpdateEmailProps,
+  TicketResponseEmailProps,
   VerificationEmailProps,
   PasswordResetEmailProps,
   WelcomeEmailProps,
@@ -373,6 +385,48 @@ class ReactMailerService {
       element: React.createElement(OrgVerifiedEmail, props),
       tags: [{ name: 'category', value: 'account' }, { name: 'type', value: 'org_verified' }],
       logType: 'org_verified_email',
+    });
+  }
+
+  // ── SUPPORT TICKET EMAILS (mandatory — always sent) ──
+
+  async sendNewTicketAdminEmail(to: string, props: NewTicketAdminEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getNewTicketAdminSubject(props.ticketNumber, props.subject),
+      element: React.createElement(NewTicketAdminEmail, props),
+      tags: [{ name: 'category', value: 'support' }, { name: 'type', value: 'new_ticket_admin' }],
+      logType: 'new_ticket_admin_email',
+    });
+  }
+
+  async sendTicketConfirmationEmail(to: string, props: TicketConfirmationEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getTicketConfirmationSubject(props.ticketNumber),
+      element: React.createElement(TicketConfirmationEmail, props),
+      tags: [{ name: 'category', value: 'support' }, { name: 'type', value: 'ticket_confirmation' }],
+      logType: 'ticket_confirmation_email',
+    });
+  }
+
+  async sendTicketStatusUpdateEmail(to: string, props: TicketStatusUpdateEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getTicketStatusUpdateSubject(props.ticketNumber, props.newStatus),
+      element: React.createElement(TicketStatusUpdateEmail, props),
+      tags: [{ name: 'category', value: 'support' }, { name: 'type', value: 'ticket_status_update' }],
+      logType: 'ticket_status_update_email',
+    });
+  }
+
+  async sendTicketResponseEmail(to: string, props: TicketResponseEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getTicketResponseSubject(props.ticketNumber),
+      element: React.createElement(TicketResponseEmail, props),
+      tags: [{ name: 'category', value: 'support' }, { name: 'type', value: 'ticket_response' }],
+      logType: 'ticket_response_email',
     });
   }
 }

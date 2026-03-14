@@ -56,5 +56,18 @@ export type { RoleChangeEmailProps } from './templates/account/RoleChangeEmail';
 export { OrgVerifiedEmail, OrgVerifiedEmailSubject } from './templates/account/OrgVerifiedEmail';
 export type { OrgVerifiedEmailProps } from './templates/account/OrgVerifiedEmail';
 
+// Support templates
+export { NewTicketAdminEmail, getNewTicketAdminSubject } from './templates/support/NewTicketAdminEmail';
+export type { NewTicketAdminEmailProps } from './templates/support/NewTicketAdminEmail';
+
+export { TicketConfirmationEmail, getTicketConfirmationSubject } from './templates/support/TicketConfirmationEmail';
+export type { TicketConfirmationEmailProps } from './templates/support/TicketConfirmationEmail';
+
+export { TicketStatusUpdateEmail, getTicketStatusUpdateSubject } from './templates/support/TicketStatusUpdateEmail';
+export type { TicketStatusUpdateEmailProps } from './templates/support/TicketStatusUpdateEmail';
+
+export { TicketResponseEmail, getTicketResponseSubject } from './templates/support/TicketResponseEmail';
+export type { TicketResponseEmailProps } from './templates/support/TicketResponseEmail';
+
 // Render utilities
 export { renderEmailToHtml, renderEmailToText } from './render';

@@ -19,7 +19,10 @@ export type ExtendedNotificationType =
   | 'POLICY_READY'
   | 'COMMENT_ADDED'
   | 'REVIEW_REQUESTED'
-  | 'SYSTEM_UPDATE';
+  | 'SYSTEM_UPDATE'
+  | 'TICKET_CREATED'
+  | 'TICKET_STATUS_UPDATE'
+  | 'TICKET_RESPONSE';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 

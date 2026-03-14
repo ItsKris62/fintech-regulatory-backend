@@ -11,6 +11,8 @@ import { notificationRouter } from '../routers/notification.router';
 import { analyticsRouter } from '../routers/analytics.router';
 import { vaultRouter } from '../routers/vault.router';
 import { billingRouter } from '../routers/billing.router';
+import { supportRouter } from '../routers/support.router';
+import { adminSupportRouter } from '../routers/adminSupport.router';
 
 /**
  * Root Application Router
@@ -29,7 +31,9 @@ import { billingRouter } from '../routers/billing.router';
  * - /trpc/notification.* - Notifications (list, mark-read, preferences)
  * - /trpc/analytics.*    - Analytics dashboards and reports
  * - /trpc/vault.*        - Organisation Document Vault (upload/download/manage compliance docs)
- * - /trpc/billing.*      - Plan, entitlements and usage data
+ * - /trpc/billing.*       - Plan, entitlements and usage data
+ * - /trpc/support.*       - User support ticket submission and tracking
+ * - /trpc/adminSupport.*  - Admin ticket management (ADMIN role only)
  */
 export const appRouter = router({
   auth: authRouter,
@@ -44,6 +48,8 @@ export const appRouter = router({
   analytics: analyticsRouter,
   vault: vaultRouter,
   billing: billingRouter,
+  support: supportRouter,
+  adminSupport: adminSupportRouter,
 });
 
 /**

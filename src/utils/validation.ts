@@ -42,35 +42,12 @@ export const phoneSchema = z
   });
 
 /**
- * Password validation schema
- * Requirements:
- * - Minimum 8 characters
- * - At least one uppercase letter
- * - At least one lowercase letter
- * - At least one number
- * - Optional special characters
- *
- * Security note: regex error messages intentionally use a generic string to
- * prevent password-policy enumeration via client-visible Zod error responses.
- * The minimum-length message is the only specific constraint surfaced because
- * length alone is acceptable UX feedback (it carries no exploitable detail).
+ * Password validation schema.
+ * Re-exported from the shared security module so all code paths share the
+ * exact same rules: min 10 chars, uppercase, lowercase, digit, special char,
+ * with granular per-rule messages.
  */
-export const passwordSchema = z
-  .string()
-  .min(8, 'Password must be at least 8 characters')
-  .max(128, 'Password does not meet complexity requirements')
-  .regex(/[A-Z]/, 'Password does not meet complexity requirements')
-  .regex(/[a-z]/, 'Password does not meet complexity requirements')
-  .regex(/[0-9]/, 'Password does not meet complexity requirements');
-
-/**
- * Strong password schema (requires special characters)
- * Security note: generic error message prevents policy enumeration.
- */
-export const strongPasswordSchema = passwordSchema.regex(
-  /[!@#$%^&*(),.?":{}|<>]/,
-  'Password does not meet complexity requirements'
-);
+export { passwordSchema } from '@/shared/validation/password.schema';
 
 /**
  * URL validation schema

@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 
@@ -28,11 +28,34 @@ import {
   initializeNotificationPreferences,
 } from '@/lib/verification/verification.service';
 import { reactMailer } from '@/lib/email/react-mailer.service';
+import { validatePassword } from '@/shared/validation/password.schema';
+import {
+  AUTH_ERROR_CODES,
+  getAuthErrorMessage,
+} from '@/shared/errors/auth-error-messages';
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
 function generateVerificationToken(): string {
   return randomBytes(32).toString('hex');
+}
+
+/**
+ * Mask an email for structured logging — never log full addresses.
+ * e.g. "kamau@equity.co.ke" → "k***@equity.co.ke"
+ */
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!local || !domain) return '***@***';
+  return `${local[0]}***@${domain}`;
+}
+
+/**
+ * Hash an IP address for logging — never log raw IPs in plaintext.
+ */
+function hashIp(ip: string | undefined): string {
+  if (!ip) return 'unknown';
+  return createHash('sha256').update(ip).digest('hex').slice(0, 16);
 }
 
 function parseDeviceLabel(userAgent: string | undefined): string {
@@ -73,23 +96,36 @@ export const authRouter = router({
       const startTime = Date.now();
 
       try {
-        // F5.6 — rate limiting enforced (was silently ignored before)
+        // Rate limiting
         const rlResult = await authRateLimiter.register(input.email);
-        enforceRateLimit(rlResult, 'Too many registration attempts. Please try again later.');
+        enforceRateLimit(rlResult, getAuthErrorMessage(AUTH_ERROR_CODES.RATE_LIMITED_REGISTER));
 
-        logger.info({ type: 'auth_register_attempt', email: input.email, role: input.role });
+        logger.info({ type: 'auth_register_attempt', email: maskEmail(input.email), role: input.role });
+
+        // ── Password policy enforcement (before any DB lookups) ──────────
+        const pwValidation = validatePassword(input.password, input.email);
+        if (!pwValidation.isValid) {
+          if (!pwValidation.rules.notCommon) {
+            logger.warn({
+              type: 'auth_register_common_password_attempt',
+              email: maskEmail(input.email),
+            });
+          }
+          throw new TRPCError({ code: 'BAD_REQUEST', message: pwValidation.errors[0] });
+        }
 
         const existingUser = await ctx.prisma.user.findUnique({
           where: { email: input.email },
           select: { emailVerified: true, accountStatus: true },
         });
+        // SECURITY: Never reveal whether a specific email is already registered.
+        // Return the same message regardless of whether the account exists.
         if (existingUser) {
-          const hint = !existingUser.emailVerified
-            ? ' Please check your inbox for a verification email, or use the "Resend verification" option on the login page.'
-            : existingUser.accountStatus === 'pending_approval'
-            ? ' Your account is pending admin approval. You will receive an email once it is approved.'
-            : ' Please sign in instead.';
-          throw new TRPCError({ code: 'CONFLICT', message: `An account with this email already exists.${hint}` });
+          logger.info({ type: 'auth_register_email_exists', email: maskEmail(input.email) });
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: getAuthErrorMessage(AUTH_ERROR_CODES.EMAIL_UNAVAILABLE),
+          });
         }
 
         if (input.role !== 'REGULATOR' && isFreeEmailDomain(input.email)) {
@@ -133,10 +169,15 @@ export const authRouter = router({
         });
 
         if (authError || !authData?.user || !authData?.properties?.action_link) {
-          logger.error({ type: 'auth_register_supabase_error', email: input.email, error: authError?.message });
+          // SECURITY: Never forward raw Supabase error messages to the client.
+          logger.error({
+            type: 'auth_register_supabase_error',
+            email: maskEmail(input.email),
+            supabaseCode: authError?.code ?? 'unknown',
+          });
           throw new TRPCError({
             code: 'INTERNAL_SERVER_ERROR',
-            message: authError?.message || 'Failed to create auth account',
+            message: getAuthErrorMessage(AUTH_ERROR_CODES.REGISTRATION_FAILED),
           });
         }
 
@@ -213,7 +254,7 @@ export const authRouter = router({
           logger.error({ type: 'auth_register_email_failed', userId: user.id, error: err.message });
         });
 
-        logger.info({ type: 'auth_register_success', userId: user.id, email: user.email, duration: Date.now() - startTime });
+        logger.info({ type: 'auth_register_success', userId: user.id, email: maskEmail(user.email), duration: Date.now() - startTime });
 
         return {
           success: true,
@@ -222,9 +263,9 @@ export const authRouter = router({
           message: 'Registration successful. Please check your email to verify your account.',
         };
       } catch (error: any) {
-        logger.error({ type: 'auth_register_error', email: input.email, error: error.message, duration: Date.now() - startTime });
+        logger.error({ type: 'auth_register_error', email: maskEmail(input.email), error: error.message, duration: Date.now() - startTime });
         if (error instanceof TRPCError) throw error;
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Registration failed. Please try again.', cause: error });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: getAuthErrorMessage(AUTH_ERROR_CODES.REGISTRATION_FAILED), cause: error });
       }
     }),
 
@@ -239,11 +280,23 @@ export const authRouter = router({
       const startTime = Date.now();
 
       try {
-        // F5.6 — rate limiting enforced (was silently ignored before)
+        // Rate limiting — count by hashed IP in addition to email for layered defence
         const rlResult = await authRateLimiter.login(input.email);
-        enforceRateLimit(rlResult, 'Too many login attempts. Please try again later.');
+        if (!rlResult.allowed) {
+          logger.warn({
+            type: 'auth_login_rate_limited',
+            email: maskEmail(input.email),
+            ipHash: hashIp(ctx.req.ip),
+            retryAfter: rlResult.retryAfter,
+          });
+          const suffix = rlResult.retryAfter ? ` Try again in ${rlResult.retryAfter} seconds.` : '';
+          throw new TRPCError({
+            code: 'TOO_MANY_REQUESTS',
+            message: getAuthErrorMessage(AUTH_ERROR_CODES.RATE_LIMITED_LOGIN) + suffix,
+          });
+        }
 
-        logger.info({ type: 'auth_login_attempt', email: input.email });
+        logger.info({ type: 'auth_login_attempt', email: maskEmail(input.email) });
 
         const { data: authData, error: authError } = await supabaseClient.auth.signInWithPassword({
           email: input.email,
@@ -251,8 +304,15 @@ export const authRouter = router({
         });
 
         if (authError || !authData.session || !authData.user) {
-          logger.warn({ type: 'auth_login_supabase_failed', email: input.email, error: authError?.message });
-          throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid email or password' });
+          logger.warn({
+            type: 'auth_login_failed',
+            email: maskEmail(input.email),
+            ipHash: hashIp(ctx.req.ip),
+          });
+          throw new TRPCError({
+            code: 'UNAUTHORIZED',
+            message: getAuthErrorMessage(AUTH_ERROR_CODES.INVALID_CREDENTIALS),
+          });
         }
 
         const user = await ctx.prisma.user.findUnique({
@@ -260,8 +320,14 @@ export const authRouter = router({
           include: { organization: { select: { id: true, name: true, type: true } } },
         });
 
+        // SECURITY: merge deleted-account and not-found into the same generic response
+        // to prevent user enumeration via the login path.
         if (!user || (user as any).deletedAt) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Account has been deactivated' });
+          logger.warn({ type: 'auth_login_account_not_found', ipHash: hashIp(ctx.req.ip) });
+          throw new TRPCError({
+            code: 'UNAUTHORIZED',
+            message: getAuthErrorMessage(AUTH_ERROR_CODES.INVALID_CREDENTIALS),
+          });
         }
 
         // Safety-net sync: if Supabase has confirmed the email but Prisma hasn't
@@ -286,26 +352,26 @@ export const authRouter = router({
           }
         }
 
-        // F2.3b — block login if email is not yet verified
+        // Block login if email is not yet verified
         if (!user.emailVerified) {
           throw new TRPCError({
             code: 'FORBIDDEN',
-            message: 'Please verify your email before logging in. Check your inbox for the verification link.',
+            message: getAuthErrorMessage(AUTH_ERROR_CODES.EMAIL_NOT_VERIFIED),
           });
         }
 
-        // F2.3c — block login if account is not in active status
+        // Block login if account is not in active status
         const status = (user as any).accountStatus as string | undefined;
         if (status && status !== 'active') {
           if (status === 'pending_approval') {
             throw new TRPCError({
               code: 'FORBIDDEN',
-              message: 'Your account is pending admin approval. You will be notified by email once approved.',
+              message: getAuthErrorMessage(AUTH_ERROR_CODES.ACCOUNT_PENDING_APPROVAL),
             });
           }
           throw new TRPCError({
             code: 'FORBIDDEN',
-            message: 'Your account is not active. Please contact support.',
+            message: getAuthErrorMessage(AUTH_ERROR_CODES.ACCOUNT_NOT_ACTIVE),
           });
         }
 
@@ -355,9 +421,9 @@ export const authRouter = router({
           },
         };
       } catch (error: any) {
-        logger.error({ type: 'auth_login_error', email: input.email, error: error.message, duration: Date.now() - startTime });
+        logger.error({ type: 'auth_login_error', email: maskEmail(input.email), error: error.message, duration: Date.now() - startTime });
         if (error instanceof TRPCError) throw error;
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Login failed. Please try again.', cause: error });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: getAuthErrorMessage(AUTH_ERROR_CODES.SERVER_ERROR), cause: error });
       }
     }),
 
@@ -497,7 +563,16 @@ export const authRouter = router({
         });
 
         if (!user) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid or expired reset token' });
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: getAuthErrorMessage(AUTH_ERROR_CODES.INVALID_RESET_TOKEN),
+          });
+        }
+
+        // Enforce password policy on the new password before updating anything.
+        const pwValidation = validatePassword(input.newPassword, user.email ?? undefined);
+        if (!pwValidation.isValid) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: pwValidation.errors[0] });
         }
 
         const hashed = await hashPassword(input.newPassword);
@@ -525,7 +600,7 @@ export const authRouter = router({
             });
             throw new TRPCError({
               code: 'INTERNAL_SERVER_ERROR',
-              message: 'Failed to update password. Please try again.',
+              message: getAuthErrorMessage(AUTH_ERROR_CODES.RESET_PASSWORD_FAILED),
             });
           }
 

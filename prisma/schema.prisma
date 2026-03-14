@@ -47,6 +47,8 @@ model User {
   organization             Organization?            @relation(fields: [organizationId], references: [id])
   queryFeedbacks           QueryFeedback[]
   savedResponses           SavedResponse[]
+  supportTickets           SupportTicket[]
+  ticketComments           TicketComment[]
 
   @@index([email])
   @@index([supabaseAuthId])
@@ -544,6 +546,72 @@ enum NotificationType {
   REVIEW_REQUESTED
   COMPLIANCE_ALERT
   SYSTEM_UPDATE
+  TICKET_CREATED
+  TICKET_STATUS_UPDATE
+  TICKET_RESPONSE
+}
+
+// ============================================================================
+// Support Ticket System
+// ============================================================================
+
+enum TicketCategory {
+  BILLING
+  TECHNICAL
+  COMPLIANCE_QUERY
+  ACCOUNT
+  FEATURE_REQUEST
+  OTHER
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  AWAITING_USER
+  RESOLVED
+  CLOSED
+}
+
+model SupportTicket {
+  id           String          @id @default(cuid())
+  ticketNumber String          @unique
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject      String
+  description  String          @db.Text
+  category     TicketCategory
+  priority     TicketPriority  @default(MEDIUM)
+  status       TicketStatus    @default(OPEN)
+  comments     TicketComment[]
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  closedAt     DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@index([ticketNumber])
+  @@index([createdAt])
+}
+
+model TicketComment {
+  id        String        @id @default(cuid())
+  ticketId  String
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   String        @db.Text
+  isAdmin   Boolean       @default(false)
+  createdAt DateTime      @default(now())
+
+  @@index([ticketId])
+  @@index([ticketId, createdAt])
 }
 
 model RegulatoryDocument {

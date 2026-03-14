@@ -47,3 +47,6 @@ documents/**/*.pdf
 documents/**/*.docx
 documents/**/*.doc
 documents/**/*.txt
+
+# API documentation (auto-generated)
+API_DOCUMENTATION.md

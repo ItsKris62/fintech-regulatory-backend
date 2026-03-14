@@ -605,7 +605,7 @@ class NotificationModule {
 
   /**
    * Map extended notification type to the existing Prisma NotificationType enum.
-   * Prisma has: POLICY_READY | COMMENT_ADDED | REVIEW_REQUESTED | COMPLIANCE_ALERT | SYSTEM_UPDATE
+   * Prisma has: POLICY_READY | COMMENT_ADDED | REVIEW_REQUESTED | COMPLIANCE_ALERT | SYSTEM_UPDATE | TICKET_CREATED | TICKET_STATUS_UPDATE | TICKET_RESPONSE
    */
   private mapToPrismaType(type: string): string {
     const mapping: Record<string, string> = {
@@ -622,6 +622,9 @@ class NotificationModule {
       COMMENT_ADDED: 'COMMENT_ADDED',
       REVIEW_REQUESTED: 'REVIEW_REQUESTED',
       SYSTEM_UPDATE: 'SYSTEM_UPDATE',
+      TICKET_CREATED: 'TICKET_CREATED',
+      TICKET_STATUS_UPDATE: 'TICKET_STATUS_UPDATE',
+      TICKET_RESPONSE: 'TICKET_RESPONSE',
     };
     return mapping[type] ?? 'SYSTEM_UPDATE';
   }
