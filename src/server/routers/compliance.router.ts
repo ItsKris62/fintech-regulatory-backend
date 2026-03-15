@@ -13,6 +13,12 @@ import {
 } from '../schemas/compliance.schema';
 import { searchAndGetContext } from '@/lib/rag/rag.service';
 import { complianceModule } from '@/modules/compliance';
+import { checklistService } from '@/modules/compliance/checklist.service';
+import {
+  generateChecklistAsyncInputSchema,
+  updateChecklistItemInputSchema,
+  getChecklistStatusInputSchema,
+} from '@/modules/compliance/checklist.types';
 import { logger } from '@/utils/logger';
 
 /**
@@ -79,7 +85,8 @@ export const complianceRouter = router({
         }));
 
         // Guard: warn if RAG chunks are missing documentIds (ingestion gap)
-        const missingDocIds = queryCitations.filter(c => !c.documentId).length;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const missingDocIds = queryCitations.filter((c: any) => !c.documentId).length;
         if (missingDocIds > 0) {
           logger.warn({
             type: 'compliance_query_citations_missing_doc_ids',
@@ -917,12 +924,16 @@ export const complianceRouter = router({
     }),
 
   /**
-   * Update checklist item progress states.
-   * Maps item IDs to NOT_STARTED | IN_PROGRESS | COMPLETED.
+   * @deprecated Use `updateChecklistItem` for normalized checklists (post-March 2026).
+   * This procedure operates on the legacy JSON-blob `itemProgress` field and is kept
+   * only for backward-compatibility with existing frontend code targeting legacy checklists.
+   * It will be removed once all legacy checklists are migrated.
    *
    * @protected
+   * @middleware withPlanContext — write mutation
    */
   updateChecklistProgress: protectedProcedure
+    .use(withPlanContext)
     .input(
       z.object({
         checklistId: z.string().min(1),
@@ -933,6 +944,15 @@ export const complianceRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      logger.warn({
+        type: 'deprecated_procedure_called',
+        procedure: 'compliance.updateChecklistProgress',
+        replacement: 'compliance.updateChecklistItem',
+        userId: ctx.user!.id,
+        checklistId: input.checklistId,
+        message: 'updateChecklistProgress is deprecated. Migrate to updateChecklistItem for normalized checklists.',
+      });
+
       try {
         const result = await complianceModule.updateChecklistProgress(
           ctx.user!.id,
@@ -974,11 +994,13 @@ export const complianceRouter = router({
     }),
 
   /**
-   * Delete a checklist.
+   * Soft-delete a checklist (sets deletedAt; record is NOT destroyed).
    *
    * @protected
+   * @middleware withPlanContext — write mutation
    */
   deleteChecklist: protectedProcedure
+    .use(withPlanContext)
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       try {
@@ -1010,6 +1032,204 @@ export const complianceRouter = router({
           message: 'Failed to delete checklist',
           cause: error,
         });
+      }
+    }),
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // NORMALIZED CHECKLIST PROCEDURES (post-March 2026)
+  //
+  // Middleware policy (per Additional Instruction 9):
+  //   READ queries  — no plan gate (reads are free)
+  //   WRITE mutations — withPlanContext applied; requirePlanFeature NOT applied
+  //     (plan gate already enforced on generateChecklistAsync via checkUsageLimit)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Fire-and-forget checklist generation.
+   * Returns immediately with { checklistId, status: 'GENERATING' }.
+   * Frontend must poll `getChecklistStatus` until status leaves GENERATING.
+   *
+   * Polling contract: 80 polls × 3 s interval = 4-minute budget.
+   * Server-side lazy stale cleanup marks GENERATING → FAILED after 5 minutes.
+   *
+   * @protected
+   * @middleware withPlanContext — write mutation; checkUsageLimit enforces monthly cap
+   */
+  generateChecklistAsync: protectedProcedure
+    .use(rateLimited('complianceQuery'))
+    .use(withPlanContext)
+    .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS))
+    .input(generateChecklistAsyncInputSchema)
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.user!.role === 'REGULATOR') {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Regulators cannot generate compliance checklists',
+        });
+      }
+
+      const orgId = ctx.user!.organizationId;
+      if (!orgId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Your account must be associated with an organization to generate a checklist.',
+        });
+      }
+
+      try {
+        logger.info({
+          type: 'checklist_generate_async_start',
+          userId: ctx.user!.id,
+          orgId,
+          productType: input.productType,
+          businessStage: input.businessStage,
+        });
+
+        // Returns immediately — background generation runs in the service
+        const result = await checklistService.generateChecklist(ctx.user!.id, orgId, input);
+
+        logger.info({
+          type: 'checklist_generate_async_accepted',
+          userId: ctx.user!.id,
+          checklistId: result.checklistId,
+        });
+
+        return result;
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : 'Failed to initiate checklist generation';
+        logger.error({
+          type: 'checklist_generate_async_error',
+          userId: ctx.user!.id,
+          error: msg,
+        });
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
+      }
+    }),
+
+  /**
+   * Poll the status of a generating checklist.
+   * Returns status, progress 0–100, item counts, and isNormalized flag.
+   * Frontend should call this every 3 s until status !== 'GENERATING'.
+   *
+   * READ — no plan gate.
+   *
+   * @protected
+   */
+  getChecklistStatus: protectedProcedure
+    .input(getChecklistStatusInputSchema)
+    .query(async ({ input, ctx }) => {
+      const orgId = ctx.user!.organizationId;
+      if (!orgId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Your account must be associated with an organization.',
+        });
+      }
+
+      try {
+        return await checklistService.getChecklistStatus(input.checklistId, ctx.user!.id, orgId);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : 'Failed to get checklist status';
+        if (error instanceof TRPCError) throw error;
+        if (msg === 'Checklist not found') throw new TRPCError({ code: 'NOT_FOUND', message: msg });
+        if (msg.includes('Access denied')) throw new TRPCError({ code: 'FORBIDDEN', message: msg });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
+      }
+    }),
+
+  /**
+   * List all checklists for the caller's organization (normalized path).
+   * Excludes soft-deleted records. Applies lazy stale cleanup.
+   *
+   * READ — no plan gate.
+   *
+   * @protected
+   */
+  listChecklists: protectedProcedure.query(async ({ ctx }) => {
+    const orgId = ctx.user!.organizationId;
+    if (!orgId) return [];
+
+    try {
+      return await checklistService.listChecklists(orgId);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : 'Failed to list checklists';
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
+    }
+  }),
+
+  /**
+   * Get full checklist detail with categories + items (normalized checklists only).
+   * Use `getChecklist` for legacy JSON-blob checklists (isNormalized = false).
+   *
+   * READ — no plan gate.
+   *
+   * @protected
+   */
+  getChecklistDetail: protectedProcedure
+    .input(z.object({ checklistId: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      const orgId = ctx.user!.organizationId;
+      if (!orgId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Your account must be associated with an organization.',
+        });
+      }
+
+      try {
+        return await checklistService.getChecklistDetail(input.checklistId, ctx.user!.id, orgId);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : 'Failed to get checklist detail';
+        if (error instanceof TRPCError) throw error;
+        if (msg === 'Checklist not found') throw new TRPCError({ code: 'NOT_FOUND', message: msg });
+        if (msg.includes('Access denied')) throw new TRPCError({ code: 'FORBIDDEN', message: msg });
+        if (msg.includes('Legacy checklist')) throw new TRPCError({ code: 'BAD_REQUEST', message: msg });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
+      }
+    }),
+
+  /**
+   * Update a single normalized ChecklistItem's status and optional notes.
+   * Recalculates checklist-level progress; marks checklist COMPLETED when all
+   * applicable items are done.
+   *
+   * @protected
+   * @middleware withPlanContext — write mutation
+   */
+  updateChecklistItem: protectedProcedure
+    .use(withPlanContext)
+    .input(updateChecklistItemInputSchema)
+    .mutation(async ({ input, ctx }) => {
+      const orgId = ctx.user!.organizationId;
+      if (!orgId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Your account must be associated with an organization.',
+        });
+      }
+
+      try {
+        const result = await checklistService.updateItemStatus(ctx.user!.id, orgId, input);
+
+        logger.info({
+          type: 'checklist_item_updated',
+          userId: ctx.user!.id,
+          checklistId: input.checklistId,
+          itemId: input.itemId,
+          newStatus: input.status,
+          checklistProgress: result.checklist.progress,
+        });
+
+        return result;
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : 'Failed to update checklist item';
+        if (error instanceof TRPCError) throw error;
+        if (msg === 'Checklist not found' || msg === 'Checklist item not found') {
+          throw new TRPCError({ code: 'NOT_FOUND', message: msg });
+        }
+        if (msg.includes('Access denied')) throw new TRPCError({ code: 'FORBIDDEN', message: msg });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
       }
     }),
 
@@ -1260,11 +1480,16 @@ export const complianceRouter = router({
   }),
 
   /**
-   * Mark a compliance checklist item as completed or incomplete.
+   * Mark a Phase-8 compliance dashboard item as completed or incomplete.
+   * Operates on the ComplianceItem model (the startup dashboard seeded checklist).
+   *
+   * NOTE: renamed from updateChecklistItem → updateDashboardItem to avoid conflict
+   * with the normalized ChecklistItem update added in March 2026.
+   * Frontend reference in startup/page.tsx updated during Task 4.
    *
    * @protected
    */
-  updateChecklistItem: protectedProcedure
+  updateDashboardItem: protectedProcedure
     .input(
       z.object({
         itemId: z.string().min(1),

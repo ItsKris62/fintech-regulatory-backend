@@ -1346,7 +1346,8 @@ Follow-up Question: ${followUp}
     criticalItems: number;
   }[]> {
     const checklists = await prisma.checklist.findMany({
-      where: { userId },
+      // deletedAt added in March 2026 schema migration; cast until prisma generate runs
+      where: { userId, ...({ deletedAt: null } as any) },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -1401,7 +1402,8 @@ Follow-up Question: ${followUp}
       where: { id: checklistId },
     });
 
-    if (!checklist) {
+    // deletedAt added in March 2026 schema migration; cast until prisma generate runs
+    if (!checklist || (checklist as any).deletedAt !== null) {
       throw new Error('Checklist not found');
     }
 
@@ -1499,7 +1501,8 @@ Follow-up Question: ${followUp}
   }
 
   /**
-   * Delete a checklist (hard delete — user confirms intent).
+   * Soft-delete a checklist (sets deletedAt timestamp; record is NOT destroyed).
+   * All list/get queries filter deletedAt: null so the record becomes invisible.
    */
   async deleteChecklist(userId: string, checklistId: string): Promise<void> {
     const checklist = await prisma.checklist.findUnique({
@@ -1513,9 +1516,13 @@ Follow-up Question: ${followUp}
       if (user?.role !== 'ADMIN') throw new Error('Access denied');
     }
 
-    await prisma.checklist.delete({ where: { id: checklistId } });
+    // Soft delete — deletedAt added in March 2026 schema migration; cast until prisma generate runs
+    await (prisma.checklist.update as any)({
+      where: { id: checklistId },
+      data: { deletedAt: new Date() },
+    });
 
-    logger.info({ type: 'checklist_deleted', userId, checklistId });
+    logger.info({ type: 'checklist_soft_deleted', userId, checklistId });
   }
 
   // ==========================================================================

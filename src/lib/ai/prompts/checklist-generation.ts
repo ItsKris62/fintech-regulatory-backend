@@ -12,7 +12,8 @@ export interface ChecklistGenerationParams {
   targetSegments: string[];
   servicesOffered: string[];
   additionalConcerns?: string;
-  ragContext?: string; // Retrieved regulatory context from Pinecone
+  ragContext?: string;     // Retrieved regulatory context from Pinecone
+  ragSourcesUsed?: number; // Number of RAG chunks retrieved (for metadata)
 }
 
 // ─── Output Types ────────────────────────────────────────────────────────────
@@ -23,6 +24,8 @@ export interface ChecklistItem {
   regulatoryBasis: string;
   priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
   description: string;
+  /** Optional plain-language guidance note explaining WHY this item matters to this specific business. */
+  guidance?: string;
   actionItems: string[];
   deadline: string;
   penalty: string;
@@ -84,7 +87,8 @@ OUTPUT RULES — FOLLOW EXACTLY:
 5. Deadlines must be specific: "Before commencing operations", "Within 30 days of [event]", "Annually by 31 March", etc.
 6. Do not hallucinate laws or section numbers. If uncertain about a specific section, cite the parent law and regulation.
 7. Generate a MINIMUM of 30 checklist items across at least 7 categories for any fintech product.
-8. Priority: CRITICAL = CBK licence/registration or legal prohibition (operations cannot start without this); HIGH = required within 3 months; MEDIUM = required within 6 months; LOW = best practice or compliance within 12 months.`;
+8. Priority: CRITICAL = CBK licence/registration or legal prohibition (operations cannot start without this); HIGH = required within 3 months; MEDIUM = required within 6 months; LOW = best practice or compliance within 12 months.
+9. Each item MAY include an optional "guidance" field (1–2 sentences) explaining WHY this requirement is specifically relevant to the business profile provided. Omit this field rather than stating the obvious.`;
 }
 
 /**
@@ -139,6 +143,7 @@ Return exactly this structure:
           "regulatoryBasis": "Digital Credit Providers Regulations, 2022, Regulation 4(1)",
           "priority": "CRITICAL",
           "description": "All digital credit providers must obtain CBK authorisation before commencing operations. Application must be submitted via CBK portal with all supporting documents.",
+          "guidance": "As a digital lending platform targeting retail consumers, this is your highest-priority blocker — CBK has been enforcing this requirement strictly since mid-2023.",
           "actionItems": [
             "Prepare application form as per CBK Digital Credit Provider Registration guidelines",
             "Compile required documents: Certificate of incorporation, memorandum and articles, audited financials, business plan, technology assessment",
@@ -159,7 +164,7 @@ Return exactly this structure:
     "highItems": 0,
     "estimatedCompletionDays": 90,
     "generatedAt": "${new Date().toISOString()}",
-    "ragSourcesUsed": ${params.ragContext ? 1 : 0}
+    "ragSourcesUsed": ${params.ragSourcesUsed ?? (params.ragContext ? 1 : 0)}
   }
 }
 \`\`\`
@@ -168,6 +173,7 @@ QUALITY REQUIREMENTS:
 - Generate 5-8 items per applicable category (skip only genuinely inapplicable categories)
 - Minimum 30 items total across all categories
 - Every item needs a complete regulatory citation, description, 3-5 action steps, deadline, and penalty
+- Add a "guidance" field to items where this requirement has specific relevance to the stated product type, target segments, or services offered — not for generic items
 - Prioritize accuracy over brevity — every item must be traceable to real Kenyan law
 - For estimatedCompletionDays: pre-launch startups typically need 120-180 days; operational companies 60-90 days
 
