@@ -95,6 +95,7 @@ model Organization {
   users                   User[]
   complianceItems         ComplianceItem[]
   complianceSnapshots     ComplianceScoreSnapshot[]
+  complianceEvents        ComplianceEvent[]
   vaultDocuments          VaultDocument[]
   usageRecords            UsageRecord[]
   payments                Payment[]
@@ -900,6 +901,34 @@ model Payment {
   @@index([orgId])
   @@index([orgId, createdAt])
   @@index([providerTransactionId])
+}
+
+// ============================================================================
+// Compliance Calendar
+// ============================================================================
+
+model ComplianceEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  title          String
+  description    String?
+  dueDate        DateTime
+  priority       String    @default("MEDIUM")   // LOW | MEDIUM | HIGH | CRITICAL
+  status         String    @default("UPCOMING") // UPCOMING | IN_PROGRESS | COMPLETED | OVERDUE
+  category       String    @default("CUSTOM")   // CUSTOM | FILING | AUDIT | RENEWAL | REVIEW
+  regulation     String?
+  recurrence     String?   @default("NONE")     // NONE | MONTHLY | QUARTERLY | ANNUALLY
+  assigneeId     String?
+  createdById    String
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, dueDate])
+  @@index([organizationId, status])
 }
 
 model VaultDocument {

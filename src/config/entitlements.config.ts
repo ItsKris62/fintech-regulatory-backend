@@ -39,6 +39,9 @@ export interface PlanEntitlementConfig {
   regulatoryDashboard: boolean;
   regulatoryAlerts: boolean;
 
+  /** Compliance Calendar — create/manage org-scoped deadline events */
+  complianceCalendar: boolean;
+
   // Tiered / numeric
   documentRepository: StorageEntitlement;
   maxSeats: number; // -1 = unlimited
@@ -78,6 +81,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     false,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
+    complianceCalendar:    false,
     documentRepository:    { limitMB: 0 }, // no document repo
     maxSeats:              1,
     supportTier:           'community',
@@ -100,6 +104,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     false,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
+    complianceCalendar:    true,
     documentRepository:    { limitMB: 1024 }, // 1 GB
     maxSeats:              1,
     supportTier:           'email-48hr',
@@ -122,6 +127,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     true,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
+    complianceCalendar:    true,
     documentRepository:    { limitMB: 10240 }, // 10 GB
     maxSeats:              5,
     supportTier:           'priority-24hr',
@@ -144,6 +150,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     true,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
+    complianceCalendar:    true,
     documentRepository:    { limitMB: -1 }, // unlimited
     maxSeats:              -1,              // unlimited
     supportTier:           'dedicated',

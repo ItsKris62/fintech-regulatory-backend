@@ -14,6 +14,7 @@ import { billingRouter } from '../routers/billing.router';
 import { paymentRouter } from '../routers/payment.router';
 import { supportRouter } from '../routers/support.router';
 import { adminSupportRouter } from '../routers/adminSupport.router';
+import { calendarRouter } from '../routers/calendar.router';
 
 /**
  * Root Application Router
@@ -52,6 +53,7 @@ export const appRouter = router({
   payment: paymentRouter,
   support: supportRouter,
   adminSupport: adminSupportRouter,
+  calendar: calendarRouter,
 });
 
 /**
