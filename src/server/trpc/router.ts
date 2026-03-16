@@ -11,6 +11,7 @@ import { notificationRouter } from '../routers/notification.router';
 import { analyticsRouter } from '../routers/analytics.router';
 import { vaultRouter } from '../routers/vault.router';
 import { billingRouter } from '../routers/billing.router';
+import { paymentRouter } from '../routers/payment.router';
 import { supportRouter } from '../routers/support.router';
 import { adminSupportRouter } from '../routers/adminSupport.router';
 
@@ -48,6 +49,7 @@ export const appRouter = router({
   analytics: analyticsRouter,
   vault: vaultRouter,
   billing: billingRouter,
+  payment: paymentRouter,
   support: supportRouter,
   adminSupport: adminSupportRouter,
 });

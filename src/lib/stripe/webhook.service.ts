@@ -20,7 +20,7 @@
  */
 
 import type Stripe from 'stripe';
-import { SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
+import { PaymentProvider, PaymentStatus, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { stripe } from './client';
 import { PRICE_TO_PLAN } from '@/config/stripe.config';
 import { prisma } from '@/lib/prisma/client';
@@ -28,6 +28,7 @@ import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { appConfig } from '@/config/app.config';
 import { reactMailer } from '@/lib/email/react-mailer.service';
+import { paymentService } from '@/modules/billing/payment.service';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -202,6 +203,21 @@ class StripeWebhookService {
       trialEndsAt: trialEndsAt?.toISOString() ?? null,
     });
 
+    // ── Append payment record (trial start — amount 0 until trial ends) ──────
+    void paymentService.createPaymentRecord({
+      orgId,
+      subscriptionId:        subId,
+      provider:              PaymentProvider.STRIPE,
+      providerTransactionId: session.id,
+      amount:                0,
+      currency:              'KES',
+      status:                subStatus === SubscriptionStatus.TRIALING
+        ? PaymentStatus.PENDING
+        : PaymentStatus.COMPLETED,
+      description:           `Checkout completed — ${planName} plan`,
+      metadata:              { sessionId: session.id, plan: planName },
+    });
+
     // ── Fire activation email (non-blocking) ────────────────────────────────
     const contact = await this.findOrgOwnerContact(orgId);
     if (contact) {
@@ -351,6 +367,28 @@ class StripeWebhookService {
       invoiceId: invoice.id,
     });
 
+    // ── Append payment record ─────────────────────────────────────────────────
+    {
+      const amountDue = typeof invoice.amount_due === 'number' ? invoice.amount_due : 0;
+      const invoiceAny = invoice as unknown as Record<string, unknown>;
+      const subId = invoiceAny['subscription'] ? toId(invoiceAny['subscription'] as string | { id: string }) : null;
+      void paymentService.createPaymentRecord({
+        orgId:                 org.id,
+        subscriptionId:        subId ?? undefined,
+        provider:              PaymentProvider.STRIPE,
+        providerTransactionId: invoice.id,
+        amount:                amountDue,
+        currency:              (invoice.currency ?? 'kes').toUpperCase(),
+        status:                PaymentStatus.FAILED,
+        description:           'Invoice payment failed',
+        metadata:              {
+          invoiceId:        invoice.id,
+          customerId,
+          hostedInvoiceUrl: (invoiceAny['hosted_invoice_url'] as string | null) ?? null,
+        },
+      });
+    }
+
     // ── Fire payment-failed email (non-blocking) ─────────────────────────────
     const contact = await this.findOrgOwnerContact(org.id);
     if (contact) {
@@ -397,6 +435,29 @@ class StripeWebhookService {
         orgId:     org.id,
         customerId,
         invoiceId: invoice.id,
+      });
+    }
+
+    // ── Append payment record for every successful invoice ────────────────────
+    {
+      const amountPaid = typeof invoice.amount_paid === 'number' ? invoice.amount_paid : 0;
+      const invoiceAny = invoice as unknown as Record<string, unknown>;
+      const subId = invoiceAny['subscription'] ? toId(invoiceAny['subscription'] as string | { id: string }) : null;
+      void paymentService.createPaymentRecord({
+        orgId:                 org.id,
+        subscriptionId:        subId ?? undefined,
+        provider:              PaymentProvider.STRIPE,
+        providerTransactionId: invoice.id,
+        amount:                amountPaid,
+        currency:              (invoice.currency ?? 'kes').toUpperCase(),
+        status:                PaymentStatus.COMPLETED,
+        description:           'Invoice payment succeeded',
+        paidAt:                new Date(),
+        metadata:              {
+          invoiceId:        invoice.id,
+          customerId,
+          hostedInvoiceUrl: (invoiceAny['hosted_invoice_url'] as string | null) ?? null,
+        },
       });
     }
   }

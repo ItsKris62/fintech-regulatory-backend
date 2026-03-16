@@ -63,6 +63,8 @@ import {
   RoleChangeEmailSubject,
   OrgVerifiedEmail,
   OrgVerifiedEmailSubject,
+  EnterpriseInquiryEmail,
+  getEnterpriseInquirySubject,
 } from '@/emails';
 
 import type {
@@ -88,6 +90,7 @@ import type {
   AccountRejectedEmailProps,
   RoleChangeEmailProps,
   OrgVerifiedEmailProps,
+  EnterpriseInquiryEmailProps,
 } from '@/emails';
 
 // ─── Notification Preference Keys ────────────────────────────────────────────
@@ -427,6 +430,19 @@ class ReactMailerService {
       element: React.createElement(TicketResponseEmail, props),
       tags: [{ name: 'category', value: 'support' }, { name: 'type', value: 'ticket_response' }],
       logType: 'ticket_response_email',
+    });
+  }
+
+  // ── ENTERPRISE INQUIRY EMAIL (sent to admin) ──
+
+  /** Sent to the SheriaBot admin inbox when an org submits an Enterprise inquiry. */
+  async sendEnterpriseInquiryEmail(to: string, props: EnterpriseInquiryEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getEnterpriseInquirySubject(props.orgName),
+      element: React.createElement(EnterpriseInquiryEmail, props),
+      tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'enterprise_inquiry' }],
+      logType: 'enterprise_inquiry_email',
     });
   }
 }

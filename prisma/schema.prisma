@@ -97,6 +97,7 @@ model Organization {
   complianceSnapshots     ComplianceScoreSnapshot[]
   vaultDocuments          VaultDocument[]
   usageRecords            UsageRecord[]
+  payments                Payment[]
 
   @@index([name])
   @@index([verificationStatus])
@@ -862,6 +863,43 @@ model UsageRecord {
 
   @@unique([organizationId, metric, periodStart])
   @@index([organizationId, metric])
+}
+
+// ============================================================================
+// Payment History
+// ============================================================================
+
+enum PaymentProvider {
+  STRIPE
+  MPESA
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+model Payment {
+  id                    String          @id @default(cuid())
+  orgId                 String
+  org                   Organization    @relation(fields: [orgId], references: [id])
+  subscriptionId        String?
+  provider              PaymentProvider
+  providerTransactionId String?
+  amount                Int             // smallest currency unit (e.g. KES cents)
+  currency              String          @default("KES")
+  status                PaymentStatus   @default(PENDING)
+  description           String?
+  paidAt                DateTime?
+  metadata              Json?           // provider-specific data (invoice URL, etc.)
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([orgId])
+  @@index([orgId, createdAt])
+  @@index([providerTransactionId])
 }
 
 model VaultDocument {

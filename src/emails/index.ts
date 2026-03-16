@@ -30,6 +30,9 @@ export type { SubscriptionCancelledEmailProps } from './templates/billing/Subscr
 export { PlanDowngradedEmail, getPlanDowngradedSubject } from './templates/billing/PlanDowngradedEmail';
 export type { PlanDowngradedEmailProps } from './templates/billing/PlanDowngradedEmail';
 
+export { EnterpriseInquiryEmail, getEnterpriseInquirySubject } from './templates/billing/EnterpriseInquiryEmail';
+export type { EnterpriseInquiryEmailProps } from './templates/billing/EnterpriseInquiryEmail';
+
 // Compliance templates
 export { ComplianceQueryReadyEmail, ComplianceQueryReadyEmailSubject } from './templates/compliance/ComplianceQueryReadyEmail';
 export type { ComplianceQueryReadyEmailProps } from './templates/compliance/ComplianceQueryReadyEmail';

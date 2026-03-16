@@ -8,7 +8,15 @@ import { redis } from '@/lib/redis/client';
 import { stripe } from '@/lib/stripe/client';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import { stripeConfig, PRICE_TO_PLAN } from '@/config/stripe.config';
+import { appConfig } from '@/config/app.config';
+import { reactMailer } from '@/lib/email/react-mailer.service';
 import { logger } from '@/utils/logger';
+
+/** Redis key for enterprise inquiry rate-limiting (max 3 per org per day) */
+const enterpriseInquiryKey = (orgId: string) => {
+  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return `sheriabot:enterprise_inquiry:${orgId}:${date}`;
+};
 
 // ============================================================================
 // Helpers
@@ -318,5 +326,85 @@ export const billingRouter = router({
       });
 
       return { url: portalSession.url };
+    }),
+
+  /**
+   * Submit an Enterprise plan inquiry.
+   *
+   * Sends a notification email to the SheriaBot admin inbox and returns success.
+   * Rate-limited to 3 submissions per org per calendar day (UTC).
+   *
+   * @protected — requires authentication + an organization
+   */
+  requestEnterprise: protectedProcedure
+    .use(withPlanContext)
+    .input(
+      z.object({
+        name:    z.string().min(1).max(200),
+        email:   z.string().email(),
+        message: z.string().max(2000).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { user } = ctx;
+
+      if (!user.organizationId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'You must belong to an organization to submit an Enterprise inquiry.',
+        });
+      }
+
+      const orgId = user.organizationId;
+
+      // ── Rate limiting: max 3 per org per day ─────────────────────────────
+      const rateKey = enterpriseInquiryKey(orgId);
+      const currentCount = await redis.get<number>(rateKey);
+      const count = typeof currentCount === 'number' ? currentCount
+        : typeof currentCount === 'string' ? Number(currentCount)
+        : 0;
+
+      if (count >= 3) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'You have submitted too many Enterprise inquiries today. Please try again tomorrow.',
+        });
+      }
+
+      const newCount = await redis.incr(rateKey);
+      if (newCount === 1) {
+        // First submission today — set TTL to end of day (86400s max)
+        await redis.expire(rateKey, 86400);
+      }
+
+      // ── Fetch org details ─────────────────────────────────────────────────
+      const org = await prisma.organization.findUnique({
+        where:  { id: orgId },
+        select: { name: true, plan: true },
+      });
+
+      const adminEmail = appConfig.email.supportRecipient;
+      const currentPlan = org?.plan
+        ? org.plan.charAt(0) + org.plan.slice(1).toLowerCase()
+        : 'Unknown';
+
+      // ── Send inquiry email (non-blocking on the response) ─────────────────
+      void reactMailer.sendEnterpriseInquiryEmail(adminEmail, {
+        contactName:  input.name,
+        contactEmail: input.email,
+        orgName:      org?.name ?? 'Unknown Organization',
+        currentPlan,
+        message:      input.message,
+        submittedAt:  new Date().toISOString(),
+      });
+
+      logger.info({
+        type:   'enterprise_inquiry_submitted',
+        userId: user.id,
+        orgId,
+        contactEmail: input.email,
+      });
+
+      return { success: true };
     }),
 });

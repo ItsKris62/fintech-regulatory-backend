@@ -138,3 +138,21 @@ export function getMinimumPlan(feature: FeatureKey): SubscriptionPlan | null {
 export function getPlanDisplayName(plan: SubscriptionPlan): string {
   return PLAN_DISPLAY_NAMES[plan];
 }
+
+// ============================================================================
+// getOrgEntitlements
+// ============================================================================
+
+/**
+ * Returns the full entitlements config for an org based on its subscription plan.
+ *
+ * This is the canonical way to look up entitlements from an org object in
+ * service-layer code that has direct DB access rather than middleware context.
+ * Middlewares use withPlanContext + PLAN_ENTITLEMENTS internally; this helper
+ * follows the same pattern but is callable from module/service code.
+ */
+export function getOrgEntitlements(
+  org: { plan: SubscriptionPlan },
+): typeof PLAN_ENTITLEMENTS[SubscriptionPlan] {
+  return PLAN_ENTITLEMENTS[org.plan];
+}
