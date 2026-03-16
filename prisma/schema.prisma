@@ -84,6 +84,12 @@ model Organization {
   stripeCustomerId   String?          @unique
   stripeSubId        String?          @unique
   customLimits       Json?
+  // Contact Information — Primary contact for regulatory matters
+  address            String?
+  contactPerson      String?
+  contactPosition    String?
+  contactEmail       String?
+  contactPhone       String?
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   users                   User[]
@@ -516,6 +522,19 @@ model NotificationPreference {
   id                        String  @id @default(cuid())
   userId                    String  @unique
   user                      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // General Email Notifications
+  regulatoryUpdates         Boolean @default(true)
+  deadlineReminders         Boolean @default(true)
+  reportReady               Boolean @default(true)
+  supportResponses          Boolean @default(true)
+
+  // In-App Notifications
+  realTimeAlerts            Boolean @default(true)
+
+  // Email Digest
+  emailDigestEnabled        Boolean @default(false)
+  digestFrequency           String  @default("weekly") // "daily" | "weekly" | "monthly"
 
   // Billing notifications (toggleable)
   paymentDueReminder        Boolean @default(true)

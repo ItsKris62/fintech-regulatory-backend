@@ -92,3 +92,29 @@ export const disableTotpSchema = z.object({
 });
 
 export type DisableTotpInput = z.infer<typeof disableTotpSchema>;
+
+/**
+ * Update all notification preferences (covers all 11 fields across all sections)
+ *
+ * All fields optional — supports partial updates (only send changed fields).
+ * Backward-compatible with the existing 4-field "Specific Email Alerts" section.
+ */
+export const updateAllNotificationPreferencesSchema = z.object({
+  // General Email Notifications
+  regulatoryUpdates: z.boolean().optional(),
+  deadlineReminders: z.boolean().optional(),
+  reportReady: z.boolean().optional(),
+  supportResponses: z.boolean().optional(),
+  // Specific Email Alerts (existing 4 — kept for backward compatibility)
+  paymentDueReminder: z.boolean().optional(),
+  complianceQueryReady: z.boolean().optional(),
+  policyDocumentReady: z.boolean().optional(),
+  documentIngestionComplete: z.boolean().optional(),
+  // In-App Notifications
+  realTimeAlerts: z.boolean().optional(),
+  // Email Digest
+  emailDigestEnabled: z.boolean().optional(),
+  digestFrequency: z.enum(['daily', 'weekly', 'monthly']).optional(),
+});
+
+export type UpdateAllNotificationPreferencesInput = z.infer<typeof updateAllNotificationPreferencesSchema>;

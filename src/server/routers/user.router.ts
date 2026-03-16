@@ -1,5 +1,4 @@
 import { TRPCError } from '@trpc/server';
-import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
 import {
   updateProfileSchema,
@@ -9,6 +8,7 @@ import {
   confirmTotpSchema,
   disableTotpSchema,
   revokeSessionSchema,
+  updateAllNotificationPreferencesSchema,
 } from '../schemas/user.schema';
 import { changePasswordSchema } from '../schemas/auth.schema';
 import { hashPassword, verifyPassword } from '@/utils/helpers';
@@ -628,18 +628,40 @@ export const userRouter = router({
       // Return defaults if no record exists yet
       if (!prefs) {
         return {
+          // General Email Notifications
+          regulatoryUpdates: true,
+          deadlineReminders: true,
+          reportReady: true,
+          supportResponses: true,
+          // Specific Email Alerts
           paymentDueReminder: true,
           complianceQueryReady: true,
           policyDocumentReady: true,
           documentIngestionComplete: true,
+          // In-App Notifications
+          realTimeAlerts: true,
+          // Email Digest
+          emailDigestEnabled: false,
+          digestFrequency: 'weekly' as const,
         };
       }
 
       return {
+        // General Email Notifications
+        regulatoryUpdates: prefs.regulatoryUpdates,
+        deadlineReminders: prefs.deadlineReminders,
+        reportReady: prefs.reportReady,
+        supportResponses: prefs.supportResponses,
+        // Specific Email Alerts
         paymentDueReminder: prefs.paymentDueReminder,
         complianceQueryReady: prefs.complianceQueryReady,
         policyDocumentReady: prefs.policyDocumentReady,
         documentIngestionComplete: prefs.documentIngestionComplete,
+        // In-App Notifications
+        realTimeAlerts: prefs.realTimeAlerts,
+        // Email Digest
+        emailDigestEnabled: prefs.emailDigestEnabled,
+        digestFrequency: prefs.digestFrequency,
       };
     } catch (error: any) {
       logger.error({
@@ -660,14 +682,7 @@ export const userRouter = router({
    * Update the current user's notification preferences
    */
   updateNotificationPreferences: protectedProcedure
-    .input(
-      z.object({
-        paymentDueReminder: z.boolean().optional(),
-        complianceQueryReady: z.boolean().optional(),
-        policyDocumentReady: z.boolean().optional(),
-        documentIngestionComplete: z.boolean().optional(),
-      })
-    )
+    .input(updateAllNotificationPreferencesSchema)
     .mutation(async ({ input, ctx }) => {
       try {
         const prefs = await ctx.prisma.notificationPreference.upsert({
@@ -682,13 +697,25 @@ export const userRouter = router({
         logger.info({
           type: 'user_notification_prefs_updated',
           userId: ctx.user.id,
+          updatedFields: Object.keys(input),
         });
 
         return {
+          // General Email Notifications
+          regulatoryUpdates: prefs.regulatoryUpdates,
+          deadlineReminders: prefs.deadlineReminders,
+          reportReady: prefs.reportReady,
+          supportResponses: prefs.supportResponses,
+          // Specific Email Alerts
           paymentDueReminder: prefs.paymentDueReminder,
           complianceQueryReady: prefs.complianceQueryReady,
           policyDocumentReady: prefs.policyDocumentReady,
           documentIngestionComplete: prefs.documentIngestionComplete,
+          // In-App Notifications
+          realTimeAlerts: prefs.realTimeAlerts,
+          // Email Digest
+          emailDigestEnabled: prefs.emailDigestEnabled,
+          digestFrequency: prefs.digestFrequency,
         };
       } catch (error: any) {
         logger.error({

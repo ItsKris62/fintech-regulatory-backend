@@ -4,6 +4,7 @@ import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
 import {
   createOrganizationSchema,
   updateOrganizationSchema,
+  updateOrganizationSettingsSchema,
   getOrganizationSchema,
   listOrganizationsSchema,
   addMemberSchema,
@@ -11,6 +12,7 @@ import {
   getMembersSchema,
   deleteOrganizationSchema,
 } from '../schemas/organization.schema';
+import { userCache } from '@/lib/redis/cache.service';
 import { logger } from '@/utils/logger';
 
 /**
@@ -573,6 +575,140 @@ export const organizationRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to update member role',
+          cause: error,
+        });
+      }
+    }),
+
+  // ─── SETTINGS PAGE PROCEDURES ─────────────────────────────────────────────
+
+  /**
+   * Get the current user's organization settings fields
+   *
+   * @protected — resolves org from ctx.user.organizationId (no id param)
+   */
+  getSettings: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const { organizationId } = ctx.user;
+
+      if (!organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You are not a member of any organization',
+        });
+      }
+
+      const organization = await ctx.prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: {
+          id: true,
+          name: true,
+          registrationNumber: true,
+          industry: true,
+          website: true,
+          address: true,
+          contactPerson: true,
+          contactPosition: true,
+          contactEmail: true,
+          contactPhone: true,
+        },
+      });
+
+      if (!organization) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Organization not found',
+        });
+      }
+
+      return organization;
+    } catch (error: any) {
+      logger.error({
+        type: 'organization_get_settings_error',
+        userId: ctx.user.id,
+        organizationId: ctx.user.organizationId,
+        error: error.message,
+      });
+
+      if (error instanceof TRPCError) throw error;
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to fetch organization settings',
+        cause: error,
+      });
+    }
+  }),
+
+  /**
+   * Update the current user's organization settings
+   *
+   * @protected — REGULATOR role is blocked (read-only)
+   */
+  updateSettings: protectedProcedure
+    .input(updateOrganizationSettingsSchema)
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const { organizationId } = ctx.user;
+
+        if (!organizationId) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You are not a member of any organization',
+          });
+        }
+
+        if (ctx.user.role === 'REGULATOR') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Regulators cannot modify organization settings',
+          });
+        }
+
+        const organization = await ctx.prisma.organization.update({
+          where: { id: organizationId },
+          data: {
+            ...input,
+            updatedAt: new Date(),
+          },
+          select: {
+            id: true,
+            name: true,
+            registrationNumber: true,
+            industry: true,
+            website: true,
+            address: true,
+            contactPerson: true,
+            contactPosition: true,
+            contactEmail: true,
+            contactPhone: true,
+          },
+        });
+
+        // Invalidate the current user's profile cache so org name changes surface immediately
+        await userCache.delete(ctx.user.id);
+
+        logger.info({
+          type: 'organization_settings_updated',
+          userId: ctx.user.id,
+          organizationId,
+          updatedFields: Object.keys(input),
+        });
+
+        return organization;
+      } catch (error: any) {
+        logger.error({
+          type: 'organization_update_settings_error',
+          userId: ctx.user.id,
+          organizationId: ctx.user.organizationId,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update organization settings',
           cause: error,
         });
       }
