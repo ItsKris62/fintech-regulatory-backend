@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../trpc/trpc';
 import { withPlanContext, requirePlanFeature } from '../trpc/middleware';
 import { vaultModule } from '@/modules/vault';
+import { usageTrackingService } from '@/services/usage-tracking.service';
 import {
   vaultGetUploadUrlSchema,
   vaultConfirmUploadSchema,
@@ -54,21 +55,31 @@ export const vaultRouter = router({
     .input(vaultConfirmUploadSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        return await vaultModule.createDocument({
-          documentId: input.documentId,
-          storageKey: input.storageKey,
-          name: input.name,
-          description: input.description,
-          fileName: input.fileName,
-          fileType: input.fileType,
-          fileExtension: input.fileExtension,
-          fileSize: input.fileSize,
-          category: input.category,
-          expiryDate: input.expiryDate ?? null,
-          tags: input.tags,
-          userId: ctx.user.id,
-          organizationId: ctx.user.organizationId ?? '',
+        const orgId = ctx.user.organizationId ?? '';
+        const result = await vaultModule.createDocument({
+          documentId:     input.documentId,
+          storageKey:     input.storageKey,
+          name:           input.name,
+          description:    input.description,
+          fileName:       input.fileName,
+          fileType:       input.fileType,
+          fileExtension:  input.fileExtension,
+          fileSize:       input.fileSize,
+          category:       input.category,
+          expiryDate:     input.expiryDate ?? null,
+          tags:           input.tags,
+          userId:         ctx.user.id,
+          organizationId: orgId,
         });
+
+        // Non-blocking: increment document storage usage counter.
+        // fileSize is in bytes; service converts to MB internally.
+        // Failure is logged inside the service and never blocks the upload response.
+        if (orgId) {
+          void usageTrackingService.incrementDocumentStorage(orgId, input.fileSize);
+        }
+
+        return result;
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
         logger.error({ type: 'vault_confirm_upload_error', userId: ctx.user.id, error: String(error) });

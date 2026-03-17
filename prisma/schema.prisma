@@ -98,6 +98,7 @@ model Organization {
   complianceEvents        ComplianceEvent[]
   vaultDocuments          VaultDocument[]
   usageRecords            UsageRecord[]
+  usagePeriods            UsagePeriod[]
   payments                Payment[]
 
   @@index([name])
@@ -864,6 +865,53 @@ model UsageRecord {
 
   @@unique([organizationId, metric, periodStart])
   @@index([organizationId, metric])
+}
+
+// ============================================================================
+// Usage Period — durable per-org monthly usage snapshots with plan limits
+// Source of truth for historical comparison; Redis counters are real-time truth.
+// Period boundaries are calendar months in EAT (UTC+3).
+// ============================================================================
+
+model UsagePeriod {
+  id             String   @id @default(cuid())
+  organizationId String
+
+  // Period boundaries stored as UTC equivalents of EAT calendar-month boundaries.
+  // periodStart = 1st of month 00:00:00 EAT expressed in UTC.
+  // periodEnd   = last day of month 23:59:59.999 EAT expressed in UTC.
+  periodStart    DateTime
+  periodEnd      DateTime
+
+  // ---- Usage counters (synced lazily from Redis on each dashboard read) ----
+  complianceQueries    Int   @default(0)
+  checklistGenerations Int   @default(0)
+  apiCalls             Int   @default(0)
+  documentStorageMb    Float @default(0)
+  gapAnalyses          Int   @default(0)
+  policyGenerations    Int   @default(0)
+
+  // ---- Plan snapshot (captured at period creation / plan upgrade) ----------
+  // Limits use the same convention as PLAN_ENTITLEMENTS:
+  //   -1 = unlimited,  0 = unavailable/feature not in plan,  n = monthly cap
+  planTier                 String // "REGULATOR" | "STARTUP" | "BUSINESS" | "ENTERPRISE"
+  complianceQueryLimit     Int
+  checklistGenerationLimit Int
+  apiCallLimit             Int
+  documentStorageMbLimit   Float
+  gapAnalysisLimit         Int    // boolean features: -1 = enabled, 0 = disabled
+  policyGenerationLimit    Int    // boolean features: -1 = enabled, 0 = disabled
+
+  // ---- Audit ---------------------------------------------------------------
+  syncedFromRedisAt DateTime? // Last time counters were synced from Redis
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, periodStart])
+  @@index([organizationId, periodStart])
+  @@index([periodStart, periodEnd])
 }
 
 // ============================================================================

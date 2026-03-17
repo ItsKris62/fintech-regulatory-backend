@@ -15,6 +15,7 @@ import { paymentRouter } from '../routers/payment.router';
 import { supportRouter } from '../routers/support.router';
 import { adminSupportRouter } from '../routers/adminSupport.router';
 import { calendarRouter } from '../routers/calendar.router';
+import { usageRouter } from '../routers/usage.router';
 
 /**
  * Root Application Router
@@ -34,6 +35,7 @@ import { calendarRouter } from '../routers/calendar.router';
  * - /trpc/analytics.*    - Analytics dashboards and reports
  * - /trpc/vault.*        - Organisation Document Vault (upload/download/manage compliance docs)
  * - /trpc/billing.*       - Plan, entitlements and usage data
+ * - /trpc/usage.*         - Per-org monthly usage tracking, history and comparison
  * - /trpc/support.*       - User support ticket submission and tracking
  * - /trpc/adminSupport.*  - Admin ticket management (ADMIN role only)
  */
@@ -54,6 +56,7 @@ export const appRouter = router({
   support: supportRouter,
   adminSupport: adminSupportRouter,
   calendar: calendarRouter,
+  usage: usageRouter,
 });
 
 /**
