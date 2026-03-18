@@ -38,6 +38,8 @@ import {
   type PolicyUpdateData,
   type InviteEmailData,
   type AlertSeverity,
+  type NotificationCategoryName,
+  type NotificationCategoryPreferenceDTO,
 } from './notification.types';
 
 const { CACHE_TTL, LIMITS } = NOTIFICATION_CONSTANTS;
@@ -58,11 +60,12 @@ class NotificationModule {
       data: {
         userId: params.userId,
         type: prismaType as never,
+        category: (params.category ?? this.inferCategory(params.type)) as never,
         title: params.title,
         message: params.message,
         link: params.link ?? null,
         metadata: (params.metadata ?? null) as any,
-      },
+      } as any,
     });
 
     // Invalidate unread count cache
@@ -185,6 +188,7 @@ class NotificationModule {
       id: `announcement_${Date.now()}`,
       userId: 'system',
       type: 'SYSTEM_ANNOUNCEMENT',
+      category: 'SYSTEM' as NotificationCategoryName,
       title: params.title,
       message: params.message,
       link: params.link ?? null,
@@ -211,6 +215,7 @@ class NotificationModule {
       userId,
       ...(filters.read !== undefined && { read: filters.read }),
       ...(filters.type && { type: filters.type }),
+      ...(filters.category && { category: filters.category }),
       ...(filters.dateFrom || filters.dateTo
         ? {
             createdAt: {
@@ -233,6 +238,9 @@ class NotificationModule {
       }),
       this.getUnreadCount(userId),
     ]);
+
+    // Lazy 90-day cleanup — throttled to once per 24h per user
+    this.lazyCleanupOldNotifications(userId).catch(() => { /* non-blocking */ });
 
     return {
       items: items.map((n) => toNotificationDTO(n as unknown as Record<string, unknown>)),
@@ -600,33 +608,205 @@ class NotificationModule {
   }
 
   // ==========================================================================
+  // CATEGORY PREFERENCES
+  // ==========================================================================
+
+  /**
+   * Create a notification, respecting per-category in-app preferences.
+   * SECURITY category always bypasses preference checks (cannot be disabled).
+   */
+  async createCategorizedNotification(params: CreateNotificationParams): Promise<NotificationDTO | null> {
+    const category = params.category ?? this.inferCategory(params.type);
+
+    // SECURITY notifications are never suppressed
+    if (category !== 'SECURITY') {
+      const prefs = await this.getCategoryPreferences(params.userId);
+      const pref = prefs.find((p) => p.category === category);
+      if (pref && !pref.inAppEnabled) {
+        logger.info({
+          type: 'notification_suppressed_by_preference',
+          userId: params.userId,
+          category,
+          notifType: params.type,
+        });
+        return null;
+      }
+    }
+
+    return this.createNotification({ ...params, category });
+  }
+
+  async getUnreadCountByCategory(userId: string): Promise<Record<NotificationCategoryName, number>> {
+    const categories: NotificationCategoryName[] = ['SECURITY', 'COMPLIANCE', 'DOCUMENTS', 'ACCOUNT', 'SUPPORT', 'SYSTEM'];
+
+    const counts = await Promise.all(
+      categories.map((cat) =>
+        prisma.notification.count({
+          where: { userId, read: false, category: cat as never } as any,
+        })
+      )
+    );
+
+    return Object.fromEntries(
+      categories.map((cat, i) => [cat, counts[i] ?? 0])
+    ) as Record<NotificationCategoryName, number>;
+  }
+
+  async getCategoryPreferences(userId: string): Promise<NotificationCategoryPreferenceDTO[]> {
+    const existing = await (prisma as any).notificationCategoryPreference.findMany({
+      where: { userId },
+    }) as Array<{ id: string; userId: string; category: string; inAppEnabled: boolean; emailEnabled: boolean }>;
+
+    const categories: NotificationCategoryName[] = ['SECURITY', 'COMPLIANCE', 'DOCUMENTS', 'ACCOUNT', 'SUPPORT', 'SYSTEM'];
+    const existingCategories = new Set(existing.map((p) => p.category));
+    const missing = categories.filter((c) => !existingCategories.has(c));
+
+    if (missing.length > 0) {
+      await (prisma as any).notificationCategoryPreference.createMany({
+        data: missing.map((category) => ({
+          userId,
+          category,
+          inAppEnabled: true,
+          emailEnabled: category !== 'SYSTEM',
+        })),
+        skipDuplicates: true,
+      });
+
+      const seeded = await (prisma as any).notificationCategoryPreference.findMany({
+        where: { userId },
+      }) as Array<{ id: string; userId: string; category: string; inAppEnabled: boolean; emailEnabled: boolean }>;
+
+      return seeded.map((p) => ({
+        id: p.id,
+        userId: p.userId,
+        category: p.category as NotificationCategoryName,
+        inAppEnabled: p.inAppEnabled,
+        emailEnabled: p.emailEnabled,
+      }));
+    }
+
+    return existing.map((p) => ({
+      id: p.id,
+      userId: p.userId,
+      category: p.category as NotificationCategoryName,
+      inAppEnabled: p.inAppEnabled,
+      emailEnabled: p.emailEnabled,
+    }));
+  }
+
+  async updateCategoryPreference(
+    userId: string,
+    category: NotificationCategoryName,
+    inAppEnabled?: boolean,
+    emailEnabled?: boolean
+  ): Promise<NotificationCategoryPreferenceDTO> {
+    if (category === 'SECURITY' && inAppEnabled === false) {
+      throw new ForbiddenError('Security notifications cannot be disabled');
+    }
+
+    const updated = await (prisma as any).notificationCategoryPreference.upsert({
+      where: { userId_category: { userId, category } },
+      update: {
+        ...(inAppEnabled !== undefined && { inAppEnabled }),
+        ...(emailEnabled !== undefined && { emailEnabled }),
+      },
+      create: {
+        userId,
+        category,
+        inAppEnabled: inAppEnabled ?? true,
+        emailEnabled: emailEnabled ?? true,
+      },
+    }) as { id: string; userId: string; category: string; inAppEnabled: boolean; emailEnabled: boolean };
+
+    logger.info({ type: 'category_preference_updated', userId, category, inAppEnabled, emailEnabled });
+
+    return {
+      id: updated.id,
+      userId: updated.userId,
+      category: updated.category as NotificationCategoryName,
+      inAppEnabled: updated.inAppEnabled,
+      emailEnabled: updated.emailEnabled,
+    };
+  }
+
+  // ==========================================================================
   // PRIVATE HELPERS
   // ==========================================================================
 
   /**
-   * Map extended notification type to the existing Prisma NotificationType enum.
-   * Prisma has: POLICY_READY | COMMENT_ADDED | REVIEW_REQUESTED | COMPLIANCE_ALERT | SYSTEM_UPDATE | TICKET_CREATED | TICKET_STATUS_UPDATE | TICKET_RESPONSE
+   * Infer the NotificationCategory from the notification type.
+   */
+  private inferCategory(type: string): NotificationCategoryName {
+    const securityTypes = new Set(['PASSWORD_CHANGED', 'PASSWORD_CHANGE_FAILED', 'LOGIN_NEW_DEVICE']);
+    const complianceTypes = new Set(['COMPLIANCE_ALERT', 'REQUIREMENT_DUE', 'CHECKLIST_GENERATED', 'CHECKLIST_COMPLETED', 'GAP_ANALYSIS_STARTED', 'GAP_ANALYSIS_COMPLETED', 'POLICY_READY', 'POLICY_UPDATE', 'REPORT_READY', 'REVIEW_REQUESTED']);
+    const documentTypes = new Set(['DOCUMENT_PROCESSED', 'DOCUMENT_UPLOADED', 'DOCUMENT_DELETED']);
+    const accountTypes = new Set(['ORGANIZATION_INVITE', 'MEMBER_JOINED', 'PROFILE_UPDATED', 'ORGANIZATION_UPDATED', 'SUBSCRIPTION_CHANGED', 'SUBSCRIPTION_EXPIRING', 'SUBSCRIPTION_ALERT']);
+    const supportTypes = new Set(['TICKET_CREATED', 'TICKET_STATUS_UPDATE', 'TICKET_RESPONSE', 'SUPPORT_TICKET_CREATED', 'SUPPORT_TICKET_UPDATED', 'COMMENT_ADDED']);
+
+    if (securityTypes.has(type)) return 'SECURITY';
+    if (complianceTypes.has(type)) return 'COMPLIANCE';
+    if (documentTypes.has(type)) return 'DOCUMENTS';
+    if (accountTypes.has(type)) return 'ACCOUNT';
+    if (supportTypes.has(type)) return 'SUPPORT';
+    return 'SYSTEM';
+  }
+
+  /**
+   * Map extended notification type to the Prisma NotificationType enum.
+   * All new types are native enum values — pass through directly.
    */
   private mapToPrismaType(type: string): string {
-    const mapping: Record<string, string> = {
-      COMPLIANCE_ALERT: 'COMPLIANCE_ALERT',
+    const PRISMA_NATIVE = new Set([
+      'POLICY_READY', 'COMMENT_ADDED', 'REVIEW_REQUESTED', 'COMPLIANCE_ALERT',
+      'SYSTEM_UPDATE', 'TICKET_CREATED', 'TICKET_STATUS_UPDATE', 'TICKET_RESPONSE',
+      'PASSWORD_CHANGED', 'PASSWORD_CHANGE_FAILED', 'LOGIN_NEW_DEVICE',
+      'CHECKLIST_GENERATED', 'CHECKLIST_COMPLETED', 'GAP_ANALYSIS_STARTED', 'GAP_ANALYSIS_COMPLETED',
+      'DOCUMENT_UPLOADED', 'DOCUMENT_DELETED',
+      'PROFILE_UPDATED', 'ORGANIZATION_UPDATED', 'SUBSCRIPTION_CHANGED', 'SUBSCRIPTION_EXPIRING',
+      'SUPPORT_TICKET_CREATED', 'SUPPORT_TICKET_UPDATED', 'SYSTEM_ANNOUNCEMENT',
+    ]);
+
+    if (PRISMA_NATIVE.has(type)) return type;
+
+    const legacyMapping: Record<string, string> = {
       POLICY_UPDATE: 'SYSTEM_UPDATE',
       DOCUMENT_PROCESSED: 'SYSTEM_UPDATE',
       ORGANIZATION_INVITE: 'SYSTEM_UPDATE',
-      SYSTEM_ANNOUNCEMENT: 'SYSTEM_UPDATE',
       REQUIREMENT_DUE: 'COMPLIANCE_ALERT',
       SUBSCRIPTION_ALERT: 'SYSTEM_UPDATE',
       REPORT_READY: 'SYSTEM_UPDATE',
       MEMBER_JOINED: 'SYSTEM_UPDATE',
-      POLICY_READY: 'POLICY_READY',
-      COMMENT_ADDED: 'COMMENT_ADDED',
-      REVIEW_REQUESTED: 'REVIEW_REQUESTED',
-      SYSTEM_UPDATE: 'SYSTEM_UPDATE',
-      TICKET_CREATED: 'TICKET_CREATED',
-      TICKET_STATUS_UPDATE: 'TICKET_STATUS_UPDATE',
-      TICKET_RESPONSE: 'TICKET_RESPONSE',
     };
-    return mapping[type] ?? 'SYSTEM_UPDATE';
+    return legacyMapping[type] ?? 'SYSTEM_UPDATE';
+  }
+
+  /**
+   * Lazy cleanup of notifications older than 90 days.
+   * Throttled to once per 24 hours per user via Redis.
+   */
+  private async lazyCleanupOldNotifications(userId: string): Promise<void> {
+    const throttleKey = `${NOTIFICATION_CONSTANTS.REDIS_KEYS.CATEGORY_CLEANUP}${userId}`;
+    const alreadyRan = await redis.get<string>(throttleKey);
+    if (alreadyRan) return;
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - NOTIFICATION_CONSTANTS.CLEANUP_AGE_DAYS);
+
+    const result = await prisma.notification.deleteMany({
+      where: { userId, createdAt: { lt: cutoff } },
+    });
+
+    if (result.count > 0) {
+      logger.info({
+        type: 'old_notifications_cleaned',
+        userId,
+        deleted: result.count,
+        olderThanDays: NOTIFICATION_CONSTANTS.CLEANUP_AGE_DAYS,
+      });
+      await redis.del(unreadCountKey(userId));
+    }
+
+    await redis.set(throttleKey, '1', { ex: NOTIFICATION_CONSTANTS.CACHE_TTL.CLEANUP_THROTTLE });
   }
 
   private async sendEmailForNotification(

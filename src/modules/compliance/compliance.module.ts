@@ -19,6 +19,7 @@ import { mailer as _mailer } from '@/lib/email/mailer.service';
 import { sendEmail } from '@/lib/email/client';
 import { storageService } from '@/lib/storage/storage.service';
 import { logger } from '@/utils/logger';
+import { notificationModule } from '@/modules/notification';
 import { complianceScorer } from './compliance-scorer';
 import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
@@ -1291,6 +1292,15 @@ Follow-up Question: ${followUp}
         durationMs: Date.now() - startTime,
       });
 
+      notificationModule.createCategorizedNotification({
+        userId,
+        type: 'CHECKLIST_GENERATED',
+        category: 'COMPLIANCE',
+        title: 'Compliance Checklist Ready',
+        message: `Your compliance checklist for "${checklistTitle}" has been generated with ${generatedChecklist.metadata.totalItems} items.`,
+        link: `/startup/checklists/${record.id}`,
+      }).catch(() => { /* non-blocking */ });
+
       return {
         id: updated.id,
         title: updated.title,
@@ -1644,6 +1654,15 @@ Follow-up Question: ${followUp}
         data: { documentUrl: uploadResult.key, status: 'ANALYZING' },
       });
 
+      notificationModule.createCategorizedNotification({
+        userId,
+        type: 'GAP_ANALYSIS_STARTED',
+        category: 'COMPLIANCE',
+        title: 'Gap Analysis In Progress',
+        message: `Analyzing "${params.fileName}" for compliance gaps. This may take a minute.`,
+        link: `/startup/gap-analysis/${record.id}`,
+      }).catch(() => { /* non-blocking */ });
+
       // 3. Extract text from document
       const policyText = await this.extractTextFromFile(fileBuffer, ext);
 
@@ -1704,6 +1723,15 @@ Follow-up Question: ${followUp}
         totalGaps: gapResults.metadata.totalGaps,
         durationMs: Date.now() - startTime,
       });
+
+      notificationModule.createCategorizedNotification({
+        userId,
+        type: 'GAP_ANALYSIS_COMPLETED',
+        category: 'COMPLIANCE',
+        title: 'Gap Analysis Complete',
+        message: `Analysis of "${params.fileName}" complete. Score: ${gapResults.overallScore}%. Found ${gapResults.metadata.totalGaps} gaps.`,
+        link: `/startup/gap-analysis/${record.id}`,
+      }).catch(() => { /* non-blocking */ });
 
       return {
         id: completed.id,

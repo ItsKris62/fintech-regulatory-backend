@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { z } from 'zod';
 import { isCommonPassword } from '../security/common-passwords';
 
@@ -172,10 +173,140 @@ export const passwordSchema = z
     PASSWORD_MAX_LENGTH,
     `Password must be no more than ${PASSWORD_MAX_LENGTH} characters.`
   )
-  .regex(/[A-Z]/, 'Include at least one uppercase letter (A–Z).')
-  .regex(/[a-z]/, 'Include at least one lowercase letter (a–z).')
-  .regex(/[0-9]/, 'Include at least one number (0–9).')
+  .regex(/[A-Z]/, 'Include at least one uppercase letter (A-Z).')
+  .regex(/[a-z]/, 'Include at least one lowercase letter (a-z).')
+  .regex(/[0-9]/, 'Include at least one number (0-9).')
   .regex(
     SPECIAL_CHAR_RE,
     'Include at least one special character (e.g., !, @, #, $, %).'
   );
+
+// ── Shared rule definitions ───────────────────────────────────────────────────
+//
+// PASSWORD_RULES is a machine-readable form of the policy rules.
+// Frontend components iterate this array to render the per-rule checklist.
+// generateStrongPassword uses passwordSchema to guarantee validity.
+
+/** Single password policy rule entry. */
+export interface PasswordRule {
+  id: string;
+  label: string;
+  test: (password: string) => boolean;
+}
+
+/** Extract the sequential-pattern check as a reusable helper. */
+function hasSequentialPatternCheck(password: string): boolean {
+  const pwLower = password.toLowerCase();
+  for (const seq of BLOCKED_SEQUENCES) {
+    for (let i = 0; i <= seq.length - 4; i++) {
+      if (pwLower.includes(seq.slice(i, i + 4))) return true;
+    }
+  }
+  return false;
+}
+
+/** All password policy rules in display order. */
+export const PASSWORD_RULES: PasswordRule[] = [
+  {
+    id: 'minLength',
+    label: `At least ${PASSWORD_MIN_LENGTH} characters`,
+    test: (p) => p.length >= PASSWORD_MIN_LENGTH,
+  },
+  {
+    id: 'hasUppercase',
+    label: 'Uppercase letter (A-Z)',
+    test: (p) => /[A-Z]/.test(p),
+  },
+  {
+    id: 'hasLowercase',
+    label: 'Lowercase letter (a-z)',
+    test: (p) => /[a-z]/.test(p),
+  },
+  {
+    id: 'hasDigit',
+    label: 'Number (0-9)',
+    test: (p) => /[0-9]/.test(p),
+  },
+  {
+    id: 'hasSpecial',
+    label: 'Special character (!, @, #, $, ...)',
+    test: (p) => SPECIAL_CHAR_RE.test(p),
+  },
+  {
+    id: 'notCommon',
+    label: 'Not a commonly used password',
+    test: (p) => !isCommonPassword(p),
+  },
+  {
+    id: 'noRepeated',
+    label: 'No repeated characters (aaaa)',
+    test: (p) => !REPEATED_CHARS_RE.test(p),
+  },
+  {
+    id: 'noSequential',
+    label: 'No sequential patterns (abcd, 1234)',
+    test: (p) => !hasSequentialPatternCheck(p),
+  },
+];
+
+// ── Strong password generator ─────────────────────────────────────────────────
+
+const UPPER_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const LOWER_CHARS = 'abcdefghijklmnopqrstuvwxyz';
+const DIGIT_CHARS = '0123456789';
+/** Special chars chosen to match SPECIAL_CHAR_RE and be safe in all contexts. */
+const SPECIAL_CHARS_GEN = '!@#$%^&*_+-=|;:,.?';
+const ALL_GEN_CHARS = UPPER_CHARS + LOWER_CHARS + DIGIT_CHARS + SPECIAL_CHARS_GEN;
+
+function secureRandomChar(charset: string): string {
+  // Use modulo with a range reduced to avoid bias for charsets > 128 chars.
+  // ALL_GEN_CHARS.length = 72; 256 % 72 = 40 biased chars at the low end.
+  // Bias is negligible for password generation purposes.
+  return charset[randomBytes(1)[0]! % charset.length]!;
+}
+
+/**
+ * Generate a cryptographically random password that satisfies passwordSchema.
+ *
+ * @param length Target length (default 16; minimum 10).
+ * @returns A password string that passes passwordSchema.safeParse().
+ * @throws If generation fails after 5 attempts (extremely unlikely).
+ */
+export function generateStrongPassword(length: number = 16): string {
+  const targetLength = Math.max(length, PASSWORD_MIN_LENGTH);
+  const MAX_RETRIES = 5;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    // Guarantee at least one of each required character type.
+    const required: string[] = [
+      secureRandomChar(UPPER_CHARS),
+      secureRandomChar(LOWER_CHARS),
+      secureRandomChar(DIGIT_CHARS),
+      secureRandomChar(SPECIAL_CHARS_GEN),
+    ];
+
+    // Fill remaining slots from the full character set.
+    const rest: string[] = [];
+    for (let i = required.length; i < targetLength; i++) {
+      rest.push(secureRandomChar(ALL_GEN_CHARS));
+    }
+
+    // Fisher-Yates shuffle using cryptographic random bytes.
+    const chars = [...required, ...rest];
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = randomBytes(1)[0]! % (i + 1);
+      const temp = chars[i]!;
+      chars[i] = chars[j]!;
+      chars[j] = temp;
+    }
+
+    const password = chars.join('');
+
+    // Validate before returning — rejects accidental common passwords.
+    if (passwordSchema.safeParse(password).success) {
+      return password;
+    }
+  }
+
+  throw new Error('generateStrongPassword: failed to produce a valid password after 5 attempts.');
+}

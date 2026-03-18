@@ -42,6 +42,7 @@ model User {
   vaultDocuments           VaultDocument[]
   notifications            Notification[]
   notificationPreferences  NotificationPreference?
+  categoryPreferences      NotificationCategoryPreference[]
   policies                 Policy[]
   sessions                 Session[]
   organization             Organization?            @relation(fields: [organizationId], references: [id])
@@ -375,21 +376,24 @@ model GapAnalysis {
 }
 
 model Notification {
-  id        String           @id @default(cuid())
+  id        String               @id @default(cuid())
   userId    String
   type      NotificationType
+  category  NotificationCategory @default(SYSTEM)
   title     String
   message   String
   link      String?
-  read      Boolean          @default(false)
+  read      Boolean              @default(false)
   readAt    DateTime?
   metadata  Json?
-  createdAt DateTime         @default(now())
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime             @default(now())
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([read])
   @@index([createdAt])
+  @@index([userId, read, createdAt])
+  @@index([userId, category, createdAt])
 }
 
 model AuditLog {
@@ -594,6 +598,7 @@ enum ContentStatus {
 }
 
 enum NotificationType {
+  // ── Existing (all callers preserved) ──────────────────────────────────────
   POLICY_READY
   COMMENT_ADDED
   REVIEW_REQUESTED
@@ -602,6 +607,57 @@ enum NotificationType {
   TICKET_CREATED
   TICKET_STATUS_UPDATE
   TICKET_RESPONSE
+
+  // ── Security events ────────────────────────────────────────────────────────
+  PASSWORD_CHANGED
+  PASSWORD_CHANGE_FAILED
+  LOGIN_NEW_DEVICE
+
+  // ── Compliance events ──────────────────────────────────────────────────────
+  CHECKLIST_GENERATED
+  CHECKLIST_COMPLETED
+  GAP_ANALYSIS_STARTED
+  GAP_ANALYSIS_COMPLETED
+
+  // ── Document vault ────────────────────────────────────────────────────────
+  DOCUMENT_UPLOADED
+  DOCUMENT_DELETED
+
+  // ── Account events ────────────────────────────────────────────────────────
+  PROFILE_UPDATED
+  ORGANIZATION_UPDATED
+  SUBSCRIPTION_CHANGED
+  SUBSCRIPTION_EXPIRING
+
+  // ── Support tickets ───────────────────────────────────────────────────────
+  SUPPORT_TICKET_CREATED
+  SUPPORT_TICKET_UPDATED
+
+  // ── System ────────────────────────────────────────────────────────────────
+  SYSTEM_ANNOUNCEMENT
+}
+
+enum NotificationCategory {
+  SECURITY    // Password changes, login alerts, and security events
+  COMPLIANCE  // Checklists, gap analysis, policy docs
+  DOCUMENTS   // Vault uploads, deletions, and vault activity
+  ACCOUNT     // Profile changes, organization updates, and subscription events
+  SUPPORT     // Support ticket creation and status updates
+  SYSTEM      // Platform announcements and maintenance notices
+}
+
+model NotificationCategoryPreference {
+  id           String               @id @default(cuid())
+  userId       String
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category     NotificationCategory
+  inAppEnabled Boolean              @default(true)
+  emailEnabled Boolean              @default(true)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  @@unique([userId, category])
+  @@index([userId])
 }
 
 // ============================================================================

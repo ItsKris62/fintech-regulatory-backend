@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../trpc/trpc';
+import { notificationModule } from '@/modules/notification';
 import {
   updateProfileSchema,
   updatePreferencesSchema,
@@ -14,6 +15,8 @@ import { changePasswordSchema } from '../schemas/auth.schema';
 import { hashPassword, verifyPassword } from '@/utils/helpers';
 import { userCache } from '@/lib/redis/cache.service';
 import { redis } from '@/lib/redis/client';
+import { rateLimiter } from '@/lib/redis/rate-limiter';
+import { supabaseAdmin } from '@/lib/supabase';
 import { logger } from '@/utils/logger';
 
 const TOTP_PENDING_PREFIX = 'totp:pending:';
@@ -125,6 +128,14 @@ export const userRouter = router({
           fields: Object.keys(input),
         });
 
+        notificationModule.createCategorizedNotification({
+          userId: ctx.user.id,
+          type: 'PROFILE_UPDATED',
+          category: 'ACCOUNT',
+          title: 'Profile Updated',
+          message: 'Your profile information was successfully updated.',
+        }).catch(() => { /* non-blocking */ });
+
         return { success: true, user };
       } catch (error: any) {
         logger.error({
@@ -142,11 +153,38 @@ export const userRouter = router({
     }),
 
   /**
-   * Change password
+   * Change password (hardened)
+   *
+   * Security controls applied in order:
+   * 1. Rate limiting (5 per 15 min per userId) before any DB work.
+   * 2. Current password verification via bcrypt.
+   * 3. New password hashed and saved to Prisma.
+   * 4. Supabase Auth password updated so Supabase-native flows also reflect the change.
+   * 5. All Supabase sessions revoked (old token can no longer be used).
+   * 6. Redis user-session cache cleared.
+   * 7. Other Prisma sessions deleted.
+   * 8. Success logged.
+   *
+   * The caller (frontend) must call logout() after receiving success — all
+   * Supabase sessions are invalidated so the current token is no longer valid.
    */
   changePassword: protectedProcedure
     .input(changePasswordSchema)
     .mutation(async ({ input, ctx }) => {
+      // ── 1. Rate limit (must be first, before any DB queries) ─────────────
+      const rateCheck = await rateLimiter.check(ctx.user.id, 'change-password', 5, 900);
+      if (!rateCheck.allowed) {
+        logger.warn({
+          type: 'user_password_change_rate_limited',
+          userId: ctx.user.id,
+          retryAfter: rateCheck.retryAfter,
+        }, 'Password change rate limited');
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Too many password change attempts. Please try again in 15 minutes.',
+        });
+      }
+
       try {
         const user = await ctx.prisma.user.findUnique({
           where: { id: ctx.user.id },
@@ -156,15 +194,30 @@ export const userRouter = router({
           throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
         }
 
+        // ── 2. Verify current password ────────────────────────────────────
         const validPassword = await verifyPassword(input.currentPassword, user.password);
         if (!validPassword) {
-          logger.warn({ type: 'user_change_password_invalid_current', userId: ctx.user.id });
+          logger.warn({
+            type: 'user_password_change_failed',
+            userId: ctx.user.id,
+            reason: 'invalid_current_password',
+          }, 'Password change failed - wrong current password');
+
+          notificationModule.createCategorizedNotification({
+            userId: ctx.user.id,
+            type: 'PASSWORD_CHANGE_FAILED',
+            category: 'SECURITY',
+            title: 'Failed Password Change Attempt',
+            message: "A failed attempt was made to change your password. If this wasn't you, please secure your account.",
+          }).catch(() => { /* non-blocking */ });
+
           throw new TRPCError({
             code: 'UNAUTHORIZED',
             message: 'Current password is incorrect',
           });
         }
 
+        // ── 3. Hash and save new password to Prisma ───────────────────────
         const newHashedPassword = await hashPassword(input.newPassword);
 
         await ctx.prisma.user.update({
@@ -172,7 +225,43 @@ export const userRouter = router({
           data: { password: newHashedPassword, updatedAt: new Date() },
         });
 
-        // Revoke all other sessions after password change
+        // ── 4. Sync Supabase Auth password (CRITICAL) ─────────────────────
+        // Without this, the old password continues to work via Supabase-native
+        // auth flows (SDK, mobile, etc.) even after a successful change here.
+        const supabaseAuthId = (user as { supabaseAuthId?: string | null }).supabaseAuthId;
+        if (supabaseAuthId) {
+          const { error: supabaseUpdateError } = await supabaseAdmin.auth.admin.updateUserById(
+            supabaseAuthId,
+            { password: input.newPassword },
+          );
+          if (supabaseUpdateError) {
+            logger.error({
+              type: 'user_password_change_supabase_update_error',
+              userId: ctx.user.id,
+              error: supabaseUpdateError.message,
+            });
+            throw new TRPCError({
+              code: 'INTERNAL_SERVER_ERROR',
+              message: 'Failed to sync password — please try again.',
+            });
+          }
+
+          // ── 5. Revoke all Supabase sessions ───────────────────────────
+          // Mirrors auth.resetPassword. All existing JWTs become invalid.
+          // The frontend must call logout() after success.
+          await supabaseAdmin.auth.admin.signOut(supabaseAuthId).catch((signOutErr: unknown) => {
+            logger.warn({
+              type: 'user_password_change_session_revoke_warn',
+              userId: ctx.user.id,
+              error: signOutErr instanceof Error ? signOutErr.message : String(signOutErr),
+            });
+          });
+
+          // ── 6. Clear Redis user-session cache ─────────────────────────
+          await redis.del(`user:session:${supabaseAuthId}`);
+        }
+
+        // ── 7. Revoke other Prisma sessions ───────────────────────────────
         if (ctx.user.sessionId) {
           await ctx.prisma.session.deleteMany({
             where: {
@@ -184,12 +273,21 @@ export const userRouter = router({
 
         logger.info({ type: 'user_password_changed', userId: ctx.user.id });
 
-        return { success: true, message: 'Password changed successfully' };
-      } catch (error: any) {
+        notificationModule.createCategorizedNotification({
+          userId: ctx.user.id,
+          type: 'PASSWORD_CHANGED',
+          category: 'SECURITY',
+          title: 'Password Changed',
+          message: "Your password was successfully changed. If you didn't make this change, please contact support immediately.",
+        }).catch(() => { /* non-blocking */ });
+
+        return { success: true, message: 'Password changed successfully. Please log in again.' };
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
         logger.error({
           type: 'user_change_password_error',
           userId: ctx.user.id,
-          error: error.message,
+          error: message,
         });
 
         if (error instanceof TRPCError) throw error;

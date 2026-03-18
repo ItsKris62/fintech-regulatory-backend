@@ -59,6 +59,7 @@ export function toNotificationDTO(n: Record<string, unknown>): NotificationDTO {
     id: n.id as string,
     userId: n.userId as string,
     type: n.type as string,
+    category: (n.category as NotificationDTO['category']) ?? 'SYSTEM',
     title: n.title as string,
     message: n.message as string,
     link: n.link as string | null,

@@ -5,7 +5,9 @@ import {
   markAsReadSchema,
   deleteNotificationSchema,
   updateNotificationPreferencesSchema,
+  updateCategoryPreferenceSchema,
 } from '../schemas/notification.schema';
+import type { NotificationCategoryName, ExtendedNotificationType } from '@/modules/notification/notification.types';
 import { notificationModule } from '@/modules/notification';
 import { logger } from '@/utils/logger';
 
@@ -25,21 +27,22 @@ export const notificationRouter = router({
     .input(listNotificationsSchema)
     .query(async ({ input, ctx }) => {
       try {
-        const { page, limit, unreadOnly, type } = input;
+        const { page, limit, unreadOnly, type, category } = input;
 
         const result = await notificationModule.getNotifications(ctx.user!.id, {
           page,
           limit,
           ...(unreadOnly === true && { read: false }),
-          ...(type && { type: type as import('@/modules/notification/notification.types').ExtendedNotificationType }),
+          ...(type && { type: type as ExtendedNotificationType }),
+          ...(category && { category: category as NotificationCategoryName }),
         });
 
         return result;
-      } catch (error: any) {
+      } catch (error: unknown) {
         logger.error({
           type: 'notification_list_error',
           userId: ctx.user!.id,
-          error: error.message,
+          error: (error as Error).message,
         });
 
         throw new TRPCError({
@@ -275,6 +278,95 @@ export const notificationRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to update notification preferences',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get unread notification count broken down by category
+   *
+   * @protected
+   */
+  unreadCountByCategory: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const counts = await notificationModule.getUnreadCountByCategory(ctx.user!.id);
+      return counts;
+    } catch (error: unknown) {
+      logger.error({
+        type: 'notification_unread_by_category_error',
+        userId: ctx.user!.id,
+        error: (error as Error).message,
+      });
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get unread counts by category',
+        cause: error,
+      });
+    }
+  }),
+
+  /**
+   * Get per-category notification preferences (seeds defaults if none exist)
+   *
+   * @protected
+   */
+  getCategoryPreferences: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const prefs = await notificationModule.getCategoryPreferences(ctx.user!.id);
+      return prefs;
+    } catch (error: unknown) {
+      logger.error({
+        type: 'notification_category_prefs_get_error',
+        userId: ctx.user!.id,
+        error: (error as Error).message,
+      });
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get category preferences',
+        cause: error,
+      });
+    }
+  }),
+
+  /**
+   * Update in-app or email toggle for a single notification category.
+   * SECURITY category in-app toggle cannot be turned off.
+   *
+   * @protected
+   */
+  updateCategoryPreference: protectedProcedure
+    .input(updateCategoryPreferenceSchema)
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const pref = await notificationModule.updateCategoryPreference(
+          ctx.user!.id,
+          input.category as NotificationCategoryName,
+          input.inAppEnabled,
+          input.emailEnabled
+        );
+
+        logger.info({
+          type: 'notification_category_preference_updated',
+          userId: ctx.user!.id,
+          category: input.category,
+        });
+
+        return pref;
+      } catch (error: unknown) {
+        logger.error({
+          type: 'notification_category_pref_update_error',
+          userId: ctx.user!.id,
+          error: (error as Error).message,
+        });
+
+        if ((error as Error & { name?: string }).name === 'ForbiddenError') {
+          throw new TRPCError({ code: 'FORBIDDEN', message: (error as Error).message });
+        }
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update category preference',
           cause: error,
         });
       }

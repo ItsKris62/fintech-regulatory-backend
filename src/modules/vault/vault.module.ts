@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma/client';
 import { storageService } from '@/lib/storage/storage.service';
 import { storageConfig } from '@/config/storage.config';
 import { logger } from '@/utils/logger';
+import { notificationModule } from '@/modules/notification';
 import type {
   DocumentCategory,
   VaultDocumentStatus,
@@ -217,6 +218,15 @@ class VaultModule {
       documentId: doc.id,
       category: doc.category,
     });
+
+    notificationModule.createCategorizedNotification({
+      userId: params.userId,
+      type: 'DOCUMENT_UPLOADED',
+      category: 'DOCUMENTS',
+      title: 'Document Uploaded',
+      message: `"${params.name}" has been added to your document vault.`,
+      link: `/startup/vault`,
+    }).catch(() => { /* non-blocking */ });
 
     return doc as VaultDocumentListItem;
   }
@@ -466,6 +476,15 @@ class VaultModule {
       organizationId: orgId,
       documentId: params.documentId,
     });
+
+    notificationModule.createCategorizedNotification({
+      userId: params.userId,
+      type: 'DOCUMENT_DELETED',
+      category: 'DOCUMENTS',
+      title: 'Document Removed',
+      message: 'A document has been removed from your document vault.',
+      link: `/startup/vault`,
+    }).catch(() => { /* non-blocking */ });
 
     return { success: true };
   }

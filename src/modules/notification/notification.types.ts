@@ -7,6 +7,7 @@
 // ============================================================================
 
 export type ExtendedNotificationType =
+  // ── Existing ──────────────────────────────────────────────────────────────
   | 'COMPLIANCE_ALERT'
   | 'POLICY_UPDATE'
   | 'DOCUMENT_PROCESSED'
@@ -22,7 +23,35 @@ export type ExtendedNotificationType =
   | 'SYSTEM_UPDATE'
   | 'TICKET_CREATED'
   | 'TICKET_STATUS_UPDATE'
-  | 'TICKET_RESPONSE';
+  | 'TICKET_RESPONSE'
+  // ── Security ──────────────────────────────────────────────────────────────
+  | 'PASSWORD_CHANGED'
+  | 'PASSWORD_CHANGE_FAILED'
+  | 'LOGIN_NEW_DEVICE'
+  // ── Compliance ────────────────────────────────────────────────────────────
+  | 'CHECKLIST_GENERATED'
+  | 'CHECKLIST_COMPLETED'
+  | 'GAP_ANALYSIS_STARTED'
+  | 'GAP_ANALYSIS_COMPLETED'
+  // ── Document vault ────────────────────────────────────────────────────────
+  | 'DOCUMENT_UPLOADED'
+  | 'DOCUMENT_DELETED'
+  // ── Account ───────────────────────────────────────────────────────────────
+  | 'PROFILE_UPDATED'
+  | 'ORGANIZATION_UPDATED'
+  | 'SUBSCRIPTION_CHANGED'
+  | 'SUBSCRIPTION_EXPIRING'
+  // ── Support ───────────────────────────────────────────────────────────────
+  | 'SUPPORT_TICKET_CREATED'
+  | 'SUPPORT_TICKET_UPDATED';
+
+export type NotificationCategoryName =
+  | 'SECURITY'
+  | 'COMPLIANCE'
+  | 'DOCUMENTS'
+  | 'ACCOUNT'
+  | 'SUPPORT'
+  | 'SYSTEM';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 
@@ -41,17 +70,20 @@ export const NOTIFICATION_CONSTANTS = {
     UNREAD_COUNT: 'notif:unread:',
     USER_PREFS: 'notif:prefs:',
     NOTIFICATION: 'notif:',
+    CATEGORY_CLEANUP: 'notification:cleanup:',
   },
   CACHE_TTL: {
     UNREAD_COUNT: 300,   // 5 minutes
     PREFERENCES: 3600,   // 1 hour
     NOTIFICATION: 3600,  // 1 hour
+    CLEANUP_THROTTLE: 86400, // 24 hours
   },
   LIMITS: {
     MAX_BULK: 500,
     PAGE_SIZE: 20,
     BATCH_EMAIL_SIZE: 50,
   },
+  CLEANUP_AGE_DAYS: 90,
 } as const;
 
 // ============================================================================
@@ -98,10 +130,19 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: Omit<NotificationPreferences, 'us
 export interface CreateNotificationParams {
   userId: string;
   type: ExtendedNotificationType;
+  category?: NotificationCategoryName;
   title: string;
   message: string;
   link?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface NotificationCategoryPreferenceDTO {
+  id: string;
+  userId: string;
+  category: NotificationCategoryName;
+  inAppEnabled: boolean;
+  emailEnabled: boolean;
 }
 
 export interface BulkNotificationParams {
@@ -124,6 +165,7 @@ export interface AnnouncementParams {
 export interface NotificationFilters {
   read?: boolean;
   type?: ExtendedNotificationType;
+  category?: NotificationCategoryName;
   page?: number;
   limit?: number;
   dateFrom?: Date;
@@ -143,6 +185,7 @@ export interface NotificationDTO {
   id: string;
   userId: string;
   type: string;
+  category: NotificationCategoryName;
   title: string;
   message: string;
   link: string | null;
