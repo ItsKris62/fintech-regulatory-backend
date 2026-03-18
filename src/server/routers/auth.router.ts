@@ -227,17 +227,22 @@ export const authRouter = router({
           );
         }
 
-        // F3.1 — Create and link Organization if companyName was provided and user has no org yet
+        // F3.1 — Create and link Organization if companyName was provided and user has no org yet.
+        // Awaited so that user.organizationId is set before the response and first session cache.
         if (input.companyName && !user.organizationId) {
-          ctx.prisma.organization.create({
-            data: {
-              name: input.companyName,
-              type: resolvedRole,
-              users: { connect: { id: user.id } },
-            } as any,
-          }).catch((err: any) => {
+          try {
+            const org = await ctx.prisma.organization.create({
+              data: {
+                name: input.companyName,
+                type: resolvedRole,
+                users: { connect: { id: user.id } },
+              } as any,
+              select: { id: true },
+            });
+            user.organizationId = org.id;
+          } catch (err: any) {
             logger.warn({ type: 'auth_register_org_create_failed', userId: user.id, error: err.message });
-          });
+          }
         }
 
         initializeNotificationPreferences(user.id).catch(() => {});

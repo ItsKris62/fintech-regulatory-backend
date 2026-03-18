@@ -1065,12 +1065,35 @@ export const complianceRouter = router({
     .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS, { deferIncrement: true }))
     .input(generateChecklistAsyncInputSchema)
     .mutation(async ({ input, ctx }) => {
-      const orgId = ctx.user!.organizationId;
+      let orgId = ctx.user!.organizationId;
+
+      // If user has no org (e.g. registration race condition where org creation
+      // was not awaited), auto-create a default one and link it now.
       if (!orgId) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Your account must be associated with an organization to generate a checklist.',
-        });
+        try {
+          const org = await ctx.prisma.organization.create({
+            data: {
+              name: ctx.user!.email.split('@')[0] + ' Organisation',
+              type: ctx.user!.role,
+              users: { connect: { id: ctx.user!.id } },
+            } as any,
+            select: { id: true },
+          });
+          orgId = org.id;
+          // Bust the Redis user cache so subsequent requests pick up the new orgId.
+          await redis.del(`user:session:${ctx.user!.supabaseAuthId}`).catch(() => {});
+          logger.info({
+            type: 'checklist_auto_created_org',
+            userId: ctx.user!.id,
+            orgId,
+          });
+        } catch (orgErr: unknown) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Failed to create your organisation profile. Please contact support.',
+            cause: orgErr,
+          });
+        }
       }
 
       try {
