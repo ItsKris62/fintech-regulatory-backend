@@ -99,7 +99,7 @@ OUTPUT RULES — FOLLOW EXACTLY:
 4. Action items must be specific and actionable (not vague). Bad: "Ensure compliance". Good: "Submit PSP licence application to CBK via the eCitizen portal with Form CBK/PG/01 and all annexures".
 5. Deadlines must be specific: "Before commencing operations", "Within 30 days of [event]", "Annually by 31 March", etc.
 6. Do not hallucinate laws or section numbers. If uncertain about a specific section, cite the parent law and regulation.
-7. Generate a MINIMUM of 30 checklist items across at least 7 categories for any fintech product.
+7. Generate a MINIMUM of 15 checklist items across at least 4 categories for any fintech product.
 8. Priority: CRITICAL = CBK licence/registration or legal prohibition (operations cannot start without this); HIGH = required within 3 months; MEDIUM = required within 6 months; LOW = best practice or compliance within 12 months.
 9. Each item MAY include an optional "guidance" field (1–2 sentences) explaining WHY this requirement is specifically relevant to the business profile provided. Omit this field rather than stating the obvious.`;
 }
@@ -183,8 +183,8 @@ Return exactly this structure:
 \`\`\`
 
 QUALITY REQUIREMENTS:
-- Generate 5-8 items per applicable category (skip only genuinely inapplicable categories)
-- Minimum 30 items total across all categories
+- Generate 2-4 items per applicable category (skip only genuinely inapplicable categories)
+- Minimum 15 items total across all categories
 - Every item needs a complete regulatory citation, description, 3-5 action steps, deadline, and penalty
 - Add a "guidance" field to items where this requirement has specific relevance to the stated product type, target segments, or services offered — not for generic items
 - Prioritize accuracy over brevity — every item must be traceable to real Kenyan law

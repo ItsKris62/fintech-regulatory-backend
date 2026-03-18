@@ -533,15 +533,15 @@ export class AIService {
     const systemPrompt = generateChecklistSystemPrompt();
     const userPrompt = generateChecklistUserPrompt(params);
 
-    // Use higher token limit — checklists are dense
+    // Haiku + 3000 tokens: ~15-25s on Render free tier (was Sonnet + 8000 = 120s timeout)
     const result = await complete(
       {
         prompt: userPrompt,
         systemPrompt,
-        maxTokens: 8000,
+        maxTokens: 3000,
         temperature: 0.2, // Low temperature for factual legal content
       },
-      'policy'
+      'checklist'
     );
 
     // Parse and validate the JSON response
@@ -558,10 +558,10 @@ export class AIService {
         {
           prompt: userPrompt + '\n\nIMPORTANT: Return ONLY valid JSON, starting with { and ending with }. No other text.',
           systemPrompt,
-          maxTokens: 8000,
+          maxTokens: 3000,
           temperature: 0.1,
         },
-        'policy'
+        'checklist'
       );
       checklist = parseChecklistOutput(retryResult.content);
     }

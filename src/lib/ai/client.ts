@@ -184,7 +184,7 @@ async function cacheCompletion(
  */
 export async function complete(
   options: AICompletionOptions,
-  useCase?: 'policy' | 'query' | 'verification',
+  useCase?: 'policy' | 'checklist' | 'query' | 'verification',
   cacheTTL: number = 0
 ): Promise<AICompletionResult> {
   const startTime = Date.now();
@@ -236,11 +236,11 @@ export async function complete(
         },
       ];
 
-      // Use a per-request timeout; checklist/policy generation can take 90-120s
+      // Use a per-request timeout appropriate for the use case
       const timeoutMs =
-        useCase === 'policy'
-          ? aiConfig.timeout.policyGeneration
-          : aiConfig.timeout.default;
+        useCase === 'policy'     ? aiConfig.timeout.policyGeneration :
+        useCase === 'checklist'  ? aiConfig.timeout.checklistGeneration :
+                                   aiConfig.timeout.default;
 
       const response = await anthropic.messages.create(
         {
@@ -332,7 +332,7 @@ export async function complete(
  */
 export async function stream(
   options: AIStreamOptions,
-  useCase?: 'policy' | 'query' | 'verification'
+  useCase?: 'policy' | 'checklist' | 'query' | 'verification'
 ): Promise<AICompletionResult> {
   const startTime = Date.now();
 

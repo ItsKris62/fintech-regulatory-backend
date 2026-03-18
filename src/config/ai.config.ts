@@ -25,6 +25,9 @@ export const aiConfig = {
     // Policy generation (Sonnet 4.6 for balance of speed/quality)
     policyGeneration: 'claude-sonnet-4-6',
 
+    // Checklist generation (Sonnet 4.6 — quality legal citations; 3k tokens fits 90s free-tier timeout)
+    checklistGeneration: 'claude-sonnet-4-6',
+
     // Compliance queries (Haiku 4.5 for speed and cost efficiency)
     complianceQuery: 'claude-haiku-4-5-20251001',
 
@@ -73,6 +76,9 @@ export const aiConfig = {
 
     // Policy generation timeout (can take longer)
     policyGeneration: 120000, // 120 seconds
+
+    // Checklist generation timeout (90s accounts for Render free-tier cold starts)
+    checklistGeneration: 90000, // 90 seconds
 
     // Compliance query timeout
     complianceQuery: 45000, // 45 seconds
@@ -224,14 +230,15 @@ export const aiConfig = {
  * @returns Model ID string
  */
 export function getModelForUseCase(
-  useCase: 'policy' | 'query' | 'verification' | 'analysis' | 'default'
+  useCase: 'policy' | 'checklist' | 'query' | 'verification' | 'analysis' | 'default'
 ): string {
   const modelMap = {
-    policy: aiConfig.models.policyGeneration,
-    query: aiConfig.models.complianceQuery,
+    policy:       aiConfig.models.policyGeneration,
+    checklist:    aiConfig.models.checklistGeneration,
+    query:        aiConfig.models.complianceQuery,
     verification: aiConfig.models.citationVerification,
-    analysis: aiConfig.models.complexAnalysis,
-    default: aiConfig.models.default,
+    analysis:     aiConfig.models.complexAnalysis,
+    default:      aiConfig.models.default,
   };
 
   return modelMap[useCase] || aiConfig.models.default;
