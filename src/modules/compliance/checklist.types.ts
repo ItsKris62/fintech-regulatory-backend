@@ -108,19 +108,22 @@ export interface ChecklistStatusResult {
 }
 
 export interface ChecklistSummary {
-  id:             string;
-  title:          string;
-  productType:    string | null;
-  businessStage:  string | null;
-  progress:       number;
-  completedItems: number;
-  totalItems:     number;
-  criticalItems:  number;
-  status:         ChecklistStatus;
-  createdAt:      Date;
-  updatedAt:      Date;
+  id:                 string;
+  title:              string;
+  productType:        string | null;
+  businessStage:      string | null;
+  targetSegments:     unknown;
+  servicesOffered:    unknown;
+  additionalConcerns: string | null;
+  progress:           number;
+  completedItems:     number;
+  totalItems:         number;
+  criticalItems:      number;
+  status:             ChecklistStatus;
+  createdAt:          Date;
+  updatedAt:          Date;
   /** True when normalized ChecklistItem records exist for this checklist. */
-  isNormalized:   boolean;
+  isNormalized:       boolean;
 }
 
 export interface ChecklistItemDetail {

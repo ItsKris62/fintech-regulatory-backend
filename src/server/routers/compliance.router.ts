@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
-import { BillingMetric } from '@prisma/client';
+import { BillingMetric, SubscriptionPlan } from '@prisma/client';
 import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
 import {
   complianceQuerySchema,
@@ -20,6 +20,8 @@ import {
   getChecklistStatusInputSchema,
 } from '@/modules/compliance/checklist.types';
 import { logger } from '@/utils/logger';
+import { redis } from '@/lib/redis/client';
+import { getQuota } from '@/utils/entitlements';
 
 /**
  * Compliance Router
@@ -1058,16 +1060,11 @@ export const complianceRouter = router({
   generateChecklistAsync: protectedProcedure
     .use(rateLimited('complianceQuery'))
     .use(withPlanContext)
-    .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS))
+    // deferIncrement: true — usage counter is committed only after the DB placeholder
+    // is successfully written, preventing lost credits on service failure (Gap #4).
+    .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS, { deferIncrement: true }))
     .input(generateChecklistAsyncInputSchema)
     .mutation(async ({ input, ctx }) => {
-      if (ctx.user!.role === 'REGULATOR') {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Regulators cannot generate compliance checklists',
-        });
-      }
-
       const orgId = ctx.user!.organizationId;
       if (!orgId) {
         throw new TRPCError({
@@ -1085,8 +1082,12 @@ export const complianceRouter = router({
           businessStage: input.businessStage,
         });
 
-        // Returns immediately — background generation runs in the service
+        // Returns immediately — background generation runs in the service.
+        // incrementUsage() is called AFTER the DB write succeeds (Gap #4 fix).
         const result = await checklistService.generateChecklist(ctx.user!.id, orgId, input);
+
+        // Commit the usage counter now that the DB record exists.
+        await ctx.incrementUsage?.();
 
         logger.info({
           type: 'checklist_generate_async_accepted',
@@ -1231,6 +1232,42 @@ export const complianceRouter = router({
         if (msg.includes('Access denied')) throw new TRPCError({ code: 'FORBIDDEN', message: msg });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
       }
+    }),
+
+  /**
+   * Return the caller's checklist generation usage for the current period.
+   * Used by the frontend UsageIndicator and to gate the "Generate" CTA.
+   *
+   * Returns:
+   *   used    — number of checklists generated in the current period
+   *   limit   — plan cap (-1 = unlimited, 0 = unavailable, n = cap)
+   *   period  — 'month' | 'lifetime'
+   *   planName — current SubscriptionPlan enum value
+   *
+   * READ — no plan gate.
+   *
+   * @protected
+   */
+  getChecklistUsage: protectedProcedure
+    .use(withPlanContext)
+    .query(async ({ ctx }) => {
+      const plan     = ctx.plan ?? SubscriptionPlan.REGULATOR;
+      const scopeId  = ctx.user!.organizationId ?? ctx.user!.id;
+      const { limit, period } = getQuota(plan, 'checklistGenerations');
+
+      if (limit === -1) {
+        return { used: 0, limit: -1, period, planName: plan };
+      }
+
+      const periodKey = period === 'lifetime'
+        ? 'lifetime'
+        : new Date().toISOString().slice(0, 7);
+      const usageKey  = `sheriabot:usage:${scopeId}:${BillingMetric.CHECKLIST_GENERATIONS}:${periodKey}`;
+
+      const raw  = await redis.get<number>(usageKey);
+      const used = typeof raw === 'number' ? raw : Number(raw ?? 0);
+
+      return { used, limit, period, planName: plan };
     }),
 
   // ══════════════════════════════════════════════════════════════════════════

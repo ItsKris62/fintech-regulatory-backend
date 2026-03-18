@@ -93,6 +93,33 @@ export function getLimit(plan: SubscriptionPlan, feature: FeatureKey): number {
 }
 
 // ============================================================================
+// getQuota
+// ============================================================================
+
+/**
+ * Returns both the numeric limit and billing period for a metered feature.
+ * Used by checkUsageLimit middleware to construct the correct Redis key
+ * (monthly vs. lifetime) and surface the right error message.
+ *
+ * Falls back to { limit: 0, period: 'month' } for non-quota features.
+ */
+export function getQuota(
+  plan: SubscriptionPlan,
+  feature: FeatureKey,
+): { limit: number; period: 'month' | 'lifetime' } {
+  const entitlements = PLAN_ENTITLEMENTS[plan];
+  const value: PlanEntitlementConfig[typeof feature] = entitlements[feature];
+
+  if (typeof value === 'object' && value !== null && 'limit' in value) {
+    const q = value as { limit: number; period: 'month' | 'lifetime' };
+    return { limit: q.limit, period: q.period };
+  }
+
+  // Non-quota feature: treat as unavailable with monthly placeholder period.
+  return { limit: typeof value === 'boolean' ? (value ? -1 : 0) : 0, period: 'month' };
+}
+
+// ============================================================================
 // requireFeature
 // ============================================================================
 

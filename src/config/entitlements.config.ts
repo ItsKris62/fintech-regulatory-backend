@@ -9,9 +9,10 @@ export type AnalyticsTier = 'none' | 'basic' | 'advanced';
 export type KnowledgeBaseAccess = 'read-only' | 'full';
 
 export interface QuotaEntitlement {
-  /** -1 = unlimited, 0 = not available, n = monthly cap */
+  /** -1 = unlimited, 0 = not available, n = cap for the given period */
   limit: number;
-  period: 'month';
+  /** 'month' = reset on billing cycle; 'lifetime' = never resets */
+  period: 'month' | 'lifetime';
 }
 
 export interface StorageEntitlement {
@@ -73,7 +74,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
    */
   REGULATOR: {
     complianceQueries:     { limit: 50,  period: 'month' },
-    checklistGenerations:  { limit: 0,   period: 'month' }, // 0 = not available
+    checklistGenerations:  { limit: 1,   period: 'lifetime' }, // 1 lifetime checklist for free tier
     apiAccess:             false,
     gapAnalysis:           false,
     policyGeneration:      false,

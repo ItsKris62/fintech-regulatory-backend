@@ -4,6 +4,8 @@
  * for Kenyan fintech regulatory requirements.
  */
 
+import { z } from 'zod';
+
 // ─── Input Types ────────────────────────────────────────────────────────────
 
 export interface ChecklistGenerationParams {
@@ -16,41 +18,52 @@ export interface ChecklistGenerationParams {
   ragSourcesUsed?: number; // Number of RAG chunks retrieved (for metadata)
 }
 
-// ─── Output Types ────────────────────────────────────────────────────────────
+// ─── Zod Schemas (strict validation of Claude API output) ────────────────────
+// These are the single source of truth for the AI response shape.
+// parseChecklistOutput() must pass raw Claude output through these schemas
+// before any DB write — malformed AI responses must never reach Prisma.
 
-export interface ChecklistItem {
-  id: string;
-  title: string;
-  regulatoryBasis: string;
-  priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
-  description: string;
-  /** Optional plain-language guidance note explaining WHY this item matters to this specific business. */
-  guidance?: string;
-  actionItems: string[];
-  deadline: string;
-  penalty: string;
-}
+export const ChecklistItemSchema = z.object({
+  /** AI-generated label (e.g. "LIC-001"). Not persisted — DB generates its own IDs. */
+  id:               z.string().optional(),
+  title:            z.string().min(1, 'Item title must not be empty'),
+  regulatoryBasis:  z.string().min(1, 'Regulatory basis must not be empty'),
+  priority:         z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']),
+  description:      z.string().min(1, 'Item description must not be empty'),
+  /** Optional 1-2 sentence guidance note specific to this business profile. */
+  guidance:         z.string().optional(),
+  actionItems:      z.array(z.string()).default([]),
+  deadline:         z.string().default(''),
+  penalty:          z.string().default(''),
+});
 
-export interface ChecklistCategory {
-  id: string;
-  name: string;
-  description: string;
-  items: ChecklistItem[];
-}
+export const ChecklistCategorySchema = z.object({
+  /** AI-generated short label (e.g. "LIC"). Not persisted. */
+  id:          z.string().optional(),
+  name:        z.string().min(1, 'Category name must not be empty'),
+  description: z.string(),
+  items:       z.array(ChecklistItemSchema).min(1, 'Each category must have at least one item'),
+});
 
-export interface GeneratedChecklist {
-  categories: ChecklistCategory[];
-  metadata: {
-    productType: string;
-    businessStage: string;
-    totalItems: number;
-    criticalItems: number;
-    highItems: number;
-    estimatedCompletionDays: number;
-    generatedAt: string;
-    ragSourcesUsed: number;
-  };
-}
+export const GeneratedChecklistSchema = z.object({
+  categories: z.array(ChecklistCategorySchema).min(1, 'Response must contain at least one category'),
+  metadata: z.object({
+    productType:             z.string(),
+    businessStage:           z.string(),
+    totalItems:              z.number(),
+    criticalItems:           z.number(),
+    highItems:               z.number(),
+    estimatedCompletionDays: z.number(),
+    generatedAt:             z.string(),
+    ragSourcesUsed:          z.number(),
+  }),
+});
+
+// ─── Inferred Output Types (derived from Zod schemas) ────────────────────────
+
+export type ChecklistItem     = z.infer<typeof ChecklistItemSchema>;
+export type ChecklistCategory = z.infer<typeof ChecklistCategorySchema>;
+export type GeneratedChecklist = z.infer<typeof GeneratedChecklistSchema>;
 
 // ─── Prompt Builders ─────────────────────────────────────────────────────────
 
@@ -183,8 +196,17 @@ Return ONLY valid JSON. Start with { and end with }. No other text.`;
 }
 
 /**
- * Parse and validate AI checklist output.
- * Strips markdown fences, handles malformed JSON, validates structure.
+ * Parse and strictly validate AI checklist output via Zod.
+ *
+ * Pipeline:
+ *  1. Strip markdown code fences (Claude sometimes adds them despite instructions).
+ *  2. JSON.parse() — throw if not valid JSON.
+ *  3. GeneratedChecklistSchema.parse() — throw ZodError with field-level detail
+ *     if the shape is wrong.  This is the P0 guard against corrupt DB writes.
+ *  4. Recompute metadata counts from actual item data (override AI-reported counts).
+ *
+ * Throws an Error with a descriptive message on any failure.
+ * Callers (checklist.service.ts) must catch and mark the checklist FAILED.
  */
 export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
   let content = rawContent.trim();
@@ -197,44 +219,52 @@ export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
       .trim();
   }
 
-  let parsed: GeneratedChecklist;
+  // JSON parse — attempt a fallback extraction if the model added leading text
+  let rawParsed: unknown;
   try {
-    parsed = JSON.parse(content) as GeneratedChecklist;
+    rawParsed = JSON.parse(content);
   } catch {
-    // Try to extract JSON object from the content
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error('AI response does not contain valid JSON');
     }
-    parsed = JSON.parse(jsonMatch[0]) as GeneratedChecklist;
-  }
-
-  // Validate required structure
-  if (!parsed.categories || !Array.isArray(parsed.categories)) {
-    throw new Error('Invalid checklist structure: missing categories array');
-  }
-  if (!parsed.metadata) {
-    throw new Error('Invalid checklist structure: missing metadata');
-  }
-
-  // Recompute metadata counts from actual items
-  let totalItems = 0;
-  let criticalItems = 0;
-  let highItems = 0;
-
-  for (const category of parsed.categories) {
-    if (!Array.isArray(category.items)) continue;
-    totalItems += category.items.length;
-    for (const item of category.items) {
-      if (item.priority === 'CRITICAL') criticalItems++;
-      if (item.priority === 'HIGH') highItems++;
+    try {
+      rawParsed = JSON.parse(jsonMatch[0]);
+    } catch (innerErr: unknown) {
+      throw new Error(
+        `AI response contains malformed JSON: ${(innerErr as Error).message}`
+      );
     }
   }
 
-  parsed.metadata.totalItems = totalItems;
+  // Strict Zod validation — throws ZodError with field paths on schema mismatch
+  const result = GeneratedChecklistSchema.safeParse(rawParsed);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((i) => `${i.path.join('.')}: ${i.message}`)
+      .join('; ');
+    throw new Error(`AI response failed schema validation: ${issues}`);
+  }
+
+  const parsed = result.data;
+
+  // Recompute metadata counts from actual items — never trust the AI's self-reported counts
+  let totalItems    = 0;
+  let criticalItems = 0;
+  let highItems     = 0;
+
+  for (const category of parsed.categories) {
+    totalItems += category.items.length;
+    for (const item of category.items) {
+      if (item.priority === 'CRITICAL') criticalItems++;
+      if (item.priority === 'HIGH')     highItems++;
+    }
+  }
+
+  parsed.metadata.totalItems    = totalItems;
   parsed.metadata.criticalItems = criticalItems;
-  parsed.metadata.highItems = highItems;
-  parsed.metadata.generatedAt = new Date().toISOString();
+  parsed.metadata.highItems     = highItems;
+  parsed.metadata.generatedAt   = new Date().toISOString();
 
   return parsed;
 }

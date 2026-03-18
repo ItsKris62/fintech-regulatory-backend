@@ -32,6 +32,12 @@ export interface Context {
   plan?: SubscriptionPlan;
   customLimits?: Record<string, unknown> | null;
   usageInfo?: { metric: string; current: number; limit: number };
+  /**
+   * Populated by checkUsageLimit when called with { deferIncrement: true }.
+   * The router handler MUST call this after a successful DB write to commit
+   * the usage counter. Never incremented if the service call throws.
+   */
+  incrementUsage?: () => Promise<void>;
 }
 
 /** How long to cache the Prisma user lookup in Upstash (matches Supabase default token TTL). */

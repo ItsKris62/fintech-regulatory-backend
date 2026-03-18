@@ -5,7 +5,7 @@ import { rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
-import { getLimit, requireFeature } from '@/utils/entitlements';
+import { getQuota, requireFeature } from '@/utils/entitlements';
 import type { FeatureKey } from '@/config/entitlements.config';
 import { reactMailer } from '@/lib/email/react-mailer.service';
 import { appConfig } from '@/config/app.config';
@@ -359,29 +359,45 @@ const METRIC_FEATURE_MAP = {
 } as const satisfies Record<BillingMetric, FeatureKey>;
 
 /**
- * Factory that returns a middleware enforcing a monthly usage quota.
+ * Factory that returns a middleware enforcing a usage quota (monthly or lifetime).
  *
- * - Reads the plan's limit from PLAN_ENTITLEMENTS.
- * - If limit === -1 (unlimited): passes through without touching Redis.
- * - If limit === 0: blocks (feature unavailable — use requirePlanFeature instead).
- * - Otherwise: atomically increments the Redis counter and blocks if over limit.
+ * - Reads plan limit + period from PLAN_ENTITLEMENTS via getQuota().
+ * - limit === -1 (unlimited): passes through without touching Redis.
+ * - limit === 0 (FORBIDDEN): feature unavailable on this plan.
+ * - Otherwise: reads the Redis counter and blocks if at or over limit.
  *
- * Redis key: sheriabot:usage:{orgId}:{metric}:{YYYY-MM}
- * TTL: 35 days (automatically cleaned up after billing cycle).
+ * Redis keys:
+ *   Monthly:  sheriabot:usage:{scopeId}:{metric}:{YYYY-MM}  (TTL: 35 days)
+ *   Lifetime: sheriabot:usage:{scopeId}:{metric}:lifetime    (no TTL)
+ *
+ * Error code semantics:
+ *   FORBIDDEN         — feature is not included in the plan at all (limit === 0)
+ *   TOO_MANY_REQUESTS — feature is included but the quota is exhausted
+ *
+ * Options:
+ *   deferIncrement?: boolean
+ *     When true, the middleware does NOT increment the counter immediately.
+ *     Instead, it attaches ctx.incrementUsage() which the router handler
+ *     must call after a successful DB write.  This prevents lost credits
+ *     when the service call fails after the middleware runs.
+ *     Default: false (increment immediately, backward-compatible).
  *
  * Must run after withPlanContext.
  */
-export const checkUsageLimit = (metric: BillingMetric) =>
+export const checkUsageLimit = (
+  metric:  BillingMetric,
+  opts?:   { deferIncrement?: boolean },
+) =>
   middleware(async ({ ctx, next }) => {
-    // Re-assert auth (this middleware always runs after isAuthenticated + withPlanContext)
+    // Re-assert auth (always runs after isAuthenticated + withPlanContext)
     if (!ctx.user) {
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required.' });
     }
-    const user = ctx.user; // User (non-null)
+    const user = ctx.user;
 
-    const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
+    const plan       = ctx.plan ?? SubscriptionPlan.REGULATOR;
     const featureKey = METRIC_FEATURE_MAP[metric];
-    const limit = getLimit(plan, featureKey);
+    const { limit, period } = getQuota(plan, featureKey);
 
     // Unlimited: skip all Redis I/O
     if (limit === -1) {
@@ -390,58 +406,82 @@ export const checkUsageLimit = (metric: BillingMetric) =>
       });
     }
 
-    // Feature unavailable on this plan (should be caught by requirePlanFeature first)
+    // Feature unavailable on this plan — FORBIDDEN (not a quota issue, a plan issue)
     if (limit === 0) {
       const planName = plan.charAt(0) + plan.slice(1).toLowerCase();
       throw new TRPCError({
-        code: 'FORBIDDEN',
+        code:    'FORBIDDEN',
         message: `This feature is not available on the ${planName} plan. Please upgrade your subscription.`,
       });
     }
 
-    // Build the Redis key for this org + metric + billing period
-    const scopeId = user.organizationId ?? user.id;
-    const period = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
-    const usageKey = `sheriabot:usage:${scopeId}:${metric}:${period}`;
+    // Build the Redis key using the correct period bucket
+    const scopeId  = user.organizationId ?? user.id;
+    const periodKey = period === 'lifetime'
+      ? 'lifetime'
+      : new Date().toISOString().slice(0, 7); // 'YYYY-MM'
+    const usageKey = `sheriabot:usage:${scopeId}:${metric}:${periodKey}`;
 
-    // Read current count first to give an accurate error message
+    // Read current count to give an accurate error message before touching Redis
     const currentRaw = await redis.get<number>(usageKey);
-    const current = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw ?? 0);
+    const current    = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw ?? 0);
 
     if (current >= limit) {
       logger.warn({
-        type: 'usage_limit_reached',
-        userId: user.id,
-        orgId: scopeId,
+        type:    'usage_limit_reached',
+        userId:  user.id,
+        orgId:   scopeId,
         metric,
         current,
         limit,
+        period,
         plan,
       });
 
+      const limitLabel = period === 'lifetime' ? 'Lifetime' : 'Monthly';
       throw new TRPCError({
-        code: 'TOO_MANY_REQUESTS',
-        message: `Monthly limit reached (${current}/${limit}). Upgrade your plan for more.`,
+        code:    'TOO_MANY_REQUESTS',
+        message: `${limitLabel} limit reached (${current}/${limit}). Upgrade your plan for more.`,
       });
     }
 
-    // Atomically increment
-    const newCount = await redis.incr(usageKey);
+    // -----------------------------------------------------------------
+    // Increment logic — either immediately or deferred (Gap #4 fix).
+    // -----------------------------------------------------------------
+    const doIncrement = async (): Promise<void> => {
+      const newCount = await redis.incr(usageKey);
+      // Set TTL only for monthly keys (lifetime keys never expire)
+      if (newCount === 1 && period === 'month') {
+        await redis.expire(usageKey, USAGE_TTL);
+      }
+      logger.debug({
+        type:    'usage_incremented',
+        orgId:   scopeId,
+        metric,
+        current: newCount,
+        limit,
+        period,
+        deferred: opts?.deferIncrement ?? false,
+      });
+    };
 
-    // Set TTL on first write (new period key)
-    if (newCount === 1) {
-      await redis.expire(usageKey, USAGE_TTL);
+    if (opts?.deferIncrement) {
+      // Attach the increment callback — the router handler calls this after
+      // a successful DB write so no credit is lost if the service throws.
+      return next({
+        ctx: {
+          ...ctx,
+          user,
+          usageInfo:      { metric, current, limit },
+          incrementUsage: doIncrement,
+        },
+      });
     }
 
-    logger.debug({
-      type: 'usage_incremented',
-      orgId: scopeId,
-      metric,
-      current: newCount,
-      limit,
-    });
+    // Default (eager) path: increment now, before the handler runs.
+    await doIncrement();
 
     return next({
-      ctx: { ...ctx, user, usageInfo: { metric, current: newCount, limit } },
+      ctx: { ...ctx, user, usageInfo: { metric, current: current + 1, limit } },
     });
   });

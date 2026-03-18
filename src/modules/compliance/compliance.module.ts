@@ -1262,7 +1262,11 @@ Follow-up Question: ${followUp}
       const itemProgress: Record<string, string> = {};
       for (const category of generatedChecklist.categories) {
         for (const item of category.items) {
-          itemProgress[item.id] = 'NOT_STARTED';
+          // item.id is an optional AI-generated label (e.g. "LIC-001") used as
+          // the key in the legacy itemProgress map.  Skip items without one.
+          if (item.id !== undefined) {
+            itemProgress[item.id] = 'NOT_STARTED';
+          }
         }
       }
 
@@ -1348,6 +1352,9 @@ Follow-up Question: ${followUp}
     title: string;
     productType: string | null;
     businessStage: string | null;
+    targetSegments: unknown;
+    servicesOffered: unknown;
+    additionalConcerns: string | null;
     progress: number;
     status: string;
     createdAt: Date;
@@ -1364,6 +1371,9 @@ Follow-up Question: ${followUp}
         title: true,
         productType: true,
         businessStage: true,
+        targetSegments: true,
+        servicesOffered: true,
+        additionalConcerns: true,
         progress: true,
         status: true,
         checklistData: true,
@@ -1379,6 +1389,9 @@ Follow-up Question: ${followUp}
         title: c.title,
         productType: c.productType,
         businessStage: c.businessStage,
+        targetSegments: c.targetSegments,
+        servicesOffered: c.servicesOffered,
+        additionalConcerns: c.additionalConcerns,
         progress: c.progress,
         status: c.status,
         createdAt: c.createdAt,
