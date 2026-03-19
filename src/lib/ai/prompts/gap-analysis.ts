@@ -4,6 +4,8 @@
  * Kenyan regulatory requirements using RAG-retrieved context.
  */
 
+import { z } from 'zod';
+
 // ─── Input Types ─────────────────────────────────────────────────────────────
 
 export interface GapAnalysisParams {
@@ -16,7 +18,7 @@ export interface GapAnalysisParams {
   ragContext?: string; // Retrieved regulatory passages from Pinecone
 }
 
-// ─── Output Types ─────────────────────────────────────────────────────────────
+// ─── Output Types (T4: added evidenceRequired, responsibleRole, regulatoryDeadline, dependsOn) ──
 
 export interface GapItem {
   id: string;
@@ -28,6 +30,12 @@ export interface GapItem {
   recommendation: string;
   effort: 'LOW' | 'MEDIUM' | 'HIGH';
   priority: number;
+  /** Documents/artefacts that must be produced to close this gap. */
+  evidenceRequired: string[];
+  /** Role or department accountable for resolving this gap. */
+  responsibleRole?: string;
+  /** Regulatory deadline, if the regulation imposes one (e.g. "21 days — DPA 2019 s.26"). */
+  regulatoryDeadline?: string;
 }
 
 export interface FrameworkResult {
@@ -46,6 +54,8 @@ export interface ActionPlanItem {
   deadline: string;
   effort: 'LOW' | 'MEDIUM' | 'HIGH';
   resources: string[];
+  /** IDs or short titles of actions that must be completed first. */
+  dependsOn: string[];
 }
 
 export interface GapAnalysisResult {
@@ -62,85 +72,212 @@ export interface GapAnalysisResult {
     criticalGaps: number;
     highGaps: number;
     analysisDate: string;
+    /** Set when multi-chunk flow was used (document exceeded CHUNK_SIZE). */
+    chunksProcessed?: number;
   };
 }
 
-// ─── Prompt Builders ─────────────────────────────────────────────────────────
+// ─── Zod Validation Schemas (T3) ─────────────────────────────────────────────
 
-/**
- * System prompt for gap analysis.
- */
-export function generateGapAnalysisSystemPrompt(): string {
-  return `You are a senior Kenyan financial regulatory compliance auditor with 15+ years of experience. You specialise in reviewing internal compliance policies and procedures against Kenyan regulatory requirements.
+const GapItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  severity: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']),
+  regulatoryBasis: z.string(),
+  description: z.string(),
+  policyCurrentState: z.string(),
+  recommendation: z.string(),
+  effort: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+  priority: z.number().int().min(1),
+  evidenceRequired: z.array(z.string()).default([]),
+  responsibleRole: z.string().optional(),
+  regulatoryDeadline: z.string().optional(),
+});
 
-Your expertise covers:
-- Data Protection Act 2019 (DPA) and ODPC guidelines
-- CBK Prudential Guidelines and Banking Act
-- National Payment System Act 2011 and subsidiary legislation
-- Proceeds of Crime and Anti-Money Laundering Act (POCAMLA)
-- CBK Cybersecurity Guidance Note 2023
-- Consumer Protection Act and CBK consumer protection guidelines
-- Capital Markets Authority (CMA) Act and Regulations
-- Digital Credit Providers Regulations 2022
-- Computer Misuse and Cybercrimes Act 2018
+const FrameworkResultSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  score: z.number().min(0).max(100),
+  gaps: z.array(GapItemSchema),
+  strengths: z.array(z.string()),
+  summary: z.string(),
+});
 
-Your task is to conduct a rigorous gap analysis of the provided policy document(s) against the specified regulatory frameworks. You must:
-1. Identify specific gaps where the policy fails to meet regulatory requirements
-2. Cite the exact Kenyan law section that creates each obligation
-3. Rate severity accurately: CRITICAL = legal exposure/licence risk; HIGH = likely regulatory finding; MEDIUM = best-practice gap; LOW = minor improvement
-4. Identify genuine strengths to give a balanced assessment
-5. Calculate a realistic compliance score (0-100) per framework and overall
+const ActionPlanItemSchema = z.object({
+  priority: z.number().int().min(1),
+  action: z.string(),
+  framework: z.string(),
+  deadline: z.string(),
+  effort: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+  resources: z.array(z.string()),
+  dependsOn: z.array(z.string()).default([]),
+});
 
-CRITICAL OUTPUT RULES:
-1. Respond ONLY with valid JSON. No markdown fences, no preamble, no explanation outside JSON.
-2. Every gap must cite a real, specific Kenyan regulatory provision (e.g., "DPA 2019, Section 32(1)(b)").
-3. Do not fabricate gaps that do not exist based on the policy text provided.
-4. Be specific about WHAT is missing in the policy, not generic statements.
-5. Overall score must reflect actual gap severity — a policy with CRITICAL gaps cannot score above 50.`;
+export const GapAnalysisResultSchema = z.object({
+  overallScore: z.number().min(0).max(100),
+  executiveSummary: z.string(),
+  frameworks: z.array(FrameworkResultSchema).min(1),
+  crossCuttingStrengths: z.array(z.string()),
+  actionPlan: z.array(ActionPlanItemSchema),
+  metadata: z.object({
+    documentName: z.string(),
+    analysisDepth: z.string(),
+    frameworksAnalysed: z.array(z.string()),
+    totalGaps: z.number().int().min(0),
+    criticalGaps: z.number().int().min(0),
+    highGaps: z.number().int().min(0),
+    analysisDate: z.string(),
+    chunksProcessed: z.number().int().positive().optional(),
+  }),
+});
+
+// ─── Chunking Strategy (T1) ─────────────────────────────────────────────────
+
+export interface PolicyChunk {
+  index: number;
+  total: number;
+  text: string;
+  charStart: number;
+  charEnd: number;
 }
 
 /**
- * User prompt for gap analysis with policy text and regulatory context.
+ * Chunk size and overlap constants.
+ * A chunk of ~6,000 characters fits comfortably within Claude's context
+ * alongside the system prompt, RAG context, and JSON response buffer.
  */
-export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string {
-  const depthInstructions: Record<string, string> = {
-    quick: 'Focus on CRITICAL and HIGH severity gaps only. Generate 2-3 gaps per framework maximum. Provide a high-level executive summary.',
-    standard: 'Cover all severity levels. Generate 3-7 gaps per framework. Provide detailed analysis of each gap.',
-    deep: 'Comprehensive analysis. Cover all severity levels thoroughly. Generate as many gaps as genuinely found (no limit). Provide granular analysis with specific policy excerpt references where possible.',
-  };
+export const CHUNK_SIZE = 6000;
+export const CHUNK_OVERLAP = 800;
 
-  const ragSection = params.ragContext
-    ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from the Kenyan regulatory document database. Use these to ground your gap identification:\n\n${params.ragContext}\n`
-    : `\n\n## NOTE: Regulatory document database context unavailable. Use your knowledge of current Kenyan regulations.\n`;
+/**
+ * Split policy text into overlapping chunks that respect paragraph boundaries.
+ * If the text fits within CHUNK_SIZE the result is a single-element array —
+ * callers should check length === 1 to skip the multi-pass path.
+ */
+export function chunkPolicyText(
+  text: string,
+  chunkSize = CHUNK_SIZE,
+  overlap = CHUNK_OVERLAP
+): PolicyChunk[] {
+  if (text.length <= chunkSize) {
+    return [{ index: 0, total: 1, text, charStart: 0, charEnd: text.length }];
+  }
 
-  const focusSection = params.focusAreas && params.focusAreas.length > 0
-    ? `\n## PRIORITY FOCUS AREAS\nPay particular attention to these areas: ${params.focusAreas.join(', ')}\n`
-    : '';
+  const paragraphs = text.split(/\n\n+/);
+  const chunks: PolicyChunk[] = [];
+  let current = '';
+  let charStart = 0;
+  let absolutePos = 0;
 
-  // Truncate policy text if too large (keep first 15,000 chars for deep, 8,000 for others)
-  const maxPolicyChars = params.analysisDepth === 'deep' ? 15000 : 8000;
-  const policyText = params.policyText.length > maxPolicyChars
-    ? params.policyText.slice(0, maxPolicyChars) + '\n\n[... document truncated for analysis ...]'
-    : params.policyText;
+  for (const para of paragraphs) {
+    const candidate = current ? `${current}\n\n${para}` : para;
 
-  return `Conduct a ${params.analysisDepth.toUpperCase()} gap analysis of the following policy document against the specified Kenyan regulatory frameworks.
+    if (candidate.length <= chunkSize) {
+      current = candidate;
+    } else {
+      if (current) {
+        const charEnd = charStart + current.length;
+        chunks.push({ index: chunks.length, total: 0, text: current, charStart, charEnd });
+        // Overlap: carry the last `overlap` chars into the next chunk
+        const tail = current.length > overlap ? current.slice(-overlap) : current;
+        charStart = charEnd - tail.length;
+        current = `${tail}\n\n${para}`;
+      } else {
+        // Single paragraph larger than chunkSize — split at nearest word boundary
+        let pos = 0;
+        while (pos < para.length) {
+          let end = pos + chunkSize;
+          if (end < para.length) {
+            const ws = para.lastIndexOf(' ', end);
+            if (ws > pos) end = ws;
+          } else {
+            end = para.length;
+          }
+          const slice = para.slice(pos, end);
+          chunks.push({
+            index: chunks.length,
+            total: 0,
+            text: slice,
+            charStart: absolutePos + pos,
+            charEnd: absolutePos + end,
+          });
+          pos = end - overlap;
+          if (pos <= 0 || pos >= para.length) break;
+        }
+        current = '';
+        charStart = absolutePos + para.length;
+      }
+    }
+    absolutePos += para.length + 2; // +2 for the \n\n separator
+  }
 
-## ANALYSIS SCOPE
-- **Document:** ${params.documentName} (${params.documentType.toUpperCase()})
-- **Regulatory Frameworks:** ${params.regulatoryFrameworks.join(', ')}
-- **Analysis Depth:** ${params.analysisDepth} — ${depthInstructions[params.analysisDepth] || depthInstructions.standard}
-${focusSection}${ragSection}
+  if (current.trim()) {
+    chunks.push({
+      index: chunks.length,
+      total: 0,
+      text: current,
+      charStart,
+      charEnd: charStart + current.length,
+    });
+  }
 
-## POLICY DOCUMENT TO ANALYSE
-\`\`\`
-${policyText}
-\`\`\`
+  // Back-fill total count now that we know how many chunks there are
+  const total = chunks.length;
+  for (const c of chunks) c.total = total;
+  return chunks;
+}
 
-## REQUIRED JSON SCHEMA
-Return EXACTLY this structure. Populate ALL fields accurately:
+// ─── Prompt Injection Sanitization ───────────────────────────────────────────
 
-\`\`\`json
-{
+/**
+ * Patterns that are characteristic of prompt injection attacks embedded inside
+ * a policy document.  Each pattern is replaced with '[REDACTED]' so the
+ * surrounding text remains readable but the instruction cannot be executed.
+ *
+ * Returns the sanitized text and a flag indicating whether any substitution
+ * was made (so callers can log the event).
+ */
+export function sanitizePolicyText(text: string): { sanitized: string; wasModified: boolean } {
+  const patterns: RegExp[] = [
+    /ignore\s+(all\s+)?previous\s+instructions?/gi,
+    /ignore\s+(all\s+)?above\s+instructions?/gi,
+    /disregard\s+(all\s+)?previous/gi,
+    /instead[,\s]+output/gi,
+    /new\s+instructions?\s*:/gi,
+    /\bsystem\s*:\s*/gi,
+    /\[SYSTEM\]/gi,
+    /\[INST\]/gi,
+    /<<SYS>>/gi,
+    /<\|im_start\|>/gi,
+    /forget\s+(everything|all)\s+(above|previous|prior)/gi,
+    /you\s+are\s+now\s+a\s+different\s+(ai|assistant|model)/gi,
+  ];
+
+  let sanitized = text;
+  let wasModified = false;
+
+  for (const pattern of patterns) {
+    if (pattern.test(sanitized)) {
+      wasModified = true;
+      sanitized = sanitized.replace(pattern, '[REDACTED]');
+    }
+  }
+
+  return { sanitized, wasModified };
+}
+
+// ─── Shared Schema Example ────────────────────────────────────────────────────
+
+/**
+ * Returns the required JSON schema example string embedded in prompts.
+ * Shared between single-pass and merge prompts to keep them in sync.
+ */
+function buildRequiredJsonSchema(params: {
+  documentName: string;
+  analysisDepth: string;
+  regulatoryFrameworks: string[];
+}): string {
+  return `{
   "overallScore": 65,
   "executiveSummary": "This policy demonstrates foundational compliance awareness but has significant gaps in data subject rights procedures (DPA 2019) and transaction monitoring thresholds (POCAMLA). Immediate action is required on 2 CRITICAL gaps before the policy can be considered regulatory-grade.",
   "frameworks": [
@@ -159,7 +296,10 @@ Return EXACTLY this structure. Populate ALL fields accurately:
           "policyCurrentState": "Policy mentions 'we respect privacy' but contains no operational procedure for handling subject rights requests.",
           "recommendation": "Draft and implement a Data Subject Rights Procedure covering: request intake form, 21-day response SLA, escalation process, and rejection grounds as per DPA Section 26-32.",
           "effort": "MEDIUM",
-          "priority": 1
+          "priority": 1,
+          "evidenceRequired": ["Data Subject Rights Request Form", "Procedure SOP document", "Staff training records on DPA rights"],
+          "responsibleRole": "Data Protection Officer",
+          "regulatoryDeadline": "Immediate — DPA 2019 is in force; non-compliance risks ODPC enforcement"
         }
       ],
       "strengths": [
@@ -179,7 +319,8 @@ Return EXACTLY this structure. Populate ALL fields accurately:
       "framework": "Data Protection Act 2019",
       "deadline": "Within 30 days",
       "effort": "MEDIUM",
-      "resources": ["DPO or external data protection counsel", "DPA 2019 Sections 26-32", "ODPC guidance on subject rights"]
+      "resources": ["DPO or external data protection counsel", "DPA 2019 Sections 26-32", "ODPC guidance on subject rights"],
+      "dependsOn": []
     }
   ],
   "metadata": {
@@ -191,14 +332,184 @@ Return EXACTLY this structure. Populate ALL fields accurately:
     "highGaps": 0,
     "analysisDate": "${new Date().toISOString()}"
   }
+}`;
 }
+
+// ─── Prompt Builders ─────────────────────────────────────────────────────────
+
+/**
+ * System prompt for gap analysis (T4: expanded regulation list).
+ */
+export function generateGapAnalysisSystemPrompt(): string {
+  return `You are a senior Kenyan financial regulatory compliance auditor with 15+ years of experience. You specialise in reviewing internal compliance policies and procedures against Kenyan regulatory requirements.
+
+Your expertise covers:
+- Data Protection Act 2019 (DPA) and ODPC General Regulations 2021
+- CBK Prudential Guidelines and Banking Act (Cap 488)
+- National Payment System Act 2011 and NPS Regulations 2014
+- Proceeds of Crime and Anti-Money Laundering Act (POCAMLA) and AML/CFT Guidelines
+- CBK Cybersecurity Guidance Note 2023 (CBS/PG/82)
+- Consumer Protection Act 2012 and CBK consumer protection guidelines
+- Capital Markets Authority (CMA) Act and CMA Regulations
+- Digital Credit Providers Regulations 2022
+- Computer Misuse and Cybercrimes Act 2018
+- Kenya Information and Communications Act (KICA) and ICT regulations
+
+Your task is to conduct a rigorous gap analysis of the provided policy document(s) against the specified regulatory frameworks. You must:
+1. Identify specific gaps where the policy fails to meet regulatory requirements
+2. Cite the exact Kenyan law section that creates each obligation
+3. Rate severity accurately: CRITICAL = legal exposure/licence risk; HIGH = likely regulatory finding; MEDIUM = best-practice gap; LOW = minor improvement
+4. For each gap, populate evidenceRequired (artefacts needed to close the gap) and responsibleRole (accountable role/department)
+5. Identify genuine strengths to give a balanced assessment
+6. Calculate a realistic compliance score (0-100) per framework and overall
+
+CRITICAL OUTPUT RULES:
+1. Respond ONLY with valid JSON. No markdown fences, no preamble, no explanation outside JSON.
+2. Every gap must cite a real, specific Kenyan regulatory provision (e.g., "DPA 2019, Section 32(1)(b)").
+3. Do not fabricate gaps that do not exist based on the policy text provided.
+4. Be specific about WHAT is missing in the policy, not generic statements.
+5. Overall score must reflect actual gap severity — a policy with CRITICAL gaps cannot score above 50.`;
+}
+
+/**
+ * User prompt for the first-pass per-chunk phase.
+ * Only identifies gaps in the given chunk — no scoring or consolidation.
+ */
+export function generateChunkAnalysisUserPrompt(
+  params: Omit<GapAnalysisParams, 'policyText'> & { chunkText: string },
+  chunkIndex: number,
+  totalChunks: number
+): string {
+  const ragSection = params.ragContext
+    ? `\n## RETRIEVED REGULATORY CONTEXT\n${params.ragContext}\n`
+    : `\n## NOTE: Regulatory document database unavailable. Use knowledge of current Kenyan regulations.\n`;
+
+  const focusSection =
+    params.focusAreas && params.focusAreas.length > 0
+      ? `\n## PRIORITY FOCUS AREAS\nPay particular attention to: ${params.focusAreas.join(', ')}\n`
+      : '';
+
+  return `You are analysing CHUNK ${chunkIndex + 1} of ${totalChunks} of the document "${params.documentName}".
+Identify ALL compliance gaps visible in this chunk against: ${params.regulatoryFrameworks.join(', ')}.
+${ragSection}${focusSection}
+## DOCUMENT CHUNK ${chunkIndex + 1} / ${totalChunks}
+\`\`\`
+${params.chunkText}
+\`\`\`
+
+Return a JSON array of gap objects found ONLY in this chunk. Each object:
+{
+  "framework": "<framework id e.g. DPA_2019>",
+  "id": "<e.g. DPA-G001-C${chunkIndex + 1}>",
+  "title": "...",
+  "severity": "CRITICAL|HIGH|MEDIUM|LOW",
+  "regulatoryBasis": "...",
+  "description": "...",
+  "policyCurrentState": "...",
+  "recommendation": "...",
+  "effort": "LOW|MEDIUM|HIGH",
+  "priority": 1,
+  "evidenceRequired": ["..."],
+  "responsibleRole": "...",
+  "regulatoryDeadline": "..."
+}
+
+Return [] if no gaps are found. Return ONLY a valid JSON array.`;
+}
+
+/**
+ * User prompt for the second-pass consolidation merge.
+ * Receives all raw per-chunk gaps and produces the full GapAnalysisResult.
+ */
+export function generateMergeUserPrompt(
+  rawGaps: unknown[],
+  params: Omit<GapAnalysisParams, 'policyText'> & { chunkCount: number }
+): string {
+  const ragSection = params.ragContext
+    ? `\n## RETRIEVED REGULATORY CONTEXT\n${params.ragContext}\n`
+    : '';
+
+  const depthInstructions: Record<string, string> = {
+    quick: 'Focus on CRITICAL and HIGH severity gaps. Merge minor duplicates aggressively.',
+    standard: 'Cover all severity levels. Merge obvious duplicates.',
+    deep: 'Retain all distinct gaps. Only merge exact duplicates.',
+  };
+
+  return `You have received pre-identified compliance gaps from a ${params.chunkCount}-chunk analysis of "${params.documentName}".
+Your task: consolidate, de-duplicate, score, and produce the final GapAnalysisResult JSON.
+
+Analysis depth: ${params.analysisDepth} — ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
+Frameworks: ${params.regulatoryFrameworks.join(', ')}
+${ragSection}
+## RAW GAPS FROM ALL CHUNKS (${(rawGaps as unknown[]).length} total — some may be duplicates)
+\`\`\`json
+${JSON.stringify(rawGaps, null, 2)}
+\`\`\`
+
+## CONSOLIDATION INSTRUCTIONS
+1. De-duplicate gaps describing the same issue — keep the most detailed entry, reassign sequential priority numbers.
+2. Group final gaps by framework into the frameworks array.
+3. Score each framework (0–100) based on severity/count of retained gaps.
+4. Write a concise executiveSummary (2-4 sentences).
+5. Build a prioritised actionPlan with dependsOn referencing other action titles or empty [].
+6. Set metadata.chunksProcessed = ${params.chunkCount}.
+7. Recompute totalGaps, criticalGaps, highGaps from the final deduplicated list.
+
+## REQUIRED JSON SCHEMA
+\`\`\`json
+${buildRequiredJsonSchema({ documentName: params.documentName, analysisDepth: params.analysisDepth, regulatoryFrameworks: params.regulatoryFrameworks })}
+\`\`\`
+
+Analyse EVERY specified framework — include frameworks with no gaps (score them high). Return ONLY valid JSON.`;
+}
+
+/**
+ * User prompt for gap analysis — used for single-pass (document ≤ CHUNK_SIZE).
+ */
+export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string {
+  const depthInstructions: Record<string, string> = {
+    quick: 'Focus on CRITICAL and HIGH severity gaps only. Generate 2-3 gaps per framework maximum. Provide a high-level executive summary.',
+    standard: 'Cover all severity levels. Generate 3-7 gaps per framework. Provide detailed analysis of each gap.',
+    deep: 'Comprehensive analysis. Cover all severity levels thoroughly. Generate as many gaps as genuinely found (no limit). Provide granular analysis with specific policy excerpt references where possible.',
+  };
+
+  const ragSection = params.ragContext
+    ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from the Kenyan regulatory document database. Use these to ground your gap identification:\n\n${params.ragContext}\n`
+    : `\n\n## NOTE: Regulatory document database context unavailable. Use your knowledge of current Kenyan regulations.\n`;
+
+  const focusSection =
+    params.focusAreas && params.focusAreas.length > 0
+      ? `\n## PRIORITY FOCUS AREAS\nPay particular attention to these areas: ${params.focusAreas.join(', ')}\n`
+      : '';
+
+  return `Conduct a ${params.analysisDepth.toUpperCase()} gap analysis of the following policy document against the specified Kenyan regulatory frameworks.
+
+## ANALYSIS SCOPE
+- **Document:** ${params.documentName} (${params.documentType.toUpperCase()})
+- **Regulatory Frameworks:** ${params.regulatoryFrameworks.join(', ')}
+- **Analysis Depth:** ${params.analysisDepth} — ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
+${focusSection}${ragSection}
+
+## POLICY DOCUMENT TO ANALYSE
+\`\`\`
+${params.policyText}
+\`\`\`
+
+## REQUIRED JSON SCHEMA
+Return EXACTLY this structure. Populate ALL fields accurately:
+
+\`\`\`json
+${buildRequiredJsonSchema(params)}
 \`\`\`
 
 Analyse EVERY specified framework. Compute metadata counts from your actual gaps after writing all frameworks. Overall score = weighted average of framework scores, with CRITICAL gaps reducing it proportionally. Return ONLY valid JSON.`;
 }
 
+// ─── Output Parser ────────────────────────────────────────────────────────────
+
 /**
- * Parse and validate AI gap analysis output.
+ * Parse and validate AI gap analysis output using Zod (T3).
+ * Falls back to regex JSON extraction if the response contains surrounding text.
  */
 export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
   let content = rawContent.trim();
@@ -211,31 +522,35 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
       .trim();
   }
 
-  let parsed: GapAnalysisResult;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(content) as GapAnalysisResult;
+    parsed = JSON.parse(content);
   } catch {
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error('AI response does not contain valid JSON');
     }
-    parsed = JSON.parse(jsonMatch[0]) as GapAnalysisResult;
+    parsed = JSON.parse(jsonMatch[0]);
   }
 
-  if (!parsed.frameworks || !Array.isArray(parsed.frameworks)) {
-    throw new Error('Invalid gap analysis structure: missing frameworks array');
-  }
-  if (typeof parsed.overallScore !== 'number') {
-    throw new Error('Invalid gap analysis structure: missing overallScore');
+  // Zod validation — coerces defaults (evidenceRequired: [], dependsOn: [])
+  const result = GapAnalysisResultSchema.safeParse(parsed);
+  if (!result.success) {
+    // Surface the first Zod error to help with debugging
+    const firstError = result.error.errors[0];
+    throw new Error(
+      `Invalid gap analysis structure: ${firstError.path.join('.')} — ${firstError.message}`
+    );
   }
 
-  // Recompute metadata counts
+  const validated = result.data;
+
+  // Recompute metadata counts from actual validated gaps
   let totalGaps = 0;
   let criticalGaps = 0;
   let highGaps = 0;
 
-  for (const framework of parsed.frameworks) {
-    if (!Array.isArray(framework.gaps)) continue;
+  for (const framework of validated.frameworks) {
     totalGaps += framework.gaps.length;
     for (const gap of framework.gaps) {
       if (gap.severity === 'CRITICAL') criticalGaps++;
@@ -243,25 +558,13 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
     }
   }
 
-  if (!parsed.metadata) {
-    parsed.metadata = {
-      documentName: '',
-      analysisDepth: 'standard',
-      frameworksAnalysed: [],
-      totalGaps,
-      criticalGaps,
-      highGaps,
-      analysisDate: new Date().toISOString(),
-    };
-  } else {
-    parsed.metadata.totalGaps = totalGaps;
-    parsed.metadata.criticalGaps = criticalGaps;
-    parsed.metadata.highGaps = highGaps;
-    parsed.metadata.analysisDate = new Date().toISOString();
-  }
+  validated.metadata.totalGaps = totalGaps;
+  validated.metadata.criticalGaps = criticalGaps;
+  validated.metadata.highGaps = highGaps;
+  validated.metadata.analysisDate = new Date().toISOString();
 
-  // Clamp score to valid range
-  parsed.overallScore = Math.max(0, Math.min(100, Math.round(parsed.overallScore)));
+  // Clamp score to valid range (belt-and-suspenders, Zod already enforces min/max)
+  validated.overallScore = Math.max(0, Math.min(100, Math.round(validated.overallScore)));
 
-  return parsed;
+  return validated as GapAnalysisResult;
 }

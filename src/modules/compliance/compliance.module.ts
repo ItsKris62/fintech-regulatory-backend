@@ -25,6 +25,7 @@ import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
 import type { GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
 import type { GapAnalysisResult } from '@/lib/ai/prompts/gap-analysis';
+import { sanitizePolicyText } from '@/lib/ai/prompts/gap-analysis';
 // pdf-parse and mammoth are CommonJS modules
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
@@ -1592,6 +1593,8 @@ Follow-up Question: ${followUp}
       analysisDepth: 'quick' | 'standard' | 'deep';
       focusAreas?: string[];
       organizationId?: string;
+      ipAddress?: string;
+      userAgent?: string;
     }
   ): Promise<{
     id: string;
@@ -1600,6 +1603,7 @@ Follow-up Question: ${followUp}
     overallScore: number | null;
     documentName: string;
     createdAt: Date;
+    ragGrounded: boolean;
   }> {
     logger.info({
       type: 'gap_analysis_run_started',
@@ -1658,7 +1662,7 @@ Follow-up Question: ${followUp}
       // Update document URL
       const gapAnalysisTable = (prisma as unknown as {
         gapAnalysis: {
-          update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date }>;
+          update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date; ragGrounded: boolean }>;
         };
       }).gapAnalysis;
 
@@ -1689,9 +1693,11 @@ Follow-up Question: ${followUp}
       const ragQuery = `${frameworkNames} compliance requirements Kenya${focusText}`;
 
       let ragContext: string | undefined;
+      let ragGrounded = false;
       try {
         const ragResults = await ragService.search(ragQuery, { topK: 15, minScore: 0.6 });
         if (ragResults.length > 0) {
+          ragGrounded = true;
           ragContext = ragResults
             .map((r, i) => {
               const label = r.documentTitle || 'Kenyan Regulation';
@@ -1707,9 +1713,20 @@ Follow-up Question: ${followUp}
         });
       }
 
-      // 5. Run AI gap analysis
+      // 5. Sanitize policy text against prompt injection before sending to AI.
+      const { sanitized: safePolicyText, wasModified: injectionDetected } = sanitizePolicyText(policyText);
+      if (injectionDetected) {
+        logger.warn({
+          type: 'gap_analysis_prompt_injection_detected',
+          userId,
+          analysisId: record.id,
+          fileName: params.fileName,
+        });
+      }
+
+      // 6. Run AI gap analysis
       const gapResults = await aiService.performGapAnalysis({
-        policyText,
+        policyText: safePolicyText,
         documentName: params.fileName,
         documentType: ext,
         regulatoryFrameworks: params.regulatoryFrameworks,
@@ -1718,13 +1735,14 @@ Follow-up Question: ${followUp}
         ragContext,
       });
 
-      // 6. Save completed results
+      // 7. Save completed results
       const completed = await gapAnalysisTable.update({
         where: { id: record.id },
         data: {
           results: gapResults as unknown as Record<string, unknown>,
           overallScore: gapResults.overallScore,
           status: 'COMPLETED',
+          ragGrounded,
         },
       });
 
@@ -1746,6 +1764,27 @@ Follow-up Question: ${followUp}
         link: `/startup/gap-analysis/${record.id}`,
       }).catch(() => { /* non-blocking */ });
 
+      // Audit log — fire-and-forget; must never block the primary operation.
+      prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'GAP_ANALYSIS_CREATED',
+          entityType: 'GapAnalysis',
+          entityId: record.id,
+          metadata: {
+            documentName: params.fileName,
+            frameworks: params.regulatoryFrameworks,
+            depth: params.analysisDepth,
+            overallScore: gapResults.overallScore,
+            ragGrounded,
+          },
+          ipAddress: params.ipAddress ?? null,
+          userAgent: params.userAgent ?? null,
+        },
+      }).catch((err: unknown) => {
+        logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId: record.id, error: (err as Error).message });
+      });
+
       return {
         id: completed.id,
         status: completed.status,
@@ -1753,6 +1792,7 @@ Follow-up Question: ${followUp}
         overallScore: completed.overallScore as number | null,
         documentName: completed.documentName,
         createdAt: completed.createdAt,
+        ragGrounded,
       };
     } catch (error: unknown) {
       // Mark as FAILED and propagate
@@ -1831,7 +1871,11 @@ Follow-up Question: ${followUp}
   /**
    * Get a single gap analysis result by ID.
    */
-  async getGapAnalysisResult(userId: string, analysisId: string): Promise<{
+  async getGapAnalysisResult(
+    userId: string,
+    analysisId: string,
+    opts?: { ipAddress?: string; userAgent?: string },
+  ): Promise<{
     id: string;
     documentName: string;
     documentType: string;
@@ -1843,6 +1887,7 @@ Follow-up Question: ${followUp}
     overallScore: number | null;
     status: string;
     errorMessage: string | null;
+    ragGrounded: boolean;
     createdAt: Date;
     updatedAt: Date;
   }> {
@@ -1861,6 +1906,7 @@ Follow-up Question: ${followUp}
           overallScore: number | null;
           status: string;
           errorMessage: string | null;
+          ragGrounded: boolean;
           createdAt: Date;
           updatedAt: Date;
         } | null>;
@@ -1874,6 +1920,21 @@ Follow-up Question: ${followUp}
       if (user?.role !== 'ADMIN') throw new Error('Access denied');
     }
 
+    // Audit log — fire-and-forget; must never block the primary operation.
+    prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'GAP_ANALYSIS_VIEWED',
+        entityType: 'GapAnalysis',
+        entityId: analysisId,
+        metadata: { documentName: analysis.documentName, status: analysis.status },
+        ipAddress: opts?.ipAddress ?? null,
+        userAgent: opts?.userAgent ?? null,
+      },
+    }).catch((err: unknown) => {
+      logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId, error: (err as Error).message });
+    });
+
     return {
       ...analysis,
       results: (analysis.results as GapAnalysisResult) ?? null,
@@ -1883,7 +1944,11 @@ Follow-up Question: ${followUp}
   /**
    * Delete a gap analysis record (and R2 file).
    */
-  async deleteGapAnalysis(userId: string, analysisId: string): Promise<void> {
+  async deleteGapAnalysis(
+    userId: string,
+    analysisId: string,
+    opts?: { ipAddress?: string; userAgent?: string },
+  ): Promise<void> {
     const analysis = await (prisma as unknown as {
       gapAnalysis: {
         findUnique: (args: { where: { id: string }; select: Record<string, boolean> }) => Promise<{ userId: string; documentUrl: string } | null>;
@@ -1899,6 +1964,22 @@ Follow-up Question: ${followUp}
       const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
       if (user?.role !== 'ADMIN') throw new Error('Access denied');
     }
+
+    // Audit log before deletion (entity still exists at this point).
+    // Fire-and-forget; must never block the delete operation.
+    prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'GAP_ANALYSIS_DELETED',
+        entityType: 'GapAnalysis',
+        entityId: analysisId,
+        metadata: { documentUrl: analysis.documentUrl },
+        ipAddress: opts?.ipAddress ?? null,
+        userAgent: opts?.userAgent ?? null,
+      },
+    }).catch((err: unknown) => {
+      logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId, error: (err as Error).message });
+    });
 
     // Delete R2 file if it exists
     if (analysis.documentUrl) {

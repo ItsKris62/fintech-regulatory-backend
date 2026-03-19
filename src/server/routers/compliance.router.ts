@@ -1307,9 +1307,10 @@ export const complianceRouter = router({
    * @rate-limited
    */
   runGapAnalysis: protectedProcedure
-    .use(rateLimited('complianceQuery'))
+    .use(rateLimited('gapAnalysis', 5))
     .use(withPlanContext)
     .use(requirePlanFeature('gapAnalysis'))
+    .use(checkUsageLimit(BillingMetric.GAP_ANALYSES, { deferIncrement: true }))
     .input(
       z.object({
         fileName: z.string().min(1).max(255),
@@ -1347,13 +1348,19 @@ export const complianceRouter = router({
           analysisDepth: input.analysisDepth,
           focusAreas: input.focusAreas,
           organizationId: input.organizationId ?? ctx.user!.organizationId ?? undefined,
+          ipAddress: ctx.req.ip,
+          userAgent: ctx.req.headers['user-agent'] as string | undefined,
         });
+
+        // Commit the usage counter now that the DB record exists (deferIncrement pattern).
+        await ctx.incrementUsage?.();
 
         logger.info({
           type: 'gap_analysis_request_success',
           userId: ctx.user!.id,
           analysisId: result.id,
           overallScore: result.overallScore,
+          ragGrounded: result.ragGrounded,
         });
 
         return result;
@@ -1385,7 +1392,10 @@ export const complianceRouter = router({
       try {
         if (input?.id) {
           // Return specific analysis by ID
-          return await complianceModule.getGapAnalysisResult(ctx.user!.id, input.id);
+          return await complianceModule.getGapAnalysisResult(ctx.user!.id, input.id, {
+            ipAddress: ctx.req.ip,
+            userAgent: ctx.req.headers['user-agent'] as string | undefined,
+          });
         }
 
         // Return list of all analyses for this user
@@ -1428,7 +1438,10 @@ export const complianceRouter = router({
     .input(z.object({ id: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
-        const result = await complianceModule.getGapAnalysisResult(ctx.user!.id, input.id);
+        const result = await complianceModule.getGapAnalysisResult(ctx.user!.id, input.id, {
+          ipAddress: ctx.req.ip,
+          userAgent: ctx.req.headers['user-agent'] as string | undefined,
+        });
 
         logger.info({
           type: 'gap_analysis_result_retrieved',
@@ -1461,7 +1474,10 @@ export const complianceRouter = router({
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       try {
-        await complianceModule.deleteGapAnalysis(ctx.user!.id, input.id);
+        await complianceModule.deleteGapAnalysis(ctx.user!.id, input.id, {
+          ipAddress: ctx.req.ip,
+          userAgent: ctx.req.headers['user-agent'] as string | undefined,
+        });
 
         logger.info({
           type: 'gap_analysis_deleted',

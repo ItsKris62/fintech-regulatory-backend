@@ -32,8 +32,8 @@ export interface PlanEntitlementConfig {
   checklistGenerations: QuotaEntitlement;
   apiAccess: ApiAccessEntitlement;
 
-  // Boolean feature flags
-  gapAnalysis: boolean;
+  // Metered boolean features (QuotaEntitlement: limit=0 → unavailable, -1 → unlimited)
+  gapAnalysis: QuotaEntitlement;
   policyGeneration: boolean;
   customIntegrations: boolean;
   teamCollaboration: boolean;
@@ -76,7 +76,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     complianceQueries:     { limit: 50,  period: 'month' },
     checklistGenerations:  { limit: 1,   period: 'lifetime' }, // 1 lifetime checklist for free tier
     apiAccess:             false,
-    gapAnalysis:           false,
+    gapAnalysis:           { limit: 0,  period: 'month' }, // not available on free tier
     policyGeneration:      false,
     customIntegrations:    false,
     teamCollaboration:     false,
@@ -99,7 +99,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     complianceQueries:     { limit: -1, period: 'month' }, // unlimited
     checklistGenerations:  { limit: 5,  period: 'month' },
     apiAccess:             false,
-    gapAnalysis:           false,
+    gapAnalysis:           { limit: 5,  period: 'month' }, // 5 analyses/month — standard frameworks only
     policyGeneration:      false,
     customIntegrations:    false,
     teamCollaboration:     false,
@@ -122,7 +122,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     complianceQueries:     { limit: -1,    period: 'month' },
     checklistGenerations:  { limit: -1,    period: 'month' },
     apiAccess:             { limit: 10000, period: 'month' },
-    gapAnalysis:           true,
+    gapAnalysis:           { limit: 20,   period: 'month' }, // 20 analyses/month — full framework access
     policyGeneration:      false, // Enterprise only
     customIntegrations:    false, // Enterprise only
     teamCollaboration:     true,
@@ -145,7 +145,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     complianceQueries:     { limit: -1, period: 'month' },
     checklistGenerations:  { limit: -1, period: 'month' },
     apiAccess:             { limit: -1, period: 'month' }, // unlimited
-    gapAnalysis:           true,
+    gapAnalysis:           { limit: -1, period: 'month' }, // unlimited
     policyGeneration:      true,
     customIntegrations:    true,
     teamCollaboration:     true,

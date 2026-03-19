@@ -16,6 +16,7 @@
     "db:seed:prod": "tsx src/scripts/seed.ts",
     "ingest": "tsx src/scripts/ingest-documents.ts",
     "seed:domains": "tsx src/scripts/seed-domain-whitelist.ts",
+    "seed:admin": "tsx src/scripts/seed-admin.ts",
     "cleanup:documents": "tsx src/scripts/cleanup-deleted-documents.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts",
