@@ -28,9 +28,14 @@ import {
 import {
   GapAnalysisParams,
   GapAnalysisResult,
+  RawChunkGapItem,
+  PolicyChunk,
   generateGapAnalysisSystemPrompt,
   generateGapAnalysisUserPrompt,
+  generateChunkAnalysisUserPrompt,
+  generateMergeUserPrompt,
   parseGapAnalysisOutput,
+  parseChunkAnalysisOutput,
 } from './prompts/gap-analysis';
 import { aiConfig } from '@/config/ai.config';
 import { logger } from '@/utils/logger';
@@ -643,6 +648,165 @@ export class AIService {
     });
 
     return gapAnalysis;
+  }
+
+  /**
+   * Perform multi-chunk gap analysis for large policy documents.
+   *
+   * Phase 1 (sequential): each chunk is analysed independently using a
+   * condensed prompt that returns a flat JSON array of raw gap objects.
+   * Phase 2 (merge): all raw gaps are consolidated into a full
+   * GapAnalysisResult by a single merge call.
+   *
+   * Chunks must arrive pre-sanitised (sanitizePolicyText applied by the
+   * caller before chunking).
+   */
+  async performMultiChunkGapAnalysis(params: {
+    chunks: PolicyChunk[];
+    documentName: string;
+    documentType: string;
+    regulatoryFrameworks: string[];
+    analysisDepth: 'quick' | 'standard' | 'deep';
+    focusAreas?: string[];
+    ragContext?: string;
+  }): Promise<{ result: GapAnalysisResult; chunksProcessed: number }> {
+    const startTime = Date.now();
+    const { chunks, ...baseParams } = params;
+    const totalChunks = chunks.length;
+
+    logger.info({
+      type: 'gap_analysis_multi_chunk_started',
+      documentName: params.documentName,
+      frameworks: params.regulatoryFrameworks,
+      totalChunks,
+    });
+
+    const systemPrompt = generateGapAnalysisSystemPrompt();
+    // Chunks only need to identify gaps — keep token budget lean
+    const chunkMaxTokens = 3000;
+    const allRawGaps: RawChunkGapItem[] = [];
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalCost = 0;
+
+    // ── Phase 1: sequential per-chunk analysis ────────────────────────────────
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      logger.info({
+        type: 'gap_analysis_chunk_processing',
+        chunk: i + 1,
+        total: totalChunks,
+        documentName: params.documentName,
+      });
+
+      const chunkPrompt = generateChunkAnalysisUserPrompt(
+        { ...baseParams, chunkText: chunk.text },
+        chunk.index,
+        chunk.total,
+      );
+
+      let chunkGaps: RawChunkGapItem[];
+      try {
+        const chunkResult = await complete(
+          { prompt: chunkPrompt, systemPrompt, maxTokens: chunkMaxTokens, temperature: 0.2 },
+          'policy',
+        );
+        totalInputTokens += chunkResult.inputTokens;
+        totalOutputTokens += chunkResult.outputTokens;
+        totalCost += chunkResult.cost;
+        chunkGaps = parseChunkAnalysisOutput(chunkResult.content, i);
+      } catch (chunkErr: unknown) {
+        // A single failed chunk does not abort the whole analysis — log and skip
+        logger.error({
+          type: 'gap_analysis_chunk_error',
+          chunk: i + 1,
+          total: totalChunks,
+          error: (chunkErr as Error).message,
+        });
+        continue;
+      }
+
+      allRawGaps.push(...chunkGaps);
+      logger.info({
+        type: 'gap_analysis_chunk_complete',
+        chunk: i + 1,
+        total: totalChunks,
+        gapsFound: chunkGaps.length,
+        cumulativeGaps: allRawGaps.length,
+      });
+    }
+
+    // ── Phase 2: merge / consolidate all raw gaps ─────────────────────────────
+    const mergePrompt = generateMergeUserPrompt(allRawGaps, {
+      ...baseParams,
+      chunkCount: totalChunks,
+    });
+
+    const mergeMaxTokens =
+      params.analysisDepth === 'deep' ? 8000 : params.analysisDepth === 'standard' ? 5000 : 3000;
+
+    let mergeCompletionResult;
+    try {
+      mergeCompletionResult = await complete(
+        { prompt: mergePrompt, systemPrompt, maxTokens: mergeMaxTokens, temperature: 0.2 },
+        'policy',
+      );
+    } catch {
+      // Retry once with a stricter JSON-only instruction
+      mergeCompletionResult = await complete(
+        {
+          prompt: mergePrompt + '\n\nIMPORTANT: Return ONLY valid JSON starting with { and ending with }. No other text.',
+          systemPrompt,
+          maxTokens: mergeMaxTokens,
+          temperature: 0.1,
+        },
+        'policy',
+      );
+    }
+
+    totalInputTokens += mergeCompletionResult.inputTokens;
+    totalOutputTokens += mergeCompletionResult.outputTokens;
+    totalCost += mergeCompletionResult.cost;
+
+    let gapAnalysis: GapAnalysisResult;
+    try {
+      gapAnalysis = parseGapAnalysisOutput(mergeCompletionResult.content);
+    } catch (parseErr: unknown) {
+      logger.warn({
+        type: 'gap_analysis_merge_parse_retry',
+        error: (parseErr as Error).message,
+      });
+      const retryResult = await complete(
+        {
+          prompt: mergePrompt + '\n\nIMPORTANT: Return ONLY valid JSON starting with { and ending with }. No other text.',
+          systemPrompt,
+          maxTokens: mergeMaxTokens,
+          temperature: 0.1,
+        },
+        'policy',
+      );
+      totalInputTokens += retryResult.inputTokens;
+      totalOutputTokens += retryResult.outputTokens;
+      totalCost += retryResult.cost;
+      gapAnalysis = parseGapAnalysisOutput(retryResult.content);
+    }
+
+    // Set chunksProcessed in the metadata blob so it flows through to the DB
+    gapAnalysis.metadata.chunksProcessed = totalChunks;
+
+    logger.info({
+      type: 'gap_analysis_multi_chunk_complete',
+      documentName: params.documentName,
+      overallScore: gapAnalysis.overallScore,
+      totalGaps: gapAnalysis.metadata.totalGaps,
+      chunksProcessed: totalChunks,
+      totalInputTokens,
+      totalOutputTokens,
+      estimatedCost: totalCost,
+      durationMs: Date.now() - startTime,
+    });
+
+    return { result: gapAnalysis, chunksProcessed: totalChunks };
   }
 }
 

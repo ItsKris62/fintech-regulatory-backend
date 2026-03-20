@@ -22,6 +22,10 @@ import {
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
 import { getQuota } from '@/utils/entitlements';
+import { prisma } from '@/lib/prisma/client';
+import { gapAnalysisExportService } from '@/services/gap-analysis-export.service';
+import { storageService } from '@/lib/storage/storage.service';
+import { GapAnalysisResultSchema } from '@/lib/ai/prompts/gap-analysis';
 
 /**
  * Compliance Router
@@ -1298,6 +1302,55 @@ export const complianceRouter = router({
   // ══════════════════════════════════════════════════════════════════════════
 
   /**
+   * Return the list of regulatory frameworks available to the current user.
+   *
+   * Each framework carries a `locked` flag: true when the framework's tier
+   * exceeds the user's current subscription plan.  Locked frameworks are
+   * visible (so users understand what they're missing) but the frontend
+   * should prevent them from being selected.
+   *
+   * Tier access ladder: STARTUP < BUSINESS < ENTERPRISE.
+   * REGULATOR users see all frameworks (they can't run analyses anyway).
+   *
+   * @protected
+   */
+  getFrameworks: protectedProcedure
+    .use(withPlanContext)
+    .query(async ({ ctx }) => {
+      const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
+
+      // Map SubscriptionPlan → numeric tier level for comparison
+      const tierLevel: Record<string, number> = {
+        REGULATOR: 3,
+        STARTUP: 1,
+        BUSINESS: 2,
+        ENTERPRISE: 3,
+      };
+      const frameworkTierLevel: Record<string, number> = {
+        STARTUP: 1,
+        BUSINESS: 2,
+        ENTERPRISE: 3,
+      };
+      const userLevel = tierLevel[plan] ?? 0;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const frameworks = await (prisma as any).regulatoryFramework.findMany({
+        where: { isActive: true },
+        orderBy: { sortOrder: 'asc' },
+        select: { slug: true, name: true, category: true, description: true, tier: true },
+      }) as Array<{ slug: string; name: string; category: string; description: string | null; tier: string }>;
+
+      return frameworks.map((fw) => ({
+        slug: fw.slug,
+        name: fw.name,
+        category: fw.category,
+        description: fw.description,
+        tier: fw.tier,
+        locked: userLevel < (frameworkTierLevel[fw.tier] ?? 1),
+      }));
+    }),
+
+  /**
    * Run a full AI+RAG gap analysis on an uploaded policy document.
    * Accepts base64-encoded file content (max 10MB), uploads to R2,
    * extracts text, retrieves regulatory context from Pinecone, and
@@ -1332,6 +1385,39 @@ export const complianceRouter = router({
           });
         }
 
+        // Validate framework slugs against the DB registry and enforce tier access.
+        const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
+        const frameworkTierLevel: Record<string, number> = { STARTUP: 1, BUSINESS: 2, ENTERPRISE: 3 };
+        const tierLevel: Record<string, number> = { REGULATOR: 3, STARTUP: 1, BUSINESS: 2, ENTERPRISE: 3 };
+        const userLevel = tierLevel[plan] ?? 0;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const dbFrameworks = await (prisma as any).regulatoryFramework.findMany({
+          where: { slug: { in: input.regulatoryFrameworks }, isActive: true },
+          select: { slug: true, name: true, tier: true },
+        }) as Array<{ slug: string; name: string; tier: string }>;
+
+        // Reject any slugs not found in the DB
+        const foundSlugs = new Set(dbFrameworks.map((f) => f.slug));
+        const invalidSlugs = input.regulatoryFrameworks.filter((s) => !foundSlugs.has(s));
+        if (invalidSlugs.length > 0) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Invalid framework slug(s): ${invalidSlugs.join(', ')}`,
+          });
+        }
+
+        // Reject slugs the user's plan does not have access to
+        const lockedFrameworks = dbFrameworks.filter(
+          (f) => userLevel < (frameworkTierLevel[f.tier] ?? 1)
+        );
+        if (lockedFrameworks.length > 0) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: `Your plan does not include access to: ${lockedFrameworks.map((f) => f.name).join(', ')}. Please upgrade.`,
+          });
+        }
+
         logger.info({
           type: 'gap_analysis_request',
           userId: ctx.user!.id,
@@ -1340,11 +1426,14 @@ export const complianceRouter = router({
           depth: input.analysisDepth,
         });
 
+        // Map validated slugs to full framework names for AI/RAG prompt quality.
+        const frameworkNames = dbFrameworks.map((f) => f.name);
+
         const result = await complianceModule.runGapAnalysis(ctx.user!.id, {
           fileName: input.fileName,
           fileType: input.fileType,
           fileContent: input.fileContent,
-          regulatoryFrameworks: input.regulatoryFrameworks,
+          regulatoryFrameworks: frameworkNames,
           analysisDepth: input.analysisDepth,
           focusAreas: input.focusAreas,
           organizationId: input.organizationId ?? ctx.user!.organizationId ?? undefined,
@@ -1882,5 +1971,147 @@ export const complianceRouter = router({
           pages: Math.ceil(total / input.limit),
         },
       };
+    }),
+
+  /**
+   * Log a client-side PDF export to the audit log.
+   * Called fire-and-forget from the frontend immediately after the print window opens.
+   *
+   * @protected
+   */
+  logExport: protectedProcedure
+    .input(z.object({
+      analysisId: z.string().min(1),
+      format: z.enum(['pdf', 'docx']),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+
+      // Fire-and-forget audit log — never block the response
+      prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'GAP_ANALYSIS_EXPORTED',
+          entityType: 'GapAnalysis',
+          entityId: input.analysisId,
+          metadata: { format: input.format },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: (ctx.req.headers['user-agent'] as string | undefined) ?? null,
+        },
+      }).catch((err: unknown) => {
+        logger.error({ type: 'gap_analysis_export_audit_log_failed', userId, analysisId: input.analysisId, error: (err as Error).message });
+      });
+
+      logger.info({ type: 'gap_analysis_pdf_exported', userId, analysisId: input.analysisId, format: input.format });
+
+      return { success: true };
+    }),
+
+  /**
+   * Generate and upload a DOCX report for a completed gap analysis.
+   * Returns a signed R2 download URL with 15-minute expiry.
+   *
+   * Gated: BUSINESS and ENTERPRISE plans only (requirePlanFeature('gapAnalysis') already
+   * restricts to these tiers via the entitlements config).
+   *
+   * @protected
+   */
+  exportDocx: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('gapAnalysis'))
+    .input(z.object({ analysisId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+
+      // 1. Fetch the analysis record with user relation
+      const analysis = await prisma.gapAnalysis.findUnique({
+        where: { id: input.analysisId },
+        include: {
+          user: { select: { fullName: true, email: true } },
+        },
+      });
+
+      if (!analysis) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
+      }
+
+      // 2. Ownership check (or ADMIN role)
+      if (analysis.userId !== userId && ctx.user!.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this analysis' });
+      }
+
+      // 3. Must be completed
+      if (analysis.status !== 'COMPLETED') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Cannot export a ${analysis.status.toLowerCase()} analysis. Wait for it to complete.`,
+        });
+      }
+
+      // 4. Parse and validate the results JSON
+      const parsed = GapAnalysisResultSchema.safeParse(analysis.results);
+      if (!parsed.success) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Analysis results are malformed and cannot be exported' });
+      }
+
+      // 5. Build DOCX buffer — fetch org name separately (GapAnalysis has no direct org relation)
+      const orgName = analysis.organizationId
+        ? (await prisma.organization.findUnique({ where: { id: analysis.organizationId }, select: { name: true } }))?.name
+        : undefined;
+      const userName = analysis.user?.fullName;
+
+      const docxBuffer = await gapAnalysisExportService.generateGapAnalysisDocx({
+        result: parsed.data,
+        analysisId: input.analysisId,
+        documentName: analysis.documentName,
+        regulatoryFrameworks: Array.isArray(analysis.regulatoryFrameworks)
+          ? (analysis.regulatoryFrameworks as string[])
+          : [],
+        analysisDepth: analysis.analysisDepth,
+        ragGrounded: analysis.ragGrounded,
+        chunksProcessed: (analysis as any).chunksProcessed ?? 0,
+        createdAt: analysis.createdAt,
+        organizationName: orgName ?? undefined,
+        userName: userName ?? undefined,
+      });
+
+      // 6. Build a sanitised filename
+      const orgSafe = gapAnalysisExportService.sanitiseFilename(orgName ?? userName ?? 'Organisation');
+      const dateSafe = analysis.createdAt.toISOString().slice(0, 10);
+      const filename = `SheriaBot_Gap_Analysis_${orgSafe}_${dateSafe}.docx`;
+
+      // 7. Upload to R2
+      const uploadResult = await storageService.uploadGapAnalysisExport(
+        docxBuffer,
+        filename,
+        input.analysisId,
+        userId,
+      );
+
+      // 8. Generate signed URL with 15-minute expiry (900 seconds)
+      const downloadUrl = await storageService.getDownloadUrl(uploadResult.key, 900, false, filename);
+
+      const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
+
+      // 9. Write audit log (fire-and-forget)
+      prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'GAP_ANALYSIS_EXPORTED',
+          entityType: 'GapAnalysis',
+          entityId: input.analysisId,
+          metadata: { format: 'docx', filename, r2Key: uploadResult.key },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: (ctx.req.headers['user-agent'] as string | undefined) ?? null,
+        },
+      }).catch((err: unknown) => {
+        logger.error({ type: 'gap_analysis_export_audit_log_failed', userId, analysisId: input.analysisId, error: (err as Error).message });
+      });
+
+      logger.info({ type: 'gap_analysis_docx_exported', userId, analysisId: input.analysisId, filename, r2Key: uploadResult.key });
+
+      // Note: reportUrl and reportGeneratedAt DB update is wired after schema migration (Task 2.6)
+
+      return { downloadUrl, expiresAt, fileName: filename };
     }),
 });

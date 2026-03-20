@@ -533,6 +533,52 @@ export class StorageService {
       return 0;
     }
   }
+
+  /**
+   * Upload a generated gap analysis DOCX export to R2.
+   * Skips file-type validation since the buffer is generated server-side.
+   * @param fileBuffer DOCX buffer
+   * @param filename   Desired filename (e.g. SheriaBot_Gap_Analysis_Acme_2026-03-20.docx)
+   * @param analysisId GapAnalysis record ID — used as the R2 path segment
+   * @param userId     Uploader user ID — stored as metadata
+   */
+  async uploadGapAnalysisExport(
+    fileBuffer: Buffer,
+    filename: string,
+    analysisId: string,
+    userId: string,
+  ): Promise<FileUploadResult> {
+    const key = `gap-analysis-exports/${analysisId}/${filename}`;
+    const contentType =
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    logger.info({ type: 'gap_analysis_export_upload_started', key, size: fileBuffer.length });
+
+    try {
+      const fileMetadata = await storageClient.uploadBuffer(key, fileBuffer, {
+        contentType,
+        metadata: { analysisId, userId, exportedAt: new Date().toISOString() },
+      });
+
+      const url = getPublicUrl(key);
+
+      logger.info({ type: 'gap_analysis_export_upload_success', key });
+
+      return {
+        key,
+        url,
+        size: fileMetadata.size,
+        contentType: fileMetadata.contentType,
+      };
+    } catch (error: unknown) {
+      logger.error({
+        type: 'gap_analysis_export_upload_error',
+        key,
+        error: (error as Error).message,
+      });
+      throw error;
+    }
+  }
 }
 
 /**

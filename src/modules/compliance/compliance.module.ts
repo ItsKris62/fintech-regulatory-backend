@@ -25,7 +25,7 @@ import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
 import type { GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
 import type { GapAnalysisResult } from '@/lib/ai/prompts/gap-analysis';
-import { sanitizePolicyText } from '@/lib/ai/prompts/gap-analysis';
+import { sanitizePolicyText, chunkPolicyText } from '@/lib/ai/prompts/gap-analysis';
 // pdf-parse and mammoth are CommonJS modules
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
@@ -1604,6 +1604,7 @@ Follow-up Question: ${followUp}
     documentName: string;
     createdAt: Date;
     ragGrounded: boolean;
+    chunksProcessed: number;
   }> {
     logger.info({
       type: 'gap_analysis_run_started',
@@ -1662,7 +1663,7 @@ Follow-up Question: ${followUp}
       // Update document URL
       const gapAnalysisTable = (prisma as unknown as {
         gapAnalysis: {
-          update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date; ragGrounded: boolean }>;
+          update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date; ragGrounded: boolean; chunksProcessed: number }>;
         };
       }).gapAnalysis;
 
@@ -1687,30 +1688,77 @@ Follow-up Question: ${followUp}
         throw new Error('Could not extract meaningful text from the document. Please ensure it is not encrypted or image-only.');
       }
 
-      // 4. Build RAG query from frameworks + focus areas
-      const frameworkNames = params.regulatoryFrameworks.join(', ');
-      const focusText = params.focusAreas?.length ? ` focusing on ${params.focusAreas.join(', ')}` : '';
-      const ragQuery = `${frameworkNames} compliance requirements Kenya${focusText}`;
+      // 4. Per-framework parallel RAG retrieval.
+      // Each framework gets its own targeted query (topK: 8) so minority frameworks
+      // are not crowded out by dominant ones in a single combined query.
+      const ragPromises = params.regulatoryFrameworks.map((framework: string) =>
+        ragService
+          .search(`${framework} compliance requirements Kenya fintech`, { topK: 8, minScore: 0.6 })
+          .catch((err: unknown) => {
+            logger.warn({
+              type: 'gap_analysis_rag_framework_failed',
+              userId,
+              framework,
+              error: (err as Error).message,
+            });
+            return [] as Awaited<ReturnType<typeof ragService.search>>;
+          })
+      );
 
-      let ragContext: string | undefined;
-      let ragGrounded = false;
-      try {
-        const ragResults = await ragService.search(ragQuery, { topK: 15, minScore: 0.6 });
-        if (ragResults.length > 0) {
-          ragGrounded = true;
-          ragContext = ragResults
-            .map((r, i) => {
-              const label = r.documentTitle || 'Kenyan Regulation';
-              return `[REGULATORY CONTEXT ${i + 1} — ${label}]\n${r.chunkText}`;
-            })
-            .join('\n\n---\n\n');
+      const ragResultsByFramework = await Promise.all(ragPromises);
+
+      // Deduplicate chunks that appear for multiple frameworks (same documentId)
+      const seenDocumentIds = new Set<string>();
+      const labeledResults: Array<{ text: string; framework: string }> = [];
+      let groundedFrameworkCount = 0;
+
+      for (let fIdx = 0; fIdx < params.regulatoryFrameworks.length; fIdx++) {
+        const framework = params.regulatoryFrameworks[fIdx];
+        const results = ragResultsByFramework[fIdx] ?? [];
+        if (results.length > 0) groundedFrameworkCount++;
+        for (const r of results) {
+          if (!seenDocumentIds.has(r.documentId)) {
+            seenDocumentIds.add(r.documentId);
+            labeledResults.push({ text: r.chunkText, framework });
+          }
         }
-      } catch (ragErr: unknown) {
-        logger.warn({
-          type: 'gap_analysis_rag_search_failed',
-          userId,
-          error: (ragErr as Error).message,
-        });
+      }
+
+      // ragGrounded = true when at least 50% of selected frameworks returned results
+      const ragGrounded =
+        params.regulatoryFrameworks.length === 0
+          ? false
+          : groundedFrameworkCount >= Math.ceil(params.regulatoryFrameworks.length / 2);
+
+      const groundedFrameworks = params.regulatoryFrameworks.filter(
+        (_, i) => (ragResultsByFramework[i]?.length ?? 0) > 0
+      );
+      const ungroundedFrameworks = params.regulatoryFrameworks.filter(
+        (_, i) => (ragResultsByFramework[i]?.length ?? 0) === 0
+      );
+      logger.info({
+        type: 'gap_analysis_rag_grounding_summary',
+        userId,
+        groundedFrameworks,
+        ungroundedFrameworks,
+        ragGrounded,
+      });
+
+      // Build labeled context string grouped by framework
+      let ragContext: string | undefined;
+      if (labeledResults.length > 0) {
+        const grouped: Record<string, string[]> = {};
+        for (const r of labeledResults) {
+          if (!grouped[r.framework]) grouped[r.framework] = [];
+          grouped[r.framework].push(r.text);
+        }
+        ragContext = Object.entries(grouped)
+          .map(([fw, texts]) =>
+            texts
+              .map((t, i) => `[REGULATORY CONTEXT — ${fw} (${i + 1} of ${texts.length})]\n${t}`)
+              .join('\n\n---\n\n')
+          )
+          .join('\n\n---\n\n');
       }
 
       // 5. Sanitize policy text against prompt injection before sending to AI.
@@ -1724,16 +1772,48 @@ Follow-up Question: ${followUp}
         });
       }
 
-      // 6. Run AI gap analysis
-      const gapResults = await aiService.performGapAnalysis({
-        policyText: safePolicyText,
-        documentName: params.fileName,
-        documentType: ext,
-        regulatoryFrameworks: params.regulatoryFrameworks,
-        analysisDepth: params.analysisDepth,
-        focusAreas: params.focusAreas,
-        ragContext,
-      });
+      // 6. Run AI gap analysis — single-pass for short documents, multi-chunk for long ones.
+      // "quick" always uses single-pass (speed over coverage for a quick scan).
+      // "standard": chunk if text exceeds 8,000 chars (~2 pages).
+      // "deep":     chunk if text exceeds 15,000 chars (~4 pages).
+      const SINGLE_PASS_THRESHOLD = params.analysisDepth === 'deep' ? 15000 : 8000;
+      const useMultiChunk =
+        params.analysisDepth !== 'quick' && safePolicyText.length > SINGLE_PASS_THRESHOLD;
+
+      let gapResults: GapAnalysisResult;
+      let chunksProcessed = 1;
+
+      if (!useMultiChunk) {
+        gapResults = await aiService.performGapAnalysis({
+          policyText: safePolicyText,
+          documentName: params.fileName,
+          documentType: ext,
+          regulatoryFrameworks: params.regulatoryFrameworks,
+          analysisDepth: params.analysisDepth,
+          focusAreas: params.focusAreas,
+          ragContext,
+        });
+      } else {
+        const chunks = chunkPolicyText(safePolicyText);
+        logger.info({
+          type: 'gap_analysis_chunking',
+          userId,
+          analysisId: record.id,
+          textLength: safePolicyText.length,
+          totalChunks: chunks.length,
+        });
+        const multiResult = await aiService.performMultiChunkGapAnalysis({
+          chunks,
+          documentName: params.fileName,
+          documentType: ext,
+          regulatoryFrameworks: params.regulatoryFrameworks,
+          analysisDepth: params.analysisDepth,
+          focusAreas: params.focusAreas,
+          ragContext,
+        });
+        gapResults = multiResult.result;
+        chunksProcessed = multiResult.chunksProcessed;
+      }
 
       // 7. Save completed results
       const completed = await gapAnalysisTable.update({
@@ -1743,6 +1823,7 @@ Follow-up Question: ${followUp}
           overallScore: gapResults.overallScore,
           status: 'COMPLETED',
           ragGrounded,
+          chunksProcessed,
         },
       });
 
@@ -1752,6 +1833,7 @@ Follow-up Question: ${followUp}
         analysisId: record.id,
         overallScore: gapResults.overallScore,
         totalGaps: gapResults.metadata.totalGaps,
+        chunksProcessed,
         durationMs: Date.now() - startTime,
       });
 
@@ -1777,6 +1859,7 @@ Follow-up Question: ${followUp}
             depth: params.analysisDepth,
             overallScore: gapResults.overallScore,
             ragGrounded,
+            chunksProcessed,
           },
           ipAddress: params.ipAddress ?? null,
           userAgent: params.userAgent ?? null,
@@ -1793,6 +1876,7 @@ Follow-up Question: ${followUp}
         documentName: completed.documentName,
         createdAt: completed.createdAt,
         ragGrounded,
+        chunksProcessed,
       };
     } catch (error: unknown) {
       // Mark as FAILED and propagate
@@ -1888,6 +1972,7 @@ Follow-up Question: ${followUp}
     status: string;
     errorMessage: string | null;
     ragGrounded: boolean;
+    chunksProcessed: number;
     createdAt: Date;
     updatedAt: Date;
   }> {
@@ -1907,6 +1992,7 @@ Follow-up Question: ${followUp}
           status: string;
           errorMessage: string | null;
           ragGrounded: boolean;
+          chunksProcessed: number;
           createdAt: Date;
           updatedAt: Date;
         } | null>;
