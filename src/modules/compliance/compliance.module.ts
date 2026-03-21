@@ -69,6 +69,297 @@ import {
 
 const { REDIS_KEYS, MAX_QUERIES_PER_HOUR, MAX_QUICK_CHECKS_PER_HOUR, QUERY_CACHE_TTL } = COMPLIANCE_CONSTANTS;
 
+// ─── Gap Analysis Async Helpers ───────────────────────────────────────────────
+
+/** Minimal Prisma cast type for GapAnalysis write operations. */
+type GapAnalysisWriteTable = {
+  update: (a: { where: { id: string }; data: Record<string, unknown> }) => Promise<void>;
+  updateMany: (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
+};
+
+/**
+ * Update status + progress on a GapAnalysis record.
+ * Never throws — errors are logged and swallowed so callers stay non-fatal.
+ */
+async function updateAnalysisStatus(
+  analysisId: string,
+  update: { status: string; progress: number; errorMessage?: string },
+): Promise<void> {
+  try {
+    await (prisma as unknown as { gapAnalysis: GapAnalysisWriteTable }).gapAnalysis.update({
+      where: { id: analysisId },
+      data: {
+        status: update.status,
+        progress: update.progress,
+        ...(update.errorMessage !== undefined ? { errorMessage: update.errorMessage } : {}),
+      },
+    });
+    logger.info({ type: 'gap_analysis_status_updated', analysisId, ...update });
+  } catch (err) {
+    logger.error({ type: 'gap_analysis_status_update_failed', analysisId, error: (err as Error).message });
+  }
+}
+
+/**
+ * Mark stuck analyses (non-terminal status, older than maxAgeMinutes) as FAILED.
+ * Called lazily at the start of runGapAnalysis and getUserGapAnalyses. Never throws.
+ */
+async function recoverStaleJobs(maxAgeMinutes = 20): Promise<void> {
+  const staleThreshold = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
+  try {
+    const updated = await (prisma as unknown as { gapAnalysis: GapAnalysisWriteTable }).gapAnalysis.updateMany({
+      where: {
+        status: { in: ['UPLOADING', 'QUEUED', 'EXTRACTING', 'ANALYZING', 'COMPLETING'] },
+        updatedAt: { lt: staleThreshold },
+      },
+      data: {
+        status: 'FAILED',
+        errorMessage: `Analysis timed out after ${maxAgeMinutes} minutes. This may be due to a large document or temporary service issue. Please try again.`,
+      },
+    });
+    if (updated.count > 0) {
+      logger.warn({ type: 'gap_analysis_stale_jobs_recovered', count: updated.count, maxAgeMinutes });
+    }
+  } catch (err) {
+    logger.error({ type: 'gap_analysis_stale_job_recovery_failed', error: (err as Error).message });
+  }
+}
+
+interface GapAnalysisPipelineParams {
+  analysisId: string;
+  userId: string;
+  fileName: string;
+  fileContent: string;  // base64-encoded
+  fileType: string;     // extension without dot: pdf | docx | doc | txt
+  regulatoryFrameworks: string[];
+  analysisDepth: 'quick' | 'standard' | 'deep';
+  focusAreas?: string[];
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+/**
+ * Background gap analysis pipeline.
+ * Runs after the HTTP response is sent. Manages its own lifecycle via DB status
+ * updates. The top-level try/catch guarantees FAILED is set on any unhandled error.
+ */
+async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Promise<void> {
+  const {
+    analysisId, userId, fileName, fileContent, fileType,
+    regulatoryFrameworks, analysisDepth, focusAreas, ipAddress, userAgent,
+  } = params;
+
+  const startTime = Date.now();
+  let currentProgress = 5;
+
+  try {
+    // ── EXTRACTING (progress: 10) ─────────────────────────────────────────
+    await updateAnalysisStatus(analysisId, { status: 'EXTRACTING', progress: 10 });
+    currentProgress = 10;
+
+    const fileBuffer = Buffer.from(fileContent, 'base64');
+    const ext = fileType.toLowerCase().replace('.', '');
+
+    let policyText: string;
+    if (ext === 'pdf') {
+      const r = await pdfParse(fileBuffer);
+      policyText = r.text;
+    } else if (ext === 'docx' || ext === 'doc') {
+      const r = await mammoth.extractRawText({ buffer: fileBuffer });
+      policyText = r.value;
+    } else {
+      policyText = fileBuffer.toString('utf8');
+    }
+
+    if (!policyText || policyText.trim().length < 50) {
+      throw new Error('Could not extract meaningful text from the document. Please ensure it is not encrypted or image-only.');
+    }
+
+    // ── RAG RETRIEVAL (progress: 15 \u2192 30) ──────────────────────────────────
+    await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 15 });
+    currentProgress = 15;
+
+    const ragPromises = regulatoryFrameworks.map((framework) =>
+      ragService
+        .search(`${framework} compliance requirements Kenya fintech`, { topK: 8, minScore: 0.6 })
+        .catch((err: unknown) => {
+          logger.warn({ type: 'gap_analysis_rag_framework_failed', userId, analysisId, framework, error: (err as Error).message });
+          return [] as Awaited<ReturnType<typeof ragService.search>>;
+        })
+    );
+
+    const ragResultsByFramework = await Promise.all(ragPromises);
+
+    const seenDocumentIds = new Set<string>();
+    const labeledResults: Array<{ text: string; framework: string }> = [];
+    let groundedFrameworkCount = 0;
+
+    for (let fIdx = 0; fIdx < regulatoryFrameworks.length; fIdx++) {
+      const framework = regulatoryFrameworks[fIdx];
+      const results = ragResultsByFramework[fIdx] ?? [];
+      if (results.length > 0) groundedFrameworkCount++;
+      for (const r of results) {
+        if (!seenDocumentIds.has(r.documentId)) {
+          seenDocumentIds.add(r.documentId);
+          labeledResults.push({ text: r.chunkText, framework });
+        }
+      }
+    }
+
+    const ragGrounded =
+      regulatoryFrameworks.length === 0
+        ? false
+        : groundedFrameworkCount >= Math.ceil(regulatoryFrameworks.length / 2);
+
+    let ragContext: string | undefined;
+    if (labeledResults.length > 0) {
+      const grouped: Record<string, string[]> = {};
+      for (const r of labeledResults) {
+        if (!grouped[r.framework]) grouped[r.framework] = [];
+        grouped[r.framework].push(r.text);
+      }
+      ragContext = Object.entries(grouped)
+        .map(([fw, texts]) =>
+          texts
+            .map((t, i) => `[REGULATORY CONTEXT \u2014 ${fw} (${i + 1} of ${texts.length})]\n${t}`)
+            .join('\n\n---\n\n')
+        )
+        .join('\n\n---\n\n');
+    }
+
+    logger.info({ type: 'gap_analysis_rag_grounding_summary', userId, analysisId, ragGrounded, groundedFrameworkCount, totalFrameworks: regulatoryFrameworks.length });
+
+    await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 30 });
+    currentProgress = 30;
+
+    // ── SANITIZE ──────────────────────────────────────────────────────────
+    const { sanitized: safePolicyText, wasModified: injectionDetected } = sanitizePolicyText(policyText);
+    if (injectionDetected) {
+      logger.warn({ type: 'gap_analysis_prompt_injection_detected', userId, analysisId, fileName });
+    }
+
+    // ── AI ANALYSIS (progress: 30 \u2192 85) ────────────────────────────────────
+    const SINGLE_PASS_THRESHOLD = analysisDepth === 'deep' ? 15000 : 8000;
+    const useMultiChunk = analysisDepth !== 'quick' && safePolicyText.length > SINGLE_PASS_THRESHOLD;
+
+    let gapResults: GapAnalysisResult;
+    let chunksProcessed = 1;
+
+    if (!useMultiChunk) {
+      gapResults = await aiService.performGapAnalysis({
+        policyText: safePolicyText,
+        documentName: fileName,
+        documentType: ext,
+        regulatoryFrameworks,
+        analysisDepth,
+        focusAreas,
+        ragContext,
+      });
+      await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 80 });
+      currentProgress = 80;
+    } else {
+      const chunks = chunkPolicyText(safePolicyText);
+      logger.info({ type: 'gap_analysis_chunking', userId, analysisId, textLength: safePolicyText.length, totalChunks: chunks.length });
+      const multiResult = await aiService.performMultiChunkGapAnalysis({
+        chunks,
+        documentName: fileName,
+        documentType: ext,
+        regulatoryFrameworks,
+        analysisDepth,
+        focusAreas,
+        ragContext,
+      });
+      gapResults = multiResult.result;
+      chunksProcessed = multiResult.chunksProcessed;
+      // Attach token cost into metadata for storage + audit
+      gapResults.metadata.tokenCost = {
+        inputTokens: multiResult.totalInputTokens,
+        outputTokens: multiResult.totalOutputTokens,
+        estimatedCostUsd: multiResult.totalCost,
+      };
+      await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 85 });
+      currentProgress = 85;
+    }
+
+    // ── COMPLETING (progress: 90) ────────────────────────────────────────
+    await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 90 });
+    currentProgress = 90;
+
+    await (prisma as unknown as { gapAnalysis: GapAnalysisWriteTable }).gapAnalysis.update({
+      where: { id: analysisId },
+      data: {
+        results: gapResults as unknown as Record<string, unknown>,
+        overallScore: gapResults.overallScore,
+        status: 'COMPLETED',
+        progress: 100,
+        ragGrounded,
+        chunksProcessed,
+      },
+    });
+
+    logger.info({
+      type: 'gap_analysis_pipeline_complete',
+      userId,
+      analysisId,
+      overallScore: gapResults.overallScore,
+      totalGaps: gapResults.metadata.totalGaps,
+      chunksProcessed,
+      durationMs: Date.now() - startTime,
+    });
+
+    // Invalidate list cache so the completed status is visible on next poll
+    try {
+      await redis.del(`cache:gap-analysis:list:${userId}`);
+    } catch { /* non-fatal */ }
+
+    // ── POST-COMPLETION: notifications + audit log ────────────────────────
+    notificationModule.createCategorizedNotification({
+      userId,
+      type: 'GAP_ANALYSIS_COMPLETED',
+      category: 'COMPLIANCE',
+      title: 'Gap Analysis Complete',
+      message: `Analysis of "${fileName}" complete. Score: ${gapResults.overallScore}%. Found ${gapResults.metadata.totalGaps} gaps.`,
+      link: `/startup/gap-analysis/${analysisId}`,
+    }).catch(() => { /* non-blocking */ });
+
+    prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'GAP_ANALYSIS_CREATED',
+        entityType: 'GapAnalysis',
+        entityId: analysisId,
+        metadata: {
+          documentName: fileName,
+          frameworks: regulatoryFrameworks,
+          depth: analysisDepth,
+          overallScore: gapResults.overallScore,
+          ragGrounded,
+          chunksProcessed,
+          tokenCost: gapResults.metadata.tokenCost ?? null,
+        },
+        ipAddress: ipAddress ?? null,
+        userAgent: userAgent ?? null,
+      },
+    }).catch((err: unknown) => {
+      logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId, error: (err as Error).message });
+    });
+  } catch (err) {
+    logger.error({
+      type: 'gap_analysis_pipeline_failed',
+      userId,
+      analysisId,
+      durationMs: Date.now() - startTime,
+      error: (err as Error).message,
+    });
+
+    const errorMessage = err instanceof Error
+      ? `Analysis failed: ${err.message}`
+      : 'Analysis failed due to an unexpected error. Please try again.';
+
+    await updateAnalysisStatus(analysisId, { status: 'FAILED', progress: currentProgress, errorMessage });
+  }
+}
+
 /**
  * Compliance Module Class
  * Central orchestrator for all compliance-related business logic
@@ -1553,35 +1844,16 @@ Follow-up Question: ${followUp}
   // GAP ANALYSIS OPERATIONS
   // ==========================================================================
 
-  /**
-   * Extract plain text from a file buffer based on its type.
-   */
-  private async extractTextFromFile(
-    fileBuffer: Buffer,
-    fileType: string
-  ): Promise<string> {
-    const ext = fileType.toLowerCase().replace('.', '');
-
-    if (ext === 'pdf') {
-      const result = await pdfParse(fileBuffer);
-      return result.text;
-    }
-
-    if (ext === 'docx' || ext === 'doc') {
-      const result = await mammoth.extractRawText({ buffer: fileBuffer });
-      return result.value;
-    }
-
-    if (ext === 'txt') {
-      return fileBuffer.toString('utf-8');
-    }
-
-    throw new Error(`Unsupported file type: ${ext}. Supported types: pdf, docx, txt`);
-  }
 
   /**
-   * Run a full AI+RAG gap analysis on an uploaded policy document.
-   * Handles: upload to R2, text extraction, RAG retrieval, AI analysis, DB save.
+   * Run a gap analysis — Part A (synchronous, within the HTTP request).
+   *
+   * Validates inputs, creates the DB record, uploads the file to R2, then
+   * fires the background pipeline (Part B) as a non-blocking Promise and
+   * returns immediately with { id, status: 'QUEUED', progress: 5 }.
+   *
+   * The heavy lifting (text extraction, RAG, AI analysis, DB save) happens in
+   * executeGapAnalysisPipeline() which runs after the HTTP response is sent.
    */
   async runGapAnalysis(
     userId: string,
@@ -1596,16 +1868,7 @@ Follow-up Question: ${followUp}
       ipAddress?: string;
       userAgent?: string;
     }
-  ): Promise<{
-    id: string;
-    status: string;
-    results: GapAnalysisResult | null;
-    overallScore: number | null;
-    documentName: string;
-    createdAt: Date;
-    ragGrounded: boolean;
-    chunksProcessed: number;
-  }> {
+  ): Promise<{ id: string; status: string; progress: number }> {
     logger.info({
       type: 'gap_analysis_run_started',
       userId,
@@ -1614,12 +1877,9 @@ Follow-up Question: ${followUp}
       analysisDepth: params.analysisDepth,
     });
 
-    const startTime = Date.now();
-
     // Validate file size (base64 → actual size)
     const estimatedBytes = Math.round((params.fileContent.length * 3) / 4);
-    const maxBytes = 10 * 1024 * 1024; // 10MB
-    if (estimatedBytes > maxBytes) {
+    if (estimatedBytes > 10 * 1024 * 1024) {
       throw new Error(`File too large. Maximum size is 10MB (estimated: ${(estimatedBytes / 1024 / 1024).toFixed(1)}MB)`);
     }
 
@@ -1630,11 +1890,15 @@ Follow-up Question: ${followUp}
       throw new Error(`Unsupported file type .${ext}. Allowed: ${allowedTypes.join(', ')}`);
     }
 
-    // 1. Create placeholder record with UPLOADING status
+    // Trigger stale job recovery lazily (non-blocking — does not delay this request)
+    void recoverStaleJobs().catch((err: unknown) => {
+      logger.error({ type: 'gap_analysis_stale_job_recovery_failed', error: (err as Error).message });
+    });
+
+    // Create placeholder record (UPLOADING, progress: 0)
     const record = await (prisma as unknown as {
       gapAnalysis: {
-        create: (args: { data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date }>;
-        update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date }>;
+        create: (args: { data: Record<string, unknown> }) => Promise<{ id: string }>;
       };
     }).gapAnalysis.create({
       data: {
@@ -1647,11 +1911,17 @@ Follow-up Question: ${followUp}
         analysisDepth: params.analysisDepth,
         focusAreas: params.focusAreas ?? [],
         status: 'UPLOADING',
+        progress: 0,
       },
     });
 
+    // Invalidate list cache so the new record appears immediately
     try {
-      // 2. Upload to R2
+      await redis.del(`cache:gap-analysis:list:${userId}`);
+    } catch { /* non-fatal */ }
+
+    try {
+      // Upload file to R2
       const fileBuffer = Buffer.from(params.fileContent, 'base64');
       const uploadResult = await storageService.uploadDocument(
         fileBuffer,
@@ -1660,253 +1930,58 @@ Follow-up Question: ${followUp}
         { purpose: 'gap_analysis', analysisId: record.id }
       );
 
-      // Update document URL
-      const gapAnalysisTable = (prisma as unknown as {
-        gapAnalysis: {
-          update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<{ id: string; status: string; results: unknown; overallScore: unknown; documentName: string; createdAt: Date; ragGrounded: boolean; chunksProcessed: number }>;
-        };
-      }).gapAnalysis;
-
-      await gapAnalysisTable.update({
+      // Update documentUrl + mark as QUEUED (progress: 5)
+      await (prisma as unknown as { gapAnalysis: GapAnalysisWriteTable }).gapAnalysis.update({
         where: { id: record.id },
-        data: { documentUrl: uploadResult.key, status: 'ANALYZING' },
+        data: { documentUrl: uploadResult.key, status: 'QUEUED', progress: 5 },
       });
 
+      // Notify user that analysis has started (fire-and-forget)
       notificationModule.createCategorizedNotification({
         userId,
         type: 'GAP_ANALYSIS_STARTED',
         category: 'COMPLIANCE',
         title: 'Gap Analysis In Progress',
-        message: `Analyzing "${params.fileName}" for compliance gaps. This may take a minute.`,
+        message: `Analysing "${params.fileName}" for compliance gaps. This may take a few minutes.`,
         link: `/startup/gap-analysis/${record.id}`,
       }).catch(() => { /* non-blocking */ });
 
-      // 3. Extract text from document
-      const policyText = await this.extractTextFromFile(fileBuffer, ext);
-
-      if (!policyText || policyText.trim().length < 50) {
-        throw new Error('Could not extract meaningful text from the document. Please ensure it is not encrypted or image-only.');
-      }
-
-      // 4. Per-framework parallel RAG retrieval.
-      // Each framework gets its own targeted query (topK: 8) so minority frameworks
-      // are not crowded out by dominant ones in a single combined query.
-      const ragPromises = params.regulatoryFrameworks.map((framework: string) =>
-        ragService
-          .search(`${framework} compliance requirements Kenya fintech`, { topK: 8, minScore: 0.6 })
-          .catch((err: unknown) => {
-            logger.warn({
-              type: 'gap_analysis_rag_framework_failed',
-              userId,
-              framework,
-              error: (err as Error).message,
-            });
-            return [] as Awaited<ReturnType<typeof ragService.search>>;
-          })
-      );
-
-      const ragResultsByFramework = await Promise.all(ragPromises);
-
-      // Deduplicate chunks that appear for multiple frameworks (same documentId)
-      const seenDocumentIds = new Set<string>();
-      const labeledResults: Array<{ text: string; framework: string }> = [];
-      let groundedFrameworkCount = 0;
-
-      for (let fIdx = 0; fIdx < params.regulatoryFrameworks.length; fIdx++) {
-        const framework = params.regulatoryFrameworks[fIdx];
-        const results = ragResultsByFramework[fIdx] ?? [];
-        if (results.length > 0) groundedFrameworkCount++;
-        for (const r of results) {
-          if (!seenDocumentIds.has(r.documentId)) {
-            seenDocumentIds.add(r.documentId);
-            labeledResults.push({ text: r.chunkText, framework });
-          }
-        }
-      }
-
-      // ragGrounded = true when at least 50% of selected frameworks returned results
-      const ragGrounded =
-        params.regulatoryFrameworks.length === 0
-          ? false
-          : groundedFrameworkCount >= Math.ceil(params.regulatoryFrameworks.length / 2);
-
-      const groundedFrameworks = params.regulatoryFrameworks.filter(
-        (_, i) => (ragResultsByFramework[i]?.length ?? 0) > 0
-      );
-      const ungroundedFrameworks = params.regulatoryFrameworks.filter(
-        (_, i) => (ragResultsByFramework[i]?.length ?? 0) === 0
-      );
-      logger.info({
-        type: 'gap_analysis_rag_grounding_summary',
-        userId,
-        groundedFrameworks,
-        ungroundedFrameworks,
-        ragGrounded,
-      });
-
-      // Build labeled context string grouped by framework
-      let ragContext: string | undefined;
-      if (labeledResults.length > 0) {
-        const grouped: Record<string, string[]> = {};
-        for (const r of labeledResults) {
-          if (!grouped[r.framework]) grouped[r.framework] = [];
-          grouped[r.framework].push(r.text);
-        }
-        ragContext = Object.entries(grouped)
-          .map(([fw, texts]) =>
-            texts
-              .map((t, i) => `[REGULATORY CONTEXT — ${fw} (${i + 1} of ${texts.length})]\n${t}`)
-              .join('\n\n---\n\n')
-          )
-          .join('\n\n---\n\n');
-      }
-
-      // 5. Sanitize policy text against prompt injection before sending to AI.
-      const { sanitized: safePolicyText, wasModified: injectionDetected } = sanitizePolicyText(policyText);
-      if (injectionDetected) {
-        logger.warn({
-          type: 'gap_analysis_prompt_injection_detected',
-          userId,
-          analysisId: record.id,
-          fileName: params.fileName,
-        });
-      }
-
-      // 6. Run AI gap analysis — single-pass for short documents, multi-chunk for long ones.
-      // "quick" always uses single-pass (speed over coverage for a quick scan).
-      // "standard": chunk if text exceeds 8,000 chars (~2 pages).
-      // "deep":     chunk if text exceeds 15,000 chars (~4 pages).
-      const SINGLE_PASS_THRESHOLD = params.analysisDepth === 'deep' ? 15000 : 8000;
-      const useMultiChunk =
-        params.analysisDepth !== 'quick' && safePolicyText.length > SINGLE_PASS_THRESHOLD;
-
-      let gapResults: GapAnalysisResult;
-      let chunksProcessed = 1;
-
-      if (!useMultiChunk) {
-        gapResults = await aiService.performGapAnalysis({
-          policyText: safePolicyText,
-          documentName: params.fileName,
-          documentType: ext,
-          regulatoryFrameworks: params.regulatoryFrameworks,
-          analysisDepth: params.analysisDepth,
-          focusAreas: params.focusAreas,
-          ragContext,
-        });
-      } else {
-        const chunks = chunkPolicyText(safePolicyText);
-        logger.info({
-          type: 'gap_analysis_chunking',
-          userId,
-          analysisId: record.id,
-          textLength: safePolicyText.length,
-          totalChunks: chunks.length,
-        });
-        const multiResult = await aiService.performMultiChunkGapAnalysis({
-          chunks,
-          documentName: params.fileName,
-          documentType: ext,
-          regulatoryFrameworks: params.regulatoryFrameworks,
-          analysisDepth: params.analysisDepth,
-          focusAreas: params.focusAreas,
-          ragContext,
-        });
-        gapResults = multiResult.result;
-        chunksProcessed = multiResult.chunksProcessed;
-      }
-
-      // 7. Save completed results
-      const completed = await gapAnalysisTable.update({
-        where: { id: record.id },
-        data: {
-          results: gapResults as unknown as Record<string, unknown>,
-          overallScore: gapResults.overallScore,
-          status: 'COMPLETED',
-          ragGrounded,
-          chunksProcessed,
-        },
-      });
-
-      logger.info({
-        type: 'gap_analysis_run_success',
-        userId,
+      // Fire background pipeline — do NOT await
+      void executeGapAnalysisPipeline({
         analysisId: record.id,
-        overallScore: gapResults.overallScore,
-        totalGaps: gapResults.metadata.totalGaps,
-        chunksProcessed,
-        durationMs: Date.now() - startTime,
-      });
-
-      notificationModule.createCategorizedNotification({
         userId,
-        type: 'GAP_ANALYSIS_COMPLETED',
-        category: 'COMPLIANCE',
-        title: 'Gap Analysis Complete',
-        message: `Analysis of "${params.fileName}" complete. Score: ${gapResults.overallScore}%. Found ${gapResults.metadata.totalGaps} gaps.`,
-        link: `/startup/gap-analysis/${record.id}`,
-      }).catch(() => { /* non-blocking */ });
-
-      // Audit log — fire-and-forget; must never block the primary operation.
-      prisma.auditLog.create({
-        data: {
-          userId,
-          action: 'GAP_ANALYSIS_CREATED',
-          entityType: 'GapAnalysis',
-          entityId: record.id,
-          metadata: {
-            documentName: params.fileName,
-            frameworks: params.regulatoryFrameworks,
-            depth: params.analysisDepth,
-            overallScore: gapResults.overallScore,
-            ragGrounded,
-            chunksProcessed,
-          },
-          ipAddress: params.ipAddress ?? null,
-          userAgent: params.userAgent ?? null,
-        },
+        fileName: params.fileName,
+        fileContent: params.fileContent,
+        fileType: ext,
+        regulatoryFrameworks: params.regulatoryFrameworks,
+        analysisDepth: params.analysisDepth,
+        focusAreas: params.focusAreas,
+        ipAddress: params.ipAddress,
+        userAgent: params.userAgent,
       }).catch((err: unknown) => {
-        logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId: record.id, error: (err as Error).message });
+        // Safety net — executeGapAnalysisPipeline has its own try/catch, so this
+        // should never fire. Log it as a critical error if it does.
+        logger.error({ type: 'gap_analysis_pipeline_unhandled_error', analysisId: record.id, error: (err as Error).message });
       });
 
-      return {
-        id: completed.id,
-        status: completed.status,
-        results: completed.results as GapAnalysisResult,
-        overallScore: completed.overallScore as number | null,
-        documentName: completed.documentName,
-        createdAt: completed.createdAt,
-        ragGrounded,
-        chunksProcessed,
-      };
+      logger.info({ type: 'gap_analysis_queued', userId, analysisId: record.id });
+
+      return { id: record.id, status: 'QUEUED', progress: 5 };
     } catch (error: unknown) {
-      // Mark as FAILED and propagate
-      const gapAnalysisTable = (prisma as unknown as {
-        gapAnalysis: {
-          update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<void>;
-        };
-      }).gapAnalysis;
-
-      await gapAnalysisTable.update({
-        where: { id: record.id },
-        data: {
-          status: 'FAILED',
-          errorMessage: (error as Error).message,
-        },
+      // R2 upload failed — mark as FAILED immediately (no pipeline to clean up)
+      await updateAnalysisStatus(record.id, {
+        status: 'FAILED',
+        progress: 0,
+        errorMessage: (error as Error).message,
       });
-
-      logger.error({
-        type: 'gap_analysis_run_error',
-        userId,
-        analysisId: record.id,
-        error: (error as Error).message,
-      });
-
+      logger.error({ type: 'gap_analysis_upload_error', userId, analysisId: record.id, error: (error as Error).message });
       throw error;
     }
   }
 
   /**
    * List all gap analyses for a user (summary list).
+   * Triggers stale job recovery lazily before returning results.
    */
   async getUserGapAnalyses(userId: string): Promise<{
     id: string;
@@ -1916,9 +1991,23 @@ Follow-up Question: ${followUp}
     analysisDepth: string;
     overallScore: number | null;
     status: string;
+    progress: number;
+    errorMessage: string | null;
     createdAt: Date;
     updatedAt: Date;
   }[]> {
+    // Lazy stale job recovery — non-blocking; cleans up any stuck analyses
+    void recoverStaleJobs().catch((err: unknown) => {
+      logger.error({ type: 'gap_analysis_stale_job_recovery_failed', error: (err as Error).message });
+    });
+
+    // Cache-aside: 60s TTL (short enough to reflect in-progress status changes)
+    const listCacheKey = `cache:gap-analysis:list:${userId}`;
+    try {
+      const cached = await redis.get<string>(listCacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch { /* non-fatal — fall through to DB */ }
+
     const analyses = await (prisma as unknown as {
       gapAnalysis: {
         findMany: (args: { where: { userId: string }; orderBy: { createdAt: string }; select: Record<string, boolean> }) => Promise<{
@@ -1929,6 +2018,8 @@ Follow-up Question: ${followUp}
           analysisDepth: string;
           overallScore: number | null;
           status: string;
+          progress: number;
+          errorMessage: string | null;
           createdAt: Date;
           updatedAt: Date;
         }[]>;
@@ -1944,10 +2035,17 @@ Follow-up Question: ${followUp}
         analysisDepth: true,
         overallScore: true,
         status: true,
+        progress: true,
+        errorMessage: true,
         createdAt: true,
         updatedAt: true,
       },
     });
+
+    // Populate cache
+    try {
+      await redis.set(listCacheKey, JSON.stringify(analyses), { ex: 60 });
+    } catch { /* non-fatal */ }
 
     return analyses;
   }
@@ -1970,17 +2068,21 @@ Follow-up Question: ${followUp}
     results: GapAnalysisResult | null;
     overallScore: number | null;
     status: string;
+    progress: number;
     errorMessage: string | null;
     ragGrounded: boolean;
     chunksProcessed: number;
     createdAt: Date;
     updatedAt: Date;
+    userName: string | null;
+    organizationName: string | null;
   }> {
     const analysis = await (prisma as unknown as {
       gapAnalysis: {
         findUnique: (args: { where: { id: string } }) => Promise<{
           id: string;
           userId: string;
+          organizationId: string | null;
           documentName: string;
           documentType: string;
           documentUrl: string;
@@ -1990,6 +2092,7 @@ Follow-up Question: ${followUp}
           results: unknown;
           overallScore: number | null;
           status: string;
+          progress: number;
           errorMessage: string | null;
           ragGrounded: boolean;
           chunksProcessed: number;
@@ -2021,10 +2124,38 @@ Follow-up Question: ${followUp}
       logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId, error: (err as Error).message });
     });
 
-    return {
+    // Cache-aside: only cache COMPLETED results (in-progress results must stay live)
+    const resultCacheKey = `cache:gap-analysis:result:${analysisId}`;
+    if (analysis.status === 'COMPLETED') {
+      try {
+        const cached = await redis.get<string>(resultCacheKey);
+        if (cached) return JSON.parse(cached);
+      } catch { /* non-fatal — fall through to DB result */ }
+    }
+
+    // Fetch user name + org name in parallel (non-critical — null on failure)
+    const [ownerUser, organization] = await Promise.all([
+      prisma.user.findUnique({ where: { id: analysis.userId }, select: { fullName: true } }),
+      analysis.organizationId
+        ? prisma.organization.findUnique({ where: { id: analysis.organizationId }, select: { name: true } })
+        : Promise.resolve(null),
+    ]);
+
+    const result = {
       ...analysis,
       results: (analysis.results as GapAnalysisResult) ?? null,
+      userName: ownerUser?.fullName ?? null,
+      organizationName: organization?.name ?? null,
     };
+
+    // Populate cache for completed results — 7-day TTL
+    if (analysis.status === 'COMPLETED') {
+      try {
+        await redis.set(resultCacheKey, JSON.stringify(result), { ex: 7 * 24 * 3600 });
+      } catch { /* non-fatal */ }
+    }
+
+    return result;
   }
 
   /**
@@ -2078,6 +2209,12 @@ Follow-up Question: ${followUp}
 
     await (prisma as unknown as { gapAnalysis: { delete: (args: { where: { id: string } }) => Promise<void> } })
       .gapAnalysis.delete({ where: { id: analysisId } });
+
+    // Invalidate caches
+    try {
+      await redis.del(`cache:gap-analysis:list:${userId}`);
+      await redis.del(`cache:gap-analysis:result:${analysisId}`);
+    } catch { /* non-fatal */ }
 
     logger.info({ type: 'gap_analysis_deleted', userId, analysisId });
   }

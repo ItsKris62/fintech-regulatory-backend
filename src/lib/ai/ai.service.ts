@@ -669,7 +669,7 @@ export class AIService {
     analysisDepth: 'quick' | 'standard' | 'deep';
     focusAreas?: string[];
     ragContext?: string;
-  }): Promise<{ result: GapAnalysisResult; chunksProcessed: number }> {
+  }): Promise<{ result: GapAnalysisResult; chunksProcessed: number; totalInputTokens: number; totalOutputTokens: number; totalCost: number }> {
     const startTime = Date.now();
     const { chunks, ...baseParams } = params;
     const totalChunks = chunks.length;
@@ -806,7 +806,13 @@ export class AIService {
       durationMs: Date.now() - startTime,
     });
 
-    return { result: gapAnalysis, chunksProcessed: totalChunks };
+    return {
+      result: gapAnalysis,
+      chunksProcessed: totalChunks,
+      totalInputTokens,
+      totalOutputTokens,
+      totalCost,
+    };
   }
 }
 

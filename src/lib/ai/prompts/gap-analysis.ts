@@ -80,6 +80,11 @@ export const GapAnalysisResultSchema = z.object({
     lowGaps: z.number().int().min(0).optional(),
     analysisDate: z.string(),
     chunksProcessed: z.number().int().positive().optional(),
+    tokenCost: z.object({
+      inputTokens: z.number().int().min(0),
+      outputTokens: z.number().int().min(0),
+      estimatedCostUsd: z.number().min(0),
+    }).optional(),
   }),
 });
 

@@ -1441,15 +1441,15 @@ export const complianceRouter = router({
           userAgent: ctx.req.headers['user-agent'] as string | undefined,
         });
 
-        // Commit the usage counter now that the DB record exists (deferIncrement pattern).
+        // Commit the usage counter now that the job is queued (deferIncrement pattern).
+        // Usage is consumed at queue time, not completion — prevents free retries on timeout.
         await ctx.incrementUsage?.();
 
         logger.info({
           type: 'gap_analysis_request_success',
           userId: ctx.user!.id,
           analysisId: result.id,
-          overallScore: result.overallScore,
-          ragGrounded: result.ragGrounded,
+          status: result.status,
         });
 
         return result;
@@ -2093,6 +2093,15 @@ export const complianceRouter = router({
 
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 
+      // 8b. Persist report tracking fields (fire-and-forget — non-blocking)
+      // Note: (prisma as any) required until prisma generate picks up reportUrl + reportGeneratedAt
+      (prisma as any).gapAnalysis.update({
+        where: { id: input.analysisId },
+        data: { reportUrl: uploadResult.key, reportGeneratedAt: new Date() },
+      }).catch((err: unknown) => {
+        logger.error({ type: 'gap_analysis_report_tracking_update_failed', userId, analysisId: input.analysisId, error: (err as Error).message });
+      });
+
       // 9. Write audit log (fire-and-forget)
       prisma.auditLog.create({
         data: {
@@ -2109,8 +2118,6 @@ export const complianceRouter = router({
       });
 
       logger.info({ type: 'gap_analysis_docx_exported', userId, analysisId: input.analysisId, filename, r2Key: uploadResult.key });
-
-      // Note: reportUrl and reportGeneratedAt DB update is wired after schema migration (Task 2.6)
 
       return { downloadUrl, expiresAt, fileName: filename };
     }),
