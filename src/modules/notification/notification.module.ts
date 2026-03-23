@@ -64,6 +64,7 @@ class NotificationModule {
         title: params.title,
         message: params.message,
         link: params.link ?? null,
+        eventId: params.eventId ?? null,
         metadata: (params.metadata ?? null) as any,
       } as any,
     });
@@ -738,7 +739,7 @@ class NotificationModule {
    */
   private inferCategory(type: string): NotificationCategoryName {
     const securityTypes = new Set(['PASSWORD_CHANGED', 'PASSWORD_CHANGE_FAILED', 'LOGIN_NEW_DEVICE']);
-    const complianceTypes = new Set(['COMPLIANCE_ALERT', 'REQUIREMENT_DUE', 'CHECKLIST_GENERATED', 'CHECKLIST_COMPLETED', 'GAP_ANALYSIS_STARTED', 'GAP_ANALYSIS_COMPLETED', 'POLICY_READY', 'POLICY_UPDATE', 'REPORT_READY', 'REVIEW_REQUESTED']);
+    const complianceTypes = new Set(['COMPLIANCE_ALERT', 'REQUIREMENT_DUE', 'CHECKLIST_GENERATED', 'CHECKLIST_COMPLETED', 'GAP_ANALYSIS_STARTED', 'GAP_ANALYSIS_COMPLETED', 'POLICY_READY', 'POLICY_UPDATE', 'REPORT_READY', 'REVIEW_REQUESTED', 'EVENT_CREATED', 'EVENT_REMINDER']);
     const documentTypes = new Set(['DOCUMENT_PROCESSED', 'DOCUMENT_UPLOADED', 'DOCUMENT_DELETED']);
     const accountTypes = new Set(['ORGANIZATION_INVITE', 'MEMBER_JOINED', 'PROFILE_UPDATED', 'ORGANIZATION_UPDATED', 'SUBSCRIPTION_CHANGED', 'SUBSCRIPTION_EXPIRING', 'SUBSCRIPTION_ALERT']);
     const supportTypes = new Set(['TICKET_CREATED', 'TICKET_STATUS_UPDATE', 'TICKET_RESPONSE', 'SUPPORT_TICKET_CREATED', 'SUPPORT_TICKET_UPDATED', 'COMMENT_ADDED']);
@@ -764,6 +765,7 @@ class NotificationModule {
       'DOCUMENT_UPLOADED', 'DOCUMENT_DELETED',
       'PROFILE_UPDATED', 'ORGANIZATION_UPDATED', 'SUBSCRIPTION_CHANGED', 'SUBSCRIPTION_EXPIRING',
       'SUPPORT_TICKET_CREATED', 'SUPPORT_TICKET_UPDATED', 'SYSTEM_ANNOUNCEMENT',
+      'EVENT_CREATED', 'EVENT_REMINDER',
     ]);
 
     if (PRISMA_NATIVE.has(type)) return type;

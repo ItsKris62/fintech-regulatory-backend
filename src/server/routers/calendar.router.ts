@@ -145,11 +145,19 @@ export const calendarRouter = router({
     .use(requirePlanFeature('complianceCalendar'))
     .input(upcomingEventsSchema)
     .query(async ({ input, ctx }) => {
+      const organizationId = ctx.user.organizationId ?? '';
       try {
-        return await calendarModule.getUpcomingDeadlines({
-          organizationId: ctx.user.organizationId ?? '',
-          daysAhead:      input.daysAhead,
+        const events = await calendarModule.getUpcomingDeadlines({
+          organizationId,
+          daysAhead: input.daysAhead,
         });
+
+        // Fire-and-forget lazy reminder evaluation — does not block the response
+        void calendarModule.evaluateAndGenerateReminders(organizationId).catch((err: unknown) => {
+          logger.error({ type: 'calendar_reminder_eval_error', organizationId, error: String(err) });
+        });
+
+        return events;
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
         logger.error({ type: 'calendar_upcoming_error', userId: ctx.user.id, error: String(error) });

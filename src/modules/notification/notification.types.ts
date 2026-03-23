@@ -43,7 +43,10 @@ export type ExtendedNotificationType =
   | 'SUBSCRIPTION_EXPIRING'
   // ── Support ───────────────────────────────────────────────────────────────
   | 'SUPPORT_TICKET_CREATED'
-  | 'SUPPORT_TICKET_UPDATED';
+  | 'SUPPORT_TICKET_UPDATED'
+  // ── Calendar events ───────────────────────────────────────────────────────
+  | 'EVENT_CREATED'
+  | 'EVENT_REMINDER';
 
 export type NotificationCategoryName =
   | 'SECURITY'
@@ -134,6 +137,7 @@ export interface CreateNotificationParams {
   title: string;
   message: string;
   link?: string;
+  eventId?: string;
   metadata?: Record<string, unknown>;
 }
 

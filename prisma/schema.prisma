@@ -391,13 +391,16 @@ model Notification {
   readAt    DateTime?
   metadata  Json?
   createdAt DateTime             @default(now())
+  eventId   String?
   user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event     ComplianceEvent?     @relation(fields: [eventId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([read])
   @@index([createdAt])
   @@index([userId, read, createdAt])
   @@index([userId, category, createdAt])
+  @@index([eventId])
 }
 
 model AuditLog {
@@ -639,6 +642,10 @@ enum NotificationType {
 
   // ── System ────────────────────────────────────────────────────────────────
   SYSTEM_ANNOUNCEMENT
+
+  // ── Calendar events ───────────────────────────────────────────────────────
+  EVENT_CREATED
+  EVENT_REMINDER
 }
 
 enum NotificationCategory {
@@ -1032,11 +1039,13 @@ model ComplianceEvent {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  notifications Notification[]
 
   @@index([organizationId])
   @@index([organizationId, dueDate])
   @@index([organizationId, status])
+  @@unique([organizationId, title, dueDate])
 }
 
 model VaultDocument {
