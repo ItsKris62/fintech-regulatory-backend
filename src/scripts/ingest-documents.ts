@@ -451,6 +451,17 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     effectiveDate: new Date('2022-10-25'),
     version: '2022 (3rd edition)',
   },
+  {
+    // ✅ File present
+    fileName: 'international/ISO_IEC_27000_2018(en).pdf',
+    title: 'ISO/IEC 27000:2018 — Information Security Management Systems Overview and Vocabulary',
+    source: 'ISO/IEC',
+    category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
+    jurisdiction: 'International',
+    documentType: 'standard',
+    effectiveDate: new Date('2018-02-01'),
+    version: '2018 (5th edition)',
+  },
 
   // ── International: Payment Card Industry ─────────────────────────────────
 
