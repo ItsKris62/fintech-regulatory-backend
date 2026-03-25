@@ -29,6 +29,7 @@ import { logger } from '@/utils/logger';
 import { appConfig } from '@/config/app.config';
 import { reactMailer } from '@/lib/email/react-mailer.service';
 import { paymentService } from '@/modules/billing/payment.service';
+import { planCtxCacheKey } from '@/modules/trial';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -541,14 +542,43 @@ class StripeWebhookService {
     return user ?? null;
   }
 
-  /** Delete the org's plan from the Redis cache so withPlanContext re-fetches from DB. */
+  /**
+   * Invalidate all plan-related Redis caches after a subscription change.
+   *
+   * Two key spaces are cleared:
+   *   1. Legacy org-scoped key `sheriabot:plan:{orgId}` — kept for any
+   *      consumers that may still read it directly.
+   *   2. User-scoped plan context keys `sheriabot:planctx:{userId}` — the
+   *      authoritative cache read by `withPlanContext` middleware. Every
+   *      member of the org must have their key cleared so the next request
+   *      re-fetches the updated plan from the DB within this request cycle
+   *      rather than after the 5-minute TTL expires.
+   */
   private async invalidatePlanCache(orgId: string): Promise<void> {
     try {
+      // 1. Legacy org-scoped key
       await redis.del(planCacheKey(orgId));
+
+      // 2. User-scoped plan context keys for all org members
+      const users = await prisma.user.findMany({
+        where:  { organizationId: orgId },
+        select: { id: true },
+      });
+
+      await Promise.all(
+        users.map((u) => redis.del(planCtxCacheKey(u.id)).catch(() => { /* non-fatal */ }))
+      );
+
+      logger.info({
+        type:      'plan_cache_invalidated',
+        orgId,
+        userCount: users.length,
+        source:    'stripe_webhook',
+      });
     } catch (err) {
       // Cache invalidation failure is non-fatal — withPlanContext will serve
       // stale data for up to 5 minutes then re-fetch.
-      logger.warn({ type: 'stripe_plan_cache_invalidation_failed', orgId, err });
+      logger.warn({ type: 'stripe_plan_cache_invalidation_failed', orgId, err: String(err) });
     }
   }
 }

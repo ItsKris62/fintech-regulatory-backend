@@ -392,14 +392,35 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
   let effectivePlan: EffectivePlan = SubscriptionPlan.REGULATOR;
   let trialState: { isActive: boolean; daysRemaining: number | null } | undefined;
 
+  // Only ACTIVE and TRIALING (Stripe 14-day trial) are considered a live paid
+  // subscription.  GRACE_PERIOD is handled separately below (it uses a date
+  // check so we don't grant access past gracePeriodEndsAt).
+  // CANCELLED, PAST_DUE, and EXPIRED are explicitly excluded: a CANCELLED org
+  // must go through the grace period path, PAST_DUE loses access immediately
+  // so the failed-payment email motivates quick resolution, and EXPIRED means
+  // the grace window has already closed.
   const hasPaidPlan =
     orgPlan !== SubscriptionPlan.REGULATOR &&
-    subscriptionStatus !== SubscriptionStatus.EXPIRED;
+    (subscriptionStatus === SubscriptionStatus.ACTIVE ||
+     subscriptionStatus === SubscriptionStatus.TRIALING);
 
   const graceStillActive =
     subscriptionStatus === SubscriptionStatus.GRACE_PERIOD &&
     gracePeriodEndsAt !== null &&
     new Date(gracePeriodEndsAt) > new Date();
+
+  if (!hasPaidPlan && !graceStillActive && orgPlan !== SubscriptionPlan.REGULATOR) {
+    // Plan is set to a paid tier but status is not ACTIVE/TRIALING/GRACE_PERIOD
+    // (e.g. CANCELLED, PAST_DUE, EXPIRED) — log and fall through to trial/REGULATOR.
+    logger.warn({
+      type:               'plan_downgrade',
+      userId,
+      orgId,
+      orgPlan,
+      subscriptionStatus,
+      effectivePlan:      'REGULATOR',
+    });
+  }
 
   if (hasPaidPlan || graceStillActive) {
     // Steps 1 & 2: paid plan or active grace period

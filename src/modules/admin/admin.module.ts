@@ -7,10 +7,12 @@
  * Impersonation tokens are short-lived (15 min) and stored only in Redis.
  */
 
+import { SubscriptionPlan as PrismaSubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@/utils/error';
+import { planCtxCacheKey } from '@/modules/trial';
 import { nanoid } from 'nanoid';
 import {
   toAdminUserDetail,
@@ -392,15 +394,32 @@ class AdminModule {
     const org = await prisma.organization.findUnique({ where: { id: orgId } });
     if (!org) throw new NotFoundError('Organization');
 
-    const before = { subscriptionTier: org.subscriptionTier };
+    const prismaplan = PrismaSubscriptionPlan[plan as keyof typeof PrismaSubscriptionPlan];
+    const before = { subscriptionTier: org.subscriptionTier, plan: org.plan };
+
     await prisma.organization.update({
       where: { id: orgId },
-      data: { subscriptionTier: plan, subscriptionStatus: 'ACTIVE' },
+      data: {
+        subscriptionTier: plan,        // legacy field — keep in sync
+        plan:             prismaplan,  // authoritative field read by withPlanContext
+        subscriptionStatus: SubscriptionStatus.ACTIVE,
+      },
     });
+
+    logger.info({
+      type:             'plan_sync',
+      orgId,
+      oldPlan:          before.plan,
+      newPlan:          prismaplan,
+      subscriptionTier: plan,
+      source:           'admin_update_org_plan',
+    });
+
+    await this.invalidatePlanCacheForOrg(orgId, 'admin_update_org_plan');
 
     await this.writeAuditLog(adminId, 'admin_update_org_plan', 'Organization', orgId, {
       before,
-      after: { plan },
+      after: { plan, prismaplan },
     });
 
     return this.getOrganizationDetails(orgId);
@@ -944,18 +963,42 @@ class AdminModule {
     if (!user) throw new NotFoundError('User');
     if (!user.organizationId) throw new BadRequestError('User is not part of an organization');
 
-    await prisma.organization.update({
-      where: { id: user.organizationId },
-      data: { subscriptionTier: plan, subscriptionStatus: 'ACTIVE' },
+    const orgId     = user.organizationId;
+    const prismaplan = PrismaSubscriptionPlan[plan as keyof typeof PrismaSubscriptionPlan];
+
+    const oldOrg = await prisma.organization.findUnique({
+      where:  { id: orgId },
+      select: { plan: true },
     });
 
-    await this.writeAuditLog(adminId, 'admin_update_subscription', 'Organization', user.organizationId, {
+    await prisma.organization.update({
+      where: { id: orgId },
+      data: {
+        subscriptionTier: plan,        // legacy field — keep in sync
+        plan:             prismaplan,  // authoritative field read by withPlanContext
+        subscriptionStatus: SubscriptionStatus.ACTIVE,
+      },
+    });
+
+    logger.info({
+      type:             'plan_sync',
+      orgId,
+      oldPlan:          oldOrg?.plan ?? null,
+      newPlan:          prismaplan,
+      subscriptionTier: plan,
+      source:           'admin_update_user_subscription',
+    });
+
+    await this.invalidatePlanCacheForOrg(orgId, 'admin_update_user_subscription');
+
+    await this.writeAuditLog(adminId, 'admin_update_subscription', 'Organization', orgId, {
       plan,
+      prismaplan,
     });
 
     return {
       userId,
-      organizationId: user.organizationId,
+      organizationId: orgId,
       plan,
       status: 'active',
       updatedAt: new Date(),
@@ -965,6 +1008,37 @@ class AdminModule {
   // ==========================================================================
   // PRIVATE HELPERS
   // ==========================================================================
+
+  /**
+   * Deletes the user-scoped plan context cache (`sheriabot:planctx:{userId}`)
+   * for every member of an org so that `withPlanContext` re-fetches from DB
+   * on the next request rather than serving the stale 5-minute cached plan.
+   *
+   * Non-fatal: a Redis failure must never prevent the plan update from being
+   * visible on the next request (the DB is the source of truth; the cache
+   * simply accelerates reads).
+   */
+  private async invalidatePlanCacheForOrg(orgId: string, source: string): Promise<void> {
+    try {
+      const users = await prisma.user.findMany({
+        where:  { organizationId: orgId },
+        select: { id: true },
+      });
+
+      await Promise.all(
+        users.map((u) => redis.del(planCtxCacheKey(u.id)).catch(() => { /* non-fatal */ }))
+      );
+
+      logger.info({
+        type:      'plan_cache_invalidated',
+        orgId,
+        userCount: users.length,
+        source,
+      });
+    } catch (err) {
+      logger.warn({ type: 'plan_cache_invalidation_failed', orgId, source, err: String(err) });
+    }
+  }
 
   private async writeAuditLog(
     adminId: string,
