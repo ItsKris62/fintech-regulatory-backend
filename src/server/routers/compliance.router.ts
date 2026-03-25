@@ -21,6 +21,7 @@ import {
 } from '@/modules/compliance/checklist.types';
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
+import { incrementTrialUsage } from '@/modules/trial';
 import { getQuota } from '@/utils/entitlements';
 import { prisma } from '@/lib/prisma/client';
 import { gapAnalysisExportService } from '@/services/gap-analysis-export.service';
@@ -120,6 +121,11 @@ export const complianceRouter = router({
             },
           },
         });
+
+        // Track token usage for free trial users (fire-and-forget, non-fatal).
+        if (ctx.plan === 'FREE_TRIAL') {
+          incrementTrialUsage(ctx.user!.id, 'totalTokensUsed', answer.inputTokens + answer.outputTokens).catch(() => {});
+        }
 
         const duration = Date.now() - startTime;
 
@@ -1111,7 +1117,12 @@ export const complianceRouter = router({
 
         // Returns immediately — background generation runs in the service.
         // incrementUsage() is called AFTER the DB write succeeds (Gap #4 fix).
-        const result = await checklistService.generateChecklist(ctx.user!.id, orgId, input);
+        const result = await checklistService.generateChecklist(
+          ctx.user!.id,
+          orgId,
+          input,
+          ctx.plan === 'FREE_TRIAL' ? ctx.user!.id : undefined,
+        );
 
         // Commit the usage counter now that the DB record exists.
         await ctx.incrementUsage?.();
@@ -1439,6 +1450,7 @@ export const complianceRouter = router({
           organizationId: input.organizationId ?? ctx.user!.organizationId ?? undefined,
           ipAddress: ctx.req.ip,
           userAgent: ctx.req.headers['user-agent'] as string | undefined,
+          trialUserId: ctx.plan === 'FREE_TRIAL' ? ctx.user!.id : undefined,
         });
 
         // Commit the usage counter now that the job is queued (deferIncrement pattern).

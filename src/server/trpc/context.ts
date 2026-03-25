@@ -1,5 +1,6 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { SubscriptionPlan } from '@prisma/client';
+import type { EffectivePlan } from '@/types/plan.types';
+import type { TrialContextState } from '@/modules/trial/trial.types';
 import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
@@ -28,10 +29,12 @@ export interface Context {
   mailer: typeof mailer;
   req: FastifyRequest;
   res: FastifyReply;
-  // Populated by withPlanContext middleware (optional — only present after that middleware runs)
-  plan?: SubscriptionPlan;
+  // Populated by withPlanContext middleware (optional -- only present after that middleware runs)
+  plan?: EffectivePlan;
   customLimits?: Record<string, unknown> | null;
   usageInfo?: { metric: string; current: number; limit: number };
+  /** Present when plan === 'FREE_TRIAL'. Lightweight trial state for middleware consumers. */
+  trialState?: TrialContextState;
   /**
    * Populated by checkUsageLimit when called with { deferIncrement: true }.
    * The router handler MUST call this after a successful DB write to commit

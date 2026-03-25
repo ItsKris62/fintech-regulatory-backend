@@ -11,6 +11,7 @@ import { stripeConfig, PRICE_TO_PLAN } from '@/config/stripe.config';
 import { appConfig } from '@/config/app.config';
 import { reactMailer } from '@/lib/email/react-mailer.service';
 import { logger } from '@/utils/logger';
+import { getTrialStatus } from '@/modules/trial';
 
 /** Redis key for enterprise inquiry rate-limiting (max 3 per org per day) */
 const enterpriseInquiryKey = (orgId: string) => {
@@ -83,6 +84,14 @@ export const billingRouter = router({
           readUsageCount(scopeId, BillingMetric.DOCUMENT_STORAGE_MB),
         ]);
 
+        // ── Trial status (user-scoped, fetched for FREE_TRIAL and REGULATOR so
+        //    the frontend knows whether the user is eligible or has already used
+        //    their trial — prevents showing the activation banner to expired users)
+        const trialStatus =
+          plan === 'FREE_TRIAL' || plan === 'REGULATOR'
+            ? await getTrialStatus(ctx.user.id)
+            : null;
+
         // ── Billing + subscription metadata (org row) ──────────────────────
         const org = orgId
           ? await prisma.organization.findUnique({
@@ -140,6 +149,7 @@ export const billingRouter = router({
             cancelledAt:        org?.cancelledAt?.toISOString()        ?? null,
             subscriptionEndsAt: org?.subscriptionEndsAt?.toISOString() ?? null,
           },
+          trial: trialStatus,
         };
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'Unknown error';

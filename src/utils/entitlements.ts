@@ -1,7 +1,8 @@
 import { TRPCError } from '@trpc/server';
+import { SubscriptionPlan } from '@prisma/client';
+import type { EffectivePlan } from '@/types/plan.types';
 import {
   PLAN_ENTITLEMENTS,
-  SubscriptionPlan,
   type FeatureKey,
   type PlanEntitlementConfig,
 } from '@/config/entitlements.config';
@@ -18,11 +19,12 @@ const PLAN_ORDER: SubscriptionPlan[] = [
   SubscriptionPlan.ENTERPRISE,
 ];
 
-const PLAN_DISPLAY_NAMES: Record<SubscriptionPlan, string> = {
+const PLAN_DISPLAY_NAMES: Record<EffectivePlan, string> = {
   REGULATOR:  'Regulator',
   STARTUP:    'Startup',
   BUSINESS:   'Business',
   ENTERPRISE: 'Enterprise',
+  FREE_TRIAL: 'Free Trial',
 };
 
 // ============================================================================
@@ -33,16 +35,16 @@ const PLAN_DISPLAY_NAMES: Record<SubscriptionPlan, string> = {
  * Returns true if the given plan grants access to a feature.
  *
  * Rules per value type:
- *  - boolean           → the boolean itself
- *  - QuotaEntitlement  → limit !== 0  (-1 = unlimited = true, 0 = unavailable = false)
- *  - StorageEntitlement→ limitMB !== 0
- *  - ApiAccessEntitlement → false means no access; object means access
- *  - number (maxSeats) → > 0 or unlimited (-1)
- *  - AnalyticsTier     → 'none' means no access
- *  - other strings     → always true (different tiers of the same feature)
- *  - undefined         → false (optional Enterprise-only flags on lower plans)
+ *  - boolean           -> the boolean itself
+ *  - QuotaEntitlement  -> limit !== 0  (-1 = unlimited = true, 0 = unavailable = false)
+ *  - StorageEntitlement-> limitMB !== 0
+ *  - ApiAccessEntitlement -> false means no access; object means access
+ *  - number (maxSeats) -> > 0 or unlimited (-1)
+ *  - AnalyticsTier     -> 'none' means no access
+ *  - other strings     -> always true (different tiers of the same feature)
+ *  - undefined         -> false (optional Enterprise-only flags on lower plans)
  */
-export function hasFeature(plan: SubscriptionPlan, feature: FeatureKey): boolean {
+export function hasFeature(plan: EffectivePlan, feature: FeatureKey): boolean {
   const entitlements = PLAN_ENTITLEMENTS[plan];
   const value: PlanEntitlementConfig[typeof feature] = entitlements[feature];
 
@@ -52,7 +54,7 @@ export function hasFeature(plan: SubscriptionPlan, feature: FeatureKey): boolean
   if (typeof value === 'number') return value > 0 || value === -1;
   if (typeof value === 'string') return value !== 'none';
 
-  // Object value — QuotaEntitlement | StorageEntitlement
+  // Object value -- QuotaEntitlement | StorageEntitlement
   if (typeof value === 'object') {
     if ('limitMB' in value) return value.limitMB !== 0;
     if ('limit' in value) return value.limit !== 0;
@@ -75,7 +77,7 @@ export function hasFeature(plan: SubscriptionPlan, feature: FeatureKey): boolean
  * For non-metered boolean features returns 1 (available) or 0 (unavailable).
  * For maxSeats returns the seat count directly.
  */
-export function getLimit(plan: SubscriptionPlan, feature: FeatureKey): number {
+export function getLimit(plan: EffectivePlan, feature: FeatureKey): number {
   const entitlements = PLAN_ENTITLEMENTS[plan];
   const value: PlanEntitlementConfig[typeof feature] = entitlements[feature];
 
@@ -104,7 +106,7 @@ export function getLimit(plan: SubscriptionPlan, feature: FeatureKey): number {
  * Falls back to { limit: 0, period: 'month' } for non-quota features.
  */
 export function getQuota(
-  plan: SubscriptionPlan,
+  plan: EffectivePlan,
   feature: FeatureKey,
 ): { limit: number; period: 'month' | 'lifetime' } {
   const entitlements = PLAN_ENTITLEMENTS[plan];
@@ -125,11 +127,11 @@ export function getQuota(
 
 /**
  * Throws a FORBIDDEN TRPCError if the plan does not grant access to the feature.
- * Use inside tRPC middleware — do NOT use directly in handler logic.
+ * Use inside tRPC middleware -- do NOT use directly in handler logic.
  *
  * @throws TRPCError { code: 'FORBIDDEN' }
  */
-export function requireFeature(plan: SubscriptionPlan, feature: FeatureKey): void {
+export function requireFeature(plan: EffectivePlan, feature: FeatureKey): void {
   if (!hasFeature(plan, feature)) {
     const minimumPlan = getMinimumPlan(feature);
     const requiredPlanName = minimumPlan
@@ -148,7 +150,8 @@ export function requireFeature(plan: SubscriptionPlan, feature: FeatureKey): voi
 // ============================================================================
 
 /**
- * Returns the lowest plan that grants access to a feature.
+ * Returns the lowest SubscriptionPlan that grants access to a feature.
+ * Only considers purchasable DB plans (not FREE_TRIAL).
  * Returns null if no plan provides the feature (should not happen in practice).
  */
 export function getMinimumPlan(feature: FeatureKey): SubscriptionPlan | null {
@@ -162,7 +165,7 @@ export function getMinimumPlan(feature: FeatureKey): SubscriptionPlan | null {
 // getPlanDisplayName
 // ============================================================================
 
-export function getPlanDisplayName(plan: SubscriptionPlan): string {
+export function getPlanDisplayName(plan: EffectivePlan): string {
   return PLAN_DISPLAY_NAMES[plan];
 }
 
@@ -173,13 +176,12 @@ export function getPlanDisplayName(plan: SubscriptionPlan): string {
 /**
  * Returns the full entitlements config for an org based on its subscription plan.
  *
- * This is the canonical way to look up entitlements from an org object in
- * service-layer code that has direct DB access rather than middleware context.
- * Middlewares use withPlanContext + PLAN_ENTITLEMENTS internally; this helper
- * follows the same pattern but is callable from module/service code.
+ * Accepts SubscriptionPlan (not EffectivePlan) because orgs always have a
+ * DB-persisted plan. Use PLAN_ENTITLEMENTS[effectivePlan] directly when working
+ * with an already-resolved EffectivePlan from middleware context.
  */
 export function getOrgEntitlements(
   org: { plan: SubscriptionPlan },
-): typeof PLAN_ENTITLEMENTS[SubscriptionPlan] {
+): PlanEntitlementConfig {
   return PLAN_ENTITLEMENTS[org.plan];
 }

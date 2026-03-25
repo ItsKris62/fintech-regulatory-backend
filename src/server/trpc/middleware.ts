@@ -9,6 +9,15 @@ import { getQuota, requireFeature } from '@/utils/entitlements';
 import type { FeatureKey } from '@/config/entitlements.config';
 import { reactMailer } from '@/lib/email/react-mailer.service';
 import { appConfig } from '@/config/app.config';
+import type { EffectivePlan, TrialFeature } from '@/types/plan.types';
+import { FREE_TRIAL_LIMITS } from '@/types/plan.types';
+import {
+  checkTrialLimit,
+  incrementTrialUsage,
+  planCtxCacheKey,
+  fireTrialExpiredEmail,
+} from '@/modules/trial';
+import { TrialUsageSchema, EMPTY_TRIAL_USAGE } from '@/modules/trial/trial.types';
 
 /**
  * Logging Middleware (Fixed Error Handling)
@@ -164,27 +173,29 @@ export const isOrganizationMember = middleware(async ({ ctx, input, next }) => {
 // Plan-Aware Middleware
 // ============================================================================
 
-/** TTL for org plan cache in Redis: 5 minutes */
+/** TTL for the user-scoped plan+trial context cache in Redis: 5 minutes */
 const PLAN_CACHE_TTL = 300;
 
 /** TTL for usage counters in Redis: 35 days (covers billing cycle edge cases) */
 const USAGE_TTL = 35 * 24 * 60 * 60;
 
 /**
- * Shape stored in Redis for the org plan cache.
- * Includes subscription status fields so grace-period enforcement works
- * on cache hits without an extra DB round-trip.
+ * Shape stored in the user-scoped plan context cache (sheriabot:planctx:{userId}).
+ * Includes subscription status and trial timestamps so all resolution logic
+ * works on cache hits without extra DB round-trips.
  */
-type CachedPlan = {
-  plan:               SubscriptionPlan;
+type CachedPlanCtx = {
+  orgPlan:            SubscriptionPlan;
   customLimits:       Record<string, unknown> | null;
   subscriptionStatus: SubscriptionStatus | null;
-  gracePeriodEndsAt:  string | null; // ISO-8601 string
+  gracePeriodEndsAt:  string | null; // ISO-8601
+  trialActivatedAt:   string | null; // ISO-8601
+  trialExpiresAt:     string | null; // ISO-8601
 };
 
 /**
  * Returns true when an org is in the GRACE_PERIOD state and the window has
- * already passed — i.e. access should be revoked NOW.
+ * already passed -- i.e. access should be revoked NOW.
  */
 function isGracePeriodExpired(
   status:            SubscriptionStatus | null,
@@ -198,81 +209,131 @@ function isGracePeriodExpired(
 }
 
 /**
- * Fetches the organization's SubscriptionPlan and customLimits from the
- * database (with a 5-min Redis cache) and attaches them to ctx.
+ * Resolves the effective plan for a request, with this priority:
  *
- * Grace-period enforcement (lazy, no cron required):
- *   If the org is in GRACE_PERIOD and gracePeriodEndsAt has passed, this
- *   middleware atomically downgrades the plan to REGULATOR, sets status to
- *   EXPIRED, and invalidates the cache — all within the current request.
+ *  1. Active paid subscription                  -> orgPlan (STARTUP/BUSINESS/ENTERPRISE)
+ *  2. Grace period active                       -> orgPlan (retain access until window closes)
+ *  3. Free trial active (expiresAt > now)       -> 'FREE_TRIAL'
+ *  4. Fallback                                  -> REGULATOR
  *
- * Must run AFTER isAuthenticated. Falls back to REGULATOR for users
- * without an organization (e.g. accounts mid-onboarding).
+ * Notes:
+ *  - The trial check (step 3) runs BEFORE the org-less fast-return so that
+ *    users without an organization can still use their trial.
+ *  - Grace-period expiry is lazily enforced (no cron). Same pattern as before.
+ *  - Cache key is now user-scoped (sheriabot:planctx:{userId}) so trial fields
+ *    are co-located with subscription state.
+ *  - The legacy org-scoped key (sheriabot:plan:{orgId}) is left untouched for
+ *    any other consumers that may read it directly.
+ *
+ * Must run AFTER isAuthenticated.
  */
 export const withPlanContext = middleware(async ({ ctx, next }) => {
-  // isAuthenticated must run before this middleware
   if (!ctx.user) {
     throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required.' });
   }
 
-  // Keep user non-null in the extended context (mirrors isAuthenticated narrowing pattern)
-  const user = ctx.user;
-  const orgId = user.organizationId;
+  const user  = ctx.user;
+  const userId = user.id;
+  const orgId  = user.organizationId;
 
-  // No organization → apply the most restrictive defaults
-  if (!orgId) {
-    return next({
-      ctx: { ...ctx, user, plan: SubscriptionPlan.REGULATOR, customLimits: null },
-    });
-  }
+  const cacheKey = planCtxCacheKey(userId);
 
-  const cacheKey = `sheriabot:plan:${orgId}`;
-
-  // ── Try Redis cache ────────────────────────────────────────────────────────
-  let plan:               SubscriptionPlan            = SubscriptionPlan.REGULATOR;
+  // ── Try user-scoped plan context cache ────────────────────────────────────
+  let orgPlan:            SubscriptionPlan            = SubscriptionPlan.REGULATOR;
   let customLimits:       Record<string, unknown> | null = null;
   let subscriptionStatus: SubscriptionStatus | null   = null;
   let gracePeriodEndsAt:  string | null               = null;
+  let trialActivatedAt:   string | null               = null;
+  let trialExpiresAt:     string | null               = null;
   let fromCache = false;
 
   try {
-    const cached = await redis.get<CachedPlan>(cacheKey);
-    if (cached && typeof cached === 'object' && cached.plan) {
-      plan               = cached.plan;
+    const cached = await redis.get<CachedPlanCtx>(cacheKey);
+    if (cached && typeof cached === 'object' && cached.orgPlan) {
+      orgPlan            = cached.orgPlan;
       customLimits       = cached.customLimits ?? null;
       subscriptionStatus = cached.subscriptionStatus ?? null;
       gracePeriodEndsAt  = cached.gracePeriodEndsAt ?? null;
+      trialActivatedAt   = cached.trialActivatedAt ?? null;
+      trialExpiresAt     = cached.trialExpiresAt ?? null;
       fromCache          = true;
     }
   } catch {
-    // Cache miss or parse error — fall through to DB
+    // Cache miss or parse error -- fall through to DB
   }
 
-  // ── DB lookup (on cache miss) ──────────────────────────────────────────────
+  // ── DB lookup on cache miss ────────────────────────────────────────────────
   if (!fromCache) {
-    const org = await prisma.organization.findUnique({
-      where:  { id: orgId },
-      select: { plan: true, customLimits: true, subscriptionStatus: true, gracePeriodEndsAt: true },
+    // Always fetch trial fields from the User row
+    const userRow = await prisma.user.findUnique({
+      where:  { id: userId },
+      select: {
+        freeTrialActivatedAt: true,
+        freeTrialExpiresAt:   true,
+        freeTrialUsage:       true,
+        fullName:             true,
+      },
     });
 
-    plan               = org?.plan               ?? SubscriptionPlan.REGULATOR;
-    customLimits       = (org?.customLimits as Record<string, unknown> | null) ?? null;
-    subscriptionStatus = org?.subscriptionStatus ?? null;
-    gracePeriodEndsAt  = org?.gracePeriodEndsAt?.toISOString() ?? null;
+    trialActivatedAt = userRow?.freeTrialActivatedAt?.toISOString() ?? null;
+    trialExpiresAt   = userRow?.freeTrialExpiresAt?.toISOString()   ?? null;
 
-    // Populate cache (includes status fields for future grace-period checks)
+    // Fetch org subscription state only if the user belongs to an org
+    if (orgId) {
+      const org = await prisma.organization.findUnique({
+        where:  { id: orgId },
+        select: {
+          plan:               true,
+          customLimits:       true,
+          subscriptionStatus: true,
+          gracePeriodEndsAt:  true,
+        },
+      });
+
+      orgPlan            = org?.plan               ?? SubscriptionPlan.REGULATOR;
+      customLimits       = (org?.customLimits as Record<string, unknown> | null) ?? null;
+      subscriptionStatus = org?.subscriptionStatus ?? null;
+      gracePeriodEndsAt  = org?.gracePeriodEndsAt?.toISOString() ?? null;
+    }
+
+    // Populate user-scoped cache
     await redis.set(
       cacheKey,
-      JSON.stringify({ plan, customLimits, subscriptionStatus, gracePeriodEndsAt }),
+      JSON.stringify({
+        orgPlan,
+        customLimits,
+        subscriptionStatus,
+        gracePeriodEndsAt,
+        trialActivatedAt,
+        trialExpiresAt,
+      }),
       { ex: PLAN_CACHE_TTL },
-    );
+    ).catch(() => { /* non-fatal */ });
+
+    // ── Lazy trial-expiry email (fires once per trial, on cache miss only) ────
+    // If a trial was previously active but has now expired, fire the email once.
+    if (
+      trialActivatedAt !== null &&
+      trialExpiresAt !== null &&
+      new Date(trialExpiresAt) <= new Date()
+    ) {
+      const usage = (() => {
+        const parsed = TrialUsageSchema.safeParse(userRow?.freeTrialUsage);
+        return parsed.success ? parsed.data : { ...EMPTY_TRIAL_USAGE };
+      })();
+
+      void fireTrialExpiredEmail(
+        userId,
+        user.email,
+        userRow?.fullName ?? '',
+        usage,
+      ).catch(() => { /* non-fatal */ });
+    }
   }
 
   // ── Lazy grace-period enforcement ─────────────────────────────────────────
-  // If the grace window has elapsed, atomically downgrade the plan. This
-  // happens on the first request after expiry — no cron job required.
-  if (isGracePeriodExpired(subscriptionStatus, gracePeriodEndsAt)) {
-    const previousPlan = plan; // capture before overwrite
+  if (orgId && isGracePeriodExpired(subscriptionStatus, gracePeriodEndsAt)) {
+    const previousPlan = orgPlan;
 
     await prisma.organization.update({
       where: { id: orgId },
@@ -282,19 +343,19 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
       },
     });
 
-    // Invalidate cache so the next request sees the downgraded state from DB
+    // Invalidate user-scoped cache
     try { await redis.del(cacheKey); } catch { /* non-fatal */ }
 
-    plan               = SubscriptionPlan.REGULATOR;
+    orgPlan            = SubscriptionPlan.REGULATOR;
     subscriptionStatus = SubscriptionStatus.EXPIRED;
 
     logger.info({
       type:  'grace_period_expired_downgraded',
       orgId,
+      userId,
       previousGracePeriodEndsAt: gracePeriodEndsAt,
     });
 
-    // ── Fire downgrade email (non-blocking) ──────────────────────────────────
     void (async () => {
       try {
         const contact = await prisma.user.findFirst({
@@ -307,7 +368,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
           select: { name: true },
         });
         if (contact && org) {
-          const base = appConfig.frontendUrl.replace(/\/$/, '');
+          const base      = appConfig.frontendUrl.replace(/\/$/, '');
           const planLabel = previousPlan.charAt(0) + previousPlan.slice(1).toLowerCase();
           await reactMailer.sendPlanDowngradedEmail(contact.email, {
             userName:         contact.fullName,
@@ -321,9 +382,59 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     })();
   }
 
-  logger.debug({ type: 'plan_context_loaded', orgId, plan, subscriptionStatus, fromCache });
+  // ── Resolve effective plan (priority order) ───────────────────────────────
+  //
+  //  1. Active paid subscription (ACTIVE or TRIALING from Stripe)
+  //  2. Grace period active (not yet expired)
+  //  3. Free trial active
+  //  4. REGULATOR fallback
 
-  return next({ ctx: { ...ctx, user, plan, customLimits } });
+  let effectivePlan: EffectivePlan = SubscriptionPlan.REGULATOR;
+  let trialState: { isActive: boolean; daysRemaining: number | null } | undefined;
+
+  const hasPaidPlan =
+    orgPlan !== SubscriptionPlan.REGULATOR &&
+    subscriptionStatus !== SubscriptionStatus.EXPIRED;
+
+  const graceStillActive =
+    subscriptionStatus === SubscriptionStatus.GRACE_PERIOD &&
+    gracePeriodEndsAt !== null &&
+    new Date(gracePeriodEndsAt) > new Date();
+
+  if (hasPaidPlan || graceStillActive) {
+    // Steps 1 & 2: paid plan or active grace period
+    effectivePlan = orgPlan;
+  } else if (
+    trialActivatedAt !== null &&
+    trialExpiresAt !== null &&
+    new Date(trialExpiresAt) > new Date()
+  ) {
+    // Step 3: free trial active
+    effectivePlan = 'FREE_TRIAL';
+    const msRemaining = new Date(trialExpiresAt).getTime() - Date.now();
+    const daysRemaining = Math.max(0, Math.floor(msRemaining / (1000 * 60 * 60 * 24)));
+    trialState = { isActive: true, daysRemaining };
+  }
+  // Step 4: falls through to REGULATOR (default above)
+
+  logger.debug({
+    type:   'plan_context_loaded',
+    userId,
+    orgId,
+    effectivePlan,
+    subscriptionStatus,
+    fromCache,
+  });
+
+  return next({
+    ctx: {
+      ...ctx,
+      user,
+      plan:         effectivePlan,
+      customLimits,
+      trialState,
+    },
+  });
 });
 
 /**
@@ -357,6 +468,27 @@ const METRIC_FEATURE_MAP = {
   [BillingMetric.DOCUMENT_STORAGE_MB]:   'documentRepository',
   [BillingMetric.GAP_ANALYSES]:          'gapAnalysis',
 } as const satisfies Record<BillingMetric, FeatureKey>;
+
+/**
+ * Maps BillingMetric values to TrialFeature keys.
+ * Returns null for metrics that have no trial cap (unlimited during trial).
+ */
+function mapMetricToTrialFeature(metric: BillingMetric): TrialFeature | null {
+  switch (metric) {
+    case BillingMetric.COMPLIANCE_QUERIES:    return 'complianceQueries';
+    case BillingMetric.CHECKLIST_GENERATIONS: return 'checklists';
+    case BillingMetric.GAP_ANALYSES:          return 'gapAnalyses';
+    case BillingMetric.DOCUMENT_STORAGE_MB:   return 'vaultUploads';
+    default:                                  return null;
+  }
+}
+
+/** AI-generating metrics that consume the shared token budget. */
+const AI_METRICS = new Set<BillingMetric>([
+  BillingMetric.COMPLIANCE_QUERIES,
+  BillingMetric.CHECKLIST_GENERATIONS,
+  BillingMetric.GAP_ANALYSES,
+]);
 
 /**
  * Factory that returns a middleware enforcing a usage quota (monthly or lifetime).
@@ -394,8 +526,70 @@ export const checkUsageLimit = (
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required.' });
     }
     const user = ctx.user;
+    const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
 
-    const plan       = ctx.plan ?? SubscriptionPlan.REGULATOR;
+    // ── FREE_TRIAL branch ──────────────────────────────────────────────────
+    // Trial users bypass the Redis monthly quota path entirely.
+    // Caps are enforced against the freeTrialUsage JSON column via trialService.
+    if (plan === 'FREE_TRIAL') {
+      const trialFeature = mapMetricToTrialFeature(metric);
+
+      if (trialFeature !== null) {
+        // 1. Feature-specific lifetime cap
+        const featureCheck = await checkTrialLimit(user.id, trialFeature);
+        if (!featureCheck.allowed) {
+          logger.warn({
+            type:    'trial_limit_reached',
+            userId:  user.id,
+            feature: trialFeature,
+            current: featureCheck.current,
+            limit:   featureCheck.limit,
+          });
+          throw new TRPCError({
+            code:    'FORBIDDEN',
+            message: `Trial limit reached for this feature (${featureCheck.current}/${featureCheck.limit}). Upgrade to continue.`,
+          });
+        }
+
+        // 2. Cross-feature token budget (AI-generating features only)
+        if (AI_METRICS.has(metric)) {
+          const tokenCheck = await checkTrialLimit(user.id, 'totalTokensUsed');
+          if (!tokenCheck.allowed) {
+            logger.warn({
+              type:    'trial_token_budget_exhausted',
+              userId:  user.id,
+              current: tokenCheck.current,
+              limit:   tokenCheck.limit,
+            });
+            throw new TRPCError({
+              code:    'FORBIDDEN',
+              message: `Trial token budget exhausted (${tokenCheck.current.toLocaleString()}/${tokenCheck.limit.toLocaleString()} tokens). Upgrade to continue.`,
+            });
+          }
+        }
+
+        // Increment deferred to after successful execution via ctx.incrementUsage
+        const doTrialIncrement = async (): Promise<void> => {
+          await incrementTrialUsage(user.id, trialFeature);
+        };
+
+        return next({
+          ctx: {
+            ...ctx,
+            user,
+            usageInfo:      { metric, current: featureCheck.current, limit: featureCheck.limit },
+            incrementUsage: doTrialIncrement,
+          },
+        });
+      }
+
+      // Metric has no trial cap (e.g. API_CALLS, POLICY_GENERATIONS are not trial features)
+      return next({
+        ctx: { ...ctx, user, usageInfo: { metric, current: 0, limit: FREE_TRIAL_LIMITS.complianceQueries } },
+      });
+    }
+
+    // ── Standard Redis monthly / lifetime quota path (paid plans + REGULATOR) ─
     const featureKey = METRIC_FEATURE_MAP[metric];
     const { limit, period } = getQuota(plan, featureKey);
 
@@ -406,7 +600,7 @@ export const checkUsageLimit = (
       });
     }
 
-    // Feature unavailable on this plan — FORBIDDEN (not a quota issue, a plan issue)
+    // Feature unavailable on this plan -- FORBIDDEN (plan issue, not quota issue)
     if (limit === 0) {
       const planName = plan.charAt(0) + plan.slice(1).toLowerCase();
       throw new TRPCError({
@@ -416,11 +610,11 @@ export const checkUsageLimit = (
     }
 
     // Build the Redis key using the correct period bucket
-    const scopeId  = user.organizationId ?? user.id;
+    const scopeId   = user.organizationId ?? user.id;
     const periodKey = period === 'lifetime'
       ? 'lifetime'
       : new Date().toISOString().slice(0, 7); // 'YYYY-MM'
-    const usageKey = `sheriabot:usage:${scopeId}:${metric}:${periodKey}`;
+    const usageKey  = `sheriabot:usage:${scopeId}:${metric}:${periodKey}`;
 
     // Read current count to give an accurate error message before touching Redis
     const currentRaw = await redis.get<number>(usageKey);
@@ -446,7 +640,7 @@ export const checkUsageLimit = (
     }
 
     // -----------------------------------------------------------------
-    // Increment logic — either immediately or deferred (Gap #4 fix).
+    // Increment logic -- either immediately or deferred.
     // -----------------------------------------------------------------
     const doIncrement = async (): Promise<void> => {
       const newCount = await redis.incr(usageKey);
@@ -466,8 +660,6 @@ export const checkUsageLimit = (
     };
 
     if (opts?.deferIncrement) {
-      // Attach the increment callback — the router handler calls this after
-      // a successful DB write so no credit is lost if the service throws.
       return next({
         ctx: {
           ...ctx,

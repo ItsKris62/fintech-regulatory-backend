@@ -14,6 +14,7 @@ import {
 } from '../schemas/vault.schema';
 import { z } from 'zod';
 import { logger } from '@/utils/logger';
+import { incrementTrialUsage } from '@/modules/trial';
 
 /**
  * Vault Router
@@ -77,6 +78,11 @@ export const vaultRouter = router({
         // Failure is logged inside the service and never blocks the upload response.
         if (orgId) {
           void usageTrackingService.incrementDocumentStorage(orgId, input.fileSize);
+        }
+
+        // Track vault upload count for free trial users (fire-and-forget, non-fatal).
+        if (ctx.plan === 'FREE_TRIAL') {
+          incrementTrialUsage(ctx.user.id, 'vaultUploads').catch(() => {});
         }
 
         return result;

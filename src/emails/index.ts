@@ -33,6 +33,15 @@ export type { PlanDowngradedEmailProps } from './templates/billing/PlanDowngrade
 export { EnterpriseInquiryEmail, getEnterpriseInquirySubject } from './templates/billing/EnterpriseInquiryEmail';
 export type { EnterpriseInquiryEmailProps } from './templates/billing/EnterpriseInquiryEmail';
 
+export { FreeTrialActivatedEmail, FreeTrialActivatedEmailSubject } from './templates/billing/FreeTrialActivatedEmail';
+export type { FreeTrialActivatedEmailProps } from './templates/billing/FreeTrialActivatedEmail';
+
+export { FreeTrialExpiringEmail, getFreeTrialExpiringSubject } from './templates/billing/FreeTrialExpiringEmail';
+export type { FreeTrialExpiringEmailProps } from './templates/billing/FreeTrialExpiringEmail';
+
+export { FreeTrialExpiredEmail, FreeTrialExpiredEmailSubject } from './templates/billing/FreeTrialExpiredEmail';
+export type { FreeTrialExpiredEmailProps } from './templates/billing/FreeTrialExpiredEmail';
+
 // Compliance templates
 export { ComplianceQueryReadyEmail, ComplianceQueryReadyEmailSubject } from './templates/compliance/ComplianceQueryReadyEmail';
 export type { ComplianceQueryReadyEmailProps } from './templates/compliance/ComplianceQueryReadyEmail';

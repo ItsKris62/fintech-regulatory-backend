@@ -65,6 +65,12 @@ import {
   OrgVerifiedEmailSubject,
   EnterpriseInquiryEmail,
   getEnterpriseInquirySubject,
+  FreeTrialActivatedEmail,
+  FreeTrialActivatedEmailSubject,
+  FreeTrialExpiringEmail,
+  getFreeTrialExpiringSubject,
+  FreeTrialExpiredEmail,
+  FreeTrialExpiredEmailSubject,
 } from '@/emails';
 
 import type {
@@ -91,6 +97,9 @@ import type {
   RoleChangeEmailProps,
   OrgVerifiedEmailProps,
   EnterpriseInquiryEmailProps,
+  FreeTrialActivatedEmailProps,
+  FreeTrialExpiringEmailProps,
+  FreeTrialExpiredEmailProps,
 } from '@/emails';
 
 // ─── Notification Preference Keys ────────────────────────────────────────────
@@ -443,6 +452,41 @@ class ReactMailerService {
       element: React.createElement(EnterpriseInquiryEmail, props),
       tags: [{ name: 'category', value: 'billing' }, { name: 'type', value: 'enterprise_inquiry' }],
       logType: 'enterprise_inquiry_email',
+    });
+  }
+
+  // ── FREE TRIAL EMAILS (always sent, user-scoped) ──
+
+  /** Sent immediately when a user activates their 7-day free trial. */
+  async sendFreeTrialActivatedEmail(to: string, props: FreeTrialActivatedEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: FreeTrialActivatedEmailSubject,
+      element: React.createElement(FreeTrialActivatedEmail, props),
+      tags: [{ name: 'category', value: 'trial' }, { name: 'type', value: 'trial_activated' }],
+      logType: 'free_trial_activated_email',
+    });
+  }
+
+  /** Sent lazily when ≤ 2 days remain in the free trial (idempotent via Redis sentinel). */
+  async sendFreeTrialExpiringEmail(to: string, props: FreeTrialExpiringEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getFreeTrialExpiringSubject(props.daysRemaining),
+      element: React.createElement(FreeTrialExpiringEmail, props),
+      tags: [{ name: 'category', value: 'trial' }, { name: 'type', value: 'trial_expiring' }],
+      logType: 'free_trial_expiring_email',
+    });
+  }
+
+  /** Sent lazily after the free trial expires (idempotent via Redis sentinel). */
+  async sendFreeTrialExpiredEmail(to: string, props: FreeTrialExpiredEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: FreeTrialExpiredEmailSubject,
+      element: React.createElement(FreeTrialExpiredEmail, props),
+      tags: [{ name: 'category', value: 'trial' }, { name: 'type', value: 'trial_expired' }],
+      logType: 'free_trial_expired_email',
     });
   }
 }

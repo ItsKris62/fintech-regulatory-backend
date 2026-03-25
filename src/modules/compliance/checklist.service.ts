@@ -22,7 +22,7 @@ import { ragService } from '@/lib/rag/rag.service';
 import { aiService } from '@/lib/ai/ai.service';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError } from '@/utils/error';
-import type { GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
+import { incrementTrialUsage } from '@/modules/trial';
 import {
   CHECKLIST_STATUS,
   CHECKLIST_ITEM_STATUS,
@@ -62,7 +62,8 @@ class ChecklistService {
   async generateChecklist(
     userId: string,
     orgId:  string,
-    input:  GenerateChecklistAsyncInput
+    input:  GenerateChecklistAsyncInput,
+    trialUserId?: string
   ): Promise<ChecklistGenerateResult> {
     logger.info({
       type:          'checklist_generate_request',
@@ -101,7 +102,7 @@ class ChecklistService {
 
     // Fire-and-forget.  Errors are caught inside runGeneration and persisted
     // as a FAILED status on the DB record — they do NOT propagate here.
-    this.runGeneration(checklist.id, input, userId).catch((err: Error) => {
+    this.runGeneration(checklist.id, input, userId, trialUserId).catch((err: Error) => {
       // This branch should not be reached; runGeneration has its own catch.
       // Guard against unhandled promise rejection in case of unexpected throw.
       logger.error({
@@ -127,7 +128,8 @@ class ChecklistService {
   private async runGeneration(
     checklistId: string,
     input:       GenerateChecklistAsyncInput,
-    userId:      string
+    userId:      string,
+    trialUserId?: string
   ): Promise<void> {
     const startTime = Date.now();
 
@@ -224,7 +226,7 @@ class ChecklistService {
         ragSourcesUsed,
       });
 
-      const generatedChecklist: GeneratedChecklist =
+      const { checklist: generatedChecklist, inputTokens, outputTokens } =
         await aiService.generateComplianceChecklist({
           productType:        input.productType,
           businessStage:      input.businessStage,
@@ -289,6 +291,11 @@ class ChecklistService {
           },
         });
       });
+
+      // Track token usage for free trial users (fire-and-forget, non-fatal).
+      if (trialUserId) {
+        incrementTrialUsage(trialUserId, 'totalTokensUsed', inputTokens + outputTokens).catch(() => {});
+      }
 
       logger.info({
         type:          'checklist_generate_success',

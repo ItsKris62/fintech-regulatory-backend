@@ -1,4 +1,5 @@
 import { SubscriptionPlan } from '@prisma/client';
+import type { EffectivePlan } from '@/types/plan.types';
 
 // ============================================================================
 // Value shape types
@@ -32,7 +33,7 @@ export interface PlanEntitlementConfig {
   checklistGenerations: QuotaEntitlement;
   apiAccess: ApiAccessEntitlement;
 
-  // Metered boolean features (QuotaEntitlement: limit=0 → unavailable, -1 → unlimited)
+  // Metered boolean features (QuotaEntitlement: limit=0 -> unavailable, -1 -> unlimited)
   gapAnalysis: QuotaEntitlement;
   policyGeneration: boolean;
   customIntegrations: boolean;
@@ -40,7 +41,7 @@ export interface PlanEntitlementConfig {
   regulatoryDashboard: boolean;
   regulatoryAlerts: boolean;
 
-  /** Compliance Calendar — create/manage org-scoped deadline events */
+  /** Compliance Calendar -- create/manage org-scoped deadline events */
   complianceCalendar: boolean;
 
   // Tiered / numeric
@@ -60,8 +61,8 @@ export interface PlanEntitlementConfig {
 
 export type FeatureKey = keyof PlanEntitlementConfig;
 
-/** The full entitlements map — all plan logic lives here */
-export type PlanEntitlements = Record<SubscriptionPlan, PlanEntitlementConfig>;
+/** The full entitlements map -- covers all EffectivePlan values (DB plans + FREE_TRIAL). */
+export type PlanEntitlements = Record<EffectivePlan, PlanEntitlementConfig>;
 
 // ============================================================================
 // Single source of truth
@@ -69,7 +70,7 @@ export type PlanEntitlements = Record<SubscriptionPlan, PlanEntitlementConfig>;
 
 export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   /**
-   * REGULATOR — Free tier for CBK/CMA/CA officials.
+   * REGULATOR -- Free tier for CBK/CMA/CA officials.
    * Read-only knowledge base, limited queries, no generative features.
    */
   REGULATOR: {
@@ -91,7 +92,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   },
 
   /**
-   * STARTUP — KES 25,000/month.
+   * STARTUP -- KES 25,000/month.
    * Unlimited queries, 5 checklists/month, 1 GB storage.
    * Gap analysis / API / custom integrations greyed out (upsell to Business).
    */
@@ -99,7 +100,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     complianceQueries:     { limit: -1, period: 'month' }, // unlimited
     checklistGenerations:  { limit: 5,  period: 'month' },
     apiAccess:             false,
-    gapAnalysis:           { limit: 5,  period: 'month' }, // 5 analyses/month — standard frameworks only
+    gapAnalysis:           { limit: 5,  period: 'month' }, // 5 analyses/month -- standard frameworks only
     policyGeneration:      false,
     customIntegrations:    false,
     teamCollaboration:     false,
@@ -114,7 +115,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   },
 
   /**
-   * BUSINESS — KES 75,000/month. "Most Popular".
+   * BUSINESS -- KES 75,000/month. "Most Popular".
    * Unlimited queries + checklists, gap analysis, API (10k calls/month),
    * 5 seats, 10 GB storage.
    */
@@ -122,7 +123,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     complianceQueries:     { limit: -1,    period: 'month' },
     checklistGenerations:  { limit: -1,    period: 'month' },
     apiAccess:             { limit: 10000, period: 'month' },
-    gapAnalysis:           { limit: 20,   period: 'month' }, // 20 analyses/month — full framework access
+    gapAnalysis:           { limit: 20,   period: 'month' }, // 20 analyses/month -- full framework access
     policyGeneration:      false, // Enterprise only
     customIntegrations:    false, // Enterprise only
     teamCollaboration:     true,
@@ -137,7 +138,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   },
 
   /**
-   * ENTERPRISE — Custom pricing.
+   * ENTERPRISE -- Custom pricing.
    * Everything in Business plus AI Policy Generator, unlimited API,
    * custom integrations, SSO, on-premise option, dedicated support.
    */
@@ -162,6 +163,32 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     slaGuarantee:          '99.9%',
     legalCorpusManagement: true,
     dedicatedAccountManager: true,
+  },
+
+  /**
+   * FREE_TRIAL -- 7-day one-time trial. TypeScript-only; never stored in the DB.
+   * Mirrors STARTUP entitlements. Per-trial-lifetime usage caps are enforced
+   * separately via the freeTrialUsage JSON column and FREE_TRIAL_LIMITS.
+   * The quota limit values here are set to -1 (unlimited) because the real cap
+   * enforcement happens through FREE_TRIAL_LIMITS in trial.service.ts, not through
+   * the standard Redis monthly quota path.
+   */
+  FREE_TRIAL: {
+    complianceQueries:     { limit: -1, period: 'month' }, // cap enforced via FREE_TRIAL_LIMITS
+    checklistGenerations:  { limit: -1, period: 'month' }, // cap enforced via FREE_TRIAL_LIMITS
+    apiAccess:             false,
+    gapAnalysis:           { limit: -1, period: 'month' }, // cap enforced via FREE_TRIAL_LIMITS
+    policyGeneration:      false,
+    customIntegrations:    false,
+    teamCollaboration:     false,
+    regulatoryDashboard:   true,
+    regulatoryAlerts:      true,
+    complianceCalendar:    true,
+    documentRepository:    { limitMB: 1024 }, // same as STARTUP -- 1 GB
+    maxSeats:              1,
+    supportTier:           'email-48hr',
+    analytics:             'basic',
+    knowledgeBaseAccess:   'full',
   },
 };
 

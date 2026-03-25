@@ -16,6 +16,7 @@ import { supportRouter } from '../routers/support.router';
 import { adminSupportRouter } from '../routers/adminSupport.router';
 import { calendarRouter } from '../routers/calendar.router';
 import { usageRouter } from '../routers/usage.router';
+import { trialRouter } from '../routers/trial.router';
 
 /**
  * Root Application Router
@@ -57,6 +58,7 @@ export const appRouter = router({
   adminSupport: adminSupportRouter,
   calendar: calendarRouter,
   usage: usageRouter,
+  trial: trialRouter,
 });
 
 /**

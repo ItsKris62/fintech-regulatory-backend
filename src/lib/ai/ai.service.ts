@@ -525,7 +525,7 @@ export class AIService {
    */
   async generateComplianceChecklist(
     params: ChecklistGenerationParams
-  ): Promise<GeneratedChecklist> {
+  ): Promise<{ checklist: GeneratedChecklist; inputTokens: number; outputTokens: number }> {
     const startTime = Date.now();
 
     logger.info({
@@ -551,6 +551,8 @@ export class AIService {
 
     // Parse and validate the JSON response
     let checklist: GeneratedChecklist;
+    let inputTokens = result.inputTokens;
+    let outputTokens = result.outputTokens;
     try {
       checklist = parseChecklistOutput(result.content);
     } catch (parseError: unknown) {
@@ -568,6 +570,8 @@ export class AIService {
         },
         'checklist'
       );
+      inputTokens += retryResult.inputTokens;
+      outputTokens += retryResult.outputTokens;
       checklist = parseChecklistOutput(retryResult.content);
     }
 
@@ -579,7 +583,7 @@ export class AIService {
       cost: result.cost,
     });
 
-    return checklist;
+    return { checklist, inputTokens, outputTokens };
   }
 
   /**
@@ -589,7 +593,7 @@ export class AIService {
    */
   async performGapAnalysis(
     params: GapAnalysisParams
-  ): Promise<GapAnalysisResult> {
+  ): Promise<{ result: GapAnalysisResult; inputTokens: number; outputTokens: number }> {
     const startTime = Date.now();
 
     logger.info({
@@ -619,6 +623,8 @@ export class AIService {
 
     // Parse and validate JSON response
     let gapAnalysis: GapAnalysisResult;
+    let inputTokens = result.inputTokens;
+    let outputTokens = result.outputTokens;
     try {
       gapAnalysis = parseGapAnalysisOutput(result.content);
     } catch (parseError: unknown) {
@@ -635,6 +641,8 @@ export class AIService {
         },
         'policy'
       );
+      inputTokens += retryResult.inputTokens;
+      outputTokens += retryResult.outputTokens;
       gapAnalysis = parseGapAnalysisOutput(retryResult.content);
     }
 
@@ -647,7 +655,7 @@ export class AIService {
       cost: result.cost,
     });
 
-    return gapAnalysis;
+    return { result: gapAnalysis, inputTokens, outputTokens };
   }
 
   /**

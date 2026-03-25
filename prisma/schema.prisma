@@ -51,6 +51,11 @@ model User {
   supportTickets           SupportTicket[]
   ticketComments           TicketComment[]
 
+  // Free trial fields (one-time, user-scoped -- not org-scoped)
+  freeTrialActivatedAt     DateTime?
+  freeTrialExpiresAt       DateTime?
+  freeTrialUsage           Json?       // TrialUsage: { complianceQueries, gapAnalyses, checklists, vaultUploads, totalTokensUsed }
+
   @@index([email])
   @@index([supabaseAuthId])
   @@index([organizationId])

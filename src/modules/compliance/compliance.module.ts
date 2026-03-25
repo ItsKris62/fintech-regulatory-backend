@@ -20,6 +20,7 @@ import { sendEmail } from '@/lib/email/client';
 import { storageService } from '@/lib/storage/storage.service';
 import { logger } from '@/utils/logger';
 import { notificationModule } from '@/modules/notification';
+import { incrementTrialUsage } from '@/modules/trial';
 import { complianceScorer } from './compliance-scorer';
 import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
@@ -128,6 +129,7 @@ async function recoverStaleJobs(maxAgeMinutes = 20): Promise<void> {
 interface GapAnalysisPipelineParams {
   analysisId: string;
   userId: string;
+  trialUserId?: string;
   fileName: string;
   fileContent: string;  // base64-encoded
   fileType: string;     // extension without dot: pdf | docx | doc | txt
@@ -145,7 +147,7 @@ interface GapAnalysisPipelineParams {
  */
 async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Promise<void> {
   const {
-    analysisId, userId, fileName, fileContent, fileType,
+    analysisId, userId, trialUserId, fileName, fileContent, fileType,
     regulatoryFrameworks, analysisDepth, focusAreas, ipAddress, userAgent,
   } = params;
 
@@ -244,9 +246,11 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
 
     let gapResults: GapAnalysisResult;
     let chunksProcessed = 1;
+    let gapInputTokens = 0;
+    let gapOutputTokens = 0;
 
     if (!useMultiChunk) {
-      gapResults = await aiService.performGapAnalysis({
+      const gapAiResult = await aiService.performGapAnalysis({
         policyText: safePolicyText,
         documentName: fileName,
         documentType: ext,
@@ -255,6 +259,9 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
         focusAreas,
         ragContext,
       });
+      gapResults = gapAiResult.result;
+      gapInputTokens = gapAiResult.inputTokens;
+      gapOutputTokens = gapAiResult.outputTokens;
       await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 80 });
       currentProgress = 80;
     } else {
@@ -270,6 +277,8 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
         ragContext,
       });
       gapResults = multiResult.result;
+      gapInputTokens = multiResult.totalInputTokens;
+      gapOutputTokens = multiResult.totalOutputTokens;
       chunksProcessed = multiResult.chunksProcessed;
       // Attach token cost into metadata for storage + audit
       gapResults.metadata.tokenCost = {
@@ -279,6 +288,11 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
       };
       await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 85 });
       currentProgress = 85;
+    }
+
+    // Track token usage for free trial users (fire-and-forget, non-fatal).
+    if (trialUserId) {
+      incrementTrialUsage(trialUserId, 'totalTokensUsed', gapInputTokens + gapOutputTokens).catch(() => {});
     }
 
     // ── COMPLETING (progress: 90) ────────────────────────────────────────
@@ -1541,7 +1555,7 @@ Follow-up Question: ${followUp}
         hasRagContext: !!ragContext,
       });
 
-      const generatedChecklist = await aiService.generateComplianceChecklist({
+      const { checklist: generatedChecklist } = await aiService.generateComplianceChecklist({
         productType: params.productType,
         businessStage: params.businessStage,
         targetSegments: params.targetSegments,
@@ -1867,6 +1881,7 @@ Follow-up Question: ${followUp}
       organizationId?: string;
       ipAddress?: string;
       userAgent?: string;
+      trialUserId?: string;
     }
   ): Promise<{ id: string; status: string; progress: number }> {
     logger.info({
@@ -1950,6 +1965,7 @@ Follow-up Question: ${followUp}
       void executeGapAnalysisPipeline({
         analysisId: record.id,
         userId,
+        trialUserId: params.trialUserId,
         fileName: params.fileName,
         fileContent: params.fileContent,
         fileType: ext,
