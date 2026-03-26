@@ -20,6 +20,7 @@ import {
   getChecklistStatusInputSchema,
 } from '@/modules/compliance/checklist.types';
 import { logger } from '@/utils/logger';
+import { NotFoundError, ForbiddenError } from '@/utils/error';
 import { redis } from '@/lib/redis/client';
 import { incrementTrialUsage } from '@/modules/trial';
 import { getQuota } from '@/utils/entitlements';
@@ -1344,12 +1345,11 @@ export const complianceRouter = router({
       };
       const userLevel = tierLevel[plan] ?? 0;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const frameworks = await (prisma as any).regulatoryFramework.findMany({
+      const frameworks = await prisma.regulatoryFramework.findMany({
         where: { isActive: true },
         orderBy: { sortOrder: 'asc' },
         select: { slug: true, name: true, category: true, description: true, tier: true },
-      }) as Array<{ slug: string; name: string; category: string; description: string | null; tier: string }>;
+      });
 
       return frameworks.map((fw) => ({
         slug: fw.slug,
@@ -1379,7 +1379,7 @@ export const complianceRouter = router({
       z.object({
         fileName: z.string().min(1).max(255),
         fileType: z.enum(['pdf', 'docx', 'doc', 'txt']),
-        fileContent: z.string().min(1), // base64-encoded
+        fileContent: z.string().min(1).max(14_000_000), // base64-encoded; 10MB file ≈ 13.4MB base64
         regulatoryFrameworks: z.array(z.string()).min(1).max(10),
         analysisDepth: z.enum(['quick', 'standard', 'deep']).default('standard'),
         focusAreas: z.array(z.string()).max(10).optional(),
@@ -1402,11 +1402,10 @@ export const complianceRouter = router({
         const tierLevel: Record<string, number> = { REGULATOR: 3, STARTUP: 1, BUSINESS: 2, ENTERPRISE: 3 };
         const userLevel = tierLevel[plan] ?? 0;
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const dbFrameworks = await (prisma as any).regulatoryFramework.findMany({
+        const dbFrameworks = await prisma.regulatoryFramework.findMany({
           where: { slug: { in: input.regulatoryFrameworks }, isActive: true },
           select: { slug: true, name: true, tier: true },
-        }) as Array<{ slug: string; name: string; tier: string }>;
+        });
 
         // Reject any slugs not found in the DB
         const foundSlugs = new Set(dbFrameworks.map((f) => f.slug));
@@ -1482,24 +1481,13 @@ export const complianceRouter = router({
     }),
 
   /**
-   * Get the most recent gap analysis result for the current user.
-   * Replaces the legacy requirements-based getGapAnalysis.
+   * List all gap analyses for the current user.
    *
    * @protected
    */
-  getGapAnalysis: protectedProcedure
-    .input(z.object({ id: z.string().optional() }).optional())
-    .query(async ({ input, ctx }) => {
+  getGapAnalyses: protectedProcedure
+    .query(async ({ ctx }) => {
       try {
-        if (input?.id) {
-          // Return specific analysis by ID
-          return await complianceModule.getGapAnalysisResult(ctx.user!.id, input.id, {
-            ipAddress: ctx.req.ip,
-            userAgent: ctx.req.headers['user-agent'] as string | undefined,
-          });
-        }
-
-        // Return list of all analyses for this user
         const analyses = await complianceModule.getUserGapAnalyses(ctx.user!.id);
 
         logger.info({
@@ -1509,22 +1497,15 @@ export const complianceRouter = router({
         });
 
         return analyses;
-      } catch (error: any) {
+      } catch (error: unknown) {
         logger.error({
-          type: 'gap_analysis_retrieve_error',
+          type: 'gap_analysis_list_error',
           userId: ctx.user!.id,
-          error: error.message,
+          error: (error as Error).message,
         });
-
-        if (error.message === 'Gap analysis not found') {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
-        }
-        if (error.message.includes('Access denied')) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
-        }
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
-          message: 'Failed to retrieve gap analysis',
+          message: 'Failed to retrieve gap analyses',
           cause: error,
         });
       }
@@ -1551,12 +1532,12 @@ export const complianceRouter = router({
         });
 
         return result;
-      } catch (error: any) {
-        if (error.message === 'Gap analysis not found') {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
+      } catch (error: unknown) {
+        if (error instanceof NotFoundError) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: error.message });
         }
-        if (error.message.includes('Access denied')) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        if (error instanceof ForbiddenError) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
         }
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
@@ -1587,19 +1568,19 @@ export const complianceRouter = router({
         });
 
         return { success: true };
-      } catch (error: any) {
+      } catch (error: unknown) {
         logger.error({
           type: 'gap_analysis_delete_error',
           userId: ctx.user!.id,
           analysisId: input.id,
-          error: error.message,
+          error: (error as Error).message,
         });
 
-        if (error.message === 'Gap analysis not found') {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
+        if (error instanceof NotFoundError) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: error.message });
         }
-        if (error.message.includes('Access denied')) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        if (error instanceof ForbiddenError) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
         }
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
@@ -2106,8 +2087,7 @@ export const complianceRouter = router({
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 
       // 8b. Persist report tracking fields (fire-and-forget — non-blocking)
-      // Note: (prisma as any) required until prisma generate picks up reportUrl + reportGeneratedAt
-      (prisma as any).gapAnalysis.update({
+      prisma.gapAnalysis.update({
         where: { id: input.analysisId },
         data: { reportUrl: uploadResult.key, reportGeneratedAt: new Date() },
       }).catch((err: unknown) => {

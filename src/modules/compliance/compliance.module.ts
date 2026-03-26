@@ -19,6 +19,8 @@ import { mailer as _mailer } from '@/lib/email/mailer.service';
 import { sendEmail } from '@/lib/email/client';
 import { storageService } from '@/lib/storage/storage.service';
 import { logger } from '@/utils/logger';
+import { NotFoundError, ForbiddenError } from '@/utils/error';
+import { Prisma, UserRole } from '@prisma/client';
 import { notificationModule } from '@/modules/notification';
 import { incrementTrialUsage } from '@/modules/trial';
 import { complianceScorer } from './compliance-scorer';
@@ -72,12 +74,6 @@ const { REDIS_KEYS, MAX_QUERIES_PER_HOUR, MAX_QUICK_CHECKS_PER_HOUR, QUERY_CACHE
 
 // ─── Gap Analysis Async Helpers ───────────────────────────────────────────────
 
-/** Minimal Prisma cast type for GapAnalysis write operations. */
-type GapAnalysisWriteTable = {
-  update: (a: { where: { id: string }; data: Record<string, unknown> }) => Promise<void>;
-  updateMany: (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-};
-
 /**
  * Update status + progress on a GapAnalysis record.
  * Never throws — errors are logged and swallowed so callers stay non-fatal.
@@ -87,7 +83,7 @@ async function updateAnalysisStatus(
   update: { status: string; progress: number; errorMessage?: string },
 ): Promise<void> {
   try {
-    await (prisma as unknown as { gapAnalysis: GapAnalysisWriteTable }).gapAnalysis.update({
+    await prisma.gapAnalysis.update({
       where: { id: analysisId },
       data: {
         status: update.status,
@@ -108,7 +104,7 @@ async function updateAnalysisStatus(
 async function recoverStaleJobs(maxAgeMinutes = 20): Promise<void> {
   const staleThreshold = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
   try {
-    const updated = await (prisma as unknown as { gapAnalysis: GapAnalysisWriteTable }).gapAnalysis.updateMany({
+    const updated = await prisma.gapAnalysis.updateMany({
       where: {
         status: { in: ['UPLOADING', 'QUEUED', 'EXTRACTING', 'ANALYZING', 'COMPLETING'] },
         updatedAt: { lt: staleThreshold },
@@ -299,13 +295,14 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
     await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 90 });
     currentProgress = 90;
 
-    await (prisma as unknown as { gapAnalysis: GapAnalysisWriteTable }).gapAnalysis.update({
+    await prisma.gapAnalysis.update({
       where: { id: analysisId },
       data: {
-        results: gapResults as unknown as Record<string, unknown>,
+        results: gapResults,
         overallScore: gapResults.overallScore,
         status: 'COMPLETED',
         progress: 100,
+        completedAt: new Date(),
         ragGrounded,
         chunksProcessed,
       },
@@ -1911,11 +1908,7 @@ Follow-up Question: ${followUp}
     });
 
     // Create placeholder record (UPLOADING, progress: 0)
-    const record = await (prisma as unknown as {
-      gapAnalysis: {
-        create: (args: { data: Record<string, unknown> }) => Promise<{ id: string }>;
-      };
-    }).gapAnalysis.create({
+    const record = await prisma.gapAnalysis.create({
       data: {
         userId,
         organizationId: params.organizationId ?? null,
@@ -1946,7 +1939,7 @@ Follow-up Question: ${followUp}
       );
 
       // Update documentUrl + mark as QUEUED (progress: 5)
-      await (prisma as unknown as { gapAnalysis: GapAnalysisWriteTable }).gapAnalysis.update({
+      await prisma.gapAnalysis.update({
         where: { id: record.id },
         data: { documentUrl: uploadResult.key, status: 'QUEUED', progress: 5 },
       });
@@ -2003,7 +1996,7 @@ Follow-up Question: ${followUp}
     id: string;
     documentName: string;
     documentType: string;
-    regulatoryFrameworks: unknown;
+    regulatoryFrameworks: Prisma.JsonValue;
     analysisDepth: string;
     overallScore: number | null;
     status: string;
@@ -2017,31 +2010,15 @@ Follow-up Question: ${followUp}
       logger.error({ type: 'gap_analysis_stale_job_recovery_failed', error: (err as Error).message });
     });
 
-    // Cache-aside: 60s TTL (short enough to reflect in-progress status changes)
+    // Cache-aside: short TTL for in-progress, 60s for all-terminal
     const listCacheKey = `cache:gap-analysis:list:${userId}`;
     try {
       const cached = await redis.get<string>(listCacheKey);
       if (cached) return JSON.parse(cached);
     } catch { /* non-fatal — fall through to DB */ }
 
-    const analyses = await (prisma as unknown as {
-      gapAnalysis: {
-        findMany: (args: { where: { userId: string }; orderBy: { createdAt: string }; select: Record<string, boolean> }) => Promise<{
-          id: string;
-          documentName: string;
-          documentType: string;
-          regulatoryFrameworks: unknown;
-          analysisDepth: string;
-          overallScore: number | null;
-          status: string;
-          progress: number;
-          errorMessage: string | null;
-          createdAt: Date;
-          updatedAt: Date;
-        }[]>;
-      };
-    }).gapAnalysis.findMany({
-      where: { userId },
+    const analyses = await prisma.gapAnalysis.findMany({
+      where: { userId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -2058,9 +2035,12 @@ Follow-up Question: ${followUp}
       },
     });
 
-    // Populate cache
+    // Populate cache — 5s TTL if any analysis is in-progress, 60s if all terminal
+    const hasInProgress = analyses.some(
+      (a) => !['COMPLETED', 'FAILED'].includes(a.status),
+    );
     try {
-      await redis.set(listCacheKey, JSON.stringify(analyses), { ex: 60 });
+      await redis.set(listCacheKey, JSON.stringify(analyses), { ex: hasInProgress ? 5 : 60 });
     } catch { /* non-fatal */ }
 
     return analyses;
@@ -2078,9 +2058,9 @@ Follow-up Question: ${followUp}
     documentName: string;
     documentType: string;
     documentUrl: string;
-    regulatoryFrameworks: unknown;
+    regulatoryFrameworks: Prisma.JsonValue;
     analysisDepth: string;
-    focusAreas: unknown;
+    focusAreas: Prisma.JsonValue | null;
     results: GapAnalysisResult | null;
     overallScore: number | null;
     status: string;
@@ -2088,41 +2068,19 @@ Follow-up Question: ${followUp}
     errorMessage: string | null;
     ragGrounded: boolean;
     chunksProcessed: number;
+    completedAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
     userName: string | null;
     organizationName: string | null;
   }> {
-    const analysis = await (prisma as unknown as {
-      gapAnalysis: {
-        findUnique: (args: { where: { id: string } }) => Promise<{
-          id: string;
-          userId: string;
-          organizationId: string | null;
-          documentName: string;
-          documentType: string;
-          documentUrl: string;
-          regulatoryFrameworks: unknown;
-          analysisDepth: string;
-          focusAreas: unknown;
-          results: unknown;
-          overallScore: number | null;
-          status: string;
-          progress: number;
-          errorMessage: string | null;
-          ragGrounded: boolean;
-          chunksProcessed: number;
-          createdAt: Date;
-          updatedAt: Date;
-        } | null>;
-      };
-    }).gapAnalysis.findUnique({ where: { id: analysisId } });
+    const analysis = await prisma.gapAnalysis.findUnique({ where: { id: analysisId } });
 
-    if (!analysis) throw new Error('Gap analysis not found');
+    if (!analysis || analysis.deletedAt !== null) throw new NotFoundError('Gap analysis');
 
     if (analysis.userId !== userId) {
       const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
-      if (user?.role !== 'ADMIN') throw new Error('Access denied');
+      if (user?.role !== UserRole.ADMIN) throw new ForbiddenError('Access denied');
     }
 
     // Audit log — fire-and-forget; must never block the primary operation.
@@ -2182,23 +2140,18 @@ Follow-up Question: ${followUp}
     analysisId: string,
     opts?: { ipAddress?: string; userAgent?: string },
   ): Promise<void> {
-    const analysis = await (prisma as unknown as {
-      gapAnalysis: {
-        findUnique: (args: { where: { id: string }; select: Record<string, boolean> }) => Promise<{ userId: string; documentUrl: string } | null>;
-        delete: (args: { where: { id: string } }) => Promise<void>;
-      };
-    }).gapAnalysis.findUnique({
+    const analysis = await prisma.gapAnalysis.findUnique({
       where: { id: analysisId },
-      select: { userId: true, documentUrl: true },
+      select: { userId: true, documentUrl: true, deletedAt: true },
     });
 
-    if (!analysis) throw new Error('Gap analysis not found');
+    if (!analysis || analysis.deletedAt !== null) throw new NotFoundError('Gap analysis');
     if (analysis.userId !== userId) {
       const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
-      if (user?.role !== 'ADMIN') throw new Error('Access denied');
+      if (user?.role !== UserRole.ADMIN) throw new ForbiddenError('Access denied');
     }
 
-    // Audit log before deletion (entity still exists at this point).
+    // Audit log before soft-deletion (entity still exists at this point).
     // Fire-and-forget; must never block the delete operation.
     prisma.auditLog.create({
       data: {
@@ -2223,8 +2176,11 @@ Follow-up Question: ${followUp}
       }
     }
 
-    await (prisma as unknown as { gapAnalysis: { delete: (args: { where: { id: string } }) => Promise<void> } })
-      .gapAnalysis.delete({ where: { id: analysisId } });
+    // Soft delete — set deletedAt instead of destroying the row
+    await prisma.gapAnalysis.update({
+      where: { id: analysisId },
+      data: { deletedAt: new Date() },
+    });
 
     // Invalidate caches
     try {

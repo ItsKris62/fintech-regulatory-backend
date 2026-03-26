@@ -357,31 +357,35 @@ model ChecklistItem {
 }
 
 model GapAnalysis {
-  id                   String   @id @default(cuid())
+  id                   String    @id @default(cuid())
   userId               String
   organizationId       String?
   documentName         String
   documentUrl          String
   documentType         String
   regulatoryFrameworks Json
-  analysisDepth        String   @default("standard")
+  analysisDepth        String    @default("standard")
   focusAreas           Json?
   results              Json?
   overallScore         Int?
-  status               String   @default("UPLOADING")
+  status               String    @default("UPLOADING")
+  progress             Int       @default(0)
   errorMessage         String?
-  ragGrounded          Boolean  @default(true)
-  chunksProcessed      Int      @default(1)
+  ragGrounded          Boolean   @default(true)
+  chunksProcessed      Int       @default(1)
   reportUrl            String?
   reportGeneratedAt    DateTime?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  user                 User     @relation(fields: [userId], references: [id])
+  completedAt          DateTime?
+  deletedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  user                 User      @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([status])
   @@index([organizationId])
   @@index([createdAt])
+  @@index([deletedAt])
 }
 
 model Notification {
