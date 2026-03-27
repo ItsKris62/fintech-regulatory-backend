@@ -205,19 +205,28 @@ class StripeWebhookService {
     });
 
     // ── Append payment record (trial start — amount 0 until trial ends) ──────
-    void paymentService.createPaymentRecord({
-      orgId,
-      subscriptionId:        subId,
-      provider:              PaymentProvider.STRIPE,
-      providerTransactionId: session.id,
-      amount:                0,
-      currency:              'KES',
-      status:                subStatus === SubscriptionStatus.TRIALING
-        ? PaymentStatus.PENDING
-        : PaymentStatus.COMPLETED,
-      description:           `Checkout completed — ${planName} plan`,
-      metadata:              { sessionId: session.id, plan: planName },
-    });
+    {
+      const invoiceNumber    = await paymentService.generateInvoiceNumber();
+      const periodStart      = new Date();
+      const periodEnd        = trialEndsAt ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      void paymentService.createPaymentRecord({
+        orgId,
+        subscriptionId:        subId,
+        provider:              PaymentProvider.STRIPE,
+        providerTransactionId: session.id,
+        amount:                0,
+        currency:              'KES',
+        status:                subStatus === SubscriptionStatus.TRIALING
+          ? PaymentStatus.PENDING
+          : PaymentStatus.COMPLETED,
+        description:           `Checkout completed — ${planName} plan`,
+        metadata:              { sessionId: session.id, plan: planName },
+        invoiceNumber,
+        subscriptionPlan:      planName,
+        billingPeriodStart:    periodStart,
+        billingPeriodEnd:      periodEnd,
+      });
+    }
 
     // ── Fire activation email (non-blocking) ────────────────────────────────
     const contact = await this.findOrgOwnerContact(orgId);
@@ -444,6 +453,21 @@ class StripeWebhookService {
       const amountPaid = typeof invoice.amount_paid === 'number' ? invoice.amount_paid : 0;
       const invoiceAny = invoice as unknown as Record<string, unknown>;
       const subId = invoiceAny['subscription'] ? toId(invoiceAny['subscription'] as string | { id: string }) : null;
+
+      // Derive billing period from Stripe invoice timestamps
+      const periodStartTs = invoiceAny['period_start'] as number | undefined;
+      const periodEndTs   = invoiceAny['period_end'] as number | undefined;
+      const billingPeriodStart = periodStartTs ? new Date(periodStartTs * 1000) : undefined;
+      const billingPeriodEnd   = periodEndTs   ? new Date(periodEndTs   * 1000) : undefined;
+
+      // Derive plan from invoice line items price ID
+      const lines     = invoiceAny['lines'] as { data?: Array<{ price?: { id?: string } }> } | undefined;
+      const priceId   = lines?.data?.[0]?.price?.id;
+      const derivedPlan = priceId ? (PRICE_TO_PLAN[priceId] ?? null) : null;
+      const planLabel = derivedPlan ?? org.plan;
+
+      const invoiceNumber = await paymentService.generateInvoiceNumber();
+
       void paymentService.createPaymentRecord({
         orgId:                 org.id,
         subscriptionId:        subId ?? undefined,
@@ -459,6 +483,10 @@ class StripeWebhookService {
           customerId,
           hostedInvoiceUrl: (invoiceAny['hosted_invoice_url'] as string | null) ?? null,
         },
+        invoiceNumber,
+        subscriptionPlan:    String(planLabel),
+        billingPeriodStart,
+        billingPeriodEnd,
       });
     }
   }

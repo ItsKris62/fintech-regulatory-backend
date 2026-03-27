@@ -64,6 +64,11 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().min(1, 'Stripe secret key is required'),
   STRIPE_PUBLISHABLE_KEY: z.string().min(1, 'Stripe publishable key is required'),
   STRIPE_WEBHOOK_SECRET: z.string().min(1, 'Stripe webhook secret is required'),
+
+  // IntaSend (M-Pesa) — optional; required only when M-Pesa payment method is used
+  INTASEND_PUBLISHABLE_KEY: z.string().optional().default(''),
+  INTASEND_SECRET_KEY: z.string().optional().default(''),
+  INTASEND_IS_TEST: z.string().optional().default('true'),
 });
 
 /**
@@ -172,6 +177,13 @@ export const appConfig = {
     secretKey: env.STRIPE_SECRET_KEY,
     publishableKey: env.STRIPE_PUBLISHABLE_KEY,
     webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+  },
+
+  // IntaSend (M-Pesa)
+  intasend: {
+    publishableKey: env.INTASEND_PUBLISHABLE_KEY,
+    secretKey: env.INTASEND_SECRET_KEY,
+    isTest: env.INTASEND_IS_TEST === 'true',
   },
 } as const;
 

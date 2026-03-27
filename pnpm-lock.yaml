@@ -98,6 +98,9 @@ importers:
       file-type:
         specifier: ^21.3.0
         version: 21.3.0
+      intasend-node:
+        specifier: ^1.1.2
+        version: 1.1.2
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
@@ -3693,6 +3696,9 @@ packages:
 
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
+
+  intasend-node@1.1.2:
+    resolution: {integrity: sha512-V9zQdcKEwFfMhfTKz7OrmSJ73BmBmT7MkjA2iN2k4PyxomOtWVgIYP5zYL9lF0wGuzpJaIp9cI8cZFo06n1TKQ==}
 
   ioredis@5.9.3:
     resolution: {integrity: sha512-VI5tMCdeoxZWU5vjHWsiE/Su76JGhBvWF1MJnV9ZtGltHk9BmD48oDq8Tj8haZ85aceXZMxLNDQZRVo5QKNgXA==}
@@ -8886,7 +8892,7 @@ snapshots:
       isstream: 0.1.2
       jsonwebtoken: 9.0.3
       mime-types: 2.1.35
-      retry-axios: 2.6.0(axios@1.13.5)
+      retry-axios: 2.6.0(axios@1.13.5(debug@4.4.3))
       tough-cookie: 4.1.4
     transitivePeerDependencies:
       - supports-color
@@ -8922,6 +8928,8 @@ snapshots:
   imurmurhash@0.1.4: {}
 
   inherits@2.0.4: {}
+
+  intasend-node@1.1.2: {}
 
   ioredis@5.9.3:
     dependencies:
@@ -9766,7 +9774,7 @@ snapshots:
 
   ret@0.5.0: {}
 
-  retry-axios@2.6.0(axios@1.13.5):
+  retry-axios@2.6.0(axios@1.13.5(debug@4.4.3)):
     dependencies:
       axios: 1.13.5(debug@4.4.3)
 

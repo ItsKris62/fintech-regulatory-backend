@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { BillingMetric, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
+import { BillingMetric, PaymentProvider, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { middleware } from './init';
 import { rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
@@ -185,12 +185,15 @@ const USAGE_TTL = 35 * 24 * 60 * 60;
  * works on cache hits without extra DB round-trips.
  */
 type CachedPlanCtx = {
-  orgPlan:            SubscriptionPlan;
-  customLimits:       Record<string, unknown> | null;
-  subscriptionStatus: SubscriptionStatus | null;
-  gracePeriodEndsAt:  string | null; // ISO-8601
-  trialActivatedAt:   string | null; // ISO-8601
-  trialExpiresAt:     string | null; // ISO-8601
+  orgPlan:                  SubscriptionPlan;
+  customLimits:             Record<string, unknown> | null;
+  subscriptionStatus:       SubscriptionStatus | null;
+  gracePeriodEndsAt:        string | null; // ISO-8601
+  trialActivatedAt:         string | null; // ISO-8601
+  trialExpiresAt:           string | null; // ISO-8601
+  // M-Pesa renewal fields
+  preferredPaymentMethod:   PaymentProvider | null;
+  mpesaNextPaymentDueDate:  string | null; // ISO-8601
 };
 
 /**
@@ -239,24 +242,28 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
   const cacheKey = planCtxCacheKey(userId);
 
   // ── Try user-scoped plan context cache ────────────────────────────────────
-  let orgPlan:            SubscriptionPlan            = SubscriptionPlan.REGULATOR;
-  let customLimits:       Record<string, unknown> | null = null;
-  let subscriptionStatus: SubscriptionStatus | null   = null;
-  let gracePeriodEndsAt:  string | null               = null;
-  let trialActivatedAt:   string | null               = null;
-  let trialExpiresAt:     string | null               = null;
+  let orgPlan:                  SubscriptionPlan            = SubscriptionPlan.REGULATOR;
+  let customLimits:             Record<string, unknown> | null = null;
+  let subscriptionStatus:       SubscriptionStatus | null   = null;
+  let gracePeriodEndsAt:        string | null               = null;
+  let trialActivatedAt:         string | null               = null;
+  let trialExpiresAt:           string | null               = null;
+  let preferredPaymentMethod:   PaymentProvider | null      = null;
+  let mpesaNextPaymentDueDate:  string | null               = null;
   let fromCache = false;
 
   try {
     const cached = await redis.get<CachedPlanCtx>(cacheKey);
     if (cached && typeof cached === 'object' && cached.orgPlan) {
-      orgPlan            = cached.orgPlan;
-      customLimits       = cached.customLimits ?? null;
-      subscriptionStatus = cached.subscriptionStatus ?? null;
-      gracePeriodEndsAt  = cached.gracePeriodEndsAt ?? null;
-      trialActivatedAt   = cached.trialActivatedAt ?? null;
-      trialExpiresAt     = cached.trialExpiresAt ?? null;
-      fromCache          = true;
+      orgPlan                 = cached.orgPlan;
+      customLimits            = cached.customLimits ?? null;
+      subscriptionStatus      = cached.subscriptionStatus ?? null;
+      gracePeriodEndsAt       = cached.gracePeriodEndsAt ?? null;
+      trialActivatedAt        = cached.trialActivatedAt ?? null;
+      trialExpiresAt          = cached.trialExpiresAt ?? null;
+      preferredPaymentMethod  = cached.preferredPaymentMethod ?? null;
+      mpesaNextPaymentDueDate = cached.mpesaNextPaymentDueDate ?? null;
+      fromCache               = true;
     }
   } catch {
     // Cache miss or parse error -- fall through to DB
@@ -283,17 +290,21 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
       const org = await prisma.organization.findUnique({
         where:  { id: orgId },
         select: {
-          plan:               true,
-          customLimits:       true,
-          subscriptionStatus: true,
-          gracePeriodEndsAt:  true,
+          plan:                    true,
+          customLimits:            true,
+          subscriptionStatus:      true,
+          gracePeriodEndsAt:       true,
+          preferredPaymentMethod:  true,
+          mpesaNextPaymentDueDate: true,
         },
       });
 
-      orgPlan            = org?.plan               ?? SubscriptionPlan.REGULATOR;
-      customLimits       = (org?.customLimits as Record<string, unknown> | null) ?? null;
-      subscriptionStatus = org?.subscriptionStatus ?? null;
-      gracePeriodEndsAt  = org?.gracePeriodEndsAt?.toISOString() ?? null;
+      orgPlan                 = org?.plan               ?? SubscriptionPlan.REGULATOR;
+      customLimits            = (org?.customLimits as Record<string, unknown> | null) ?? null;
+      subscriptionStatus      = org?.subscriptionStatus ?? null;
+      gracePeriodEndsAt       = org?.gracePeriodEndsAt?.toISOString()       ?? null;
+      preferredPaymentMethod  = org?.preferredPaymentMethod                 ?? null;
+      mpesaNextPaymentDueDate = org?.mpesaNextPaymentDueDate?.toISOString() ?? null;
     }
 
     // Populate user-scoped cache
@@ -306,6 +317,8 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
         gracePeriodEndsAt,
         trialActivatedAt,
         trialExpiresAt,
+        preferredPaymentMethod,
+        mpesaNextPaymentDueDate,
       }),
       { ex: PLAN_CACHE_TTL },
     ).catch(() => { /* non-fatal */ });
@@ -380,6 +393,153 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
         }
       } catch { /* email failure must never affect the request */ }
     })();
+  }
+
+  // ── M-Pesa renewal lazy check ─────────────────────────────────────────────
+  //
+  // Only runs when the org has elected M-Pesa as their payment method.
+  // Stripe subscriptions are managed entirely by Stripe -- do NOT touch them here.
+  //
+  // Logic:
+  //   Past 7-day grace   -> downgrade to REGULATOR
+  //   Within grace       -> keep plan, fire once-per-day payment-due reminder
+  //   Within 3 days      -> fire once-per-72h upcoming payment reminder
+  if (
+    orgId &&
+    preferredPaymentMethod === PaymentProvider.MPESA &&
+    mpesaNextPaymentDueDate !== null
+  ) {
+    const now        = new Date();
+    const dueDate    = new Date(mpesaNextPaymentDueDate);
+    const msPerDay   = 1000 * 60 * 60 * 24;
+    const msDiff     = dueDate.getTime() - now.getTime();
+    const daysPast   = msDiff < 0 ? Math.floor(-msDiff / msPerDay) : 0;
+    const daysUntil  = msDiff > 0 ? Math.floor(msDiff / msPerDay) : 0;
+
+    if (daysPast > 7) {
+      // Past the 7-day grace window — downgrade to REGULATOR
+      const previousPlan = orgPlan;
+
+      await prisma.organization.update({
+        where: { id: orgId },
+        data: {
+          plan:               SubscriptionPlan.REGULATOR,
+          subscriptionStatus: SubscriptionStatus.EXPIRED,
+        },
+      });
+
+      try { await redis.del(cacheKey); } catch { /* non-fatal */ }
+
+      orgPlan            = SubscriptionPlan.REGULATOR;
+      subscriptionStatus = SubscriptionStatus.EXPIRED;
+
+      logger.info({
+        type:  'mpesa_grace_period_expired_downgraded',
+        orgId,
+        userId,
+        previousPlan,
+        mpesaNextPaymentDueDate,
+      });
+
+      // Fire downgrade email (non-blocking)
+      void (async () => {
+        try {
+          const contact = await prisma.user.findFirst({
+            where:   { organizationId: orgId, role: { in: ['ADMIN', 'STARTUP', 'ENTERPRISE'] } },
+            select:  { email: true, fullName: true },
+            orderBy: { createdAt: 'asc' },
+          });
+          const org = await prisma.organization.findUnique({
+            where:  { id: orgId },
+            select: { name: true },
+          });
+          if (contact && org) {
+            const base      = appConfig.frontendUrl.replace(/\/$/, '');
+            const planLabel = previousPlan.charAt(0) + previousPlan.slice(1).toLowerCase();
+            await reactMailer.sendPlanDowngradedEmail(contact.email, {
+              userName:         contact.fullName,
+              orgName:          org.name,
+              previousPlanName: planLabel,
+              reactivateUrl:    `${base}/settings/billing`,
+              dashboardUrl:     `${base}/startup`,
+            });
+          }
+        } catch { /* email failure must never affect the request */ }
+      })();
+    } else if (daysPast > 0) {
+      // Within 7-day grace window — keep current plan, send daily reminder
+      const today       = now.toISOString().slice(0, 10); // YYYY-MM-DD
+      const sentinelKey = `sheriabot:mpesa:due_notified:${orgId}:${today}`;
+
+      void (async () => {
+        try {
+          const alreadyNotified = await redis.get<string>(sentinelKey);
+          if (!alreadyNotified) {
+            await redis.set(sentinelKey, '1', { ex: 60 * 60 * 24 }); // 24-hour TTL
+
+            const contact = await prisma.user.findFirst({
+              where:   { organizationId: orgId, role: { in: ['ADMIN', 'STARTUP', 'ENTERPRISE'] } },
+              select:  { email: true, fullName: true, id: true },
+              orderBy: { createdAt: 'asc' },
+            });
+            if (contact) {
+              const org = await prisma.organization.findUnique({
+                where:  { id: orgId },
+                select: { plan: true },
+              });
+              const planLabel  = (org?.plan ?? 'Subscription').charAt(0) + (org?.plan ?? '').slice(1).toLowerCase();
+              const amountKes  = org?.plan === 'STARTUP' ? 25000 : org?.plan === 'BUSINESS' ? 75000 : 0;
+              const amountStr  = `KES ${amountKes.toLocaleString('en-KE')}`;
+              const base       = appConfig.frontendUrl.replace(/\/$/, '');
+              await reactMailer.sendPaymentDueEmail(contact.email, contact.id, {
+                userName:     contact.fullName,
+                amount:       amountStr,
+                dueDate:      dueDate.toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' }),
+                planName:     planLabel,
+                paymentUrl:   `${base}/settings/billing`,
+                daysUntilDue: -daysPast, // negative = overdue
+              });
+            }
+          }
+        } catch { /* non-fatal */ }
+      })();
+    } else if (daysUntil <= 3 && daysUntil >= 0) {
+      // Approaching due date (within 3 days) — send one-time upcoming reminder
+      const sentinelKey = `sheriabot:mpesa:upcoming_notified:${orgId}`;
+
+      void (async () => {
+        try {
+          const alreadyNotified = await redis.get<string>(sentinelKey);
+          if (!alreadyNotified) {
+            await redis.set(sentinelKey, '1', { ex: 60 * 60 * 72 }); // 72-hour TTL
+
+            const contact = await prisma.user.findFirst({
+              where:   { organizationId: orgId, role: { in: ['ADMIN', 'STARTUP', 'ENTERPRISE'] } },
+              select:  { email: true, fullName: true, id: true },
+              orderBy: { createdAt: 'asc' },
+            });
+            if (contact) {
+              const org = await prisma.organization.findUnique({
+                where:  { id: orgId },
+                select: { plan: true },
+              });
+              const planLabel  = (org?.plan ?? 'Subscription').charAt(0) + (org?.plan ?? '').slice(1).toLowerCase();
+              const amountKes  = org?.plan === 'STARTUP' ? 25000 : org?.plan === 'BUSINESS' ? 75000 : 0;
+              const amountStr  = `KES ${amountKes.toLocaleString('en-KE')}`;
+              const base       = appConfig.frontendUrl.replace(/\/$/, '');
+              await reactMailer.sendPaymentDueEmail(contact.email, contact.id, {
+                userName:     contact.fullName,
+                amount:       amountStr,
+                dueDate:      dueDate.toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' }),
+                planName:     planLabel,
+                paymentUrl:   `${base}/settings/billing`,
+                daysUntilDue: daysUntil,
+              });
+            }
+          }
+        } catch { /* non-fatal */ }
+      })();
+    }
   }
 
   // ── Resolve effective plan (priority order) ───────────────────────────────

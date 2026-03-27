@@ -12,7 +12,11 @@
 
 import { PaymentProvider, PaymentStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma/client';
+import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
+
+// Invoice sequence Redis key — one counter per calendar year
+const invoiceSeqKey = (year: number) => `sheriabot:invoice_seq:${year}`;
 
 export interface CreatePaymentInput {
   orgId:                 string;
@@ -25,6 +29,11 @@ export interface CreatePaymentInput {
   description?:          string;
   paidAt?:               Date;
   metadata?:             Record<string, unknown>;
+  // Invoice fields — generated at payment creation time
+  invoiceNumber?:        string;
+  subscriptionPlan?:     string;
+  billingPeriodStart?:   Date;
+  billingPeriodEnd?:     Date;
 }
 
 export interface GetPaymentsInput {
@@ -74,6 +83,10 @@ class PaymentService {
         description:           input.description,
         paidAt:                input.paidAt,
         metadata:              input.metadata ?? {},
+        invoiceNumber:         input.invoiceNumber,
+        subscriptionPlan:      input.subscriptionPlan,
+        billingPeriodStart:    input.billingPeriodStart,
+        billingPeriodEnd:      input.billingPeriodEnd,
       },
     });
 
@@ -124,6 +137,29 @@ class PaymentService {
     return prisma.payment.findFirst({
       where: { id: paymentId, orgId },
     });
+  }
+
+  /**
+   * Generate a sequential invoice number for the current year.
+   *
+   * Uses an atomic Redis INCR on key `sheriabot:invoice_seq:{YYYY}` so that
+   * concurrent calls never produce the same number. The TTL is set to 400 days
+   * on first write so the counter expires well after year-end without manual cleanup.
+   *
+   * Format: SB-{YYYY}-{00000} (e.g. SB-2026-00042)
+   */
+  async generateInvoiceNumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    const key  = invoiceSeqKey(year);
+
+    const seq = await redis.incr(key);
+
+    // Set TTL on first write (seq === 1). 400 days covers the full year + buffer.
+    if (seq === 1) {
+      await redis.expire(key, 60 * 60 * 24 * 400);
+    }
+
+    return `SB-${year}-${String(seq).padStart(5, '0')}`;
   }
 
   /**

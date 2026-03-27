@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { BillingMetric, SubscriptionPlan } from '@prisma/client';
+import { BillingMetric, PaymentProvider, PaymentStatus, SubscriptionPlan } from '@prisma/client';
 import { router, protectedProcedure } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
 import { prisma } from '@/lib/prisma/client';
@@ -12,6 +12,8 @@ import { appConfig } from '@/config/app.config';
 import { reactMailer } from '@/lib/email/react-mailer.service';
 import { logger } from '@/utils/logger';
 import { getTrialStatus } from '@/modules/trial';
+import { intaSendService, normalisePhoneNumber } from '@/modules/intasend';
+import { paymentService } from '@/modules/billing/payment.service';
 
 /** Redis key for enterprise inquiry rate-limiting (max 3 per org per day) */
 const enterpriseInquiryKey = (orgId: string) => {
@@ -416,5 +418,267 @@ export const billingRouter = router({
       });
 
       return { success: true };
+    }),
+
+  // ==========================================================================
+  // M-Pesa / IntaSend procedures
+  // ==========================================================================
+
+  /**
+   * Update the preferred payment method (Card/Stripe or M-Pesa) for the org.
+   *
+   * When switching to M-Pesa, a phone number is required (now or previously stored).
+   * Switching methods does NOT cancel an existing Stripe subscription — it only
+   * affects the next payment initiated by the user.
+   */
+  updatePaymentMethod: protectedProcedure
+    .input(
+      z.object({
+        provider:          z.nativeEnum(PaymentProvider),
+        mpesaPhoneNumber:  z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { user } = ctx;
+
+      if (!user.organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'No organization found.' });
+      }
+
+      let normalisedPhone: string | undefined;
+
+      if (input.provider === PaymentProvider.MPESA) {
+        const raw = input.mpesaPhoneNumber;
+        const existing = await prisma.organization.findUnique({
+          where:  { id: user.organizationId },
+          select: { mpesaPhoneNumber: true },
+        });
+
+        const phoneToNormalise = raw ?? existing?.mpesaPhoneNumber ?? null;
+
+        if (!phoneToNormalise) {
+          throw new TRPCError({
+            code:    'BAD_REQUEST',
+            message: 'M-Pesa phone number is required when selecting M-Pesa as payment method.',
+          });
+        }
+
+        const normalised = normalisePhoneNumber(phoneToNormalise);
+        if (!normalised) {
+          throw new TRPCError({
+            code:    'BAD_REQUEST',
+            message: 'Invalid phone number. Use format: 07XX XXX XXX, 01XX XXX XXX, or 254XXXXXXXXX.',
+          });
+        }
+        normalisedPhone = normalised;
+      }
+
+      const updated = await prisma.organization.update({
+        where: { id: user.organizationId },
+        data: {
+          preferredPaymentMethod: input.provider,
+          ...(normalisedPhone ? { mpesaPhoneNumber: normalisedPhone } : {}),
+        },
+        select: {
+          preferredPaymentMethod: true,
+          mpesaPhoneNumber: true,
+        },
+      });
+
+      // Invalidate plan context cache so next request picks up the updated payment method
+      await redis.del(`sheriabot:planctx:${user.id}`);
+
+      logger.info({
+        type:     'payment_method_updated',
+        userId:   user.id,
+        orgId:    user.organizationId,
+        provider: input.provider,
+      });
+
+      return {
+        preferredPaymentMethod: updated.preferredPaymentMethod,
+        mpesaPhoneNumber:       updated.mpesaPhoneNumber ?? null,
+      };
+    }),
+
+  /**
+   * Initiate an M-Pesa STK push for a subscription plan.
+   *
+   * Creates a PENDING Payment record first (idempotent via providerTransactionId),
+   * then triggers the STK push via IntaSend. Returns the paymentId for polling.
+   */
+  initiateMpesaPayment: protectedProcedure
+    .input(
+      z.object({
+        plan:             z.nativeEnum(SubscriptionPlan),
+        phoneNumber:      z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { user } = ctx;
+
+      if (!user.organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'No organization found.' });
+      }
+
+      if (input.plan === SubscriptionPlan.REGULATOR || input.plan === SubscriptionPlan.ENTERPRISE) {
+        throw new TRPCError({
+          code:    'BAD_REQUEST',
+          message: 'M-Pesa payments are available for Startup and Business plans only.',
+        });
+      }
+
+      // Resolve phone number: use provided value or fall back to stored org number
+      const org = await prisma.organization.findUnique({
+        where:  { id: user.organizationId },
+        select: { mpesaPhoneNumber: true, name: true },
+      });
+
+      const rawPhone = input.phoneNumber ?? org?.mpesaPhoneNumber ?? null;
+      if (!rawPhone) {
+        throw new TRPCError({
+          code:    'BAD_REQUEST',
+          message: 'No M-Pesa phone number on file. Please provide a phone number.',
+        });
+      }
+
+      const phoneNumber = normalisePhoneNumber(rawPhone);
+      if (!phoneNumber) {
+        throw new TRPCError({
+          code:    'BAD_REQUEST',
+          message: 'Invalid phone number. Use format: 07XX XXX XXX, 01XX XXX XXX, or 254XXXXXXXXX.',
+        });
+      }
+
+      // Persist normalised phone if a new number was provided
+      if (input.phoneNumber) {
+        await prisma.organization.update({
+          where: { id: user.organizationId },
+          data:  { mpesaPhoneNumber: phoneNumber, preferredPaymentMethod: PaymentProvider.MPESA },
+        });
+      }
+
+      // Plan prices in KES (whole number) and KES cents (for DB)
+      const PLAN_KES: Record<string, number> = {
+        STARTUP:  25000,
+        BUSINESS: 75000,
+      };
+      const amountKes   = PLAN_KES[input.plan] ?? 0;
+      const amountCents = amountKes * 100; // DB stores smallest unit
+
+      // Generate invoice number upfront (stored on payment record)
+      const invoiceNumber = await paymentService.generateInvoiceNumber();
+
+      // Create PENDING payment record before initiating STK push
+      const payment = await paymentService.createPaymentRecord({
+        orgId:            user.organizationId,
+        provider:         PaymentProvider.MPESA,
+        amount:           amountCents,
+        currency:         'KES',
+        status:           PaymentStatus.PENDING,
+        description:      `${input.plan} plan — M-Pesa payment`,
+        invoiceNumber,
+        subscriptionPlan: input.plan,
+        metadata:         { phone_number: phoneNumber, plan: input.plan },
+      });
+
+      // Trigger STK push
+      let stkResponse: Awaited<ReturnType<typeof intaSendService.initiateSTKPush>>;
+      try {
+        stkResponse = await intaSendService.initiateSTKPush({
+          phoneNumber,
+          amount:           amountKes,
+          accountReference: payment.id,
+          narrative:        `SheriaBot ${input.plan} subscription`,
+        });
+      } catch (err: unknown) {
+        // Mark the pre-created payment as failed so history is clean
+        void paymentService.updatePaymentStatus(payment.id, PaymentStatus.FAILED, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw new TRPCError({
+          code:    'BAD_REQUEST',
+          message: err instanceof Error ? err.message : 'Failed to initiate M-Pesa payment.',
+        });
+      }
+
+      // Store IntaSend's invoice ID on the payment record for polling / webhook matching
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+          providerTransactionId: stkResponse.invoiceId,
+          metadata: {
+            ...(payment.metadata as Record<string, unknown> ?? {}),
+            intasendInvoiceId: stkResponse.invoiceId,
+          },
+        },
+      });
+
+      logger.info({
+        type:              'mpesa_payment_initiated',
+        userId:            user.id,
+        orgId:             user.organizationId,
+        paymentId:         payment.id,
+        intasendInvoiceId: stkResponse.invoiceId,
+        plan:              input.plan,
+        amountKes,
+      });
+
+      return {
+        paymentId:  payment.id,
+        trackingId: stkResponse.invoiceId,
+        message:    'Check your phone for the M-Pesa prompt. Enter your PIN to complete payment.',
+      };
+    }),
+
+  /**
+   * Poll the status of a pending M-Pesa payment.
+   *
+   * Used by the frontend MpesaPaymentFlow component to check every 5 seconds
+   * whether the webhook has confirmed the payment (or failed).
+   */
+  getMpesaPaymentStatus: protectedProcedure
+    .input(z.object({ paymentId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const { user } = ctx;
+
+      if (!user.organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'No organization found.' });
+      }
+
+      const payment = await paymentService.getPaymentById(input.paymentId, user.organizationId);
+
+      if (!payment) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment record not found.' });
+      }
+
+      if (payment.provider !== PaymentProvider.MPESA) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Payment is not an M-Pesa payment.' });
+      }
+
+      // If still PENDING and we have an IntaSend invoice ID, re-check status
+      if (payment.status === PaymentStatus.PENDING && payment.providerTransactionId) {
+        try {
+          const liveStatus = await intaSendService.getPaymentStatus(payment.providerTransactionId);
+
+          if (liveStatus.state === 'COMPLETE') {
+            // Webhook may not have fired yet — optimistically reflect completed status
+            // (webhook will do the full activation; we just return the current DB state)
+            logger.info({
+              type:      'mpesa_poll_status_complete_not_yet_webhoooked',
+              paymentId: payment.id,
+              invoiceId: payment.providerTransactionId,
+            });
+          }
+        } catch {
+          // Non-fatal — just return current DB status
+        }
+      }
+
+      return {
+        paymentId:  payment.id,
+        status:     payment.status,
+        updatedAt:  payment.updatedAt.toISOString(),
+      };
     }),
 });

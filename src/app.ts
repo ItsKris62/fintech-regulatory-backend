@@ -10,6 +10,8 @@ import { errorTracker } from './lib/error-tracker';
 import securityPlugin from './plugins/security.plugin';
 import { registerSecurityMiddleware } from './middleware/security.middleware';
 import { stripeWebhookService } from './lib/stripe/webhook.service';
+import { intaSendWebhookService } from './lib/intasend/webhook.service';
+import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
 
 /**
  * Build and configure the Fastify application.
@@ -99,6 +101,31 @@ export async function buildApp(): Promise<FastifyInstance> {
       },
     );
   });
+
+  // ── IntaSend Webhook — JSON body, re-verified via IntaSend status API ───────
+  // IntaSend sends standard JSON (no raw Buffer needed).
+  // Security is achieved by re-calling collection.status(invoice_id) to
+  // confirm the reported state from IntaSend's API before acting on it.
+  app.post<{ Body: IntaSendWebhookPayload }>(
+    '/api/webhooks/intasend',
+    async (request, reply) => {
+      const payload = request.body;
+
+      if (!payload || typeof payload !== 'object') {
+        logger.warn({ type: 'intasend_webhook_invalid_body', ip: request.ip });
+        return reply.status(400).send({ error: 'Invalid webhook payload' });
+      }
+
+      try {
+        await intaSendWebhookService.handleEvent(payload);
+        return reply.status(200).send({ received: true });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Webhook processing error';
+        logger.error({ type: 'intasend_webhook_error', error: message });
+        return reply.status(500).send({ error: 'Webhook handler failed' });
+      }
+    },
+  );
 
   // ── tRPC – all procedures exposed under /trpc ────────────────────────────
   await app.register(fastifyTRPCPlugin, {

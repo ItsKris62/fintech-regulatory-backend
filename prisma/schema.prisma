@@ -90,6 +90,10 @@ model Organization {
   stripeCustomerId   String?          @unique
   stripeSubId        String?          @unique
   customLimits       Json?
+  // M-Pesa / IntaSend payment fields
+  preferredPaymentMethod  PaymentProvider? // STRIPE | MPESA; null = Stripe default
+  mpesaPhoneNumber        String?          // stored as 254XXXXXXXXX
+  mpesaNextPaymentDueDate DateTime?        // set on each successful M-Pesa payment; lazy-evaluated for renewal
   // Contact Information — Primary contact for regulatory matters
   address            String?
   contactPerson      String?
@@ -1019,12 +1023,18 @@ model Payment {
   description           String?
   paidAt                DateTime?
   metadata              Json?           // provider-specific data (invoice URL, etc.)
+  // Invoice fields (generated at payment creation time)
+  invoiceNumber         String?         @unique // SB-{YYYY}-{00000}
+  subscriptionPlan      String?                 // plan name at time of payment (e.g. "STARTUP")
+  billingPeriodStart    DateTime?
+  billingPeriodEnd      DateTime?
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
   @@index([orgId])
   @@index([orgId, createdAt])
   @@index([providerTransactionId])
+  @@index([invoiceNumber])
 }
 
 // ============================================================================
