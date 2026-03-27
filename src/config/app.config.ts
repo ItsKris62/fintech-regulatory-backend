@@ -43,12 +43,18 @@ const envSchema = z.object({
   PINECONE_ENVIRONMENT: z.string().default('us-east-1-aws'),
   PINECONE_INDEX_NAME: z.string().default('sheriabot-legal-corpus'),
 
-  // Cloudflare R2
+  // Cloudflare R2 — private bucket
   R2_ACCOUNT_ID: z.string().min(1, 'R2 account ID is required'),
   R2_ACCESS_KEY_ID: z.string().min(1, 'R2 access key ID is required'),
   R2_SECRET_ACCESS_KEY: z.string().min(1, 'R2 secret access key is required'),
   R2_BUCKET_NAME: z.string().default('sheriabot-documents'),
   R2_PUBLIC_URL: z.string().url(),
+
+  // Cloudflare R2 — public bucket (avatars, logos, branding)
+  R2_PUBLIC_ACCESS_KEY_ID: z.string().min(1, 'R2 public bucket access key is required'),
+  R2_PUBLIC_SECRET_ACCESS_KEY: z.string().min(1, 'R2 public bucket secret key is required'),
+  R2_PUBLIC_BUCKET_NAME: z.string().min(1, 'R2 public bucket name is required'),
+  R2_PUBLIC_BUCKET_URL: z.string().url('R2 public bucket URL must be a valid URL'),
 
   // Rate Limiting
   RATE_LIMIT_MAX: z.string().transform(Number).pipe(z.number().positive()).default(100),
@@ -136,13 +142,23 @@ export const appConfig = {
     indexName: env.PINECONE_INDEX_NAME,
   },
 
-  // Storage
+  // Storage — private bucket (RAG documents, vault files)
   storage: {
     accountId: env.R2_ACCOUNT_ID,
     accessKeyId: env.R2_ACCESS_KEY_ID,
     secretAccessKey: env.R2_SECRET_ACCESS_KEY,
     bucketName: env.R2_BUCKET_NAME,
     publicUrl: env.R2_PUBLIC_URL,
+  },
+
+  // Public storage — public bucket (avatars, logos, branding assets)
+  publicStorage: {
+    accessKeyId: env.R2_PUBLIC_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_PUBLIC_SECRET_ACCESS_KEY,
+    bucketName: env.R2_PUBLIC_BUCKET_NAME,
+    // Endpoint is the same R2 account; only credentials + bucket differ
+    endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    bucketUrl: env.R2_PUBLIC_BUCKET_URL,
   },
 
   // Rate Limiting

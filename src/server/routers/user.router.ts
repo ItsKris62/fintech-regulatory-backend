@@ -10,7 +10,10 @@ import {
   disableTotpSchema,
   revokeSessionSchema,
   updateAllNotificationPreferencesSchema,
+  getAvatarUploadUrlSchema,
+  confirmAvatarUploadSchema,
 } from '../schemas/user.schema';
+import { avatarService } from '@/modules/user/avatar.service';
 import { changePasswordSchema } from '../schemas/auth.schema';
 import { hashPassword, verifyPassword } from '@/utils/helpers';
 import { userCache } from '@/lib/redis/cache.service';
@@ -771,6 +774,69 @@ export const userRouter = router({
       throw new TRPCError({
         code: 'INTERNAL_SERVER_ERROR',
         message: 'Failed to get notification preferences',
+        cause: error,
+      });
+    }
+  }),
+
+  // ─── AVATAR ───────────────────────────────────────────────────────────────
+
+  /**
+   * Get a presigned PUT URL for direct browser-to-R2 avatar upload.
+   * The client must PUT the image file to `uploadUrl`, then call
+   * `confirmAvatarUpload` with the returned `publicUrl`.
+   */
+  getAvatarUploadUrl: protectedProcedure
+    .input(getAvatarUploadUrlSchema)
+    .mutation(async ({ input, ctx }) => {
+      try {
+        return await avatarService.getUploadUrl(ctx.user.id, input.contentType);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        logger.error({ type: 'avatar_get_upload_url_error', userId: ctx.user.id, error: message });
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to generate upload URL',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Confirm a completed avatar upload — persists the public URL to the user
+   * profile and invalidates the profile cache.
+   */
+  confirmAvatarUpload: protectedProcedure
+    .input(confirmAvatarUploadSchema)
+    .mutation(async ({ input, ctx }) => {
+      try {
+        return await avatarService.confirmUpload(ctx.user.id, input.publicUrl);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        logger.error({ type: 'avatar_confirm_upload_error', userId: ctx.user.id, error: message });
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to confirm avatar upload',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Delete the current user's avatar from R2 and clear the profile field.
+   */
+  deleteAvatar: protectedProcedure.mutation(async ({ ctx }) => {
+    try {
+      return await avatarService.deleteAvatar(ctx.user.id);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      logger.error({ type: 'avatar_delete_error', userId: ctx.user.id, error: message });
+      if (error instanceof TRPCError) throw error;
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to delete avatar',
         cause: error,
       });
     }

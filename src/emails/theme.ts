@@ -3,7 +3,12 @@
  * Shared constants for all email templates
  */
 
+// Logo is served from the R2 public bucket so it loads even when the
+// frontend is down and is immune to Vercel cold-start delays.
+const R2_PUBLIC_URL = process.env.R2_PUBLIC_BUCKET_URL ?? '';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://sheriabot.com';
+
+export const SHERIABOT_URL = FRONTEND_URL;
 
 export const EMAIL_THEME = {
   colors: {
@@ -33,7 +38,7 @@ export const EMAIL_THEME = {
   },
 } as const;
 
-export const LOGO_URL = `${FRONTEND_URL}/email-signature-logo.png`;
+export const LOGO_URL = `${R2_PUBLIC_URL}/branding/email-signature-logo.png`;
 
 export const APP_NAME = 'SheriaBot';
 export const SUPPORT_EMAIL = process.env.EMAIL_SUPPORT_ADDRESS || 'support@sheriabot.com';

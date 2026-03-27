@@ -99,6 +99,30 @@ export type DisableTotpInput = z.infer<typeof disableTotpSchema>;
  * All fields optional — supports partial updates (only send changed fields).
  * Backward-compatible with the existing 4-field "Specific Email Alerts" section.
  */
+/**
+ * Request a presigned upload URL for the user's avatar
+ */
+export const getAvatarUploadUrlSchema = z.object({
+  contentType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+});
+
+export type GetAvatarUploadUrlInput = z.infer<typeof getAvatarUploadUrlSchema>;
+
+/**
+ * Confirm avatar upload — persists the public URL after a successful R2 PUT
+ */
+export const confirmAvatarUploadSchema = z.object({
+  publicUrl: z.string().url('Must be a valid URL'),
+});
+
+export type ConfirmAvatarUploadInput = z.infer<typeof confirmAvatarUploadSchema>;
+
+/**
+ * Update all notification preferences (covers all 11 fields across all sections)
+ *
+ * All fields optional — supports partial updates (only send changed fields).
+ * Backward-compatible with the existing 4-field "Specific Email Alerts" section.
+ */
 export const updateAllNotificationPreferencesSchema = z.object({
   // General Email Notifications
   regulatoryUpdates: z.boolean().optional(),

@@ -7,11 +7,9 @@ import {
   Container,
   Section,
   Img,
-  Text,
-  Link,
-  Hr,
 } from '@react-email/components';
-import { EMAIL_THEME, LOGO_URL, APP_NAME, SUPPORT_EMAIL, CURRENT_YEAR } from '../theme';
+import { EMAIL_THEME, LOGO_URL, APP_NAME } from '../theme';
+import { EmailSignature } from './EmailSignature';
 
 export interface BaseLayoutProps {
   preheaderText: string;
@@ -61,30 +59,10 @@ export function BaseLayout({
 
         {/* Footer */}
         <Container style={styles.footerContainer}>
-          <Hr style={styles.footerDivider} />
-          <Text style={styles.footerBrand}>
-            {APP_NAME} — AI-Powered Regulatory Compliance for Kenya's Fintech Sector
-          </Text>
-          <Text style={styles.footerText}>
-            Nairobi, Kenya &nbsp;|&nbsp;{' '}
-            <Link href={`mailto:${SUPPORT_EMAIL}`} style={styles.footerLink}>
-              {SUPPORT_EMAIL}
-            </Link>
-          </Text>
-          {showUnsubscribe && recipientEmail && (
-            <Text style={styles.footerText}>
-              <Link
-                href={`${process.env.FRONTEND_URL || 'https://sheriabot.com'}/unsubscribe?email=${encodeURIComponent(recipientEmail)}`}
-                style={styles.footerLink}
-              >
-                Unsubscribe
-              </Link>{' '}
-              from notification emails.
-            </Text>
-          )}
-          <Text style={styles.footerCopy}>
-            &copy; {CURRENT_YEAR} {APP_NAME}. Powered by SheriaBot.
-          </Text>
+          <EmailSignature
+            showUnsubscribe={showUnsubscribe}
+            recipientEmail={recipientEmail}
+          />
         </Container>
       </Body>
     </Html>
@@ -128,31 +106,5 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: EMAIL_THEME.spacing.containerWidth,
     margin: '0 auto',
     padding: '0 20px 24px',
-  },
-  footerDivider: {
-    borderColor: EMAIL_THEME.colors.border,
-    margin: '0',
-  },
-  footerBrand: {
-    color: EMAIL_THEME.colors.textSecondary,
-    fontSize: '12px',
-    textAlign: 'center',
-    margin: '16px 0 4px',
-  },
-  footerText: {
-    color: EMAIL_THEME.colors.textMuted,
-    fontSize: '11px',
-    textAlign: 'center',
-    margin: '4px 0',
-  },
-  footerLink: {
-    color: EMAIL_THEME.colors.primary,
-    textDecoration: 'none',
-  },
-  footerCopy: {
-    color: EMAIL_THEME.colors.textMuted,
-    fontSize: '11px',
-    textAlign: 'center',
-    margin: '8px 0 0',
   },
 };
