@@ -131,23 +131,28 @@ async function getCachedCompletion(
   cacheKey: string
 ): Promise<AICompletionResult | null> {
   try {
-    const cached = await redis.get<string>(cacheKey);
-    
+    // @upstash/redis auto-parses JSON — get<T> returns T directly, no JSON.parse needed
+    const cached = await redis.get<AICompletionResult>(cacheKey);
+
     if (cached) {
-      const result = JSON.parse(cached) as AICompletionResult;
-      result.cached = true;
-      
+      cached.cached = true;
+
       logger.info({
         type: 'ai_cache_hit',
         cacheKey,
       });
-      
-      return result;
+
+      return cached;
     }
-    
+
     return null;
-  } catch (error) {
-    return null;
+  } catch (error: unknown) {
+    logger.warn({
+      type: 'ai_cache_get_error',
+      cacheKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null; // Fail open — proceed without cache
   }
 }
 
@@ -163,18 +168,21 @@ async function cacheCompletion(
   ttl: number
 ): Promise<void> {
   try {
-    await redis.setex(cacheKey, ttl, JSON.stringify(result));
-    
+    // Upstash uses set(..., { ex: ttl }) — setex is not supported; auto-serializes the object
+    await redis.set(cacheKey, result, { ex: ttl });
+
     logger.info({
       type: 'ai_cache_set',
       cacheKey,
       ttl,
     });
-  } catch (error: any) {
-    logger.error({
-      type: 'ai_cache_error',
-      error: error.message,
+  } catch (error: unknown) {
+    logger.warn({
+      type: 'ai_cache_set_error',
+      cacheKey,
+      error: error instanceof Error ? error.message : String(error),
     });
+    // Fail open — cache is an optimisation, not critical path
   }
 }
 
