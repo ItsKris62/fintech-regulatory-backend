@@ -198,6 +198,15 @@ export const userRouter = router({
         }
 
         // ── 2. Verify current password ────────────────────────────────────
+        // Users registered after the B4 migration have no local bcrypt hash
+        // (Supabase is the authoritative credential store). They must reset
+        // their password via the "Forgot Password" flow before using this endpoint.
+        if (!user.password) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Password verification is unavailable for your account. Please use "Forgot Password" to set a new password.',
+          });
+        }
         const validPassword = await verifyPassword(input.currentPassword, user.password);
         if (!validPassword) {
           logger.warn({
@@ -631,6 +640,12 @@ export const userRouter = router({
           throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
         }
 
+        if (!user.password) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Password verification is unavailable for your account. Please use "Forgot Password" to set a new password.',
+          });
+        }
         const isValid = await verifyPassword(input.password, user.password);
         if (!isValid) {
           throw new TRPCError({

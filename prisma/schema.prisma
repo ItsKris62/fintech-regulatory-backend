@@ -11,7 +11,7 @@ model User {
   id                       String                   @id @default(cuid())
   supabaseAuthId           String?                  @unique
   email                    String                   @unique
-  password                 String
+  password                 String?   // nullable — Supabase is the authoritative credential store
   fullName                 String
   phone                    String?
   avatar                   String?

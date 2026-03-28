@@ -1,4 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
+import { createHash } from 'crypto';
 import type { EffectivePlan } from '@/types/plan.types';
 import type { TrialContextState } from '@/modules/trial/trial.types';
 import { supabaseAdmin } from '@/lib/supabase';
@@ -9,6 +10,8 @@ import { ragService } from '@/lib/rag/rag.service';
 import { storageService } from '@/lib/storage/storage.service';
 import { mailer } from '@/lib/email/mailer.service';
 import { logger } from '@/utils/logger';
+import { SESSION_CONFIG, lastSeenKey } from '@/config/session';
+import { isTokenRevoked } from '@/utils/token-revocation';
 
 /** User shape attached to every authenticated tRPC context. */
 export interface User {
@@ -18,6 +21,8 @@ export interface User {
   organizationId?: string;
   sessionId?: string;
   supabaseAuthId: string; // Supabase auth.users UUID (= JWT sub)
+  /** Unix ms timestamp of Session.expiresAt — enforced on every request (B6). */
+  sessionExpiresAt?: number;
 }
 
 export interface Context {
@@ -79,6 +84,14 @@ export async function createContext({
       }
 
       const supabaseUserId = authData.user.id;
+
+      // ── B4: JTI blocklist + user-level revocation check ─────────────
+      // Run after Supabase signature verification so we only pay the Redis
+      // round-trip for valid tokens. Fails open on Redis error (see util).
+      const revoked = await isTokenRevoked(token, supabaseUserId);
+      if (revoked) {
+        throw new Error('Token has been revoked');
+      }
 
       // Cache key for the Prisma user profile
       const cacheKey = `user:session:${supabaseUserId}`;
@@ -144,6 +157,81 @@ export async function createContext({
           userId: user.id,
           role: user.role,
         });
+
+        // ── B6: Enforce Session.expiresAt stored in Redis cache ──────────
+        if (user.sessionExpiresAt && Date.now() > user.sessionExpiresAt) {
+          logger.warn({
+            type:   'context_session_expired',
+            userId: user.id,
+            expiredAt: new Date(user.sessionExpiresAt).toISOString(),
+          });
+          user = null;
+        }
+
+        // ── B3: Idle session timeout (30 min) ────────────────────────────
+        if (user) {
+          const idleUserId = user.id; // captured before any nulling inside try/catch
+          const now = Date.now();
+          try {
+            const lastSeenRaw = await redis.get<string>(lastSeenKey(idleUserId));
+            const lastSeen = lastSeenRaw ? Number(lastSeenRaw) : null;
+
+            if (lastSeen !== null && (now - lastSeen) > SESSION_CONFIG.IDLE_TIMEOUT_SECONDS * 1000) {
+              logger.warn({
+                type:         'context_idle_session_expired',
+                userId:       idleUserId,
+                idleSeconds:  Math.floor((now - lastSeen) / 1000),
+              });
+              // Evict Redis user cache so the next request also sees null
+              await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+              user = null;
+            } else {
+              // Slide the window — fire-and-forget, never block the request
+              void redis.set(lastSeenKey(idleUserId), String(now), {
+                ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS,
+              }).catch(() => {});
+            }
+          } catch (idleErr: unknown) {
+            // Redis error on idle check: fail open (log + continue)
+            logger.warn({
+              type:  'context_idle_check_error',
+              userId: idleUserId,
+              error: idleErr instanceof Error ? idleErr.message : String(idleErr),
+            });
+          }
+        }
+
+        // ── B5: Session fingerprint anomaly detection (monitor mode) ─────
+        // Compute the expected fingerprint and compare with what was stored
+        // at login. On mismatch we log only — never block — until this has
+        // been observed in production for a safe period.
+        if (user && user.sessionId) {
+          try {
+            const storedFp = await redis.get<string>(`sheriabot:session_fingerprint:${user.sessionId}`);
+            if (storedFp) {
+              const currentIp = req.ip ?? '';
+              const currentUa = (req.headers['user-agent'] ?? '').substring(0, 500);
+              const currentFp = createHash('sha256').update(`${currentIp}:${currentUa}`).digest('hex');
+              if (currentFp !== storedFp) {
+                logger.warn({
+                  type:      'session_anomaly_ua_mismatch',
+                  userId:    user.id,
+                  sessionId: user.sessionId,
+                  // Do not log raw IPs/UAs in production; the hash is sufficient for correlation
+                  storedFpPrefix:  storedFp.substring(0, 8),
+                  currentFpPrefix: currentFp.substring(0, 8),
+                });
+                // monitor mode: continue serving the request
+              }
+            }
+          } catch (fpErr: unknown) {
+            logger.warn({
+              type:  'context_fingerprint_check_error',
+              userId: user.id,
+              error: fpErr instanceof Error ? fpErr.message : String(fpErr),
+            });
+          }
+        }
       } else {
         logger.warn({
           type: 'context_supabase_user_not_in_db',

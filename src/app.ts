@@ -1,5 +1,6 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import { z } from 'zod';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { createContext } from './server/trpc/context';
 import { appRouter } from './server/trpc/router';
@@ -12,6 +13,25 @@ import { registerSecurityMiddleware } from './middleware/security.middleware';
 import { stripeWebhookService } from './lib/stripe/webhook.service';
 import { intaSendWebhookService } from './lib/intasend/webhook.service';
 import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
+
+/**
+ * Zod schema for IntaSend webhook payloads.
+ *
+ * IntaSend does not sign webhook bodies, so we cannot verify authenticity via
+ * HMAC. Instead we:
+ *  1. Validate the payload shape strictly here (rejects log-injection strings
+ *     and unexpected types before they reach handleEvent).
+ *  2. In handleEvent, confirm the invoice exists in our DB *before* calling
+ *     IntaSend's status API with the caller-supplied invoice_id (SSRF guard).
+ */
+const intaSendWebhookSchema = z.object({
+  invoice_id:    z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
+  state:         z.string().min(1).max(32),
+  failed_reason: z.string().max(512).optional(),
+  failed_code:   z.string().max(64).optional(),
+  meta:          z.record(z.string(), z.unknown()).optional(),
+  challenge:     z.string().max(512).optional(),
+}).passthrough();
 
 /**
  * Build and configure the Fastify application.
@@ -45,8 +65,8 @@ export async function buildApp(): Promise<FastifyInstance> {
       // Allow requests with no origin (server-to-server, Postman, curl)
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      // Allow SheriaBot Vercel preview deployments (project-slug prefix)
-      if (/^https:\/\/sheriabot(-[a-z0-9]+)*\.vercel\.app$/.test(origin)) return cb(null, true);
+      // No wildcard regex — every allowed origin must be listed explicitly in
+      // FRONTEND_URL (comma-separated). Add Vercel preview URLs there as needed.
       cb(new Error(`CORS: origin '${origin}' not allowed`), false);
     },
     credentials: true,
@@ -104,18 +124,24 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // ── IntaSend Webhook — JSON body, re-verified via IntaSend status API ───────
   // IntaSend sends standard JSON (no raw Buffer needed).
-  // Security is achieved by re-calling collection.status(invoice_id) to
-  // confirm the reported state from IntaSend's API before acting on it.
+  // Security:
+  //  1. Payload shape is validated via intaSendWebhookSchema before processing.
+  //  2. handleEvent checks the invoice exists in our DB before calling the
+  //     IntaSend status API, preventing SSRF with attacker-controlled IDs.
   app.post<{ Body: IntaSendWebhookPayload }>(
     '/api/webhooks/intasend',
     async (request, reply) => {
-      const payload = request.body;
-
-      if (!payload || typeof payload !== 'object') {
-        logger.warn({ type: 'intasend_webhook_invalid_body', ip: request.ip });
+      const parseResult = intaSendWebhookSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        logger.warn({
+          type:   'intasend_webhook_invalid_body',
+          ip:     request.ip,
+          errors: parseResult.error.flatten(),
+        });
         return reply.status(400).send({ error: 'Invalid webhook payload' });
       }
 
+      const payload = parseResult.data as IntaSendWebhookPayload;
       try {
         await intaSendWebhookService.handleEvent(payload);
         return reply.status(200).send({ received: true });

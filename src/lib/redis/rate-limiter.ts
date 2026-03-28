@@ -11,6 +11,9 @@ export interface RateLimitResult {
   remaining: number;
   resetAt: Date;
   retryAfter?: number;
+  /** Set when the limiter itself could not be reached; used to distinguish
+   *  a capacity denial from a service-unavailability denial. */
+  reason?: 'rate_limit_exceeded' | 'rate_limit_service_unavailable';
 }
 
 /**
@@ -42,11 +45,13 @@ export class RateLimiter {
     identifier: string,
     action: string,
     max: number,
-    windowSeconds: number
+    windowSeconds: number,
+    options?: { failClosed?: boolean }
   ): Promise<RateLimitResult> {
     const key = getRateLimitKey(identifier, action);
     const now = Date.now();
     const windowStart = now - windowSeconds * 1000;
+    const failClosed = options?.failClosed ?? false;
 
     try {
       // Use Redis pipeline for atomic operations
@@ -108,10 +113,23 @@ export class RateLimiter {
         type: 'rate_limit_check_error',
         identifier,
         action,
+        failClosed,
         error: error.message,
       });
 
-      // On error, allow request (fail open)
+      if (failClosed) {
+        // Security-critical path: deny on Redis error to prevent brute-force bypass
+        // during outages. False positive (brief deny) < false negative (no throttling).
+        return {
+          allowed: false,
+          remaining: 0,
+          resetAt: new Date(now + windowSeconds * 1000),
+          retryAfter: 60,
+          reason: 'rate_limit_service_unavailable',
+        };
+      }
+
+      // Non-critical paths: fail open (preserve existing behavior)
       return {
         allowed: true,
         remaining: max,
@@ -241,7 +259,10 @@ export class RateLimiter {
         action,
         error: error.message,
       });
-      return false;
+      // Fail closed: assume blocked when Redis is unreachable.
+      // A false positive (briefly blocking a legitimate user during Redis downtime)
+      // is far less harmful than a false negative (unblocking an intentionally blocked attacker).
+      return true;
     }
   }
 
@@ -289,7 +310,7 @@ export const authRateLimiter = {
    */
   login: async (identifier: string) => {
     const config = redisConfig.rateLimiting.tiers.auth.login;
-    return rateLimiter.check(identifier, 'login', config.max, config.window);
+    return rateLimiter.check(identifier, 'login', config.max, config.window, { failClosed: true });
   },
 
   /**
@@ -298,7 +319,7 @@ export const authRateLimiter = {
    */
   register: async (identifier: string) => {
     const config = redisConfig.rateLimiting.tiers.auth.register;
-    return rateLimiter.check(identifier, 'register', config.max, config.window);
+    return rateLimiter.check(identifier, 'register', config.max, config.window, { failClosed: true });
   },
 
   /**
@@ -307,7 +328,20 @@ export const authRateLimiter = {
    */
   resetPassword: async (identifier: string) => {
     const config = redisConfig.rateLimiting.tiers.auth.resetPassword;
-    return rateLimiter.check(identifier, 'reset-password', config.max, config.window);
+    return rateLimiter.check(identifier, 'reset-password', config.max, config.window, { failClosed: true });
+  },
+
+  /**
+   * Resend verification email attempts
+   * 3 attempts per hour per email address.
+   *
+   * Uses the sliding-window RateLimiter (atomic pipeline) rather than the
+   * old INCR+EXPIRE two-step which had a race condition: if the process died
+   * between the two commands the counter key would never expire, permanently
+   * locking the user out until a manual Redis DEL.
+   */
+  resendVerification: async (identifier: string) => {
+    return rateLimiter.check(identifier, 'resend-verification', 3, 3600, { failClosed: true });
   },
 };
 

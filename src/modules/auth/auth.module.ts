@@ -243,6 +243,9 @@ class AuthModule {
       }
 
       // 4. Verify password
+      if (!user.password) {
+        throw new AuthError('Password verification unavailable. Please reset your password.', 'INVALID_CREDENTIALS', 401);
+      }
       const isValidPassword = await verifyPassword(password, user.password);
       
       if (!isValidPassword) {
@@ -708,6 +711,9 @@ class AuthModule {
       }
 
       // 2. Verify old password
+      if (!user.password) {
+        throw new AuthError('Password verification unavailable. Please reset your password.', 'INVALID_CREDENTIALS', 401);
+      }
       const isValidPassword = await verifyPassword(oldPassword, user.password);
       
       if (!isValidPassword) {
@@ -732,7 +738,7 @@ class AuthModule {
       }
 
       // 4. Check not same as old password
-      if (await verifyPassword(newPassword, user.password)) {
+      if (user.password && await verifyPassword(newPassword, user.password)) {
         throw new AuthError(
           'New password must be different from current password',
           'PASSWORD_RECENTLY_USED',

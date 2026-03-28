@@ -214,7 +214,7 @@ export function toSafeUser(user: {
   phone: string | null;
   createdAt: Date;
   updatedAt: Date;
-  password?: string;
+  password?: string | null;
   [key: string]: any;
 }): SafeUser {
   return {

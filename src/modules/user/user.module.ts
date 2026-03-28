@@ -222,6 +222,9 @@ class UserModule {
         throw new UserError('User not found', 'USER_NOT_FOUND', 404);
       }
 
+      if (!user.password) {
+        throw new UserError('Password verification unavailable. Please reset your password.', 'INVALID_PASSWORD', 401);
+      }
       const isValidPassword = await verifyPassword(password, user.password);
       if (!isValidPassword) {
         throw new UserError('Invalid password', 'INVALID_PASSWORD', 401);
@@ -736,6 +739,9 @@ class UserModule {
         throw new UserError('User not found', 'USER_NOT_FOUND', 404);
       }
 
+      if (!user.password) {
+        throw new UserError('Password verification unavailable. Please reset your password.', 'INVALID_PASSWORD', 401);
+      }
       const isValidPassword = await verifyPassword(validated.password, user.password);
       if (!isValidPassword) {
         throw new UserError('Invalid password', 'INVALID_PASSWORD', 401);

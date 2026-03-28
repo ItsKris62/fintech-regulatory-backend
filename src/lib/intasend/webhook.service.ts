@@ -141,6 +141,20 @@ class IntaSendWebhookService {
       rawState:  rawPayload.state,
     });
 
+    // SSRF guard: confirm this invoice_id belongs to one of our Payment records
+    // *before* calling IntaSend's API with it. An attacker-supplied invoice_id
+    // that has no matching Payment row is dropped here — we never proxy it to
+    // IntaSend's servers.
+    const knownPayment = await prisma.payment.findFirst({
+      where:  { providerTransactionId: invoiceId, provider: PaymentProvider.MPESA },
+      select: { id: true },
+    });
+    if (!knownPayment) {
+      logger.warn({ type: 'intasend_webhook_unknown_invoice', invoiceId });
+      // Ack silently — don't tell the caller whether the ID was unrecognised
+      return;
+    }
+
     // Re-verify from IntaSend's API (do not trust payload state alone)
     let verifiedState: ReturnType<typeof normaliseIntaSendState>;
     try {

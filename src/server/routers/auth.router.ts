@@ -18,6 +18,8 @@ import { hashPassword } from '@/utils/helpers';
 import { authRateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
+import { SESSION_CONFIG, lastSeenKey, sessionStartKey } from '@/config/session';
+import { revokeToken, revokeAllUserTokens } from '@/utils/token-revocation';
 
 import {
   isFreeEmailDomain,
@@ -181,9 +183,6 @@ export const authRouter = router({
           });
         }
 
-        // Store hashed password in Prisma (migration safety / fallback)
-        const hashedPw = await hashPassword(input.password);
-
         // F3.2b — if Prisma creation fails, delete the Supabase user so there
         // are no orphaned auth records that block re-registration.
         let user: any;
@@ -192,7 +191,6 @@ export const authRouter = router({
             data: {
               supabaseAuthId: authData.user.id,
               email: input.email,
-              password: hashedPw,
               fullName: input.name || input.email,
               role: resolvedRole,
               phone: input.phone,
@@ -397,6 +395,11 @@ export const authRouter = router({
           logger.warn({ type: 'auth_login_session_create_failed', userId: user.id, error: err.message });
         }
 
+        // B6: Include session expiry in the Redis user profile so context.ts
+        // can enforce it on every request without an extra DB query.
+        // Session.expiresAt was set to +30 days above; store as Unix ms.
+        const sessionExpiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+
         // Cache user profile in Upstash for fast context lookups (1 hour)
         const userProfile = {
           id: user.id,
@@ -405,8 +408,33 @@ export const authRouter = router({
           organizationId: user.organizationId ?? undefined,
           supabaseAuthId: authData.user.id,
           sessionId: dbSessionId,
+          sessionExpiresAt,
         };
         await redis.set(`user:session:${authData.user.id}`, JSON.stringify(userProfile), { ex: 3600 });
+
+        // B3: Seed idle-timeout window and absolute session-start on login.
+        // Both keys are TTL-only; their string value is the epoch-ms timestamp.
+        const loginNow = Date.now();
+        await Promise.all([
+          redis.set(lastSeenKey(user.id),    String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
+          redis.set(sessionStartKey(user.id), String(loginNow), { ex: SESSION_CONFIG.ABSOLUTE_TIMEOUT_SECONDS }),
+        ]).catch((err: unknown) => {
+          logger.warn({ type: 'auth_login_session_keys_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
+        });
+
+        // B5: Store a session fingerprint (SHA-256 of IP + UA) so context.ts
+        // can detect anomalies (UA change, IP change) in monitor mode.
+        // Key is scoped to sessionId so each login gets its own fingerprint.
+        if (dbSessionId) {
+          const rawIp = ctx.req.ip ?? '';
+          const rawUa = (ctx.req.headers['user-agent'] ?? '').substring(0, 500);
+          const fingerprint = createHash('sha256').update(`${rawIp}:${rawUa}`).digest('hex');
+          await redis
+            .set(`sheriabot:session_fingerprint:${dbSessionId}`, fingerprint, { ex: 30 * 24 * 60 * 60 })
+            .catch((err: unknown) => {
+              logger.warn({ type: 'auth_login_fingerprint_store_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
+            });
+        }
 
         await ctx.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
@@ -446,8 +474,36 @@ export const authRouter = router({
         await ctx.prisma.session.deleteMany({ where: { id: ctx.user!.sessionId, userId } });
       }
 
-      // Invalidate Redis user cache so next request forces a fresh DB lookup
-      await redis.del(`user:session:${supabaseAuthId}`);
+      // B4: Add the current Bearer token to the JTI revocation blocklist so
+      // it cannot be replayed even during its remaining lifetime.
+      const bearerToken = ctx.req.headers.authorization?.substring(7);
+      if (bearerToken) {
+        await revokeToken(bearerToken, 'logout');
+      }
+
+      // Invalidate Redis user cache so next request forces a fresh DB lookup.
+      // Also clean up idle-timeout / session-start (B3) + fingerprint (B5) keys.
+      const sessionId = ctx.user!.sessionId;
+      const keysToDelete: string[] = [
+        `user:session:${supabaseAuthId}`,
+        lastSeenKey(userId),
+        sessionStartKey(userId),
+        ...(sessionId ? [`sheriabot:session_fingerprint:${sessionId}`] : []),
+      ];
+      await Promise.all(keysToDelete.map((k) => redis.del(k))).catch((err: unknown) => {
+        logger.warn({ type: 'auth_logout_redis_cleanup_failed', userId, error: err instanceof Error ? err.message : String(err) });
+      });
+
+      // Revoke the Supabase session immediately so the JWT cannot be reused
+      // after logout (matches the pattern used in resetPassword at line ~614).
+      // Non-fatal: if Supabase is unreachable the token expires naturally in ≤1 hour.
+      await supabaseAdmin.auth.admin.signOut(supabaseAuthId).catch((signOutErr: unknown) => {
+        logger.warn({
+          type: 'auth_logout_supabase_signout_failed',
+          userId,
+          error: signOutErr instanceof Error ? signOutErr.message : 'Unknown error',
+        });
+      });
 
       return { success: true, message: 'Logged out successfully' };
     } catch (error: any) {
@@ -619,8 +675,16 @@ export const authRouter = router({
             });
           });
 
-          // Invalidate Redis user cache
-          await redis.del(`user:session:${supabaseAuthId}`);
+          // B4: Mark all tokens issued before this moment as revoked (covers
+          // any in-flight JWTs that Supabase signOut may not have invalidated).
+          await revokeAllUserTokens(user.id, 'password_change');
+
+          // Invalidate Redis user cache + idle/session-start keys
+          await Promise.all([
+            redis.del(`user:session:${supabaseAuthId}`),
+            redis.del(lastSeenKey(user.id)),
+            redis.del(sessionStartKey(user.id)),
+          ]).catch(() => {});
         }
 
         // F4.6 — notify the user that their password was changed
@@ -723,10 +787,11 @@ export const authRouter = router({
     .input(z.object({ email: z.string().email('Please provide a valid email address') }))
     .mutation(async ({ input, ctx }) => {
       try {
-        const rateLimitKey = `email_resend:${input.email.toLowerCase()}`;
-        const count = await redis.incr(rateLimitKey);
-        if (count === 1) await redis.expire(rateLimitKey, 3600);
-        if (count > 3) {
+        // Atomic sliding-window rate limit (replaces the old INCR+EXPIRE two-step
+        // which had a race: if the process died between the two Redis calls the
+        // key never expired, permanently locking the user out).
+        const rl = await authRateLimiter.resendVerification(input.email.toLowerCase());
+        if (!rl.allowed) {
           throw new TRPCError({
             code: 'TOO_MANY_REQUESTS',
             message: 'Too many verification email requests. Please try again in an hour.',
