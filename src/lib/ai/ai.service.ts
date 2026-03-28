@@ -538,16 +538,28 @@ export class AIService {
     const systemPrompt = generateChecklistSystemPrompt();
     const userPrompt = generateChecklistUserPrompt(params);
 
-    // Haiku + 3000 tokens: ~15-25s on Render free tier (was Sonnet + 8000 = 120s timeout)
     const result = await complete(
       {
         prompt: userPrompt,
         systemPrompt,
-        maxTokens: 3000,
+        maxTokens: aiConfig.parameters.checklistMaxTokens,
         temperature: 0.2, // Low temperature for factual legal content
       },
       'checklist'
     );
+
+    // Detect truncation before attempting to parse — a truncated response will
+    // always produce malformed JSON and retrying with the same token budget won't help.
+    if (result.stopReason === 'max_tokens') {
+      logger.error({
+        type: 'checklist_response_truncated',
+        outputTokens: result.outputTokens,
+        maxTokens: aiConfig.parameters.checklistMaxTokens,
+      });
+      throw new Error(
+        `AI response was truncated at ${result.outputTokens} tokens — checklist could not be completed`
+      );
+    }
 
     // Parse and validate the JSON response
     let checklist: GeneratedChecklist;
@@ -565,13 +577,23 @@ export class AIService {
         {
           prompt: userPrompt + '\n\nIMPORTANT: Return ONLY valid JSON, starting with { and ending with }. No other text.',
           systemPrompt,
-          maxTokens: 3000,
+          maxTokens: aiConfig.parameters.checklistMaxTokens,
           temperature: 0.1,
         },
         'checklist'
       );
       inputTokens += retryResult.inputTokens;
       outputTokens += retryResult.outputTokens;
+      if (retryResult.stopReason === 'max_tokens') {
+        logger.error({
+          type: 'checklist_retry_response_truncated',
+          outputTokens: retryResult.outputTokens,
+          maxTokens: aiConfig.parameters.checklistMaxTokens,
+        });
+        throw new Error(
+          `AI retry response was truncated at ${retryResult.outputTokens} tokens — checklist could not be completed`
+        );
+      }
       checklist = parseChecklistOutput(retryResult.content);
     }
 

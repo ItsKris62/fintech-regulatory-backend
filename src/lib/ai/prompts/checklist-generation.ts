@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { logger } from '@/utils/logger';
 
 // ─── Input Types ────────────────────────────────────────────────────────────
 
@@ -226,13 +227,26 @@ export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
   } catch {
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
+      logger.error({
+        type: 'checklist_parse_no_json',
+        rawContentLength: rawContent.length,
+        rawContentPreview: rawContent.slice(0, 500),
+        rawContentTail: rawContent.slice(-200),
+      });
       throw new Error('AI response does not contain valid JSON');
     }
     try {
       rawParsed = JSON.parse(jsonMatch[0]);
     } catch (innerErr: unknown) {
+      logger.error({
+        type: 'checklist_parse_malformed',
+        rawContentLength: rawContent.length,
+        rawContentPreview: rawContent.slice(0, 500),
+        rawContentTail: rawContent.slice(-200),
+        parseError: innerErr instanceof Error ? innerErr.message : String(innerErr),
+      });
       throw new Error(
-        `AI response contains malformed JSON: ${(innerErr as Error).message}`
+        `AI response contains malformed JSON: ${innerErr instanceof Error ? innerErr.message : String(innerErr)}`
       );
     }
   }

@@ -27,6 +27,8 @@ export interface AICompletionResult {
   outputTokens: number;
   cost: number;
   cached?: boolean;
+  /** Anthropic stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | null */
+  stopReason?: string | null;
 }
 
 /**
@@ -276,6 +278,7 @@ export async function complete(
         outputTokens,
         cost,
         cached: false,
+        stopReason: response.stop_reason,
       };
 
       // Cache result if TTL > 0

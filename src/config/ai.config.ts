@@ -25,7 +25,7 @@ export const aiConfig = {
     // Policy generation (Sonnet 4.6 for balance of speed/quality)
     policyGeneration: 'claude-sonnet-4-6',
 
-    // Checklist generation (Sonnet 4.6 — quality legal citations; 3k tokens fits 90s free-tier timeout)
+    // Checklist generation (Sonnet 4.6 — quality legal citations)
     checklistGeneration: 'claude-sonnet-4-6',
 
     // Compliance queries (Haiku 4.5 for speed and cost efficiency)
@@ -54,6 +54,10 @@ export const aiConfig = {
     // Maximum tokens for policy generation
     policyMaxTokens: 4000,
 
+    // Maximum tokens for checklist generation — 8192 ensures a full 30+ item checklist
+    // never gets truncated mid-JSON (old 3000 limit caused position-12411 parse failures)
+    checklistMaxTokens: 8192,
+
     // Maximum tokens for compliance queries
     queryMaxTokens: 2000,
 
@@ -77,8 +81,8 @@ export const aiConfig = {
     // Policy generation timeout (can take longer)
     policyGeneration: 120000, // 120 seconds
 
-    // Checklist generation timeout (90s accounts for Render free-tier cold starts)
-    checklistGeneration: 90000, // 90 seconds
+    // Checklist generation timeout — 120s needed for 8192-token responses at typical Sonnet throughput
+    checklistGeneration: 120000, // 120 seconds
 
     // Compliance query timeout
     complianceQuery: 45000, // 45 seconds
