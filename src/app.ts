@@ -13,6 +13,7 @@ import { registerSecurityMiddleware } from './middleware/security.middleware';
 import { stripeWebhookService } from './lib/stripe/webhook.service';
 import { intaSendWebhookService } from './lib/intasend/webhook.service';
 import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
+import { registerChecklistProgressRoute } from './routes/checklist-progress.route';
 
 /**
  * Zod schema for IntaSend webhook payloads.
@@ -152,6 +153,9 @@ export async function buildApp(): Promise<FastifyInstance> {
       }
     },
   );
+
+  // ── Checklist SSE progress stream ────────────────────────────────────────
+  await registerChecklistProgressRoute(app);
 
   // ── tRPC – all procedures exposed under /trpc ────────────────────────────
   await app.register(fastifyTRPCPlugin, {

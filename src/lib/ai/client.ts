@@ -3,6 +3,7 @@ import { aiConfig, getModelForUseCase, calculateCost, isRetryableError } from '@
 import { logger, logPerformance } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
 import { AIServiceError } from '@/utils/error';
+import { aiRateLimiter } from './rate-limiter';
 
 /**
  * AI completion options
@@ -60,14 +61,24 @@ async function trackCost(cost: number): Promise<void> {
     await redis.incrbyfloat(key, cost);
     await redis.expire(key, 86400 * 7); // Keep for 7 days
 
-    // Check if daily limit exceeded
+    // Warn at 80 % and log at 100 % — the hard block happens in checkCostLimit()
+    // before the request is sent, so we only log here (the cost is already spent).
     const totalCost = parseFloat(await redis.get<string>(key) || '0');
-    
-    if (totalCost > aiConfig.costs.dailyLimit) {
+    const limit = aiConfig.costs.dailyLimit;
+
+    if (totalCost > limit) {
       logger.error({
         type: 'ai_daily_limit_exceeded',
         totalCost,
-        limit: aiConfig.costs.dailyLimit,
+        limit,
+        percentUsed: Math.round((totalCost / limit) * 100),
+      });
+    } else if (totalCost > limit * 0.8) {
+      logger.warn({
+        type: 'ai_daily_cost_warning',
+        totalCost,
+        limit,
+        percentUsed: Math.round((totalCost / limit) * 100),
       });
     }
   } catch (error: any) {
@@ -93,12 +104,40 @@ export async function getTodayAICost(): Promise<number> {
 }
 
 /**
- * Check if daily cost limit would be exceeded
- * @param estimatedCost Estimated cost for operation
+ * Check if daily cost limit would be exceeded.
+ * Throws AIServiceError when the limit is already at or above 100 %.
+ * Logs a warning when projected usage exceeds 80 %.
  */
-async function checkCostLimit(estimatedCost: number): Promise<boolean> {
+async function checkCostLimit(estimatedCost: number): Promise<void> {
   const todayCost = await getTodayAICost();
-  return (todayCost + estimatedCost) <= aiConfig.costs.dailyLimit;
+  const limit = aiConfig.costs.dailyLimit;
+  const projected = todayCost + estimatedCost;
+
+  if (projected > limit) {
+    logger.error({
+      type: 'ai_daily_limit_blocked',
+      todayCost,
+      estimatedCost,
+      projected,
+      limit,
+      percentUsed: Math.round((projected / limit) * 100),
+    });
+    throw new AIServiceError(
+      `Daily AI cost limit of $${limit} exceeded ($${todayCost.toFixed(4)} used today). ` +
+      'Requests are blocked until tomorrow or until an admin resets the limit.'
+    );
+  }
+
+  if (projected > limit * 0.8) {
+    logger.warn({
+      type: 'ai_daily_cost_warning',
+      todayCost,
+      estimatedCost,
+      projected,
+      limit,
+      percentUsed: Math.round((projected / limit) * 100),
+    });
+  }
 }
 
 /**
@@ -221,12 +260,12 @@ export async function complete(
   );
   const estimatedCost = calculateCost(model, estimatedInputTokens, maxTokens);
   
-  const withinLimit = await checkCostLimit(estimatedCost);
-  if (!withinLimit) {
-    throw new AIServiceError('Daily AI cost limit exceeded');
-  }
+  await checkCostLimit(estimatedCost); // throws if daily limit exceeded
 
   let lastError: Error | null = null;
+
+  await aiRateLimiter.acquire();
+  try {
 
   // Retry loop
   for (let attempt = 1; attempt <= aiConfig.retry.maxAttempts; attempt++) {
@@ -330,10 +369,14 @@ export async function complete(
 
   // All retries failed
   logPerformance('ai_completion_failed', startTime, { model, useCase });
-  
+
   throw new AIServiceError(
     `AI completion failed after ${aiConfig.retry.maxAttempts} attempts: ${lastError?.message}`
   );
+
+  } finally {
+    aiRateLimiter.release();
+  }
 }
 
 /**
@@ -357,11 +400,9 @@ export async function stream(
   );
   const estimatedCost = calculateCost(model, estimatedInputTokens, maxTokens);
   
-  const withinLimit = await checkCostLimit(estimatedCost);
-  if (!withinLimit) {
-    throw new AIServiceError('Daily AI cost limit exceeded');
-  }
+  await checkCostLimit(estimatedCost); // throws if daily limit exceeded
 
+  await aiRateLimiter.acquire();
   try {
     logger.info({
       type: 'ai_streaming_started',
@@ -377,35 +418,76 @@ export async function stream(
       },
     ];
 
-    const stream = await anthropic.messages.create({
-      model,
-      max_tokens: maxTokens,
-      temperature,
-      system: options.systemPrompt,
-      messages,
-      stop_sequences: options.stopSequences,
-      stream: true,
-    });
+    // Dual-timeout: overall cap + per-chunk hang detection
+    const overallTimeoutMs =
+      useCase === 'policy'    ? aiConfig.timeout.policyGeneration :
+      useCase === 'checklist' ? aiConfig.timeout.checklistGeneration :
+                                aiConfig.timeout.default;
+    const chunkTimeoutMs = aiConfig.timeout.streamingChunk;
+
+    const controller = new AbortController();
+    let abortReason = `AI stream exceeded overall timeout of ${overallTimeoutMs}ms`;
+
+    const overallTimeoutId = setTimeout(() => {
+      controller.abort();
+    }, overallTimeoutMs);
+
+    const streamResponse = await anthropic.messages.create(
+      {
+        model,
+        max_tokens: maxTokens,
+        temperature,
+        system: options.systemPrompt,
+        messages,
+        stop_sequences: options.stopSequences,
+        stream: true,
+      },
+      { signal: controller.signal }
+    );
 
     let fullContent = '';
     let inputTokens = 0;
     let outputTokens = 0;
+    let chunkTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta') {
-        if (event.delta.type === 'text_delta') {
-          const chunk = event.delta.text;
-          fullContent += chunk;
-          
-          if (options.onChunk) {
-            options.onChunk(chunk);
+    const resetChunkTimeout = () => {
+      if (chunkTimeoutId !== null) clearTimeout(chunkTimeoutId);
+      chunkTimeoutId = setTimeout(() => {
+        abortReason = `AI stream hung — no data received for ${chunkTimeoutMs}ms`;
+        controller.abort();
+      }, chunkTimeoutMs);
+    };
+
+    try {
+      resetChunkTimeout();
+
+      for await (const event of streamResponse) {
+        resetChunkTimeout();
+
+        if (event.type === 'content_block_delta') {
+          if (event.delta.type === 'text_delta') {
+            const chunk = event.delta.text;
+            fullContent += chunk;
+
+            if (options.onChunk) {
+              options.onChunk(chunk);
+            }
           }
+        } else if (event.type === 'message_start') {
+          inputTokens = event.message.usage.input_tokens;
+        } else if (event.type === 'message_delta') {
+          outputTokens = event.usage.output_tokens;
         }
-      } else if (event.type === 'message_start') {
-        inputTokens = event.message.usage.input_tokens;
-      } else if (event.type === 'message_delta') {
-        outputTokens = event.usage.output_tokens;
       }
+    } catch (streamError: any) {
+      // Re-throw with human-readable timeout reason when aborted
+      if (controller.signal.aborted) {
+        throw new Error(abortReason);
+      }
+      throw streamError;
+    } finally {
+      clearTimeout(overallTimeoutId);
+      if (chunkTimeoutId !== null) clearTimeout(chunkTimeoutId);
     }
 
     const cost = calculateCost(model, inputTokens, outputTokens);
@@ -447,6 +529,8 @@ export async function stream(
     logPerformance('ai_streaming_failed', startTime, { model, useCase });
 
     throw new AIServiceError(`AI streaming failed: ${error.message}`);
+  } finally {
+    aiRateLimiter.release();
   }
 }
 

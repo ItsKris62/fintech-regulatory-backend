@@ -74,6 +74,18 @@ export interface ComplianceQueryResult extends AICompletionResult {
 }
 
 /**
+ * Progress update emitted by streamComplianceChecklist()
+ */
+export interface ChecklistProgressUpdate {
+  type: 'started' | 'progress' | 'parsing' | 'complete' | 'error';
+  message: string;
+  /** How many JSON category objects have been detected so far in the stream */
+  categoriesDetected?: number;
+  /** Final item count (only present on 'complete') */
+  itemCount?: number;
+}
+
+/**
  * AI Service
  * High-level service for policy generation and compliance queries
  */
@@ -551,13 +563,18 @@ export class AIService {
     // Detect truncation before attempting to parse — a truncated response will
     // always produce malformed JSON and retrying with the same token budget won't help.
     if (result.stopReason === 'max_tokens') {
-      logger.error({
+      logger.warn({
         type: 'checklist_response_truncated',
         outputTokens: result.outputTokens,
         maxTokens: aiConfig.parameters.checklistMaxTokens,
       });
+      const partial = this.attemptPartialParse<GeneratedChecklist>(result.content);
+      if (partial) {
+        logger.info({ type: 'checklist_partial_recovered', outputTokens: result.outputTokens });
+        return { checklist: partial, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
+      }
       throw new Error(
-        `AI response was truncated at ${result.outputTokens} tokens — checklist could not be completed`
+        `AI response was truncated at ${result.outputTokens} tokens and could not be partially recovered`
       );
     }
 
@@ -585,13 +602,18 @@ export class AIService {
       inputTokens += retryResult.inputTokens;
       outputTokens += retryResult.outputTokens;
       if (retryResult.stopReason === 'max_tokens') {
-        logger.error({
+        logger.warn({
           type: 'checklist_retry_response_truncated',
           outputTokens: retryResult.outputTokens,
           maxTokens: aiConfig.parameters.checklistMaxTokens,
         });
+        const partial = this.attemptPartialParse<GeneratedChecklist>(retryResult.content);
+        if (partial) {
+          logger.info({ type: 'checklist_retry_partial_recovered', outputTokens: retryResult.outputTokens });
+          return { checklist: partial, inputTokens, outputTokens };
+        }
         throw new Error(
-          `AI retry response was truncated at ${retryResult.outputTokens} tokens — checklist could not be completed`
+          `AI retry response was truncated at ${retryResult.outputTokens} tokens and could not be partially recovered`
         );
       }
       checklist = parseChecklistOutput(retryResult.content);
@@ -642,6 +664,22 @@ export class AIService {
       },
       'policy'
     );
+
+    if (result.stopReason === 'max_tokens') {
+      logger.warn({
+        type: 'gap_analysis_response_truncated',
+        outputTokens: result.outputTokens,
+        maxTokens,
+      });
+      const partial = this.attemptPartialParse<GapAnalysisResult>(result.content);
+      if (partial) {
+        logger.info({ type: 'gap_analysis_partial_recovered', outputTokens: result.outputTokens });
+        return { result: partial, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
+      }
+      throw new Error(
+        `AI response was truncated at ${result.outputTokens} tokens and could not be partially recovered`
+      );
+    }
 
     // Parse and validate JSON response
     let gapAnalysis: GapAnalysisResult;
@@ -843,6 +881,206 @@ export class AIService {
       totalOutputTokens,
       totalCost,
     };
+  }
+
+  /**
+   * Stream checklist generation with live progress callbacks.
+   *
+   * Identical to generateComplianceChecklist() in terms of prompts and
+   * validation, but uses the streaming client so the caller receives
+   * incremental updates instead of waiting in silence for 2-3 minutes.
+   *
+   * Progress milestones:
+   *   started  — request sent to Anthropic
+   *   progress — each new JSON category detected in the stream
+   *   parsing  — full response received, now validating
+   *   complete — checklist parsed and ready
+   *   error    — unrecoverable failure (also thrown)
+   */
+  async streamComplianceChecklist(
+    params: ChecklistGenerationParams,
+    onProgress: (update: ChecklistProgressUpdate) => void
+  ): Promise<{ checklist: GeneratedChecklist; inputTokens: number; outputTokens: number }> {
+    const startTime = Date.now();
+
+    logger.info({
+      type: 'checklist_stream_started',
+      productType: params.productType,
+      businessStage: params.businessStage,
+      ragContextLength: params.ragContext?.length ?? 0,
+    });
+
+    const systemPrompt = generateChecklistSystemPrompt();
+    const userPrompt = generateChecklistUserPrompt(params);
+
+    onProgress({ type: 'started', message: 'Connecting to AI — generating your compliance checklist...' });
+
+    let accumulatedContent = '';
+    let categoriesDetected = 0;
+
+    const result = await stream(
+      {
+        prompt: userPrompt,
+        systemPrompt,
+        maxTokens: aiConfig.parameters.checklistMaxTokens,
+        temperature: 0.2,
+        onChunk: (chunk: string) => {
+          accumulatedContent += chunk;
+
+          // Each category object opens with a "name": key — use that as a
+          // low-cost signal that a new section has started streaming.
+          const newCount = (accumulatedContent.match(/"name"\s*:/g) ?? []).length;
+          if (newCount > categoriesDetected) {
+            categoriesDetected = newCount;
+            onProgress({
+              type: 'progress',
+              message: `Building section ${categoriesDetected}...`,
+              categoriesDetected,
+            });
+          }
+        },
+      },
+      'checklist'
+    );
+
+    onProgress({ type: 'parsing', message: 'Validating checklist structure...' });
+
+    // Truncation handling — identical logic to generateComplianceChecklist
+    if (result.stopReason === 'max_tokens') {
+      logger.warn({
+        type: 'checklist_stream_truncated',
+        outputTokens: result.outputTokens,
+        maxTokens: aiConfig.parameters.checklistMaxTokens,
+      });
+      const partial = this.attemptPartialParse<GeneratedChecklist>(result.content);
+      if (partial) {
+        logger.info({ type: 'checklist_stream_partial_recovered', outputTokens: result.outputTokens });
+        onProgress({
+          type: 'complete',
+          message: 'Checklist generated (partial — some sections may be incomplete)',
+          itemCount: partial.categories.reduce((sum, c) => sum + c.items.length, 0),
+          categoriesDetected,
+        });
+        return { checklist: partial, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
+      }
+      const err = new Error(
+        `AI response was truncated at ${result.outputTokens} tokens and could not be partially recovered`
+      );
+      onProgress({ type: 'error', message: err.message });
+      throw err;
+    }
+
+    // Parse + validate
+    let checklist: GeneratedChecklist;
+    try {
+      checklist = parseChecklistOutput(result.content);
+    } catch (parseError: unknown) {
+      logger.warn({
+        type: 'checklist_stream_parse_retry',
+        error: (parseError as Error).message,
+      });
+      onProgress({ type: 'parsing', message: 'Retrying parse with stricter JSON mode...' });
+
+      const retryResult = await complete(
+        {
+          prompt: userPrompt + '\n\nIMPORTANT: Return ONLY valid JSON, starting with { and ending with }. No other text.',
+          systemPrompt,
+          maxTokens: aiConfig.parameters.checklistMaxTokens,
+          temperature: 0.1,
+        },
+        'checklist'
+      );
+
+      if (retryResult.stopReason === 'max_tokens') {
+        const partial = this.attemptPartialParse<GeneratedChecklist>(retryResult.content);
+        if (partial) {
+          onProgress({
+            type: 'complete',
+            message: 'Checklist generated (partial — some sections may be incomplete)',
+            itemCount: partial.categories.reduce((sum, c) => sum + c.items.length, 0),
+            categoriesDetected,
+          });
+          return {
+            checklist: partial,
+            inputTokens: result.inputTokens + retryResult.inputTokens,
+            outputTokens: result.outputTokens + retryResult.outputTokens,
+          };
+        }
+        const err = new Error(
+          `AI retry response was truncated at ${retryResult.outputTokens} tokens and could not be partially recovered`
+        );
+        onProgress({ type: 'error', message: err.message });
+        throw err;
+      }
+
+      checklist = parseChecklistOutput(retryResult.content);
+
+      const itemCount = checklist.categories.reduce((sum, c) => sum + c.items.length, 0);
+      logger.info({
+        type: 'checklist_stream_complete',
+        totalItems: itemCount,
+        durationMs: Date.now() - startTime,
+      });
+      onProgress({ type: 'complete', message: 'Checklist generated successfully', itemCount, categoriesDetected });
+      return {
+        checklist,
+        inputTokens: result.inputTokens + retryResult.inputTokens,
+        outputTokens: result.outputTokens + retryResult.outputTokens,
+      };
+    }
+
+    const itemCount = checklist.metadata.totalItems;
+    logger.info({
+      type: 'checklist_stream_complete',
+      totalItems: itemCount,
+      criticalItems: checklist.metadata.criticalItems,
+      durationMs: Date.now() - startTime,
+      cost: result.cost,
+    });
+
+    onProgress({ type: 'complete', message: 'Checklist generated successfully', itemCount, categoriesDetected });
+
+    return { checklist, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
+  }
+
+  /**
+   * Attempt to recover a valid object from truncated JSON.
+   * Tries a normal parse first, then closes any unclosed braces/brackets.
+   * Returns null if repair fails.
+   */
+  private attemptPartialParse<T>(content: string): T | null {
+    try {
+      return JSON.parse(content) as T;
+    } catch {
+      let braces = 0;
+      let brackets = 0;
+      for (const char of content) {
+        if (char === '{') braces++;
+        else if (char === '}') braces--;
+        else if (char === '[') brackets++;
+        else if (char === ']') brackets--;
+      }
+
+      let repaired = content.trim().replace(/,\s*$/, '');
+      while (brackets > 0) { repaired += ']'; brackets--; }
+      while (braces > 0) { repaired += '}'; braces--; }
+
+      try {
+        const parsed = JSON.parse(repaired) as T;
+        logger.info({
+          type: 'partial_json_recovered',
+          originalLength: content.length,
+          repairedLength: repaired.length,
+        });
+        return parsed;
+      } catch {
+        logger.warn({
+          type: 'partial_json_recovery_failed',
+          contentTail: content.slice(-200),
+        });
+        return null;
+      }
+    }
   }
 }
 

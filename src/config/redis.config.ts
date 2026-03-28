@@ -93,6 +93,7 @@ export const redisConfig = {
   channels: {
     notifications: 'notifications:',
     policyProgress: 'policy:progress:',
+    checklistProgress: 'checklist:progress:',
     systemEvents: 'system:events',
     userEvents: 'user:events:',
   },
@@ -296,6 +297,15 @@ export function getNotificationChannel(userId: string): string {
  */
 export function getPolicyProgressChannel(policyId: string): string {
   return `${redisConfig.channels.policyProgress}${policyId}`;
+}
+
+/**
+ * Build checklist progress channel
+ * @param checklistId Checklist ID
+ * @returns Pub/Sub channel name
+ */
+export function getChecklistProgressChannel(checklistId: string): string {
+  return `${redisConfig.channels.checklistProgress}${checklistId}`;
 }
 
 /**

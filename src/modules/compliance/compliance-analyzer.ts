@@ -4,7 +4,7 @@
  */
 
 import { prisma } from '@/lib/prisma/client';
-import { aiService } from '@/lib/ai/ai.service';
+import { complete } from '@/lib/ai/client';
 import { logger } from '@/utils/logger';
 import {
   type ComplianceGap,
@@ -380,18 +380,15 @@ Provide practical recommendations considering Kenyan regulatory context.
 Format as a JSON array of strings.
 `;
 
-      const response = await (aiService as any).generateText({
-        prompt,
-        maxTokens: 500,
-      });
+      const result = await complete({ prompt, maxTokens: 500 });
 
       try {
-        return JSON.parse(response);
+        return JSON.parse(result.content);
       } catch {
         // If not valid JSON, split by newlines
-        return response
+        return result.content
           .split('\n')
-          .filter((line: any) => line.trim())
+          .filter((line: string) => line.trim())
           .slice(0, 5);
       }
     } catch (error) {

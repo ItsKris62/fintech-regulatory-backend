@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { getNotificationChannel, getPolicyProgressChannel, redisConfig } from '@/config/redis.config';
+import { getNotificationChannel, getPolicyProgressChannel, getChecklistProgressChannel, redisConfig } from '@/config/redis.config';
 import { logger } from '@/utils/logger';
 
 /**
@@ -107,6 +107,25 @@ export const policyProgressPubSub = {
   checklist: (policyId: string) => policyProgressPubSub.publish(policyId, { type: 'creating_checklist',         progress: 75,  message: 'Creating compliance checklist...' }),
   complete:  (policyId: string, data?: any) => policyProgressPubSub.publish(policyId, { type: 'generation_complete', progress: 100, message: 'Policy generation complete!', data }),
   failed:    (policyId: string, error: string) => policyProgressPubSub.publish(policyId, { type: 'generation_failed', progress: 0, message: 'Policy generation failed', data: { error } }),
+};
+
+export type ChecklistProgressEvent = {
+  type: 'started' | 'progress' | 'parsing' | 'complete' | 'error';
+  checklistId: string;
+  message: string;
+  categoriesDetected?: number;
+  itemCount?: number;
+  timestamp: number;
+};
+
+export const checklistProgressPubSub = {
+  publish: async (checklistId: string, event: Omit<ChecklistProgressEvent, 'checklistId' | 'timestamp'>) => {
+    const channel = getChecklistProgressChannel(checklistId);
+    await pubsub.publish<ChecklistProgressEvent>(channel, { ...event, checklistId, timestamp: Date.now() });
+  },
+  subscribe: async (checklistId: string, handler: EventHandler<ChecklistProgressEvent>) => {
+    return pubsub.subscribe(getChecklistProgressChannel(checklistId), handler);
+  },
 };
 
 export const systemEventsPubSub = {

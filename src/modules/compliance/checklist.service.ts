@@ -20,6 +20,7 @@
 import { prisma } from '@/lib/prisma/client';
 import { ragService } from '@/lib/rag/rag.service';
 import { aiService } from '@/lib/ai/ai.service';
+import { checklistProgressPubSub } from '@/lib/redis/pubsub';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError } from '@/utils/error';
 import { incrementTrialUsage } from '@/modules/trial';
@@ -227,15 +228,23 @@ class ChecklistService {
       });
 
       const { checklist: generatedChecklist, inputTokens, outputTokens } =
-        await aiService.generateComplianceChecklist({
-          productType:        input.productType,
-          businessStage:      input.businessStage,
-          targetSegments:     input.targetSegments,
-          servicesOffered:    input.servicesOffered,
-          additionalConcerns: input.additionalConcerns,
-          ragContext,
-          ragSourcesUsed,
-        });
+        await aiService.streamComplianceChecklist(
+          {
+            productType:        input.productType,
+            businessStage:      input.businessStage,
+            targetSegments:     input.targetSegments,
+            servicesOffered:    input.servicesOffered,
+            additionalConcerns: input.additionalConcerns,
+            ragContext,
+            ragSourcesUsed,
+          },
+          (update) => {
+            // Publish progress to the in-process EventEmitter so any connected
+            // SSE client for this checklistId receives live updates.
+            // Fire-and-forget — a failed publish must never abort generation.
+            checklistProgressPubSub.publish(checklistId, update).catch(() => {});
+          }
+        );
 
       // ------------------------------------------------------------------
       // 4. Map AI output to ChecklistItem DB rows.
