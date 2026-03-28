@@ -16,17 +16,19 @@ export class CacheService {
     const startTime = Date.now();
 
     try {
-      const cached = await redis.get<string>(key);
+      // @upstash/redis auto-parses JSON responses — the returned value is
+      // already a deserialized object, NOT a raw string.  Using get<T>
+      // directly avoids the double-deserialization that caused
+      // JSON.parse(object) → "[object Object]" is not valid JSON.
+      const cached = await redis.get<T>(key);
 
-      if (!cached) {
+      if (cached === null || cached === undefined) {
         logPerformance('cache_miss', startTime, { key });
         return null;
       }
 
-      const parsed = JSON.parse(cached) as T;
       logPerformance('cache_hit', startTime, { key });
-      
-      return parsed;
+      return cached;
     } catch (error: any) {
       logger.error({
         type: 'cache_get_error',
@@ -247,20 +249,13 @@ export class CacheService {
     }
 
     try {
-      const values = await redis.mget<string[]>(...keys);
+      // Same Upstash auto-parse note as get(): values are already deserialized.
+      const values = await redis.mget<T[]>(...keys);
 
       keys.forEach((key, index) => {
         const value = values[index];
-        
-        if (value) {
-          try {
-            result.set(key, JSON.parse(value) as T);
-          } catch (error) {
-            logger.error({
-              type: 'cache_parse_error',
-              key,
-            });
-          }
+        if (value !== null && value !== undefined) {
+          result.set(key, value);
         }
       });
 
