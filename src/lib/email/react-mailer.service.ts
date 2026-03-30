@@ -31,6 +31,8 @@ import {
   VerificationEmailSubject,
   PasswordResetEmail,
   PasswordResetEmailSubject,
+  PasswordChangedEmail,
+  PasswordChangedEmailSubject,
   WelcomeEmail,
   WelcomeEmailSubject,
   PaymentReceiptEmail,
@@ -80,6 +82,7 @@ import type {
   TicketResponseEmailProps,
   VerificationEmailProps,
   PasswordResetEmailProps,
+  PasswordChangedEmailProps,
   WelcomeEmailProps,
   PaymentReceiptEmailProps,
   PaymentDueEmailProps,
@@ -200,6 +203,16 @@ class ReactMailerService {
       element: React.createElement(PasswordResetEmail, props),
       tags: [{ name: 'category', value: 'auth' }, { name: 'type', value: 'password_reset' }],
       logType: 'password_reset_email',
+    });
+  }
+
+  async sendPasswordChangedEmail(to: string, props: PasswordChangedEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: PasswordChangedEmailSubject,
+      element: React.createElement(PasswordChangedEmail, props),
+      tags: [{ name: 'category', value: 'auth' }, { name: 'type', value: 'password_changed' }],
+      logType: 'password_changed_email',
     });
   }
 

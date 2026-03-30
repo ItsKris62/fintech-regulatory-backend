@@ -13,6 +13,7 @@ import {
   refreshTokenSchema,
 } from '../schemas/auth.schema';
 
+import { appConfig } from '@/config/app.config';
 import { redis } from '@/lib/redis/client';
 import { hashPassword } from '@/utils/helpers';
 import { authRateLimiter } from '@/lib/redis/rate-limiter';
@@ -586,8 +587,7 @@ export const authRouter = router({
           } as any,
         });
 
-        // F3.5 — FRONTEND_URL is validated at startup, no fallback needed
-        const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+        const resetUrl = `${appConfig.frontendUrl}/reset-password?token=${resetToken}`;
         reactMailer.sendPasswordResetEmail(user.email, {
           userName: user.fullName || user.email,
           resetUrl,
@@ -688,10 +688,9 @@ export const authRouter = router({
         }
 
         // F4.6 — notify the user that their password was changed
-        reactMailer.sendPasswordResetEmail(user.email, {
+        reactMailer.sendPasswordChangedEmail(user.email, {
           userName: user.fullName || user.email,
-          resetUrl: `${process.env.FRONTEND_URL}/login`,
-          expiresInMinutes: 0, // confirmation email — not a new reset link
+          loginUrl: `${appConfig.frontendUrl}/login`,
         }).catch(() => {});
 
         logger.info({ type: 'auth_password_reset_success', userId: user.id });
@@ -757,7 +756,7 @@ export const authRouter = router({
           reactMailer.sendWelcomeEmail(user.email, {
             userName: user.fullName || user.email,
             role: user.role,
-            dashboardUrl: `${process.env.FRONTEND_URL}/dashboard`,
+            dashboardUrl: `${appConfig.frontendUrl}/dashboard`,
           }).catch(() => {});
         }
 
@@ -908,7 +907,7 @@ export const authRouter = router({
           reactMailer.sendWelcomeEmail(user.email, {
             userName: user.fullName || user.email,
             role: user.role,
-            dashboardUrl: `${process.env.FRONTEND_URL}/dashboard`,
+            dashboardUrl: `${appConfig.frontendUrl}/dashboard`,
           }).catch(() => {});
         }
 

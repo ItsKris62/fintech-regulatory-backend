@@ -13,7 +13,9 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.string().transform(Number).pipe(z.number().min(1).max(65535)).default(4000),
   APP_URL: z.string().url(),
-  FRONTEND_URL: z.string().url(),
+  // Comma-separated origins are supported for CORS (e.g. apex + www + Vercel previews).
+  // The first value is the canonical URL used in links/emails.
+  FRONTEND_URL: z.string().min(1),
 
   // Database
   DATABASE_URL: z.string().min(1, 'Database URL is required'),
@@ -104,7 +106,9 @@ export const appConfig = {
   // Server
   port: env.PORT,
   appUrl: env.APP_URL,
-  frontendUrl: env.FRONTEND_URL,
+  // The canonical (first) frontend URL — used in email links and redirects.
+  // When FRONTEND_URL is comma-separated for multi-origin CORS, this is the primary domain.
+  frontendUrl: env.FRONTEND_URL.split(',')[0].trim(),
 
   // Database
   database: {

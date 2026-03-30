@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Section, Text, Hr, Row, Column } from '@react-email/components';
 import { BaseLayout } from '../../components/BaseLayout';
 import { EmailButton } from '../../components/EmailButton';
-import { EMAIL_THEME } from '../../theme';
+import { EMAIL_THEME, SHERIABOT_URL } from '../../theme';
 
 export interface NewTicketAdminEmailProps {
   ticketNumber: string;
@@ -23,7 +23,7 @@ export function NewTicketAdminEmail({
   priority,
   description,
 }: NewTicketAdminEmailProps) {
-  const adminUrl = `${process.env.FRONTEND_URL || 'https://sheriabot.com'}/admin/support/${ticketNumber}`;
+  const adminUrl = `${SHERIABOT_URL}/admin/support/${ticketNumber}`;
   const descriptionPreview = description.length > 300 ? `${description.slice(0, 300)}…` : description;
 
   return (

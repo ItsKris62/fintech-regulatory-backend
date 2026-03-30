@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Section, Text, Link, Hr, Row, Column } from '@react-email/components';
 import { BaseLayout } from '../../components/BaseLayout';
 import { EmailButton } from '../../components/EmailButton';
-import { EMAIL_THEME } from '../../theme';
+import { EMAIL_THEME, SHERIABOT_URL } from '../../theme';
 
 export interface PaymentReceiptEmailProps {
   userName: string;
@@ -88,7 +88,7 @@ export function PaymentReceiptEmail({
 
       <Text style={styles.note}>
         Questions about this charge? Reply to this email or contact our{' '}
-        <Link href={`${process.env.FRONTEND_URL || 'https://sheriabot.com'}/support`} style={styles.link}>
+        <Link href={`${SHERIABOT_URL}/support`} style={styles.link}>
           support team
         </Link>
         .

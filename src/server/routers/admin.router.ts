@@ -4,6 +4,7 @@ import { router, adminProcedure } from '../trpc/trpc';
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
 import { adminModule } from '@/modules/admin';
+import { appConfig } from '@/config/app.config';
 
 /**
  * Admin Router
@@ -1034,7 +1035,7 @@ export const adminRouter = router({
             where: { id: ctx.user!.id },
             select: { fullName: true },
           });
-          const inviteUrl = `${process.env.FRONTEND_URL || ''}/register?token=${token}&email=${encodeURIComponent(input.email)}`;
+          const inviteUrl = `${appConfig.frontendUrl}/register?token=${token}&email=${encodeURIComponent(input.email)}`;
           await reactMailer.sendInvitationEmail(input.email, {
             inviterName: inviter?.fullName || 'SheriaBot Admin',
             role: input.role,
@@ -1196,7 +1197,7 @@ export const adminRouter = router({
           await reactMailer.sendAccountApprovedEmail(user.email, {
             userName: user.fullName || user.email,
             role: user.role,
-            dashboardUrl: `${process.env.FRONTEND_URL || ''}/dashboard`,
+            dashboardUrl: `${appConfig.frontendUrl}/dashboard`,
           });
         } catch (emailErr: any) {
           logger.warn({ type: 'admin_approve_user_email_failed', error: emailErr.message });
@@ -1347,7 +1348,7 @@ export const adminRouter = router({
             await reactMailer.sendOrgVerifiedEmail(firstUser.email, {
               userName: firstUser.fullName || firstUser.email,
               organizationName: org.name,
-              dashboardUrl: `${process.env.FRONTEND_URL || ''}/dashboard`,
+              dashboardUrl: `${appConfig.frontendUrl}/dashboard`,
             });
           } catch (emailErr: any) {
             logger.warn({ type: 'admin_verify_org_email_failed', error: emailErr.message });

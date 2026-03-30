@@ -5,6 +5,9 @@ export type { VerificationEmailProps } from './templates/auth/VerificationEmail'
 export { PasswordResetEmail, PasswordResetEmailSubject } from './templates/auth/PasswordResetEmail';
 export type { PasswordResetEmailProps } from './templates/auth/PasswordResetEmail';
 
+export { PasswordChangedEmail, PasswordChangedEmailSubject } from './templates/auth/PasswordChangedEmail';
+export type { PasswordChangedEmailProps } from './templates/auth/PasswordChangedEmail';
+
 export { WelcomeEmail, WelcomeEmailSubject } from './templates/auth/WelcomeEmail';
 export type { WelcomeEmailProps } from './templates/auth/WelcomeEmail';
 

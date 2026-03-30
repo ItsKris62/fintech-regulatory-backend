@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Section, Text, Hr, Row, Column } from '@react-email/components';
 import { BaseLayout } from '../../components/BaseLayout';
 import { EmailButton } from '../../components/EmailButton';
-import { EMAIL_THEME } from '../../theme';
+import { EMAIL_THEME, SHERIABOT_URL } from '../../theme';
 
 export interface TicketConfirmationEmailProps {
   ticketNumber: string;
@@ -19,7 +19,7 @@ export function TicketConfirmationEmail({
   category,
   priority,
 }: TicketConfirmationEmailProps) {
-  const ticketUrl = `${process.env.FRONTEND_URL || 'https://sheriabot.com'}/support/${ticketNumber}`;
+  const ticketUrl = `${SHERIABOT_URL}/support/${ticketNumber}`;
 
   return (
     <BaseLayout preheaderText={`We've received your support request: ${ticketNumber}`}>

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Section, Text, Link } from '@react-email/components';
 import { BaseLayout } from '../../components/BaseLayout';
 import { EmailButton } from '../../components/EmailButton';
-import { EMAIL_THEME } from '../../theme';
+import { EMAIL_THEME, SHERIABOT_URL } from '../../theme';
 
 export interface WelcomeEmailProps {
   userName: string;
@@ -68,7 +68,7 @@ export function WelcomeEmail({
 
       <Text style={styles.footer}>
         Need help?{' '}
-        <Link href={`${process.env.FRONTEND_URL || 'https://sheriabot.com'}/docs`} style={styles.link}>
+        <Link href={`${SHERIABOT_URL}/docs`} style={styles.link}>
           Visit our documentation
         </Link>{' '}
         or reply to this email.
