@@ -90,7 +90,7 @@ class UserModule {
       }
 
       // 2. Get from database
-      const user = await (prisma as any).user.findUnique({
+      const user = await prisma.user.findUnique({
         where: { id: userId },
         include: {
           organization: {
@@ -104,7 +104,7 @@ class UserModule {
       }
 
       // 3. Convert to profile
-      const profile = toUserProfile(user);
+      const profile = toUserProfile({ ...user, name: user.fullName, avatarUrl: user.avatar });
 
       // 4. Cache result
       await redis.setex(
@@ -147,7 +147,7 @@ class UserModule {
       const validated = updateProfileSchema.parse(updates);
 
       // 2. Check user exists
-      const existingUser = await (prisma as any).user.findUnique({
+      const existingUser = await prisma.user.findUnique({
         where: { id: userId },
       });
 
@@ -156,12 +156,11 @@ class UserModule {
       }
 
       // 3. Update user
-      const updatedUser = await (prisma as any).user.update({
+      const updatedUser = await prisma.user.update({
         where: { id: userId },
         data: {
-          ...(validated.name && { name: validated.name }),
+          ...(validated.name && { fullName: validated.name }),
           ...(validated.phone !== undefined && { phone: validated.phone }),
-          ...(validated.avatarUrl !== undefined && { avatarUrl: validated.avatarUrl }),
           updatedAt: new Date(),
         },
         include: {
@@ -180,7 +179,7 @@ class UserModule {
       });
 
       // 6. Convert and return
-      const profile = toUserProfile(updatedUser);
+      const profile = toUserProfile({ ...updatedUser, name: updatedUser.fullName, avatarUrl: updatedUser.avatar });
 
       logger.info({
         type: 'user_update_profile_success',
@@ -317,7 +316,7 @@ class UserModule {
       const { userId, newEmail } = JSON.parse(tokenData);
 
       // 2. Update user email
-      const updatedUser = await (prisma as any).user.update({
+      const updatedUser = await prisma.user.update({
         where: { id: userId },
         data: {
           email: newEmail,
@@ -348,7 +347,7 @@ class UserModule {
         userId,
       });
 
-      return toUserProfile(updatedUser);
+      return toUserProfile({ ...updatedUser, name: updatedUser.fullName, avatarUrl: updatedUser.avatar });
     } catch (error: any) {
       logger.error({
         type: 'user_email_change_confirm_error',
@@ -381,7 +380,7 @@ class UserModule {
       }
 
       // 2. Get from database
-      const user = await (prisma as any).user.findUnique({
+      const user = await prisma.user.findUnique({
         where: { id: userId },
         select: { preferences: true },
       });
@@ -434,10 +433,10 @@ class UserModule {
       const newPreferences = mergePreferences(currentPreferences, validated);
 
       // 4. Update database
-      await (prisma as any).user.update({
+      await prisma.user.update({
         where: { id: userId },
         data: {
-          preferences: newPreferences,
+          preferences: newPreferences as any,
           updatedAt: new Date(),
         },
       });
@@ -494,9 +493,7 @@ class UserModule {
         userAgent: options?.userAgent,
       });
 
-      await (prisma as any).activityLog.create({
-        data: entry,
-      });
+      await (prisma as any).activityLog.create({ data: entry });
 
       // Invalidate activity cache
       const cacheKey = USER_CACHE_KEYS.ACTIVITY(userId);

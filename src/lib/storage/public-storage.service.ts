@@ -22,7 +22,7 @@ const CONTENT_TYPE_TO_EXT: Record<AvatarContentType, string> = {
 /** Presigned PUT URL expiry: 5 minutes */
 const AVATAR_UPLOAD_EXPIRY_SECONDS = 300;
 
-/** Max avatar file size: 5 MB */
+/** Max avatar file size: 5 MB — kept for backward compat; canonical value is AVATAR_UPLOAD_LIMITS.maxFileSizeMB */
 export const AVATAR_MAX_FILE_SIZE = 5 * 1024 * 1024;
 
 /* -------------------------------------------------------------------------- */
@@ -98,19 +98,24 @@ export function extractKeyFromAvatarUrl(avatarUrl: string): string | null {
  */
 export async function generateAvatarUploadUrl(
   userId: string,
-  contentType: AvatarContentType
+  contentType: AvatarContentType,
+  fileSize: number,
 ): Promise<{ uploadUrl: string; publicUrl: string; key: string }> {
   const client = getPublicR2Client();
   const key = buildAvatarKey(userId, contentType);
 
+  // Bind the presigned URL to the declared file size so R2 rejects any
+  // PUT whose Content-Length does not match the signed value.
   const cmd = new PutObjectCommand({
     Bucket: appConfig.publicStorage.bucketName,
     Key: key,
     ContentType: contentType,
+    ContentLength: fileSize,
   });
 
   const uploadUrl = await getSignedUrl(client, cmd, {
     expiresIn: AVATAR_UPLOAD_EXPIRY_SECONDS,
+    unhoistableHeaders: new Set(['content-length']),
   });
 
   const publicUrl = `${appConfig.publicStorage.bucketUrl}/${key}`;

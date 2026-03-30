@@ -48,7 +48,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false, // Structured logging handled by Pino via src/utils/logger
     maxParamLength: 5000,
-    bodyLimit: 10485760, // 10 MB
+    bodyLimit: 31457280, // 30 MB — covers 20 MB base64 gap analysis uploads
     trustProxy: true, // Required behind Railway's reverse proxy
   });
 

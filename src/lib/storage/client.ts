@@ -67,6 +67,12 @@ export interface PresignedUrlOptions {
   expiresIn?: number;
   contentType?: string;
   contentDisposition?: string;
+  /**
+   * When set, the presigned PUT URL is bound to this exact Content-Length.
+   * R2/S3 will reject any PUT whose Content-Length header does not match,
+   * preventing clients from uploading files larger than they declared.
+   */
+  contentLength?: number;
 }
 
 export interface MalwareScanResult {
@@ -596,10 +602,22 @@ export function createStorageService(deps?: {
       Bucket: bucketName(),
       Key: key,
       ContentType: options.contentType,
+      // Bind the presigned URL to the declared file size so R2 rejects any
+      // PUT whose Content-Length header does not match the signed value.
+      ...(options.contentLength !== undefined && { ContentLength: options.contentLength }),
     });
 
     const expiresIn = options.expiresIn ?? getPresignedUrlExpiry('upload');
-    return getSignedUrl(s3, cmd, { expiresIn });
+
+    // When ContentLength is present, mark content-length as unhoistable so it
+    // becomes part of the signature. Any PUT with a different body size returns
+    // 403 SignatureDoesNotMatch from R2/S3.
+    const signOptions: Parameters<typeof getSignedUrl>[2] = { expiresIn };
+    if (options.contentLength !== undefined) {
+      signOptions.unhoistableHeaders = new Set(['content-length']);
+    }
+
+    return getSignedUrl(s3, cmd, signOptions);
   }
 
   return {

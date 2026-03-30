@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { storageConfig } from '@/config/storage.config';
+import { VAULT_MAX_FILE_SIZE_BYTES } from '@/config/upload-limits.config';
 
 // ─── Enum literals (kept in sync with Prisma schema) ──────────────────────────
 
@@ -26,7 +27,7 @@ export const vaultGetUploadUrlSchema = z.object({
   fileSize: z
     .number()
     .min(storageConfig.limits.minFileSize, 'File must be at least 1 KB')
-    .max(storageConfig.limits.maxFileSize.vault, 'File exceeds the 25 MB vault limit'),
+    .max(VAULT_MAX_FILE_SIZE_BYTES, 'File exceeds the maximum vault file size'),
 });
 
 export type VaultGetUploadUrlInput = z.infer<typeof vaultGetUploadUrlSchema>;
@@ -106,7 +107,7 @@ export const vaultReplaceDocumentSchema = z.object({
   fileSize: z
     .number()
     .min(storageConfig.limits.minFileSize)
-    .max(storageConfig.limits.maxFileSize.vault),
+    .max(VAULT_MAX_FILE_SIZE_BYTES),
 });
 
 export type VaultReplaceDocumentInput = z.infer<typeof vaultReplaceDocumentSchema>;

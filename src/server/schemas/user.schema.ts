@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { phoneSchema } from '@/utils/validation';
+import { AVATAR_UPLOAD_LIMITS } from '@/config/upload-limits.config';
 
 /**
  * User Schemas
@@ -104,6 +105,11 @@ export type DisableTotpInput = z.infer<typeof disableTotpSchema>;
  */
 export const getAvatarUploadUrlSchema = z.object({
   contentType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  fileSize: z
+    .number()
+    .int()
+    .min(1)
+    .max(AVATAR_UPLOAD_LIMITS.maxFileSizeMB * 1024 * 1024, `Avatar must not exceed ${AVATAR_UPLOAD_LIMITS.maxFileSizeMB} MB`),
 });
 
 export type GetAvatarUploadUrlInput = z.infer<typeof getAvatarUploadUrlSchema>;

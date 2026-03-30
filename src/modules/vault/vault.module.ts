@@ -6,6 +6,8 @@ import { storageService } from '@/lib/storage/storage.service';
 import { storageConfig } from '@/config/storage.config';
 import { logger } from '@/utils/logger';
 import { notificationModule } from '@/modules/notification';
+import { VAULT_UPLOAD_LIMITS } from '@/config/upload-limits.config';
+import type { EffectivePlan } from '@/types/plan.types';
 import type {
   DocumentCategory,
   VaultDocumentStatus,
@@ -26,11 +28,6 @@ import type {
 } from './vault.types';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const VAULT_ALLOWED_MIME_TYPES: readonly string[] =
-  storageConfig.allowedFileTypes.vault.mimeTypes;
-
-const VAULT_MAX_FILE_SIZE = storageConfig.limits.maxFileSize.vault;
 
 /** Roles permitted to change document verification status */
 const STATUS_CHANGE_ROLES: readonly string[] = ['ADMIN', 'REGULATOR'];
@@ -83,24 +80,71 @@ function requireOrganization(organizationId: string | undefined | null): string 
   return organizationId;
 }
 
-// ─── Helper: assert MIME type is allowed for vault ────────────────────────────
+// ─── Helper: enforce per-tier upload limits ───────────────────────────────────
 
-function assertVaultMimeType(fileType: string): void {
-  if (!VAULT_ALLOWED_MIME_TYPES.includes(fileType)) {
+function assertTierUploadLimits(plan: EffectivePlan, fileType: string, fileSize: number): void {
+  const limits = VAULT_UPLOAD_LIMITS[plan];
+
+  if (limits.maxFileSizeMB === 0) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Document vault is not available on your current plan.',
+    });
+  }
+
+  if (!(limits.allowedMimeTypes as readonly string[]).includes(fileType)) {
     throw new TRPCError({
       code: 'BAD_REQUEST',
-      message: `File type "${fileType}" is not allowed. Accepted types: PDF, DOCX, XLSX, CSV, PNG, JPG.`,
+      message: `File type "${fileType}" is not allowed on your current plan. Accepted: ${limits.allowedMimeTypes.join(', ')}.`,
+    });
+  }
+
+  const maxFileSizeBytes = limits.maxFileSizeMB * 1024 * 1024;
+  if (fileSize > maxFileSizeBytes) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: `File size ${(fileSize / 1024 / 1024).toFixed(1)} MB exceeds the ${limits.maxFileSizeMB} MB limit for your plan. Upgrade for larger uploads.`,
     });
   }
 }
 
-// ─── Helper: assert file size within vault limit ──────────────────────────────
+// ─── Helper: enforce per-org total storage quota ──────────────────────────────
 
-function assertVaultFileSize(fileSize: number): void {
-  if (fileSize > VAULT_MAX_FILE_SIZE) {
+async function checkVaultStorageQuota(
+  orgId: string,
+  incomingFileSizeBytes: number,
+  plan: EffectivePlan,
+): Promise<void> {
+  const limits = VAULT_UPLOAD_LIMITS[plan];
+
+  // Unlimited storage — no check needed
+  if (limits.maxTotalStorageMB === -1) return;
+
+  // Blocked tier — assertTierUploadLimits already handles this, but guard anyway
+  if (limits.maxTotalStorageMB === 0) {
     throw new TRPCError({
-      code: 'BAD_REQUEST',
-      message: `File size ${(fileSize / 1024 / 1024).toFixed(1)} MB exceeds the 25 MB vault limit.`,
+      code: 'FORBIDDEN',
+      message: 'Document vault is not available on your current plan.',
+    });
+  }
+
+  const maxTotalStorageBytes = limits.maxTotalStorageMB * 1024 * 1024;
+
+  // Sum active (non-archived) vault documents for this org — this is the
+  // authoritative source of total storage used (Redis counter is for billing
+  // dashboards only and resets monthly).
+  const agg = await prisma.vaultDocument.aggregate({
+    where: { organizationId: orgId, isArchived: false },
+    _sum: { fileSize: true },
+  });
+  const currentUsedBytes = agg._sum.fileSize ?? 0;
+
+  if (currentUsedBytes + incomingFileSizeBytes > maxTotalStorageBytes) {
+    const usedMB = Math.round(currentUsedBytes / (1024 * 1024));
+    const limitMB = limits.maxTotalStorageMB;
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: `Storage quota exceeded. Your plan allows ${limitMB} MB total. Currently using ${usedMB} MB. Upgrade your plan for more storage.`,
     });
   }
 }
@@ -144,27 +188,34 @@ function assertOwnerOrAdmin(
 class VaultModule {
   /**
    * Step 1 of the two-step upload flow.
-   * Generates a presigned PUT URL and a pre-allocated document ID.
-   * The caller uploads directly to R2 then calls createDocument with the
-   * documentId and storageKey returned here.
+   * Enforces tier-based file size, MIME type, and total storage quota checks
+   * BEFORE generating the presigned PUT URL. If any check fails the client
+   * never receives a URL and cannot upload.
    */
   async generateUploadPresignedUrl(
     params: GenerateUploadUrlParams,
   ): Promise<GenerateUploadUrlResult> {
     const orgId = requireOrganization(params.organizationId);
-    assertVaultMimeType(params.fileType);
-    assertVaultFileSize(params.fileSize);
+
+    // Enforce per-tier single-file limits first (cheap, synchronous)
+    assertTierUploadLimits(params.plan, params.fileType, params.fileSize);
+
+    // Enforce total storage quota (async DB aggregate)
+    await checkVaultStorageQuota(orgId, params.fileSize, params.plan);
 
     const documentId = randomUUID();
     const ext = path.extname(params.filename).toLowerCase().slice(0, 15);
     const uuidFilename = `${randomUUID()}${ext}`;
     const storageKey = `vault/org_${orgId}/${documentId}/${uuidFilename}`;
 
+    // Pass fileSize so the presigned URL is bound to a specific Content-Length,
+    // preventing the client from uploading a larger file than declared.
     const { url } = await storageService.getUploadUrl(
       params.filename,
       params.fileType,
       undefined,
       storageKey,
+      params.fileSize,
     );
 
     logger.info({
@@ -173,6 +224,7 @@ class VaultModule {
       organizationId: orgId,
       documentId,
       fileSize: params.fileSize,
+      plan: params.plan,
     });
 
     return {
@@ -192,7 +244,7 @@ class VaultModule {
   async createDocument(params: CreateDocumentParams): Promise<VaultDocumentListItem> {
     const orgId = requireOrganization(params.organizationId);
 
-    const doc = await (prisma as any).vaultDocument.create({
+    const doc = await prisma.vaultDocument.create({
       data: {
         id: params.documentId,
         name: params.name,
@@ -266,14 +318,14 @@ class VaultModule {
     const skip = (params.page - 1) * params.limit;
 
     const [documents, total] = await Promise.all([
-      (prisma as any).vaultDocument.findMany({
+      prisma.vaultDocument.findMany({
         where,
         skip,
         take: params.limit,
         orderBy,
         select: VAULT_DOCUMENT_SELECT,
       }),
-      (prisma as any).vaultDocument.count({ where }),
+      prisma.vaultDocument.count({ where }),
     ]);
 
     return {
@@ -293,7 +345,7 @@ class VaultModule {
   async getDocumentById(params: GetDocumentByIdParams): Promise<VaultDocumentListItem> {
     const orgId = requireOrganization(params.organizationId);
 
-    const doc = await (prisma as any).vaultDocument.findUnique({
+    const doc = await prisma.vaultDocument.findUnique({
       where: { id: params.documentId },
       select: VAULT_DOCUMENT_SELECT,
     });
@@ -315,7 +367,7 @@ class VaultModule {
   ): Promise<{ downloadUrl: string; filename: string; expiresAt: string }> {
     const orgId = requireOrganization(params.organizationId);
 
-    const doc = await (prisma as any).vaultDocument.findUnique({
+    const doc = await prisma.vaultDocument.findUnique({
       where: { id: params.documentId },
       select: {
         storageKey: true,
@@ -362,7 +414,7 @@ class VaultModule {
   async updateDocument(params: UpdateDocumentParams): Promise<VaultDocumentListItem> {
     const orgId = requireOrganization(params.organizationId);
 
-    const existing = await (prisma as any).vaultDocument.findUnique({
+    const existing = await prisma.vaultDocument.findUnique({
       where: { id: params.documentId },
       select: { organizationId: true, uploadedById: true, isArchived: true },
     });
@@ -383,7 +435,7 @@ class VaultModule {
     if (params.tags !== undefined) data.tags = params.tags;
     if (params.notes !== undefined) data.notes = params.notes;
 
-    const updated = await (prisma as any).vaultDocument.update({
+    const updated = await prisma.vaultDocument.update({
       where: { id: params.documentId },
       data,
       select: VAULT_DOCUMENT_SELECT,
@@ -412,7 +464,7 @@ class VaultModule {
       });
     }
 
-    const existing = await (prisma as any).vaultDocument.findUnique({
+    const existing = await prisma.vaultDocument.findUnique({
       where: { id: params.documentId },
       select: { organizationId: true, uploadedById: true, isArchived: true },
     });
@@ -432,7 +484,7 @@ class VaultModule {
       data.verifiedBy = params.userId;
     }
 
-    const updated = await (prisma as any).vaultDocument.update({
+    const updated = await prisma.vaultDocument.update({
       where: { id: params.documentId },
       data,
       select: VAULT_DOCUMENT_SELECT,
@@ -454,7 +506,7 @@ class VaultModule {
   async deleteDocument(params: DeleteDocumentParams): Promise<{ success: boolean }> {
     const orgId = requireOrganization(params.organizationId);
 
-    const existing = await (prisma as any).vaultDocument.findUnique({
+    const existing = await prisma.vaultDocument.findUnique({
       where: { id: params.documentId },
       select: { organizationId: true, uploadedById: true, isArchived: true, storageKey: true },
     });
@@ -465,7 +517,7 @@ class VaultModule {
 
     assertOwnerOrAdmin(existing, params.userId, orgId, params.userRole);
 
-    await (prisma as any).vaultDocument.update({
+    await prisma.vaultDocument.update({
       where: { id: params.documentId },
       data: { isArchived: true },
     });
@@ -498,18 +550,18 @@ class VaultModule {
     const baseWhere = { organizationId: orgId, isArchived: false };
 
     const [totalCount, categoryGroups, statusGroups, expiringSoonCount] = await Promise.all([
-      (prisma as any).vaultDocument.count({ where: baseWhere }),
-      (prisma as any).vaultDocument.groupBy({
+      prisma.vaultDocument.count({ where: baseWhere }),
+      prisma.vaultDocument.groupBy({
         by: ['category'],
         where: baseWhere,
         _count: { id: true },
       }),
-      (prisma as any).vaultDocument.groupBy({
+      prisma.vaultDocument.groupBy({
         by: ['status'],
         where: baseWhere,
         _count: { id: true },
       }),
-      (prisma as any).vaultDocument.count({
+      prisma.vaultDocument.count({
         where: {
           ...baseWhere,
           status: { not: 'EXPIRED' },
@@ -535,26 +587,22 @@ class VaultModule {
     const byCategory = Object.fromEntries(
       allCategories.map((cat) => [
         cat,
-        (categoryGroups as Array<{ category: DocumentCategory; _count: { id: number } }>).find(
-          (g) => g.category === cat,
-        )?._count.id ?? 0,
+        categoryGroups.find((g) => g.category === cat)?._count.id ?? 0,
       ]),
     ) as Record<DocumentCategory, number>;
 
     const byStatus = Object.fromEntries(
       allStatuses.map((st) => [
         st,
-        (statusGroups as Array<{ status: VaultDocumentStatus; _count: { id: number } }>).find(
-          (g) => g.status === st,
-        )?._count.id ?? 0,
+        statusGroups.find((g) => g.status === st)?._count.id ?? 0,
       ]),
     ) as Record<VaultDocumentStatus, number>;
 
     return {
-      total: totalCount as number,
+      total: totalCount,
       byCategory,
       byStatus,
-      expiringSoon: expiringSoonCount as number,
+      expiringSoon: expiringSoonCount,
     };
   }
 
@@ -570,7 +618,7 @@ class VaultModule {
     };
     if (organizationId) where.organizationId = organizationId;
 
-    const { count } = await (prisma as any).vaultDocument.updateMany({
+    const { count } = await prisma.vaultDocument.updateMany({
       where,
       data: { status: 'EXPIRED' },
     });
@@ -585,6 +633,19 @@ class VaultModule {
   }
 
   /**
+   * Returns the total active (non-archived) storage used by an org in megabytes.
+   * Used by the getUploadLimits tRPC query to show the storage usage indicator.
+   */
+  async getStorageUsedMB(organizationId: string): Promise<number> {
+    if (!organizationId) return 0;
+    const agg = await prisma.vaultDocument.aggregate({
+      where: { organizationId, isArchived: false },
+      _sum: { fileSize: true },
+    });
+    return Math.round((agg._sum.fileSize ?? 0) / (1024 * 1024));
+  }
+
+  /**
    * Generate a new presigned upload URL for replacing an existing document.
    * Increments the version counter once confirmUpload is called.
    * Returns the new storageKey and documentId (same as existing docId so the
@@ -594,10 +655,11 @@ class VaultModule {
     params: ReplaceDocumentParams,
   ): Promise<GenerateUploadUrlResult & { currentVersion: number }> {
     const orgId = requireOrganization(params.organizationId);
-    assertVaultMimeType(params.fileType);
-    assertVaultFileSize(params.fileSize);
 
-    const existing = await (prisma as any).vaultDocument.findUnique({
+    // Enforce per-tier single-file limits and MIME type before doing any DB work
+    assertTierUploadLimits(params.plan, params.fileType, params.fileSize);
+
+    const existing = await prisma.vaultDocument.findUnique({
       where: { id: params.documentId },
       select: {
         organizationId: true,
@@ -605,6 +667,7 @@ class VaultModule {
         isArchived: true,
         version: true,
         storageKey: true,
+        fileSize: true,
       },
     });
 
@@ -613,6 +676,13 @@ class VaultModule {
     }
 
     assertOwnerOrAdmin(existing, params.userId, orgId, params.userRole);
+
+    // For replacement: quota check uses (incoming - current file size) as the
+    // net addition so replacing with a same-size file never exceeds quota.
+    const sizeDeltaBytes = params.fileSize - (existing.fileSize ?? 0);
+    if (sizeDeltaBytes > 0) {
+      await checkVaultStorageQuota(orgId, sizeDeltaBytes, params.plan);
+    }
 
     const ext = path.extname(params.filename).toLowerCase().slice(0, 15);
     const uuidFilename = `${randomUUID()}${ext}`;
@@ -624,6 +694,7 @@ class VaultModule {
       params.fileType,
       undefined,
       storageKey,
+      params.fileSize,
     );
 
     logger.info({
@@ -661,7 +732,7 @@ class VaultModule {
   }): Promise<VaultDocumentListItem> {
     const orgId = requireOrganization(params.organizationId);
 
-    const existing = await (prisma as any).vaultDocument.findUnique({
+    const existing = await prisma.vaultDocument.findUnique({
       where: { id: params.documentId },
       select: { organizationId: true, uploadedById: true, isArchived: true, version: true },
     });
@@ -672,7 +743,7 @@ class VaultModule {
 
     assertOwnerOrAdmin(existing, params.userId, orgId, params.userRole);
 
-    const updated = await (prisma as any).vaultDocument.update({
+    const updated = await prisma.vaultDocument.update({
       where: { id: params.documentId },
       data: {
         storageKey: params.storageKey,

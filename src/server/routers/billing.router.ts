@@ -566,6 +566,31 @@ export const billingRouter = router({
       const amountKes   = PLAN_KES[input.plan] ?? 0;
       const amountCents = amountKes * 100; // DB stores smallest unit
 
+      // Idempotency guard: return existing PENDING payment if created within last 15 minutes
+      // for the same org + plan. Prevents duplicate STK prompts on network-drop retries.
+      const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
+      const existingPending = await prisma.payment.findFirst({
+        where: {
+          orgId:            user.organizationId,
+          status:           PaymentStatus.PENDING,
+          provider:         PaymentProvider.MPESA,
+          subscriptionPlan: input.plan as string,
+          createdAt:        { gte: fifteenMinsAgo },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (existingPending) {
+        logger.info({
+          type:      'mpesa_payment_dedup_hit',
+          userId:    user.id,
+          orgId:     user.organizationId,
+          paymentId: existingPending.id,
+          plan:      input.plan,
+        });
+        return { paymentId: existingPending.id };
+      }
+
       // Generate invoice number upfront (stored on payment record)
       const invoiceNumber = await paymentService.generateInvoiceNumber();
 

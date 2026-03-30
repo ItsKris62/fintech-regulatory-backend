@@ -805,7 +805,7 @@ export const userRouter = router({
     .input(getAvatarUploadUrlSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        return await avatarService.getUploadUrl(ctx.user.id, input.contentType);
+        return await avatarService.getUploadUrl(ctx.user.id, input.contentType, input.fileSize);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         logger.error({ type: 'avatar_get_upload_url_error', userId: ctx.user.id, error: message });

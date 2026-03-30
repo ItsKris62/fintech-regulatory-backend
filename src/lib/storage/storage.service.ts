@@ -452,12 +452,15 @@ export class StorageService {
    * @param storagePath Storage path prefix (ignored when explicitKey is set)
    * @param explicitKey If provided, use this exact key instead of auto-generating one.
    *   Callers that pre-generate document IDs (Task 2/5) should pass the full key here.
+   * @param fileSize When provided, binds the presigned URL to this exact byte length
+   *   so R2 rejects any PUT whose Content-Length header does not match.
    */
   async getUploadUrl(
     filename: string,
     contentType: string,
     storagePath: string = storageConfig.paths.userUploads,
-    explicitKey?: string
+    explicitKey?: string,
+    fileSize?: number,
   ): Promise<{ url: string; key: string }> {
     try {
       const key = explicitKey ?? `${storagePath}${generateUniqueFilename(filename)}`;
@@ -465,6 +468,7 @@ export class StorageService {
       const url = await storageClient.getPresignedUploadUrl(key, {
         contentType,
         expiresIn: storageConfig.presignedUrls.expiry.upload,
+        contentLength: fileSize,
       });
 
       return { url, key };

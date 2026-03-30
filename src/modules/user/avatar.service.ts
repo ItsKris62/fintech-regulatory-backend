@@ -62,9 +62,10 @@ export const avatarService = {
    */
   async getUploadUrl(
     userId: string,
-    contentType: AvatarContentType
+    contentType: AvatarContentType,
+    fileSize: number,
   ): Promise<AvatarUploadUrlResult> {
-    const { uploadUrl, publicUrl } = await generateAvatarUploadUrl(userId, contentType);
+    const { uploadUrl, publicUrl } = await generateAvatarUploadUrl(userId, contentType, fileSize);
 
     logger.info({ type: 'avatar_upload_url_requested', userId });
 

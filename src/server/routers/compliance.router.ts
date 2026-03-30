@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { createHash } from 'crypto';
 import { router, protectedProcedure } from '../trpc/trpc';
 import { BillingMetric, SubscriptionPlan } from '@prisma/client';
 import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
@@ -28,6 +29,7 @@ import { prisma } from '@/lib/prisma/client';
 import { gapAnalysisExportService } from '@/services/gap-analysis-export.service';
 import { storageService } from '@/lib/storage/storage.service';
 import { GapAnalysisResultSchema } from '@/lib/ai/prompts/gap-analysis';
+import { GAP_ANALYSIS_UPLOAD_LIMITS, GAP_ANALYSIS_MAX_BASE64_CHARS } from '@/config/upload-limits.config';
 
 /**
  * Compliance Router
@@ -1379,7 +1381,7 @@ export const complianceRouter = router({
       z.object({
         fileName: z.string().min(1).max(255),
         fileType: z.enum(['pdf', 'docx', 'doc', 'txt']),
-        fileContent: z.string().min(1).max(14_000_000), // base64-encoded; 10MB file ≈ 13.4MB base64
+        fileContent: z.string().min(1).max(GAP_ANALYSIS_MAX_BASE64_CHARS), // base64-encoded; ~20 MB decoded ceiling
         regulatoryFrameworks: z.array(z.string()).min(1).max(10),
         analysisDepth: z.enum(['quick', 'standard', 'deep']).default('standard'),
         focusAreas: z.array(z.string()).max(10).optional(),
@@ -1393,6 +1395,24 @@ export const complianceRouter = router({
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Regulators cannot run gap analyses on uploaded documents',
+          });
+        }
+
+        // Per-tier file size enforcement.
+        // fileContent is base64; actual decoded byte size ≈ base64.length * 0.75
+        const decodedBytes = Math.ceil(input.fileContent.length * 0.75);
+        const gapLimits = GAP_ANALYSIS_UPLOAD_LIMITS[ctx.plan ?? SubscriptionPlan.REGULATOR];
+        if (gapLimits.maxFileSizeMB === 0) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Gap analysis file uploads are not available on your current plan.',
+          });
+        }
+        const maxGapBytes = gapLimits.maxFileSizeMB * 1024 * 1024;
+        if (decodedBytes > maxGapBytes) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `File exceeds the ${gapLimits.maxFileSizeMB} MB limit for your plan.`,
           });
         }
 
@@ -1428,6 +1448,22 @@ export const complianceRouter = router({
           });
         }
 
+        // Idempotency: deduplicate concurrent/retry submissions of the same file.
+        // Key = SHA-256(base64 content) scoped to org, TTL = 15 min.
+        const orgId = input.organizationId ?? ctx.user!.organizationId ?? ctx.user!.id;
+        const fileHash = createHash('sha256').update(input.fileContent).digest('hex');
+        const dedupKey = `sheriabot:gapanalysis:dedup:${orgId}:${fileHash}`;
+
+        const existing = await redis.get<string>(dedupKey);
+        if (existing) {
+          // Return the in-progress or recently-completed analysis instead of creating a duplicate.
+          const existingAnalysis = await prisma.gapAnalysis.findUnique({ where: { id: existing } });
+          if (existingAnalysis) {
+            logger.info({ type: 'gap_analysis_dedup_hit', userId: ctx.user!.id, analysisId: existing });
+            return existingAnalysis;
+          }
+        }
+
         logger.info({
           type: 'gap_analysis_request',
           userId: ctx.user!.id,
@@ -1451,6 +1487,9 @@ export const complianceRouter = router({
           userAgent: ctx.req.headers['user-agent'] as string | undefined,
           trialUserId: ctx.plan === 'FREE_TRIAL' ? ctx.user!.id : undefined,
         });
+
+        // Store dedup sentinel so retries within 15 min return the same analysis.
+        await redis.set(dedupKey, result.id, { ex: 900 });
 
         // Commit the usage counter now that the job is queued (deferIncrement pattern).
         // Usage is consumed at queue time, not completion — prevents free retries on timeout.
@@ -1545,6 +1584,17 @@ export const complianceRouter = router({
           cause: error,
         });
       }
+    }),
+
+  /**
+   * Returns the caller's per-tier gap analysis file size limit.
+   * Used by the frontend to enforce the file size constraint before upload.
+   */
+  getGapAnalysisLimits: protectedProcedure
+    .use(withPlanContext)
+    .query(({ ctx }) => {
+      const limits = GAP_ANALYSIS_UPLOAD_LIMITS[ctx.plan];
+      return { maxFileSizeMB: limits.maxFileSizeMB };
     }),
 
   /**

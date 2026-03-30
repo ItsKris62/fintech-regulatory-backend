@@ -15,6 +15,8 @@ import {
 import { z } from 'zod';
 import { logger } from '@/utils/logger';
 import { incrementTrialUsage } from '@/modules/trial';
+import { VAULT_UPLOAD_LIMITS } from '@/config/upload-limits.config';
+import { SubscriptionPlan } from '@prisma/client';
 
 /**
  * Vault Router
@@ -23,6 +25,23 @@ import { incrementTrialUsage } from '@/modules/trial';
  * All business logic lives in VaultModule.
  */
 export const vaultRouter = router({
+  /**
+   * Returns the caller's per-tier upload limits and current storage usage.
+   * Used by the frontend to set accept/size constraints before the upload form opens.
+   */
+  getUploadLimits: protectedProcedure
+    .use(withPlanContext)
+    .query(async ({ ctx }) => {
+      const limits = VAULT_UPLOAD_LIMITS[ctx.plan];
+      const storageUsedMB = await vaultModule.getStorageUsedMB(ctx.user.organizationId ?? '');
+      return {
+        maxFileSizeMB: limits.maxFileSizeMB,
+        maxTotalStorageMB: limits.maxTotalStorageMB,
+        allowedMimeTypes: limits.allowedMimeTypes,
+        storageUsedMB,
+      };
+    }),
+
   /**
    * Step 1: Get presigned PUT URL for direct client-to-R2 upload.
    * Returns uploadUrl, storageKey, and documentId for use in confirmUpload.
@@ -39,6 +58,7 @@ export const vaultRouter = router({
           filename: input.filename,
           fileType: input.fileType,
           fileSize: input.fileSize,
+          plan: ctx.plan ?? SubscriptionPlan.REGULATOR,
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
@@ -249,6 +269,7 @@ export const vaultRouter = router({
    * Step 1 of file replacement: get new presigned PUT URL for the existing doc.
    */
   getReplaceUrl: protectedProcedure
+    .use(withPlanContext)
     .input(vaultReplaceDocumentSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -260,6 +281,7 @@ export const vaultRouter = router({
           filename: input.filename,
           fileType: input.fileType,
           fileSize: input.fileSize,
+          plan: ctx.plan ?? SubscriptionPlan.REGULATOR,
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;

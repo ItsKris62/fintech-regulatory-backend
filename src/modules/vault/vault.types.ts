@@ -62,6 +62,8 @@ export interface GenerateUploadUrlParams {
   filename: string;
   fileType: string;
   fileSize: number;
+  /** The caller's effective plan — used to enforce per-tier file size and MIME limits. */
+  plan: import('@/types/plan.types').EffectivePlan;
 }
 
 export interface GenerateUploadUrlResult {
@@ -155,4 +157,6 @@ export interface ReplaceDocumentParams {
   filename: string;
   fileType: string;
   fileSize: number;
+  /** The caller's effective plan — used to enforce per-tier file size and MIME limits. */
+  plan: import('@/types/plan.types').EffectivePlan;
 }
