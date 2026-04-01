@@ -593,14 +593,14 @@ class ComplianceTracker {
   ): Promise<void> {
     // Store reminder info in Redis
     const key = `${REDIS_KEYS.DEADLINES}${requirementId}`;
-    await redis.setex(
+    await redis.set(
       key,
-      Math.max(0, Math.floor((dueDate.getTime() - Date.now()) / 1000)),
       JSON.stringify({
         requirementId,
         dueDate: dueDate.toISOString(),
         remindersSent: [],
-      })
+      }),
+      { ex: Math.max(0, Math.floor((dueDate.getTime() - Date.now()) / 1000)) }
     );
   }
 

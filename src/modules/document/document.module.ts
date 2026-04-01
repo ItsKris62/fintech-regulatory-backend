@@ -137,10 +137,10 @@ class DocumentModule {
       });
 
       // Queue processing status in Redis
-      await redis.setex(
+      await redis.set(
         `${REDIS_KEYS.PROCESSING}${doc.id}`,
-        300,
-        JSON.stringify({ status: 'queued', documentId: doc.id })
+        JSON.stringify({ status: 'queued', documentId: doc.id }),
+        { ex: 300 }
       );
 
       // Auto-process if requested (fire-and-forget with error capture)
@@ -192,10 +192,10 @@ class DocumentModule {
       data: { status: 'PROCESSING' },
     });
 
-    await redis.setex(
+    await redis.set(
       `${REDIS_KEYS.PROCESSING}${documentId}`,
-      600,
-      JSON.stringify({ status: 'processing', documentId })
+      JSON.stringify({ status: 'processing', documentId }),
+      { ex: 600 }
     );
 
     try {
@@ -360,7 +360,7 @@ class DocumentModule {
     }
 
     const summary = toDocumentSummary(doc as unknown as Record<string, unknown>);
-    await redis.setex(cacheKey, CACHE_TTL.DOCUMENT, JSON.stringify(summary));
+    await redis.set(cacheKey, JSON.stringify(summary), { ex: CACHE_TTL.DOCUMENT });
     await this.incrementViewCount(documentId);
 
     return summary;
@@ -484,7 +484,7 @@ class DocumentModule {
       rank: r.rank,
     }));
 
-    await redis.setex(cacheKey, CACHE_TTL.SEARCH, JSON.stringify(results));
+    await redis.set(cacheKey, JSON.stringify(results), { ex: CACHE_TTL.SEARCH });
     return results;
   }
 
@@ -738,10 +738,10 @@ class DocumentModule {
     };
 
     const ttl = Math.floor((expiresAt.getTime() - Date.now()) / 1000);
-    await redis.setex(
+    await redis.set(
       `${REDIS_KEYS.SHARE}${token}`,
-      ttl,
-      JSON.stringify(shareData)
+      JSON.stringify(shareData),
+      { ex: ttl }
     );
 
     logger.info({ type: 'document_shared', documentId, sharedBy: shareParams.sharedBy });
@@ -787,7 +787,7 @@ class DocumentModule {
     const remaining = Math.floor(
       (new Date(share.expiresAt).getTime() - Date.now()) / 1000
     );
-    await redis.setex(`${REDIS_KEYS.SHARE}${shareToken}`, remaining, JSON.stringify(updated));
+    await redis.set(`${REDIS_KEYS.SHARE}${shareToken}`, JSON.stringify(updated), { ex: remaining });
 
     return toDocumentSummary(doc as unknown as Record<string, unknown>);
   }

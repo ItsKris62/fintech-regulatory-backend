@@ -107,10 +107,10 @@ class UserModule {
       const profile = toUserProfile({ ...user, name: user.fullName, avatarUrl: user.avatar });
 
       // 4. Cache result
-      await redis.setex(
+      await redis.set(
         cacheKey,
-        USER_CACHE_TTL.PROFILE,
-        JSON.stringify(profile)
+        JSON.stringify(profile),
+        { ex: USER_CACHE_TTL.PROFILE }
       );
 
       logger.info({
@@ -246,14 +246,14 @@ class UserModule {
       const token = crypto.randomUUID();
       const tokenKey = `email_change:${token}`;
       
-      await redis.setex(
+      await redis.set(
         tokenKey,
-        24 * 60 * 60, // 24 hours
         JSON.stringify({
           userId,
           newEmail: newEmail.toLowerCase(),
           createdAt: new Date().toISOString(),
-        })
+        }),
+        { ex: 24 * 60 * 60 } // 24 hours
       );
 
       // 4. Send verification email to NEW email
@@ -393,10 +393,10 @@ class UserModule {
       const preferences = parsePreferences((user as any).preferences);
 
       // 4. Cache result
-      await redis.setex(
+      await redis.set(
         cacheKey,
-        USER_CACHE_TTL.PREFERENCES,
-        JSON.stringify(preferences)
+        JSON.stringify(preferences),
+        { ex: USER_CACHE_TTL.PREFERENCES }
       );
 
       return preferences;
@@ -682,10 +682,10 @@ class UserModule {
       };
 
       // 8. Cache result
-      await redis.setex(
+      await redis.set(
         cacheKey,
-        USER_CACHE_TTL.STATS,
-        JSON.stringify(stats)
+        JSON.stringify(stats),
+        { ex: USER_CACHE_TTL.STATS }
       );
 
       logger.info({

@@ -93,7 +93,7 @@ class ComplianceScorer {
       };
 
       // Cache the score
-      await redis.setex(cacheKey, SCORE_CACHE_TTL, JSON.stringify(score));
+      await redis.set(cacheKey, JSON.stringify(score), { ex: SCORE_CACHE_TTL });
 
       // Save score history
       await this.saveScoreHistory(orgId, score);

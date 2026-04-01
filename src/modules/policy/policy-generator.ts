@@ -635,7 +635,7 @@ Provide the refined policy content, maintaining the same structure and format. O
     };
 
     const key = `${REDIS_KEYS.GENERATION_PROGRESS}${policyId}`;
-    await redis.setex(key, 600, JSON.stringify(progressData)); // 10 min TTL
+    await redis.set(key, JSON.stringify(progressData), { ex: 600 }); // 10 min TTL
 
     // Also publish to pub/sub for real-time subscribers
     await redis.publish(

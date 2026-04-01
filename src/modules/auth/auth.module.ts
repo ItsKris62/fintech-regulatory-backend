@@ -975,10 +975,10 @@ class AuthModule {
 
   private async storeSession(sessionId: string, data: SessionData): Promise<void> {
     const key = `${AUTH_CONSTANTS.REDIS_KEYS.SESSION}${sessionId}`;
-    await redis.setex(
+    await redis.set(
       key,
-      AUTH_CONSTANTS.SESSION_EXPIRY,
-      JSON.stringify(data)
+      JSON.stringify(data),
+      { ex: AUTH_CONSTANTS.SESSION_EXPIRY }
     );
   }
 
@@ -1014,10 +1014,10 @@ class AuthModule {
       rotationCount,
     };
     
-    await redis.setex(
+    await redis.set(
       key,
-      AUTH_CONSTANTS.REFRESH_TOKEN_EXPIRY,
-      JSON.stringify(data)
+      JSON.stringify(data),
+      { ex: AUTH_CONSTANTS.REFRESH_TOKEN_EXPIRY }
     );
   }
 
@@ -1060,10 +1060,10 @@ class AuthModule {
       ).toISOString();
     }
 
-    await redis.setex(
+    await redis.set(
       key,
-      AUTH_CONSTANTS.LOGIN_LOCKOUT_DURATION,
-      JSON.stringify(data)
+      JSON.stringify(data),
+      { ex: AUTH_CONSTANTS.LOGIN_LOCKOUT_DURATION }
     );
   }
 
@@ -1091,10 +1091,10 @@ class AuthModule {
       ).toISOString(),
     };
     
-    await redis.setex(
+    await redis.set(
       key,
-      AUTH_CONSTANTS.PASSWORD_RESET_EXPIRY,
-      JSON.stringify(data)
+      JSON.stringify(data),
+      { ex: AUTH_CONSTANTS.PASSWORD_RESET_EXPIRY }
     );
   }
 
@@ -1128,10 +1128,10 @@ class AuthModule {
       ).toISOString(),
     };
     
-    await redis.setex(
+    await redis.set(
       key,
-      AUTH_CONSTANTS.EMAIL_VERIFICATION_EXPIRY,
-      JSON.stringify(data)
+      JSON.stringify(data),
+      { ex: AUTH_CONSTANTS.EMAIL_VERIFICATION_EXPIRY }
     );
   }
 

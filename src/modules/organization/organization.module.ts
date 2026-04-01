@@ -201,10 +201,10 @@ class OrganizationModule {
       // 3. Transform and cache
       const organization = toOrganization(org as any);
       
-      await redis.setex(
+      await redis.set(
         cacheKey,
-        ORG_CACHE_TTL,
-        JSON.stringify(organization)
+        JSON.stringify(organization),
+        { ex: ORG_CACHE_TTL }
       );
 
       logger.info({
@@ -686,10 +686,10 @@ class OrganizationModule {
           createdAt: new Date(),
         };
 
-        await redis.setex(
+        await redis.set(
           `${REDIS_KEYS.INVITATION}${token}`,
-          ORGANIZATION_CONSTANTS.INVITATION_EXPIRY_DAYS * 24 * 60 * 60,
-          JSON.stringify(invitationData)
+          JSON.stringify(invitationData),
+          { ex: ORGANIZATION_CONSTANTS.INVITATION_EXPIRY_DAYS * 24 * 60 * 60 }
         );
 
         // Send invitation email
@@ -1429,7 +1429,7 @@ class OrganizationModule {
       };
 
       // Cache stats
-      await redis.setex(cacheKey, STATS_CACHE_TTL, JSON.stringify(stats));
+      await redis.set(cacheKey, JSON.stringify(stats), { ex: STATS_CACHE_TTL });
 
       logger.info({
         type: 'org_get_stats_success',

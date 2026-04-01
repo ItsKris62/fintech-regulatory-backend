@@ -337,7 +337,7 @@ class AnalyticsModule {
       dateRange: range,
     };
 
-    await redis.setex(cacheKey, CACHE_TTL.ORG_DASHBOARD, JSON.stringify(dashboard));
+    await redis.set(cacheKey, JSON.stringify(dashboard), { ex: CACHE_TTL.ORG_DASHBOARD });
     return dashboard;
   }
 
@@ -736,7 +736,7 @@ class AnalyticsModule {
       dateRange: range,
     };
 
-    await redis.setex(cacheKey, CACHE_TTL.PLATFORM_OVERVIEW, JSON.stringify(overview));
+    await redis.set(cacheKey, JSON.stringify(overview), { ex: CACHE_TTL.PLATFORM_OVERVIEW });
     return overview;
   }
 
@@ -821,7 +821,7 @@ class AnalyticsModule {
     health.storage = { status: 'healthy' };
     health.pinecone = { status: 'healthy', vectorCount: 0 };
 
-    await redis.setex(cacheKey, CACHE_TTL.SYSTEM_HEALTH, JSON.stringify(health));
+    await redis.set(cacheKey, JSON.stringify(health), { ex: CACHE_TTL.SYSTEM_HEALTH });
     return health;
   }
 
@@ -887,7 +887,7 @@ class AnalyticsModule {
       type: 'compliance',
     };
 
-    await redis.setex(reportJobKey(reportId), 3600, JSON.stringify(job));
+    await redis.set(reportJobKey(reportId), JSON.stringify(job), { ex: 3600 });
 
     // Generate asynchronously
     this.buildComplianceReport(orgId, params, reportId).catch((err: Error) => {
@@ -905,7 +905,7 @@ class AnalyticsModule {
     try {
       // Mark as generating
       const job = { reportId, status: 'generating', orgId, type: 'compliance' };
-      await redis.setex(reportJobKey(reportId), 3600, JSON.stringify(job));
+      await redis.set(reportJobKey(reportId), JSON.stringify(job), { ex: 3600 });
 
       const [overview, gaps, risks] = await Promise.all([
         params.includeScoring !== false ? this.getComplianceOverview(orgId) : null,
@@ -916,7 +916,7 @@ class AnalyticsModule {
       const report = { reportId, orgId, overview, gaps, risks, generatedAt: new Date() };
       const serialized = JSON.stringify(report);
 
-      await redis.setex(reportResultKey(reportId), CACHE_TTL.REPORT_RESULT, serialized);
+      await redis.set(reportResultKey(reportId), serialized, { ex: CACHE_TTL.REPORT_RESULT });
 
       const completedJob: GeneratedReport = {
         reportId,
@@ -926,7 +926,7 @@ class AnalyticsModule {
         generatedAt: new Date(),
         expiresAt: new Date(Date.now() + CACHE_TTL.REPORT_RESULT * 1000),
       };
-      await redis.setex(reportJobKey(reportId), 3600, JSON.stringify(completedJob));
+      await redis.set(reportJobKey(reportId), JSON.stringify(completedJob), { ex: 3600 });
     } catch (err: unknown) {
       const failed: GeneratedReport = {
         reportId,
@@ -934,7 +934,7 @@ class AnalyticsModule {
         orgId,
         type: 'compliance',
       };
-      await redis.setex(reportJobKey(reportId), 3600, JSON.stringify(failed));
+      await redis.set(reportJobKey(reportId), JSON.stringify(failed), { ex: 3600 });
       throw err;
     }
   }
@@ -1008,7 +1008,7 @@ class AnalyticsModule {
     };
 
     // Persist schedule in Redis (30-day TTL — re-set on each run)
-    await redis.setex(`analytics:schedule:${scheduleId}`, 30 * 24 * 3600, JSON.stringify(schedule));
+    await redis.set(`analytics:schedule:${scheduleId}`, JSON.stringify(schedule), { ex: 30 * 24 * 3600 });
 
     logger.info({ type: 'report_scheduled', scheduleId, orgId: params.orgId });
     return schedule;
@@ -1047,7 +1047,7 @@ class AnalyticsModule {
     }
 
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await redis.setex(`analytics:export:${exportId}`, 86400, content);
+    await redis.set(`analytics:export:${exportId}`, content, { ex: 86400 });
 
     logger.info({ type: 'analytics_exported', exportId, format: params.format });
 

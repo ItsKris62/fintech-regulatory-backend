@@ -117,7 +117,7 @@ class PolicyModule {
       await this.checkAccess(userId, policy);
 
       // Cache result
-      await redis.setex(cacheKey, POLICY_CACHE_TTL, JSON.stringify(policy));
+      await redis.set(cacheKey, JSON.stringify(policy), { ex: POLICY_CACHE_TTL });
 
       logger.info({
         type: 'policy_get_success',
@@ -728,10 +728,10 @@ class PolicyModule {
       const result = await policyExporter.export(policy, format, validated as any);
 
       // Cache result
-      await redis.setex(
+      await redis.set(
         cacheKey,
-        POLICY_CONSTANTS.EXPORT_CACHE_TTL,
-        JSON.stringify(result)
+        JSON.stringify(result),
+        { ex: POLICY_CONSTANTS.EXPORT_CACHE_TTL }
       );
 
       logger.info({

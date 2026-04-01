@@ -223,10 +223,10 @@ class AdminModule {
     const expiresAt = new Date(Date.now() + CACHE_TTL.IMPERSONATION_TTL * 1000);
 
     const payload = { adminId, targetUserId, expiresAt: expiresAt.toISOString() };
-    await redis.setex(
+    await redis.set(
       impersonationKey(token),
-      CACHE_TTL.IMPERSONATION_TTL,
-      JSON.stringify(payload)
+      JSON.stringify(payload),
+      { ex: CACHE_TTL.IMPERSONATION_TTL }
     );
 
     await this.writeAuditLog(adminId, 'admin_impersonate_user', 'User', targetUserId, {});
@@ -535,14 +535,14 @@ class AdminModule {
     const persisted = await redis.get<string>('admin:system_config:persisted');
     if (persisted) {
       const config = JSON.parse(persisted) as SystemConfig;
-      await redis.setex(systemConfigKey(), CACHE_TTL.SYSTEM_CONFIG, persisted);
+      await redis.set(systemConfigKey(), persisted, { ex: CACHE_TTL.SYSTEM_CONFIG });
       return config;
     }
 
-    await redis.setex(
+    await redis.set(
       systemConfigKey(),
-      CACHE_TTL.SYSTEM_CONFIG,
-      JSON.stringify(DEFAULT_SYSTEM_CONFIG)
+      JSON.stringify(DEFAULT_SYSTEM_CONFIG),
+      { ex: CACHE_TTL.SYSTEM_CONFIG }
     );
     return { ...DEFAULT_SYSTEM_CONFIG };
   }
@@ -556,7 +556,7 @@ class AdminModule {
 
     const serialized = JSON.stringify(updated);
     await redis.set('admin:system_config:persisted', serialized);
-    await redis.setex(systemConfigKey(), CACHE_TTL.SYSTEM_CONFIG, serialized);
+    await redis.set(systemConfigKey(), serialized, { ex: CACHE_TTL.SYSTEM_CONFIG });
 
     await this.writeAuditLog(adminId, 'admin_update_system_config', 'System', 'config', {
       changes: config,
@@ -573,14 +573,14 @@ class AdminModule {
     const persisted = await redis.get<string>('admin:feature_flags:persisted');
     if (persisted) {
       const flags = JSON.parse(persisted) as FeatureFlags;
-      await redis.setex(featureFlagsKey(), CACHE_TTL.FEATURE_FLAGS, persisted);
+      await redis.set(featureFlagsKey(), persisted, { ex: CACHE_TTL.FEATURE_FLAGS });
       return flags;
     }
 
-    await redis.setex(
+    await redis.set(
       featureFlagsKey(),
-      CACHE_TTL.FEATURE_FLAGS,
-      JSON.stringify(DEFAULT_FEATURE_FLAGS)
+      JSON.stringify(DEFAULT_FEATURE_FLAGS),
+      { ex: CACHE_TTL.FEATURE_FLAGS }
     );
     return { ...DEFAULT_FEATURE_FLAGS };
   }
@@ -595,7 +595,7 @@ class AdminModule {
 
     const serialized = JSON.stringify(updated);
     await redis.set('admin:feature_flags:persisted', serialized);
-    await redis.setex(featureFlagsKey(), CACHE_TTL.FEATURE_FLAGS, serialized);
+    await redis.set(featureFlagsKey(), serialized, { ex: CACHE_TTL.FEATURE_FLAGS });
 
     await this.writeAuditLog(adminId, 'admin_update_feature_flag', 'FeatureFlag', flag, {
       before: existing[flag],
@@ -624,7 +624,7 @@ class AdminModule {
       startedAt: enabled ? new Date() : null,
     };
 
-    await redis.setex(maintenanceKey(), 86400, JSON.stringify(status));
+    await redis.set(maintenanceKey(), JSON.stringify(status), { ex: 86400 });
 
     // Also update feature flag
     await this.updateFeatureFlag(adminId, 'maintenanceMode', enabled);

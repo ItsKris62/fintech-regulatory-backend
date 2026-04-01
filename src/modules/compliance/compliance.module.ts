@@ -478,7 +478,7 @@ class ComplianceModule {
       };
 
       // 11. Cache result
-      await redis.setex(cacheKey, QUERY_CACHE_TTL, JSON.stringify(result));
+      await redis.set(cacheKey, JSON.stringify(result), { ex: QUERY_CACHE_TTL });
 
       // 12. Record rate limit usage
       await this.recordQueryUsage(userId);
@@ -1083,10 +1083,10 @@ Follow-up Question: ${followUp}
     });
 
     // Store in Redis for quick lookup
-    await redis.setex(
+    await redis.set(
       `${REDIS_KEYS.SUBSCRIPTION}${userId}`,
-      24 * 60 * 60,
-      JSON.stringify(subscription)
+      JSON.stringify(subscription),
+      { ex: 24 * 60 * 60 }
     );
 
     return subscription as unknown as UpdateSubscription;

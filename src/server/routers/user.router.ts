@@ -543,10 +543,10 @@ export const userRouter = router({
       });
 
       // Store pending secret in Redis for 10 minutes
-      await redis.setex(
+      await redis.set(
         `${TOTP_PENDING_PREFIX}${ctx.user.id}`,
-        TOTP_PENDING_TTL,
         secret,
+        { ex: TOTP_PENDING_TTL },
       );
 
       logger.info({ type: 'user_totp_setup_initiated', userId: ctx.user.id });
