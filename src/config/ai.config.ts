@@ -81,8 +81,8 @@ export const aiConfig = {
     // Policy generation timeout (can take longer)
     policyGeneration: 120000, // 120 seconds
 
-    // Checklist generation timeout — 120s needed for 8192-token responses at typical Sonnet throughput
-    checklistGeneration: 120000, // 120 seconds
+    // Checklist generation timeout — 200s for 8192-token responses + RAG overhead at Sonnet throughput
+    checklistGeneration: 200000, // 200 seconds
 
     // Compliance query timeout
     complianceQuery: 45000, // 45 seconds

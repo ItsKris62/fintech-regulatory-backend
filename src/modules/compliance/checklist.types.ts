@@ -54,7 +54,7 @@ export type ChecklistItemPriority =
  * cleanup marks it FAILED.  Must be ≥ the AI client timeout (120 s) plus
  * reasonable DB/RAG overhead.
  */
-export const CHECKLIST_STALE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+export const CHECKLIST_STALE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 // ---------------------------------------------------------------------------
 // Input Schemas
@@ -120,6 +120,7 @@ export interface ChecklistSummary {
   totalItems:         number;
   criticalItems:      number;
   status:             ChecklistStatus;
+  generatedAt:        Date | null;
   createdAt:          Date;
   updatedAt:          Date;
   /** True when normalized ChecklistItem records exist for this checklist. */
@@ -129,6 +130,7 @@ export interface ChecklistSummary {
 export interface ChecklistItemDetail {
   id:                  string;
   category:            string;
+  itemCode:            string | null;
   title:               string;
   description:         string;
   guidance:            string | null;
@@ -165,6 +167,9 @@ export interface ChecklistDetail {
   completedItems:     number;
   totalItems:         number;
   status:             ChecklistStatus;
+  summary:            unknown;
+  metadata:           unknown;
+  generatedAt:        Date | null;
   createdAt:          Date;
   updatedAt:          Date;
   completedAt:        Date | null;
@@ -197,6 +202,7 @@ export interface RawChecklistItemRow {
   id:                  string;
   checklistId:         string;
   category:            string;
+  itemCode:            string | null;
   title:               string;
   description:         string;
   guidance:            string | null;

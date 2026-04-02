@@ -318,6 +318,10 @@ model Checklist {
   itemProgress       Json?
   progress           Int             @default(0)
   completedItems     Int             @default(0)
+  totalItems         Int             @default(0)
+  summary            Json?
+  metadata           Json?
+  generatedAt        DateTime?
   status             String          @default("GENERATING")
   dueDate            DateTime?
   completedAt        DateTime?
@@ -337,6 +341,7 @@ model ChecklistItem {
   id                  String    @id @default(cuid())
   checklistId         String
   category            String
+  itemCode            String?
   title               String
   description         String
   guidance            String?

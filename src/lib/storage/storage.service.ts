@@ -539,6 +539,52 @@ export class StorageService {
   }
 
   /**
+   * Upload a generated checklist DOCX export to R2.
+   * Skips file-type validation since the buffer is generated server-side.
+   * @param fileBuffer  DOCX buffer
+   * @param filename    Desired filename (e.g. SheriaBot_Checklist_Acme_2026-03-20.docx)
+   * @param checklistId Checklist record ID — used as the R2 path segment
+   * @param userId      Uploader user ID — stored as metadata
+   */
+  async uploadChecklistExport(
+    fileBuffer: Buffer,
+    filename: string,
+    checklistId: string,
+    userId: string,
+  ): Promise<FileUploadResult> {
+    const key = `checklist-exports/${checklistId}/${filename}`;
+    const contentType =
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    logger.info({ type: 'checklist_export_upload_started', key, size: fileBuffer.length });
+
+    try {
+      const fileMetadata = await storageClient.uploadBuffer(key, fileBuffer, {
+        contentType,
+        metadata: { checklistId, userId, exportedAt: new Date().toISOString() },
+      });
+
+      const url = getPublicUrl(key);
+
+      logger.info({ type: 'checklist_export_upload_success', key });
+
+      return {
+        key,
+        url,
+        size: fileMetadata.size,
+        contentType: fileMetadata.contentType,
+      };
+    } catch (error: unknown) {
+      logger.error({
+        type: 'checklist_export_upload_error',
+        key,
+        error: (error as Error).message,
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Upload a generated gap analysis DOCX export to R2.
    * Skips file-type validation since the buffer is generated server-side.
    * @param fileBuffer DOCX buffer

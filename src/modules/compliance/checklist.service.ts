@@ -255,6 +255,8 @@ class ChecklistService {
           itemRows.push({
             checklistId,
             category:            category.name,
+            // Persist the AI-generated code (e.g. "DP-001") for display and PDF export.
+            itemCode:            (aiItem as { id?: string }).id ?? null,
             title:               aiItem.title,
             description:         aiItem.description,
             // guidance is a new field added to the AI output schema.
@@ -278,10 +280,30 @@ class ChecklistService {
         ? `${generatedChecklist.metadata.productType} — ${generatedChecklist.metadata.businessStage}`
         : `${input.productType} — ${input.businessStage}`;
 
+      // Build the summary and metadata objects to persist alongside the items.
+      const generationSummary = {
+        totalCategories:         generatedChecklist.categories.length,
+        totalItems,
+        criticalItems:           generatedChecklist.metadata.criticalItems,
+        highItems:               generatedChecklist.metadata.highItems,
+        estimatedCompletionDays: generatedChecklist.metadata.estimatedCompletionDays,
+        generatedFor: {
+          productType:   input.productType,
+          businessStage: input.businessStage,
+          services:      input.servicesOffered,
+        },
+      };
+
+      const generationMetadata = {
+        ragSourcesUsed:          ragSourcesUsed,
+        estimatedCompletionDays: generatedChecklist.metadata.estimatedCompletionDays,
+        generationDurationMs:    Date.now() - startTime,
+      };
+
       // ------------------------------------------------------------------
       // 5. Persist in a single transaction:
       //    a) Create all ChecklistItem rows.
-      //    b) Update Checklist to IN_PROGRESS.
+      //    b) Update Checklist to IN_PROGRESS with summary/metadata fields.
       //    Also keep checklistData for legacy readers that may render the
       //    JSON blob (e.g. PDF export on old checklists).
       // ------------------------------------------------------------------
@@ -291,12 +313,16 @@ class ChecklistService {
         await tx.checklist.update({
           where: { id: checklistId },
           data:  {
-            title:         checklistTitle,
-            status:        CHECKLIST_STATUS.IN_PROGRESS,
-            progress:      0,
+            title:          checklistTitle,
+            status:         CHECKLIST_STATUS.IN_PROGRESS,
+            progress:       0,
             completedItems: 0,
+            totalItems,
+            summary:        generationSummary as unknown as Record<string, unknown>,
+            metadata:       generationMetadata as unknown as Record<string, unknown>,
+            generatedAt:    new Date(),
             // Preserve the full AI blob — used by legacy PDF export paths.
-            checklistData: generatedChecklist as unknown as Record<string, unknown>,
+            checklistData:  generatedChecklist as unknown as Record<string, unknown>,
           },
         });
       });
@@ -317,20 +343,30 @@ class ChecklistService {
     } catch (err: unknown) {
       const errMsg = (err as Error).message ?? 'Unknown error';
 
+      // Provide a specific, actionable message for token-limit truncation errors.
+      const isTruncation = /max_tokens|truncated|schema validation/i.test(errMsg);
+      const userFacingError = isTruncation
+        ? 'AI response was truncated. Please try again with fewer details in the specific concerns field.'
+        : errMsg;
+
       logger.error({
         type:        'checklist_generate_failed',
         checklistId,
         userId,
         error:       errMsg,
+        isTruncation,
         durationMs:  Date.now() - startTime,
       });
 
-      // Mark the stuck GENERATING record as FAILED so the frontend can show
-      // a clear error state rather than polling indefinitely.
+      // Mark the stuck GENERATING record as FAILED and persist the error reason
+      // in metadata so the frontend can surface it to the user.
       await prisma.checklist
         .update({
           where: { id: checklistId },
-          data:  { status: CHECKLIST_STATUS.FAILED },
+          data:  {
+            status:   CHECKLIST_STATUS.FAILED,
+            metadata: { errorMessage: userFacingError } as unknown as Record<string, unknown>,
+          },
         })
         .catch((updateErr: unknown) => {
           logger.warn({
@@ -366,6 +402,7 @@ class ChecklistService {
         status:         true,
         progress:       true,
         completedItems: true,
+        totalItems:     true,
         organizationId: true,
         userId:         true,
         createdAt:      true,
@@ -394,17 +431,24 @@ class ChecklistService {
       await prisma.checklist
         .update({
           where: { id: checklistId },
-          data:  { status: CHECKLIST_STATUS.FAILED },
+          data:  {
+            status:   CHECKLIST_STATUS.FAILED,
+            metadata: { errorMessage: 'Generation timed out. Please try again.' } as unknown as Record<string, unknown>,
+          },
         })
         .catch(() => { /* best-effort */ });
 
       effectiveStatus = CHECKLIST_STATUS.FAILED;
     }
 
-    // totalItems from ChecklistItem records (normalized path).
-    const totalItems = await prisma.checklistItem
-      .count({ where: { checklistId } })
-      .catch(() => 0);
+    // Use the denormalized totalItems from DB when available; fall back to a
+    // live COUNT for pre-migration records where totalItems is still 0.
+    let totalItems = checklist.totalItems;
+    if (totalItems === 0) {
+      totalItems = await prisma.checklistItem
+        .count({ where: { checklistId } })
+        .catch(() => 0);
+    }
 
     const isNormalized = totalItems > 0;
 
@@ -448,8 +492,11 @@ class ChecklistService {
         additionalConcerns: true,
         progress:           true,
         completedItems:     true,
+        totalItems:         true,
         status:             true,
+        summary:            true,
         checklistData:      true,
+        generatedAt:        true,
         createdAt:          true,
         updatedAt:          true,
       },
@@ -482,41 +529,48 @@ class ChecklistService {
         .catch(() => { /* best-effort — result returned from cached select above */ });
     }
 
-    // Count normalized items per checklist in a single query.
-    const checklistIds = checklists.map((c) => c.id);
-    const itemCounts: Map<string, number> = new Map();
+    // Detect normalized checklists: totalItems > 0 means items were persisted via
+    // the normalized path. For legacy checklists (totalItems = 0 in DB), fall back
+    // to counting items — this handles the backfill gap for pre-migration records.
+    const checklistIds = checklists.filter((c) => c.totalItems === 0).map((c) => c.id);
+    const legacyItemCounts: Map<string, number> = new Map();
 
     if (checklistIds.length > 0) {
       try {
-        // groupBy is not available on the `any`-cast model; run count per ID.
         await Promise.all(
           checklistIds.map(async (cid: string) => {
-            const count = await prisma.checklistItem.count({
-              where: { checklistId: cid },
-            });
-            itemCounts.set(cid, count);
+            const count = await prisma.checklistItem.count({ where: { checklistId: cid } });
+            legacyItemCounts.set(cid, count);
           })
         );
       } catch {
-        // Non-fatal — isNormalized defaults to false.
+        // Non-fatal — isNormalized defaults to false for these records.
       }
     }
 
     return checklists.map((c) => {
-      const normalized  = (itemCounts.get(c.id) ?? 0) > 0;
+      // For records with totalItems already set in DB, use that directly.
+      // For older records where totalItems is still 0, use the live count fallback.
+      const dbTotalItems  = c.totalItems > 0 ? c.totalItems : (legacyItemCounts.get(c.id) ?? 0);
+      const normalized    = dbTotalItems > 0;
       const effectiveStatus: ChecklistStatus = staleIds.includes(c.id)
         ? CHECKLIST_STATUS.FAILED
         : (c.status as ChecklistStatus);
 
-      // For legacy checklists, derive totalItems / criticalItems from the JSON blob.
+      // For legacy checklists, derive criticalItems from the JSON blob.
       type ChecklistDataShape = {
         metadata?: { totalItems?: number; criticalItems?: number };
       };
-      const blobData = c.checklistData as ChecklistDataShape | null;
-      const totalItems    = normalized
-        ? (itemCounts.get(c.id) ?? 0)
-        : (blobData?.metadata?.totalItems ?? 0);
-      const criticalItems = blobData?.metadata?.criticalItems ?? 0;
+      type SummaryShape = { criticalItems?: number };
+      const blobData    = c.checklistData as ChecklistDataShape | null;
+      const summaryData = c.summary as SummaryShape | null;
+
+      // criticalItems: prefer the summary field (set for normalized checklists),
+      // fall back to the legacy blob, then to 0.
+      const criticalItems =
+        summaryData?.criticalItems ??
+        blobData?.metadata?.criticalItems ??
+        0;
 
       return {
         id:                 c.id,
@@ -528,9 +582,10 @@ class ChecklistService {
         additionalConcerns: c.additionalConcerns,
         progress:           c.progress,
         completedItems:     c.completedItems,
-        totalItems,
+        totalItems:         dbTotalItems,
         criticalItems,
         status:             effectiveStatus,
+        generatedAt:        c.generatedAt,
         createdAt:          c.createdAt,
         updatedAt:          c.updatedAt,
         isNormalized:       normalized,
@@ -598,8 +653,8 @@ class ChecklistService {
       });
     }
 
-    const totalItems    = rawItems.length;
-    const status        = checklist.status as ChecklistStatus;
+    const totalItems = rawItems.length;
+    const status     = checklist.status as ChecklistStatus;
 
     return {
       id:                 checklist.id,
@@ -613,6 +668,9 @@ class ChecklistService {
       completedItems:     checklist.completedItems,
       totalItems,
       status,
+      summary:            checklist.summary,
+      metadata:           checklist.metadata,
+      generatedAt:        checklist.generatedAt,
       createdAt:          checklist.createdAt,
       updatedAt:          checklist.updatedAt,
       completedAt:        checklist.completedAt,
@@ -708,12 +766,13 @@ class ChecklistService {
       : CHECKLIST_STATUS.IN_PROGRESS;
     const completedAt = allResolved ? new Date() : null;
 
-    // 6. Persist recalculated values.
+    // 6. Persist recalculated values (also keep totalItems denormalized field in sync).
     const updatedChecklist = await prisma.checklist.update({
       where: { id: item.checklistId },
       data:  {
         progress,
         completedItems,
+        totalItems,
         status:      newChecklistStatus,
         completedAt,
       },
@@ -856,6 +915,7 @@ class ChecklistService {
     return {
       id:                  raw.id,
       category:            raw.category,
+      itemCode:            raw.itemCode,
       title:               raw.title,
       description:         raw.description,
       guidance:            raw.guidance,

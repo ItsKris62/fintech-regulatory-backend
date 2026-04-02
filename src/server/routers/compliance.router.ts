@@ -27,6 +27,7 @@ import { incrementTrialUsage } from '@/modules/trial';
 import { getQuota } from '@/utils/entitlements';
 import { prisma } from '@/lib/prisma/client';
 import { gapAnalysisExportService } from '@/services/gap-analysis-export.service';
+import { checklistExportService } from '@/services/checklist-export.service';
 import { storageService } from '@/lib/storage/storage.service';
 import { GapAnalysisResultSchema } from '@/lib/ai/prompts/gap-analysis';
 import { GAP_ANALYSIS_UPLOAD_LIMITS, GAP_ANALYSIS_MAX_BASE64_CHARS } from '@/config/upload-limits.config';
@@ -2160,6 +2161,169 @@ export const complianceRouter = router({
       });
 
       logger.info({ type: 'gap_analysis_docx_exported', userId, analysisId: input.analysisId, filename, r2Key: uploadResult.key });
+
+      return { downloadUrl, expiresAt, fileName: filename };
+    }),
+
+  /**
+   * Export a completed compliance checklist as a DOCX file.
+   *
+   * Generates a professionally formatted Word document, uploads it to R2,
+   * and returns a signed download URL with 15-minute expiry.
+   *
+   * Gated: STARTUP plan and above (same gate as generateChecklist).
+   *
+   * @protected
+   */
+  exportChecklistDocx: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('checklistGenerations'))
+    .input(z.object({ checklistId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+
+      // 1. Fetch the checklist with items and user — no direct org relation on Checklist model
+      const checklist = await prisma.checklist.findUnique({
+        where: { id: input.checklistId },
+        include: {
+          user:          { select: { fullName: true } },
+          checklistItems: {
+            orderBy: [{ category: 'asc' }, { priority: 'asc' }, { createdAt: 'asc' }],
+          },
+        },
+      });
+
+      if (!checklist) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Checklist not found' });
+      }
+
+      // 2. Ownership check (or ADMIN)
+      if (checklist.userId !== userId && ctx.user!.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this checklist' });
+      }
+
+      // 3. Only export completed checklists
+      if (checklist.status !== 'COMPLETED') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Cannot export a ${checklist.status.toLowerCase()} checklist. Wait for generation to complete.`,
+        });
+      }
+
+      // 4. Must be normalized (has ChecklistItem rows)
+      const checklistItemRows = checklist.checklistItems;
+      const itemCount = checklistItemRows.length;
+      if (itemCount === 0) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This checklist has no items and cannot be exported.',
+        });
+      }
+
+      // 5. Fetch org name separately (Checklist has organizationId but no @relation to Organization)
+      const orgName = checklist.organizationId
+        ? (await prisma.organization.findUnique({ where: { id: checklist.organizationId }, select: { name: true } }))?.name
+        : undefined;
+
+      // 6. Group items by category
+      const categoryMap = new Map<string, typeof checklistItemRows>();
+      for (const item of checklistItemRows) {
+        const cat = item.category ?? 'General';
+        if (!categoryMap.has(cat)) categoryMap.set(cat, []);
+        categoryMap.get(cat)!.push(item);
+      }
+
+      const categories = Array.from(categoryMap.entries()).map(([name, items]) => {
+        const completedCount = items.filter((i) => i.status === 'COMPLETED').length;
+        return {
+          name,
+          completedCount,
+          totalCount: items.length,
+          items: items.map((i) => ({
+            id:                  i.id,
+            itemCode:            i.itemCode ?? null,
+            category:            i.category ?? 'General',
+            title:               i.title,
+            description:         i.description,
+            guidance:            i.guidance ?? null,
+            regulatoryReference: i.regulatoryReference ?? '',
+            actionItems:         Array.isArray(i.actionItems) ? (i.actionItems as string[]) : [],
+            deadline:            i.deadline ?? null,
+            penalty:             i.penalty ?? null,
+            priority:            i.priority,
+            status:              i.status,
+            notes:               i.notes ?? null,
+            completedAt:         i.completedAt ?? null,
+          })),
+        };
+      });
+
+      // 7. Parse summary JSON
+      const summaryRaw = checklist.summary as Record<string, unknown> | null;
+      const summary = summaryRaw
+        ? {
+            criticalItems:           typeof summaryRaw['criticalItems'] === 'number' ? summaryRaw['criticalItems'] : undefined,
+            highItems:               typeof summaryRaw['highItems'] === 'number' ? summaryRaw['highItems'] : undefined,
+            estimatedCompletionDays: typeof summaryRaw['estimatedCompletionDays'] === 'number' ? summaryRaw['estimatedCompletionDays'] : undefined,
+          }
+        : null;
+
+      // 8. Compute progress
+      const completedItems = checklistItemRows.filter((i) => i.status === 'COMPLETED').length;
+      const progress = itemCount > 0 ? Math.round((completedItems / itemCount) * 100) : 0;
+
+      // 9. Build DOCX buffer
+      const docxBuffer = await checklistExportService.generateChecklistDocx({
+        checklistId:   checklist.id,
+        title:         checklist.title,
+        productType:   checklist.productType ?? null,
+        businessStage: checklist.businessStage ?? null,
+        progress,
+        completedItems,
+        totalItems:    checklist.totalItems > 0 ? checklist.totalItems : itemCount,
+        generatedAt:   checklist.generatedAt ?? null,
+        createdAt:     checklist.createdAt,
+        summary,
+        categories,
+        organizationName: orgName ?? undefined,
+        userName:         checklist.user?.fullName ?? undefined,
+      });
+
+      // 10. Build sanitised filename
+      const orgSafe = checklistExportService.sanitiseFilename(
+        orgName ?? checklist.user?.fullName ?? 'Organisation',
+      );
+      const dateSafe = checklist.createdAt.toISOString().slice(0, 10);
+      const filename = `SheriaBot_Checklist_${orgSafe}_${dateSafe}.docx`;
+
+      // 10. Upload to R2
+      const uploadResult = await storageService.uploadChecklistExport(
+        docxBuffer,
+        filename,
+        checklist.id,
+        userId,
+      );
+
+      // 11. Signed URL — 15-minute expiry
+      const downloadUrl = await storageService.getDownloadUrl(uploadResult.key, 900, false, filename);
+      const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
+
+      // 12. Audit log (fire-and-forget)
+      prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'CHECKLIST_EXPORTED',
+          entityType: 'Checklist',
+          entityId: checklist.id,
+          metadata: { format: 'docx', filename, r2Key: uploadResult.key },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: (ctx.req.headers['user-agent'] as string | undefined) ?? null,
+        },
+      }).catch((err: unknown) => {
+        logger.error({ type: 'checklist_export_audit_log_failed', userId, checklistId: checklist.id, error: (err as Error).message });
+      });
+
+      logger.info({ type: 'checklist_docx_exported', userId, checklistId: checklist.id, filename, r2Key: uploadResult.key });
 
       return { downloadUrl, expiresAt, fileName: filename };
     }),
