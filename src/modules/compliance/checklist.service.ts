@@ -495,6 +495,7 @@ class ChecklistService {
         totalItems:         true,
         status:             true,
         summary:            true,
+        metadata:           true,
         checklistData:      true,
         generatedAt:        true,
         createdAt:          true,
@@ -524,7 +525,10 @@ class ChecklistService {
       await prisma.checklist
         .updateMany({
           where: { id: { in: staleIds } },
-          data:  { status: CHECKLIST_STATUS.FAILED },
+          data:  {
+            status:   CHECKLIST_STATUS.FAILED,
+            metadata: { errorMessage: 'Generation timed out. Please try again.' } as unknown as Record<string, unknown>,
+          },
         })
         .catch(() => { /* best-effort — result returned from cached select above */ });
     }
@@ -585,6 +589,9 @@ class ChecklistService {
         totalItems:         dbTotalItems,
         criticalItems,
         status:             effectiveStatus,
+        metadata:           staleIds.includes(c.id)
+          ? { errorMessage: 'Generation timed out. Please try again.' }
+          : (c.metadata ?? null),
         generatedAt:        c.generatedAt,
         createdAt:          c.createdAt,
         updatedAt:          c.updatedAt,

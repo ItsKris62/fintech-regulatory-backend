@@ -120,6 +120,8 @@ export interface ChecklistSummary {
   totalItems:         number;
   criticalItems:      number;
   status:             ChecklistStatus;
+  /** Persisted error reason for FAILED checklists. */
+  metadata:           unknown;
   generatedAt:        Date | null;
   createdAt:          Date;
   updatedAt:          Date;
