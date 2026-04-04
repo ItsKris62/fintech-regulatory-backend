@@ -116,7 +116,19 @@ OUTPUT RULES — FOLLOW EXACTLY:
    - MEDIUM = required within 6 months; non-compliance risks regulatory notice
    - LOW = best practice, annual obligation, or compliance horizon beyond 12 months
 9. Priority distribution: at least 4 CRITICAL items, at least 6 HIGH items; remainder MEDIUM/LOW.
-10. Each item MAY include an optional "guidance" field (1–2 sentences max) explaining WHY this requirement is specifically relevant to the stated business profile. Omit entirely for generic items where the relevance is self-evident.`;
+10. Each item MAY include an optional "guidance" field (1–2 sentences max) explaining WHY this requirement is specifically relevant to the stated business profile. Omit entirely for generic items where the relevance is self-evident.
+
+ANTI-TRUNCATION PROTOCOL — FOLLOW IF APPROACHING TOKEN LIMIT:
+If you sense you are near your response limit before completing all categories:
+  a) Finish the current item's last field value completely — never stop mid-string.
+  b) Close the current item object: }
+  c) Close the items array: ]
+  d) Close the current category object: }
+  e) Close the categories array: ]
+  f) Emit a valid metadata block with accurate totalItems, criticalItems, highItems counts based on what you have written.
+  g) Close the root object: }
+A valid partial JSON with 5 well-formed categories is far more useful than a truncated response with 13 broken categories.
+NEVER stop mid-string, mid-array, or mid-object. Always close every open bracket before ending.`;
 }
 
 /**
@@ -216,6 +228,13 @@ After generating all categories and items, count them accurately and populate:
 - \`metadata.criticalItems\` = exact count of items with priority "CRITICAL"
 - \`metadata.highItems\` = exact count of items with priority "HIGH"
 
+PRE-SUBMISSION SELF-CHECK — complete this before responding:
+1. Does your response start with \`{\` and end with \`}\`? If not, something is wrong.
+2. Is every \`[\` matched by a \`]\`? Is every \`{\` matched by a \`}\`?
+3. Is every string value closed with a \`"\`? No trailing commas before \`}\` or \`]\`?
+4. Does the root object contain both \`"categories"\` and \`"metadata"\` keys?
+If any check fails, repair before responding.
+
 Return ONLY valid JSON. Start with { and end with }. No other text before or after.`;
 }
 
@@ -305,7 +324,7 @@ export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
 
   // Enforce minimum item count AFTER recomputing so the check reflects
   // actual items, not the AI's self-reported count.
-  const MIN_ITEMS = 15; // Soft floor — Zod enforces 5 categories; this catches thin responses
+  const MIN_ITEMS = 20; // Soft floor — Zod enforces 5 categories; this catches thin responses
   if (totalItems < MIN_ITEMS) {
     logger.warn({
       type:        'checklist_parse_too_few_items',
@@ -320,4 +339,553 @@ export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
   }
 
   return parsed;
+}
+
+// ─── Three-Tier Generation Infrastructure ────────────────────────────────────
+//
+// These exports are used by the tier-based generation pipeline in
+// checklist.service.ts.  They are entirely additive — the legacy
+// parseChecklistOutput() and generateChecklist*Prompt() functions above
+// remain untouched for backward compatibility with complianceModule.
+
+// ── Passage types ─────────────────────────────────────────────────────────────
+
+/**
+ * Minimal passage shape expected by the tier prompt builders.
+ * SearchResult from rag.service.ts is a structural superset of this interface
+ * and can be passed without any conversion.
+ */
+export interface RagPassage {
+  chunkText: string;
+  documentTitle: string;
+}
+
+// ── Token-budget RAG trimmer ───────────────────────────────────────────────────
+
+/**
+ * Trim a list of RAG passages to fit within a rough token budget.
+ * Uses the standard approximation: 1 token ≈ 4 characters.
+ * Passages are included in order (highest-relevance first) until the budget
+ * is exhausted; the first passage is always included even if it alone exceeds
+ * the budget.
+ */
+export function trimRagPassages(
+  passages: RagPassage[],
+  maxTokenBudget: number
+): RagPassage[] {
+  let currentTokens = 0;
+  const trimmed: RagPassage[] = [];
+
+  for (const passage of passages) {
+    const estimatedTokens = Math.ceil(passage.chunkText.length / 4);
+    if (trimmed.length > 0 && currentTokens + estimatedTokens > maxTokenBudget) break;
+    trimmed.push(passage);
+    currentTokens += estimatedTokens;
+  }
+
+  return trimmed;
+}
+
+// ── Internal context builder ───────────────────────────────────────────────────
+
+function buildRagContextString(passages: RagPassage[]): string {
+  return passages
+    .map(
+      (r, i) =>
+        `[REGULATORY CONTEXT ${i + 1} — ${r.documentTitle || 'Kenyan Regulation'}]\n${r.chunkText}`
+    )
+    .join('\n\n---\n\n');
+}
+
+// ── Tier-specific Zod schemas ─────────────────────────────────────────────────
+//
+// Each tier relaxes both the minimum category count and the minimum item count.
+// Partial validation (category-by-category) is handled in parseWithTierSchema()
+// so these schemas are applied to the FULL categories array first and the per-
+// category fallback is only attempted when the full-schema validation fails.
+
+export const Tier1ResponseSchema = z.object({
+  categories: z.array(ChecklistCategorySchema).min(4, 'Tier 1 requires at least 4 categories'),
+  metadata:   GeneratedChecklistSchema.shape.metadata,
+}).refine(
+  (d) => d.categories.flatMap((c) => c.items).length >= 25,
+  { message: 'Tier 1 requires at least 25 items total' }
+);
+
+export const Tier2ResponseSchema = z.object({
+  categories: z.array(ChecklistCategorySchema).min(3, 'Tier 2 requires at least 3 categories'),
+  metadata:   GeneratedChecklistSchema.shape.metadata,
+}).refine(
+  (d) => d.categories.flatMap((c) => c.items).length >= 10,
+  { message: 'Tier 2 requires at least 10 items total' }
+);
+
+// Tier 3 metadata is fully optional — we synthesize any missing fields from
+// the validated categories and the original generation input.
+export const Tier3ResponseSchema = z.object({
+  categories: z.array(ChecklistCategorySchema).min(2, 'Tier 3 requires at least 2 categories'),
+  metadata: z.object({
+    productType:             z.string().optional(),
+    businessStage:           z.string().optional(),
+    totalItems:              z.number().int().min(0).optional(),
+    criticalItems:           z.number().int().min(0).optional(),
+    highItems:               z.number().int().min(0).optional(),
+    estimatedCompletionDays: z.number().int().positive().optional(),
+    generatedAt:             z.string().optional(),
+    ragSourcesUsed:          z.number().int().min(0).optional(),
+  }).optional(),
+}).refine(
+  (d) => d.categories.flatMap((c) => c.items).length >= 5,
+  { message: 'Tier 3 requires at least 5 items total' }
+);
+
+// ── Tier-specific system prompts ───────────────────────────────────────────────
+
+function generateTier2SystemPrompt(): string {
+  return `You are SheriaBot, a senior regulatory compliance advisor for Kenya's fintech sector. You specialize in:
+- Data Protection Act 2019 (DPA) — ODPC registration, consent frameworks, data subject rights
+- National Payment System Act 2011 (NPSA) — CBK PSP authorisation and payment regulations
+- POCAMLA — AML/CFT obligations, FRC registration, CDD/EDD, STR/CTR filing
+- Digital Credit Providers Regulations 2022 — licensing for digital lenders
+- CBK Act (Cap 491) — prudential requirements, capital thresholds
+- Computer Misuse and Cybercrimes Act 2018 — cybersecurity obligations
+- Consumer Protection Act 2012 — fair dealing, disclosure, complaints handling
+- Capital Markets Act (Cap 485A) and CMA Crowdfunding Regulations 2022
+- CBK Guidance Note on Cybersecurity (March 2023)
+
+REGULATORS: Central Bank of Kenya (CBK), ODPC, Financial Reporting Centre (FRC), CMA, IRA, KRA, SASRA
+
+OUTPUT RULES — FOLLOW EXACTLY:
+1. Respond ONLY with valid JSON. No markdown fences, no preamble. Start with { and end with }.
+2. Every item MUST cite a specific Kenyan law with the section number.
+3. Penalties MUST include specific KES amounts where defined in legislation.
+4. Action items must be specific and actionable — name forms, portals, fees, and documents.
+5. Deadlines must be tied to a regulatory event, not vague.
+6. Generate 15-20 focused checklist items across 3-5 categories. Prioritise the most critical requirements.
+7. Keep response concise — descriptions under 200 characters, action items under 150 characters each.
+8. Priority distribution: at least 3 CRITICAL, at least 4 HIGH items.
+
+ANTI-TRUNCATION PROTOCOL — FOLLOW IF APPROACHING TOKEN LIMIT:
+If you are near your response limit before finishing all categories:
+  a) Finish the current item completely (close all strings and the item object: }).
+  b) Close the current items array: ]
+  c) Close the current category object: }
+  d) Close the categories array: ]
+  e) Emit a valid metadata block and close the root object: }
+A valid 3-category response is more useful than a broken 6-category response.
+NEVER stop mid-string or mid-object.`;
+}
+
+function generateTier3SystemPrompt(): string {
+  return `You are a Kenyan fintech regulatory compliance advisor. Generate a baseline compliance checklist using your training knowledge of Kenyan financial services regulations.
+
+Focus exclusively on these three areas:
+1. CBK licensing and registration requirements (National Payment System Act 2011, CBK Act Cap 491, Digital Credit Providers Regulations 2022)
+2. Data Protection Act 2019 — ODPC registration, consent, data subject rights
+3. AML/CFT obligations — POCAMLA, FRC registration, CDD/EDD, STR/CTR filing
+
+OUTPUT RULES — FOLLOW EXACTLY:
+1. Respond ONLY with valid JSON. No markdown fences, no preamble. Start with { and end with }.
+2. Cite only laws and section numbers you are confident are accurate. Write "Section [verify]" rather than inventing numbers.
+3. Generate 10-15 checklist items across 2-4 categories. Brevity over completeness.
+4. Keep all string values under 300 characters.
+5. Metadata fields are optional — omit any you are unsure about.
+
+ANTI-TRUNCATION PROTOCOL — FOLLOW IF APPROACHING TOKEN LIMIT:
+If you are running out of space: finish the current item, close items array ], close category }, close categories array ], emit metadata {}, close root }.
+NEVER stop mid-string. A small valid JSON beats a large broken one.`;
+}
+
+// ── Tier-specific user prompts ─────────────────────────────────────────────────
+
+function generateTier2UserPrompt(params: ChecklistGenerationParams): string {
+  const ragSection = params.ragContext
+    ? `\n\n## RETRIEVED REGULATORY CONTEXT (use to cite specific laws)\n${params.ragContext}\n`
+    : `\n\n## NOTE: No document context available. Use your training knowledge.\n`;
+
+  return `Generate a focused compliance checklist for this Kenyan fintech business. Generate 15-20 items across 3-5 categories — prioritise the most critical regulatory requirements.
+
+## BUSINESS PROFILE
+- **Product / Service Type:** ${params.productType}
+- **Business Stage:** ${params.businessStage}
+- **Target Segments:** ${params.targetSegments.join(', ')}
+- **Services Offered:** ${params.servicesOffered.join(', ')}
+${params.additionalConcerns ? `- **Specific Concerns:** ${params.additionalConcerns}` : ''}
+${ragSection}
+
+## REQUIRED JSON STRUCTURE
+{
+  "categories": [
+    {
+      "id": "LIC",
+      "name": "Licensing & Registration",
+      "description": "Core licensing requirements.",
+      "items": [
+        {
+          "id": "LIC-001",
+          "title": "Obtain CBK PSP Authorisation",
+          "regulatoryBasis": "National Payment System Act 2011, Section 12",
+          "priority": "CRITICAL",
+          "description": "All payment service providers must obtain CBK authorisation before commencing operations.",
+          "actionItems": ["Download CBK PSP application form", "Submit to CBK Director, National Payments"],
+          "deadline": "Before commencing operations",
+          "penalty": "Fine not exceeding KES 10,000,000 — National Payment System Act 2011, Section 36"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "productType": "${params.productType}",
+    "businessStage": "${params.businessStage}",
+    "totalItems": 0,
+    "criticalItems": 0,
+    "highItems": 0,
+    "estimatedCompletionDays": 90,
+    "generatedAt": "${new Date().toISOString()}",
+    "ragSourcesUsed": ${params.ragSourcesUsed ?? 0}
+  }
+}
+
+PRE-SUBMISSION SELF-CHECK: Does your response start with \`{\` and end with \`}\`? Is every \`[\` closed with \`]\`? Is every string properly quoted? Repair any issues before responding.
+
+Return ONLY valid JSON. Start with { and end with }. No other text.`;
+}
+
+function generateTier3UserPrompt(params: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>): string {
+  return `Generate a baseline compliance checklist for this Kenyan fintech using your training knowledge of Kenyan regulations. Generate 10-15 items across 2-4 categories. Focus on CBK licensing, Data Protection Act 2019, and AML/CFT obligations only.
+
+## BUSINESS PROFILE
+- **Product / Service Type:** ${params.productType}
+- **Business Stage:** ${params.businessStage}
+- **Services Offered:** ${params.servicesOffered.join(', ')}
+${params.additionalConcerns ? `- **Specific Concerns:** ${params.additionalConcerns}` : ''}
+
+## REQUIRED JSON STRUCTURE
+{
+  "categories": [
+    {
+      "id": "LIC",
+      "name": "Licensing & Registration",
+      "description": "Core CBK licensing requirements.",
+      "items": [
+        {
+          "id": "LIC-001",
+          "title": "Obtain required CBK licence",
+          "regulatoryBasis": "National Payment System Act 2011, Section 12",
+          "priority": "CRITICAL",
+          "description": "Obtain the appropriate CBK licence for your payment service type before commencing operations.",
+          "actionItems": ["Identify applicable CBK licence category", "Submit application to CBK"],
+          "deadline": "Before commencing operations",
+          "penalty": "Criminal liability — refer to applicable Act"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "productType": "${params.productType}",
+    "businessStage": "${params.businessStage}",
+    "totalItems": 0,
+    "criticalItems": 0,
+    "highItems": 0,
+    "estimatedCompletionDays": 90,
+    "generatedAt": "${new Date().toISOString()}",
+    "ragSourcesUsed": 0
+  }
+}
+
+PRE-SUBMISSION SELF-CHECK: Does your response start with \`{\` and end with \`}\`? Is every \`[\` closed? Every string quoted? Fix before responding.
+
+Return ONLY valid JSON. Start with { and end with }. No other text.`;
+}
+
+// ── Tier prompt builders (public API for checklist.service.ts) ─────────────────
+
+export function buildTier1Prompt(
+  input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>,
+  passages: RagPassage[]
+): { system: string; user: string } {
+  const trimmed = trimRagPassages(passages, 8000);
+  const ragContext = trimmed.length > 0 ? buildRagContextString(trimmed) : undefined;
+  return {
+    system: generateChecklistSystemPrompt(),
+    user: generateChecklistUserPrompt({
+      productType:        input.productType,
+      businessStage:      input.businessStage,
+      targetSegments:     input.targetSegments,
+      servicesOffered:    input.servicesOffered,
+      additionalConcerns: input.additionalConcerns,
+      ragContext,
+      ragSourcesUsed: trimmed.length,
+    }),
+  };
+}
+
+export function buildTier2Prompt(
+  input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>,
+  passages: RagPassage[]
+): { system: string; user: string } {
+  const trimmed = trimRagPassages(passages, 3000);
+  const ragContext = trimmed.length > 0 ? buildRagContextString(trimmed) : undefined;
+  return {
+    system: generateTier2SystemPrompt(),
+    user: generateTier2UserPrompt({
+      productType:        input.productType,
+      businessStage:      input.businessStage,
+      targetSegments:     input.targetSegments,
+      servicesOffered:    input.servicesOffered,
+      additionalConcerns: input.additionalConcerns,
+      ragContext,
+      ragSourcesUsed: trimmed.length,
+    }),
+  };
+}
+
+export function buildTier3Prompt(
+  input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>
+): { system: string; user: string } {
+  return {
+    system: generateTier3SystemPrompt(),
+    user: generateTier3UserPrompt(input),
+  };
+}
+
+// ── Unified metadata synthesiser ───────────────────────────────────────────────
+
+function synthesizeMetadata(
+  rawMetadata: Record<string, unknown> | null | undefined,
+  validCategories: ChecklistCategory[],
+  input: { productType: string; businessStage: string },
+  ragSourcesUsed: number
+): GeneratedChecklist['metadata'] {
+  let totalItems = 0;
+  let criticalItems = 0;
+  let highItems = 0;
+
+  for (const cat of validCategories) {
+    totalItems += cat.items.length;
+    for (const item of cat.items) {
+      if (item.priority === 'CRITICAL') criticalItems++;
+      if (item.priority === 'HIGH') highItems++;
+    }
+  }
+
+  return {
+    productType:             (rawMetadata?.productType  as string | undefined) ?? input.productType,
+    businessStage:           (rawMetadata?.businessStage as string | undefined) ?? input.businessStage,
+    totalItems,
+    criticalItems,
+    highItems,
+    estimatedCompletionDays: (rawMetadata?.estimatedCompletionDays as number | undefined) ?? 90,
+    generatedAt:             new Date().toISOString(),
+    ragSourcesUsed:          (rawMetadata?.ragSourcesUsed as number | undefined) ?? ragSourcesUsed,
+  };
+}
+
+// ── JSON extraction helper ─────────────────────────────────────────────────────
+
+/**
+ * Extract a parseable JSON object from raw AI output.
+ *
+ * Steps:
+ *  1. Strip markdown code fences.
+ *  2. Try direct JSON.parse().
+ *  3. If that fails, try extracting the outermost {...} block and parsing it.
+ *  4. If that fails, attempt brace/bracket balancing to repair truncated JSON,
+ *     then parse.  (Needed when the response was cut off mid-output.)
+ *
+ * Returns the parsed value or throws with a descriptive message.
+ */
+function extractJsonObject(rawContent: string, checklistId?: string): unknown {
+  let content = rawContent.trim();
+
+  // Step 1 — strip markdown code fences
+  if (content.startsWith('```')) {
+    content = content
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/, '')
+      .trim();
+  }
+
+  // Step 2 — direct parse
+  try {
+    return JSON.parse(content);
+  } catch { /* fall through */ }
+
+  // Step 3 — extract outermost {...} block
+  const jsonMatch = content.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error('AI response contains no JSON object');
+  }
+
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch { /* fall through to repair */ }
+
+  // Step 4 — brace/bracket balancing for truncated responses
+  let braces = 0;
+  let brackets = 0;
+  for (const char of jsonMatch[0]) {
+    if      (char === '{') braces++;
+    else if (char === '}') braces--;
+    else if (char === '[') brackets++;
+    else if (char === ']') brackets--;
+  }
+
+  let repaired = jsonMatch[0].trim().replace(/,\s*$/, '');
+  while (brackets > 0) { repaired += ']'; brackets--; }
+  while (braces   > 0) { repaired += '}'; braces--;   }
+
+  try {
+    const parsed = JSON.parse(repaired);
+    logger.info({
+      type:            'checklist_json_repaired',
+      checklistId,
+      originalLength:  rawContent.length,
+      repairedLength:  repaired.length,
+    });
+    return parsed;
+  } catch (repairErr: unknown) {
+    logger.warn({
+      type:        'checklist_json_repair_failed',
+      checklistId,
+      contentTail: rawContent.slice(-300),
+      error:       repairErr instanceof Error ? repairErr.message : String(repairErr),
+    });
+    throw new Error(
+      `AI response contains malformed JSON that could not be repaired: ${repairErr instanceof Error ? repairErr.message : String(repairErr)}`
+    );
+  }
+}
+
+// ── Partial category recovery ──────────────────────────────────────────────────
+
+/**
+ * Attempt to recover valid categories from an object that failed full-schema
+ * validation.  Each category in rawData.categories is validated individually
+ * with ChecklistCategorySchema.  Only Zod-valid categories are accepted.
+ *
+ * Returns the set of valid categories, or throws if not enough are recovered
+ * to meet the tier minimums.
+ */
+function attemptPartialCategoryRecovery(
+  rawData: Record<string, unknown>,
+  tier: 1 | 2 | 3,
+  checklistId: string | undefined
+): ChecklistCategory[] {
+  const tierMinCats  = tier === 1 ? 4 : tier === 2 ? 3 : 2;
+  const tierMinItems = tier === 1 ? 20 : tier === 2 ? 10 : 5;
+
+  if (!Array.isArray(rawData.categories)) {
+    throw new Error(`Tier ${tier}: AI response missing 'categories' array`);
+  }
+
+  const validCategories: ChecklistCategory[] = [];
+  const invalidIndices: number[] = [];
+
+  for (let i = 0; i < (rawData.categories as unknown[]).length; i++) {
+    const result = ChecklistCategorySchema.safeParse((rawData.categories as unknown[])[i]);
+    if (result.success) {
+      validCategories.push(result.data);
+    } else {
+      invalidIndices.push(i);
+    }
+  }
+
+  const totalItems      = validCategories.reduce((s, c) => s + c.items.length, 0);
+  const totalCategories = (rawData.categories as unknown[]).length;
+
+  const hasEnoughCats  = validCategories.length >= tierMinCats;
+  const hasEnoughItems = totalItems >= tierMinItems;
+  const passesRatio    = validCategories.length >= totalCategories * 0.6;
+
+  if (hasEnoughCats && hasEnoughItems && (invalidIndices.length === 0 || passesRatio)) {
+    if (invalidIndices.length > 0) {
+      logger.warn({
+        type:           'checklist_partial_recovery',
+        checklistId,
+        tier,
+        totalCategories,
+        validCategories: validCategories.length,
+        invalidIndices,
+        totalItems,
+      });
+    }
+    return validCategories;
+  }
+
+  throw new Error(
+    `Tier ${tier} partial recovery: only ${validCategories.length}/${totalCategories} categories valid ` +
+    `(${totalItems} items). Need ≥${tierMinCats} valid categories, ≥${tierMinItems} items, ` +
+    `≥60% validity ratio.`
+  );
+}
+
+// ── Main tier parse function ───────────────────────────────────────────────────
+
+/**
+ * Parse and validate raw AI output for a given generation tier.
+ *
+ * Pipeline:
+ *  1. extractJsonObject() — strip fences, JSON.parse, repair truncation
+ *  2. Attempt full tier Zod schema validation (strictest pass)
+ *  3. If full validation fails, attempt per-category Zod recovery
+ *  4. synthesizeMetadata() — recompute counts from validated data; fill defaults
+ *  5. Return a complete GeneratedChecklist
+ *
+ * Throws on unrecoverable failure so callers can escalate to the next tier.
+ * No unvalidated data reaches the database — every category in the result has
+ * passed ChecklistCategorySchema.safeParse().
+ */
+export function parseWithTierSchema(
+  rawContent: string,
+  tier: 1 | 2 | 3,
+  logCtx: {
+    checklistId?: string;
+    input: { productType: string; businessStage: string };
+    ragSourcesUsed?: number;
+  }
+): GeneratedChecklist {
+  const { checklistId, input, ragSourcesUsed = 0 } = logCtx;
+
+  // Step 1 — get a parseable object
+  const rawParsed = extractJsonObject(rawContent, checklistId);
+
+  if (!rawParsed || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
+    throw new Error(`Tier ${tier}: AI response is not a JSON object`);
+  }
+
+  const rawData = rawParsed as Record<string, unknown>;
+
+  // Step 2 — try full tier schema
+  const tierSchema =
+    tier === 1 ? Tier1ResponseSchema :
+    tier === 2 ? Tier2ResponseSchema :
+                 Tier3ResponseSchema;
+
+  const fullResult = tierSchema.safeParse(rawData);
+
+  let validCategories: ChecklistCategory[];
+
+  if (fullResult.success) {
+    validCategories = fullResult.data.categories;
+  } else {
+    // Step 3 — per-category recovery (throws if insufficient)
+    logger.warn({
+      type:        'checklist_tier_full_schema_failed',
+      checklistId,
+      tier,
+      issues:      fullResult.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+    });
+    validCategories = attemptPartialCategoryRecovery(rawData, tier, checklistId);
+  }
+
+  // Step 4 — synthesize complete metadata (always recomputes counts)
+  const metadata = synthesizeMetadata(
+    rawData.metadata as Record<string, unknown> | null | undefined,
+    validCategories,
+    input,
+    ragSourcesUsed
+  );
+
+  return { categories: validCategories, metadata };
 }

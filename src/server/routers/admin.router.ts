@@ -5,6 +5,7 @@ import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
 import { adminModule } from '@/modules/admin';
 import { appConfig } from '@/config/app.config';
+import { getStats as getChecklistStats } from '@/lib/metrics/checklist-metrics';
 
 /**
  * Admin Router
@@ -1401,6 +1402,30 @@ export const adminRouter = router({
       } catch (error: any) {
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to reject organization', cause: error });
+      }
+    }),
+
+  /**
+   * Checklist generation success-rate metrics (Sprint 3B).
+   * Returns all-time and today's counters from Redis.
+   *
+   * @admin
+   */
+  getChecklistMetrics: adminProcedure
+    .input(z.object({ window: z.enum(['alltime', 'today']).default('alltime') }).optional())
+    .query(async () => {
+      try {
+        const [alltime, today] = await Promise.all([
+          getChecklistStats('alltime'),
+          getChecklistStats('today'),
+        ]);
+        return { alltime, today };
+      } catch (error: any) {
+        throw new TRPCError({
+          code:    'INTERNAL_SERVER_ERROR',
+          message: 'Failed to fetch checklist metrics',
+          cause:   error,
+        });
       }
     }),
 });

@@ -16,6 +16,12 @@ export interface AICompletionOptions {
   maxTokens?: number;
   stopSequences?: string[];
   metadata?: Record<string, any>;
+  /**
+   * Override the overall request timeout (ms).
+   * When set, takes precedence over the useCase-derived timeout in stream() and complete().
+   * Use this for tier-specific timeouts in the three-tier checklist generation pipeline.
+   */
+  overrideTimeoutMs?: number;
 }
 
 /**
@@ -418,11 +424,14 @@ export async function stream(
       },
     ];
 
-    // Dual-timeout: overall cap + per-chunk hang detection
+    // Dual-timeout: overall cap + per-chunk hang detection.
+    // options.overrideTimeoutMs takes precedence; used by the tier system to pass
+    // tier-specific budgets (240s / 200s / 150s) without needing new useCase strings.
     const overallTimeoutMs =
-      useCase === 'policy'    ? aiConfig.timeout.policyGeneration :
-      useCase === 'checklist' ? aiConfig.timeout.checklistGeneration :
-                                aiConfig.timeout.default;
+      options.overrideTimeoutMs ??
+      (useCase === 'policy'    ? aiConfig.timeout.policyGeneration :
+       useCase === 'checklist' ? aiConfig.timeout.checklistGeneration :
+                                 aiConfig.timeout.default);
     const chunkTimeoutMs = aiConfig.timeout.streamingChunk;
 
     const controller = new AbortController();

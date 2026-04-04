@@ -2327,4 +2327,69 @@ export const complianceRouter = router({
 
       return { downloadUrl, expiresAt, fileName: filename };
     }),
+
+  /**
+   * Retry a FAILED checklist generation.
+   * Resets the existing record to GENERATING and re-fires the generation pipeline.
+   * Does NOT consume additional generation credits.
+   * Capped at 3 retries per checklist.
+   *
+   * @protected
+   * @middleware withPlanContext — write mutation (no checkUsageLimit — no credit consumed)
+   */
+  retryChecklist: protectedProcedure
+    .use(withPlanContext)
+    .input(z.object({ checklistId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+      const orgId = ctx.user!.organizationId ?? '';
+
+      try {
+        const result = await checklistService.retryChecklist(
+          input.checklistId,
+          userId,
+          orgId,
+        );
+
+        logger.info({
+          type: 'checklist_retry_queued',
+          userId,
+          checklistId: input.checklistId,
+          retryCount: result.retryCount,
+        });
+
+        return result;
+      } catch (error: any) {
+        logger.error({
+          type: 'checklist_retry_error',
+          userId,
+          checklistId: input.checklistId,
+          error: error.message,
+        });
+
+        if (error.message === 'Checklist not found') {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Checklist not found' });
+        }
+        if (error.message?.includes('Access denied') || error.message?.includes('do not own')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        }
+        if (error.message?.includes('not in FAILED')) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Only FAILED checklists can be retried',
+          });
+        }
+        if (error.message?.includes('Maximum retry')) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Maximum retry attempts reached for this checklist',
+          });
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to retry checklist generation',
+          cause: error,
+        });
+      }
+    }),
 });

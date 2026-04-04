@@ -82,7 +82,14 @@ export const aiConfig = {
     policyGeneration: 120000, // 120 seconds
 
     // Checklist generation timeout — 200s for 8192-token responses + RAG overhead at Sonnet throughput
-    checklistGeneration: 200000, // 200 seconds
+    checklistGeneration: 200000, // 200 seconds (legacy / non-tier path)
+
+    // Three-tier checklist generation timeouts.
+    // Tier 1 is generous because 8192 max_tokens at Sonnet 4.6 throughput (~30 t/s) can reach 270s.
+    // Tier 2 and 3 have lower token budgets so shorter timeouts are appropriate.
+    checklistTier1: 240000, // 240 seconds (4 min) — Tier 1: full prompt, 8192 tokens
+    checklistTier2: 200000, // 200 seconds — Tier 2: simplified prompt, 6144 tokens
+    checklistTier3: 150000, // 150 seconds — Tier 3: minimal prompt, 4096 tokens
 
     // Compliance query timeout
     complianceQuery: 45000, // 45 seconds
@@ -108,7 +115,8 @@ export const aiConfig = {
     backoffMultiplier: 2,
 
     // Retry on these HTTP status codes
-    retryableStatuses: [408, 429, 500, 502, 503, 504],
+    // 529 = Anthropic overloaded — added alongside 408/429 as a common transient failure
+    retryableStatuses: [408, 429, 500, 502, 503, 504, 529],
 
     // Retry on these error types
     retryableErrors: ['timeout', 'network', 'overloaded'],

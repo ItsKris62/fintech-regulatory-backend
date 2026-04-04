@@ -104,7 +104,15 @@ export interface ChecklistStatusResult {
   title:        string;
   createdAt:    Date;
   /** True when normalized ChecklistItem records exist for this checklist. */
-  isNormalized: boolean;
+  isNormalized:  boolean;
+  productType:   string | null;
+  businessStage: string | null;
+  /** Persisted generation metadata — available for FAILED state UI. */
+  metadata: {
+    errorMessage?:   string | null;
+    retryCount?:     number;
+    generationTier?: string | null;
+  } | null;
 }
 
 export interface ChecklistSummary {

@@ -18,12 +18,27 @@
  */
 
 import { prisma } from '@/lib/prisma/client';
-import { ragService } from '@/lib/rag/rag.service';
+import { ragService, type SearchResult } from '@/lib/rag/rag.service';
 import { aiService } from '@/lib/ai/ai.service';
 import { checklistProgressPubSub } from '@/lib/redis/pubsub';
+import {
+  buildTier1Prompt,
+  buildTier2Prompt,
+  buildTier3Prompt,
+  parseWithTierSchema,
+  type RagPassage,
+} from '@/lib/ai/prompts/checklist-generation';
+import { aiConfig } from '@/config/ai.config';
+import { type GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError } from '@/utils/error';
 import { incrementTrialUsage } from '@/modules/trial';
+import {
+  recordAttempt,
+  recordSuccess,
+  recordFailure,
+  recordRetryAttempt,
+} from '@/lib/metrics/checklist-metrics';
 import {
   CHECKLIST_STATUS,
   CHECKLIST_ITEM_STATUS,
@@ -122,260 +137,514 @@ class ChecklistService {
   // =========================================================================
 
   /**
-   * Full AI + RAG generation pipeline.  Runs in the background after
-   * generateChecklist() returns.  Updates the DB record to IN_PROGRESS on
-   * success or FAILED on error.
+   * Entry point for the background generation pipeline.
+   * Fetches RAG passages (topK 12, minScore 0.65) then delegates to
+   * runGenerationWithFallback() which implements the three-tier strategy.
    */
   private async runGeneration(
-    checklistId: string,
-    input:       GenerateChecklistAsyncInput,
-    userId:      string,
+    checklistId:  string,
+    input:        GenerateChecklistAsyncInput,
+    userId:       string,
     trialUserId?: string
   ): Promise<void> {
     const startTime = Date.now();
 
+    // ── 1. Build RAG query ───────────────────────────────────────────────────
+    const ragQueryParts: string[] = [
+      'Kenya fintech compliance requirements',
+      input.productType,
+      input.servicesOffered.join(' '),
+      input.targetSegments.join(' '),
+      input.businessStage,
+      'licensing KYC AML data protection CBK regulations',
+    ];
+    if (input.additionalConcerns) ragQueryParts.push(input.additionalConcerns);
+    const ragQuery = ragQueryParts.filter(Boolean).join(' ');
+
+    logger.info({
+      type:        'checklist_rag_query_constructed',
+      checklistId,
+      userId,
+      ragQuery:    ragQuery.slice(0, 400),
+    });
+
+    // ── 2. RAG retrieval ─────────────────────────────────────────────────────
+    //    topK 12 (was 20) + minScore 0.65 (was 0.5) — more precise passages
+    //    reduce noise, improve JSON quality, and shrink the input token cost.
+    let ragPassages: SearchResult[] = [];
+
     try {
-      // ------------------------------------------------------------------
-      // 1. Build enhanced RAG query.
-      //    All form inputs are incorporated — including targetSegments and
-      //    additionalConcerns which were absent from the legacy query.
-      // ------------------------------------------------------------------
-      const ragQueryParts: string[] = [
-        'Kenya fintech compliance requirements',
-        input.productType,
-        input.servicesOffered.join(' '),
-        input.targetSegments.join(' '),
-        input.businessStage,
-        'licensing KYC AML data protection CBK regulations',
-      ];
-      if (input.additionalConcerns) {
-        ragQueryParts.push(input.additionalConcerns);
-      }
-      const ragQuery = ragQueryParts.filter(Boolean).join(' ');
-
-      // Log the constructed query (Additional Instruction 3 requirement).
-      logger.info({
-        type:        'checklist_rag_query_constructed',
-        checklistId,
-        userId,
-        ragQuery:    ragQuery.slice(0, 400),
+      const ragResults = await ragService.search(ragQuery, {
+        topK:     12,
+        minScore: 0.65,
       });
 
-      // ------------------------------------------------------------------
-      // 2. RAG retrieval with topK = 20.
-      //    Checklist generation requests 30+ items across 13 categories;
-      //    broader retrieval (20 vs the legacy 15) reduces hallucination
-      //    risk on specific section numbers.
-      // ------------------------------------------------------------------
-      let ragContext: string | undefined;
-      let ragSourcesUsed = 0;
-
-      try {
-        const ragResults = await ragService.search(ragQuery, {
-          topK:     20,
-          minScore: 0.5,
+      if (ragResults.length > 0) {
+        // Deduplicate by first 100 chars of chunkText to avoid repetitive context.
+        const seen = new Set<string>();
+        ragPassages = ragResults.filter((r) => {
+          const key = r.chunkText.slice(0, 100);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
         });
 
-        if (ragResults.length > 0) {
-          // Deduplicate by first 100 chars of chunkText to avoid repetitive context.
-          const seen = new Set<string>();
-          const deduplicated = ragResults.filter((r) => {
-            const key = r.chunkText.slice(0, 100);
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-
-          ragSourcesUsed = deduplicated.length;
-          ragContext = deduplicated
-            .map(
-              (r, i) =>
-                `[REGULATORY CONTEXT ${i + 1} — ${r.documentTitle || 'Kenyan Regulation'}]\n${r.chunkText}`
-            )
-            .join('\n\n---\n\n');
-
-          logger.info({
-            type:           'checklist_rag_retrieved',
-            checklistId,
-            rawResults:     ragResults.length,
-            deduplicatedResults: ragSourcesUsed,
-          });
-        } else {
-          logger.warn({
-            type:        'checklist_rag_no_results',
-            checklistId,
-            ragQuery:    ragQuery.slice(0, 200),
-          });
-        }
-      } catch (ragErr: unknown) {
-        // RAG failure is non-fatal — fall through with no context.
-        // AI will use training knowledge for Kenyan regulatory content.
-        logger.warn({
-          type:        'checklist_rag_search_failed',
+        logger.info({
+          type:                'checklist_rag_retrieved',
           checklistId,
-          error:       (ragErr as Error).message,
+          rawResults:          ragResults.length,
+          deduplicatedResults: ragPassages.length,
+        });
+      } else {
+        logger.warn({
+          type:     'checklist_rag_no_results',
+          checklistId,
+          ragQuery: ragQuery.slice(0, 200),
         });
       }
-
-      // ------------------------------------------------------------------
-      // 3. AI generation via Claude.
-      // ------------------------------------------------------------------
-      logger.info({
-        type:           'checklist_ai_generation_start',
+    } catch (ragErr: unknown) {
+      // Non-fatal — Tier 1/2 will proceed with fewer/no passages; Tier 3 ignores RAG.
+      logger.warn({
+        type:        'checklist_rag_search_failed',
         checklistId,
-        hasRagContext:  !!ragContext,
-        ragSourcesUsed,
+        error:       (ragErr as Error).message,
       });
+    }
 
-      const { checklist: generatedChecklist, inputTokens, outputTokens } =
-        await aiService.streamComplianceChecklist(
-          {
-            productType:        input.productType,
-            businessStage:      input.businessStage,
-            targetSegments:     input.targetSegments,
-            servicesOffered:    input.servicesOffered,
-            additionalConcerns: input.additionalConcerns,
-            ragContext,
-            ragSourcesUsed,
-          },
-          (update) => {
-            // Publish progress to the in-process EventEmitter so any connected
-            // SSE client for this checklistId receives live updates.
-            // Fire-and-forget — a failed publish must never abort generation.
-            checklistProgressPubSub.publish(checklistId, update).catch(() => {});
-          }
-        );
+    // ── 3. Three-tier generation ─────────────────────────────────────────────
+    recordAttempt(); // fire-and-forget metric counter
+    await this.runGenerationWithFallback(
+      checklistId,
+      input,
+      ragPassages,
+      userId,
+      startTime,
+      trialUserId
+    );
+  }
 
-      // ------------------------------------------------------------------
-      // 4. Map AI output to ChecklistItem DB rows.
-      // ------------------------------------------------------------------
-      const itemRows: Parameters<typeof prisma.checklistItem.createMany>[0]['data'] = [];
-      for (const category of generatedChecklist.categories) {
-        category.items.forEach((aiItem, idx) => {
-          itemRows.push({
-            checklistId,
-            category:            category.name,
-            // Persist the AI-generated code (e.g. "DP-001") for display and PDF export.
-            itemCode:            (aiItem as { id?: string }).id ?? null,
-            title:               aiItem.title,
-            description:         aiItem.description,
-            // guidance is a new field added to the AI output schema.
-            // Falls back to null if the model didn't include it (graceful compat).
-            guidance:            (aiItem as { guidance?: string }).guidance ?? null,
-            regulatoryReference: aiItem.regulatoryBasis,
-            actionItems:         aiItem.actionItems ?? [],
-            deadline:            aiItem.deadline || null,
-            penalty:             aiItem.penalty  || null,
-            priority:            aiItem.priority,
-            status:              CHECKLIST_ITEM_STATUS.PENDING,
-            notes:               null,
-            order:               idx,
-          });
-        });
-      }
+  /**
+   * Three-tier generation with progressive fallback.
+   *
+   * Tier 1 — Full:       full prompt, up to 12 RAG passages (≤8000 token budget), 8192 max_tokens, 240s
+   * Tier 2 — Simplified: shorter prompt, top-6 passages (≤3000 token budget),   6144 max_tokens, 200s
+   * Tier 3 — Minimal:    minimal prompt, no RAG,                                  4096 max_tokens, 150s
+   *
+   * Each tier streams via executeChecklistStream() and validates via parseWithTierSchema()
+   * (per-category Zod validation — no unvalidated data reaches the database).
+   * If all three tiers fail, the checklist is marked FAILED with all error details.
+   */
+  private async runGenerationWithFallback(
+    checklistId:  string,
+    input:        GenerateChecklistAsyncInput,
+    ragPassages:  SearchResult[],
+    userId:       string,
+    startTime:    number,
+    trialUserId?: string
+  ): Promise<void> {
+    const errors: Array<{ tier: number; error: string; durationMs: number }> = [];
 
-      const totalItems = itemRows.length;
-
-      const checklistTitle = generatedChecklist.metadata.productType
-        ? `${generatedChecklist.metadata.productType} — ${generatedChecklist.metadata.businessStage}`
-        : `${input.productType} — ${input.businessStage}`;
-
-      // Build the summary and metadata objects to persist alongside the items.
-      const generationSummary = {
-        totalCategories:         generatedChecklist.categories.length,
-        totalItems,
-        criticalItems:           generatedChecklist.metadata.criticalItems,
-        highItems:               generatedChecklist.metadata.highItems,
-        estimatedCompletionDays: generatedChecklist.metadata.estimatedCompletionDays,
-        generatedFor: {
-          productType:   input.productType,
-          businessStage: input.businessStage,
-          services:      input.servicesOffered,
-        },
-      };
-
-      const generationMetadata = {
-        ragSourcesUsed:          ragSourcesUsed,
-        estimatedCompletionDays: generatedChecklist.metadata.estimatedCompletionDays,
-        generationDurationMs:    Date.now() - startTime,
-      };
-
-      // ------------------------------------------------------------------
-      // 5. Persist in a single transaction:
-      //    a) Create all ChecklistItem rows.
-      //    b) Update Checklist to IN_PROGRESS with summary/metadata fields.
-      //    Also keep checklistData for legacy readers that may render the
-      //    JSON blob (e.g. PDF export on old checklists).
-      // ------------------------------------------------------------------
-      await prisma.$transaction(async (tx) => {
-        await tx.checklistItem.createMany({ data: itemRows });
-
-        await tx.checklist.update({
-          where: { id: checklistId },
-          data:  {
-            title:          checklistTitle,
-            status:         CHECKLIST_STATUS.IN_PROGRESS,
-            progress:       0,
-            completedItems: 0,
-            totalItems,
-            summary:        generationSummary as unknown as Record<string, unknown>,
-            metadata:       generationMetadata as unknown as Record<string, unknown>,
-            generatedAt:    new Date(),
-            // Preserve the full AI blob — used by legacy PDF export paths.
-            checklistData:  generatedChecklist as unknown as Record<string, unknown>,
-          },
-        });
-      });
-
-      // Track token usage for free trial users (fire-and-forget, non-fatal).
-      if (trialUserId) {
-        incrementTrialUsage(trialUserId, 'totalTokensUsed', inputTokens + outputTokens).catch(() => {});
-      }
-
+    // ── Tier 1: Full generation ──────────────────────────────────────────────
+    const t1Start = Date.now();
+    try {
+      const checklist = await this.runTier(1, checklistId, input, ragPassages);
+      recordSuccess('full'); // fire-and-forget metric counter
+      await this.saveGenerationResult(
+        checklistId, input, checklist,
+        { generationTier: 'full' },
+        ragPassages.length, trialUserId, startTime
+      );
       logger.info({
         type:          'checklist_generate_success',
         checklistId,
         userId,
-        totalItems,
-        ragSourcesUsed,
+        tier:          1,
+        totalItems:    checklist.metadata.totalItems,
+        ragPassagesUsed: ragPassages.length,
         durationMs:    Date.now() - startTime,
+        partial:       false,
       });
+      return;
     } catch (err: unknown) {
-      const errMsg = (err as Error).message ?? 'Unknown error';
+      const msg = (err as Error).message ?? String(err);
+      errors.push({ tier: 1, error: msg, durationMs: Date.now() - t1Start });
+      logger.warn({ type: 'checklist_tier_failed', checklistId, userId, tier: 1, error: msg, durationMs: Date.now() - t1Start });
+    }
 
-      // Provide a specific, actionable message for token-limit truncation errors.
-      const isTruncation = /max_tokens|truncated|schema validation/i.test(errMsg);
-      const userFacingError = isTruncation
-        ? 'AI response was truncated. Please try again with fewer details in the specific concerns field.'
-        : errMsg;
-
-      logger.error({
-        type:        'checklist_generate_failed',
+    // ── Tier 2: Simplified (top-6 passages, shorter prompt) ─────────────────
+    const t2Start = Date.now();
+    const tier2Passages = ragPassages.slice(0, 6);
+    try {
+      const checklist = await this.runTier(2, checklistId, input, tier2Passages);
+      recordSuccess('simplified'); // fire-and-forget metric counter
+      await this.saveGenerationResult(
+        checklistId, input, checklist,
+        { generationTier: 'simplified', originalError: errors[0]?.error },
+        tier2Passages.length, trialUserId, startTime
+      );
+      logger.info({
+        type:          'checklist_generate_success',
         checklistId,
         userId,
-        error:       errMsg,
-        isTruncation,
-        durationMs:  Date.now() - startTime,
+        tier:          2,
+        totalItems:    checklist.metadata.totalItems,
+        ragPassagesUsed: tier2Passages.length,
+        durationMs:    Date.now() - startTime,
+        partial:       false,
       });
-
-      // Mark the stuck GENERATING record as FAILED and persist the error reason
-      // in metadata so the frontend can surface it to the user.
-      await prisma.checklist
-        .update({
-          where: { id: checklistId },
-          data:  {
-            status:   CHECKLIST_STATUS.FAILED,
-            metadata: { errorMessage: userFacingError } as unknown as Record<string, unknown>,
-          },
-        })
-        .catch((updateErr: unknown) => {
-          logger.warn({
-            type:        'checklist_failed_status_update_error',
-            checklistId,
-            error:       (updateErr as Error).message,
-          });
-        });
+      return;
+    } catch (err: unknown) {
+      const msg = (err as Error).message ?? String(err);
+      errors.push({ tier: 2, error: msg, durationMs: Date.now() - t2Start });
+      logger.warn({ type: 'checklist_tier_failed', checklistId, userId, tier: 2, error: msg, durationMs: Date.now() - t2Start });
     }
+
+    // ── Tier 3: Minimal (no RAG) ─────────────────────────────────────────────
+    const t3Start = Date.now();
+    try {
+      const checklist = await this.runTier(3, checklistId, input, []);
+      recordSuccess('minimal'); // fire-and-forget metric counter
+      await this.saveGenerationResult(
+        checklistId, input, checklist,
+        {
+          generationTier: 'minimal',
+          note:           'Generated without document context — review for completeness',
+          originalError:  errors[0]?.error,
+        },
+        0, trialUserId, startTime
+      );
+      logger.info({
+        type:          'checklist_generate_success',
+        checklistId,
+        userId,
+        tier:          3,
+        totalItems:    checklist.metadata.totalItems,
+        ragPassagesUsed: 0,
+        durationMs:    Date.now() - startTime,
+        partial:       false,
+      });
+      return;
+    } catch (err: unknown) {
+      const msg = (err as Error).message ?? String(err);
+      errors.push({ tier: 3, error: msg, durationMs: Date.now() - t3Start });
+    }
+
+    // ── All tiers failed ─────────────────────────────────────────────────────
+    recordFailure(); // fire-and-forget metric counter
+    const totalDurationMs = Date.now() - startTime;
+    logger.error({
+      type:           'checklist_all_tiers_failed',
+      checklistId,
+      userId,
+      errors,
+      totalDurationMs,
+    });
+
+    await prisma.checklist
+      .update({
+        where: { id: checklistId },
+        data:  {
+          status:   CHECKLIST_STATUS.FAILED,
+          metadata: {
+            errorMessage:
+              'We were unable to generate your checklist after multiple attempts. ' +
+              'This is usually caused by temporary service issues. Please try again in a few minutes.',
+            errors,
+            totalDurationMs,
+          } as unknown as Record<string, unknown>,
+        },
+      })
+      .catch((updateErr: unknown) => {
+        logger.warn({
+          type:        'checklist_failed_status_update_error',
+          checklistId,
+          error:       (updateErr as Error).message,
+        });
+      });
+  }
+
+  /**
+   * Execute a single generation tier: build prompts, stream, parse with
+   * tier-specific Zod validation (including per-category partial recovery).
+   * Throws on any failure so runGenerationWithFallback can escalate.
+   */
+  private async runTier(
+    tier:        1 | 2 | 3,
+    checklistId: string,
+    input:       GenerateChecklistAsyncInput,
+    passages:    SearchResult[]
+  ): Promise<GeneratedChecklist> {
+    const tierStart = Date.now();
+
+    const { system, user } =
+      tier === 1 ? buildTier1Prompt(input, passages as RagPassage[]) :
+      tier === 2 ? buildTier2Prompt(input, passages as RagPassage[]) :
+                   buildTier3Prompt(input);
+
+    const maxTokens =
+      tier === 1 ? 8192 :
+      tier === 2 ? 6144 :
+                   4096;
+
+    const overrideTimeoutMs =
+      tier === 1 ? aiConfig.timeout.checklistTier1 :
+      tier === 2 ? aiConfig.timeout.checklistTier2 :
+                   aiConfig.timeout.checklistTier3;
+
+    logger.info({
+      type:             'checklist_tier_start',
+      checklistId,
+      tier,
+      maxTokens,
+      overrideTimeoutMs,
+      passagesProvided: passages.length,
+    });
+
+    const { content, inputTokens, outputTokens, stopReason } =
+      await aiService.executeChecklistStream(
+        { systemPrompt: system, userPrompt: user, maxTokens, overrideTimeoutMs },
+        (update) => {
+          checklistProgressPubSub.publish(checklistId, update).catch(() => {});
+        }
+      );
+
+    if (stopReason === 'max_tokens') {
+      logger.warn({
+        type:        'checklist_tier_truncated',
+        checklistId,
+        tier,
+        outputTokens,
+        durationMs:  Date.now() - tierStart,
+      });
+      // Fall through — parseWithTierSchema handles truncated JSON via repair + partial recovery
+    }
+
+    // Parse and validate — throws on unrecoverable failure
+    const checklist = parseWithTierSchema(content, tier, {
+      checklistId,
+      input: { productType: input.productType, businessStage: input.businessStage },
+      ragSourcesUsed: passages.length,
+    });
+
+    logger.info({
+      type:        'checklist_tier_parsed',
+      checklistId,
+      tier,
+      totalItems:  checklist.metadata.totalItems,
+      inputTokens,
+      outputTokens,
+      durationMs:  Date.now() - tierStart,
+    });
+
+    return checklist;
+  }
+
+  /**
+   * Persist a successfully generated checklist.
+   * Maps AI output to ChecklistItem rows, updates the Checklist record to
+   * IN_PROGRESS, and tracks trial token usage if applicable.
+   * Extracted from runGeneration for reuse across all three tiers.
+   */
+  private async saveGenerationResult(
+    checklistId:    string,
+    input:          GenerateChecklistAsyncInput,
+    generatedChecklist: GeneratedChecklist,
+    tierMeta: {
+      generationTier: 'full' | 'simplified' | 'minimal' | 'partial';
+      originalError?: string;
+      note?:          string;
+    },
+    ragSourcesUsed: number,
+    trialUserId:    string | undefined,
+    startTime:      number
+  ): Promise<void> {
+    // ── Map AI categories → ChecklistItem rows ───────────────────────────────
+    const itemRows: Parameters<typeof prisma.checklistItem.createMany>[0]['data'] = [];
+    for (const category of generatedChecklist.categories) {
+      category.items.forEach((aiItem, idx) => {
+        itemRows.push({
+          checklistId,
+          category:            category.name,
+          itemCode:            (aiItem as { id?: string }).id ?? null,
+          title:               aiItem.title,
+          description:         aiItem.description,
+          guidance:            (aiItem as { guidance?: string }).guidance ?? null,
+          regulatoryReference: aiItem.regulatoryBasis,
+          actionItems:         aiItem.actionItems ?? [],
+          deadline:            aiItem.deadline || null,
+          penalty:             aiItem.penalty  || null,
+          priority:            aiItem.priority,
+          status:              CHECKLIST_ITEM_STATUS.PENDING,
+          notes:               null,
+          order:               idx,
+        });
+      });
+    }
+
+    const totalItems     = itemRows.length;
+    const checklistTitle =
+      generatedChecklist.metadata.productType
+        ? `${generatedChecklist.metadata.productType} — ${generatedChecklist.metadata.businessStage}`
+        : `${input.productType} — ${input.businessStage}`;
+
+    const generationSummary = {
+      totalCategories:         generatedChecklist.categories.length,
+      totalItems,
+      criticalItems:           generatedChecklist.metadata.criticalItems,
+      highItems:               generatedChecklist.metadata.highItems,
+      estimatedCompletionDays: generatedChecklist.metadata.estimatedCompletionDays,
+      generatedFor: {
+        productType:   input.productType,
+        businessStage: input.businessStage,
+        services:      input.servicesOffered,
+      },
+    };
+
+    const generationMetadata = {
+      ragSourcesUsed,
+      estimatedCompletionDays: generatedChecklist.metadata.estimatedCompletionDays,
+      generationDurationMs:    Date.now() - startTime,
+      generationTier:          tierMeta.generationTier,
+      ...(tierMeta.originalError ? { originalError: tierMeta.originalError } : {}),
+      ...(tierMeta.note          ? { note: tierMeta.note }                   : {}),
+    };
+
+    // ── Persist in a single transaction ─────────────────────────────────────
+    await prisma.$transaction(async (tx) => {
+      await tx.checklistItem.createMany({ data: itemRows });
+
+      await tx.checklist.update({
+        where: { id: checklistId },
+        data:  {
+          title:          checklistTitle,
+          status:         CHECKLIST_STATUS.IN_PROGRESS,
+          progress:       0,
+          completedItems: 0,
+          totalItems,
+          summary:        generationSummary as unknown as Record<string, unknown>,
+          metadata:       generationMetadata as unknown as Record<string, unknown>,
+          generatedAt:    new Date(),
+          // Preserve the full AI blob — used by legacy PDF export paths.
+          checklistData:  generatedChecklist as unknown as Record<string, unknown>,
+        },
+      });
+    });
+
+    // ── Trial token tracking (fire-and-forget, non-fatal) ───────────────────
+    // Token counts are not available here since executeChecklistStream returns
+    // them to runTier which only returns the checklist.  We approximate using
+    // character length / 4 (the same heuristic used elsewhere in the codebase).
+    if (trialUserId) {
+      const estimatedTokens = Math.ceil(
+        (generatedChecklist.categories.reduce(
+          (sum, c) => sum + c.items.reduce((s, i) => s + i.description.length + i.title.length, 0),
+          0
+        )) / 4
+      );
+      incrementTrialUsage(trialUserId, 'totalTokensUsed', estimatedTokens).catch(() => {});
+    }
+  }
+
+  // =========================================================================
+  // PUBLIC: Retry Failed Checklist
+  // =========================================================================
+
+  /**
+   * Reset a FAILED checklist to GENERATING and re-fire the three-tier generation
+   * pipeline using the original inputs stored on the record.
+   *
+   * Retries do NOT consume a usage credit (the original generation already did).
+   * Retries are capped at 3 per checklist — if metadata.retryCount >= 3 this throws.
+   */
+  async retryChecklist(
+    checklistId: string,
+    userId:      string,
+    orgId:       string
+  ): Promise<{ checklistId: string; status: 'GENERATING'; retryCount: number }> {
+    const checklist = await prisma.checklist.findUnique({
+      where:  { id: checklistId },
+      select: {
+        id:                 true,
+        organizationId:     true,
+        userId:             true,
+        deletedAt:          true,
+        status:             true,
+        productType:        true,
+        businessStage:      true,
+        targetSegments:     true,
+        servicesOffered:    true,
+        additionalConcerns: true,
+        metadata:           true,
+      },
+    });
+
+    if (!checklist || checklist.deletedAt !== null) {
+      throw new NotFoundError('Checklist');
+    }
+
+    await this.verifyOwnership(checklist, userId, orgId);
+
+    if (checklist.status !== CHECKLIST_STATUS.FAILED) {
+      throw new Error(
+        `Cannot retry a checklist with status '${checklist.status}' — only FAILED checklists can be retried`
+      );
+    }
+
+    // Enforce retry cap
+    const existingMeta = (checklist.metadata ?? {}) as Record<string, unknown>;
+    const retryCount   = typeof existingMeta.retryCount === 'number' ? existingMeta.retryCount : 0;
+
+    const MAX_RETRIES = 3;
+    if (retryCount >= MAX_RETRIES) {
+      throw new Error(
+        `Maximum retry attempts (${MAX_RETRIES}) reached. Please generate a new checklist.`
+      );
+    }
+
+    const nextRetryCount = retryCount + 1;
+
+    // Reconstruct the original generation input from persisted fields.
+    const input: GenerateChecklistAsyncInput = {
+      productType:        checklist.productType        ?? 'Fintech',
+      businessStage:      checklist.businessStage      ?? 'Operational (less than 1 year)',
+      targetSegments:     safeStringArray(checklist.targetSegments),
+      servicesOffered:    safeStringArray(checklist.servicesOffered),
+      additionalConcerns: checklist.additionalConcerns ?? undefined,
+    };
+
+    // Reset to GENERATING and bump retryCount atomically.
+    await prisma.checklist.update({
+      where: { id: checklistId },
+      data:  {
+        status:   CHECKLIST_STATUS.GENERATING,
+        metadata: {
+          ...existingMeta,
+          retryCount:   nextRetryCount,
+          errorMessage: null, // cleared so the frontend shows the spinner
+        } as unknown as Record<string, unknown>,
+      },
+    });
+
+    logger.info({
+      type:        'checklist_retry_initiated',
+      checklistId,
+      userId,
+      orgId,
+      retryCount:  nextRetryCount,
+    });
+
+    recordRetryAttempt(); // fire-and-forget metric counter
+    // Fire-and-forget — same pattern as generateChecklist().
+    this.runGeneration(checklistId, input, userId, undefined).catch((err: Error) => {
+      logger.error({
+        type:        'checklist_retry_unhandled_rejection',
+        checklistId,
+        userId,
+        error:       err.message,
+      });
+    });
+
+    return { checklistId, status: 'GENERATING', retryCount: nextRetryCount };
   }
 
   // =========================================================================
@@ -407,6 +676,9 @@ class ChecklistService {
         userId:         true,
         createdAt:      true,
         deletedAt:      true,
+        productType:    true,
+        businessStage:  true,
+        metadata:       true,
       },
     });
 
@@ -452,6 +724,8 @@ class ChecklistService {
 
     const isNormalized = totalItems > 0;
 
+    const meta = checklist.metadata as Record<string, unknown> | null;
+
     return {
       checklistId:    checklist.id,
       status:         effectiveStatus,
@@ -461,6 +735,13 @@ class ChecklistService {
       title:          checklist.title,
       createdAt:      checklist.createdAt,
       isNormalized,
+      productType:    checklist.productType   ?? null,
+      businessStage:  checklist.businessStage ?? null,
+      metadata:       meta ? {
+        errorMessage:   typeof meta['errorMessage']   === 'string'  ? meta['errorMessage']   : null,
+        retryCount:     typeof meta['retryCount']     === 'number'  ? meta['retryCount']     : undefined,
+        generationTier: typeof meta['generationTier'] === 'string'  ? meta['generationTier'] : null,
+      } : null,
     };
   }
 
