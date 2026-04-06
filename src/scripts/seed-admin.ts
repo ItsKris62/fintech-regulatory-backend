@@ -13,10 +13,12 @@
 
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { createClient } from '@supabase/supabase-js';
 import bcrypt from 'bcryptjs';
 
-const prisma = new (PrismaClient as any)();
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
+const prisma = new PrismaClient({ adapter } as never);
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
