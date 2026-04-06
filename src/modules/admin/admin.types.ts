@@ -331,6 +331,143 @@ export interface PendingInvitation {
 }
 
 // ============================================================================
+// Analytics Types
+// ============================================================================
+
+export interface TimeSeriesPoint {
+  date: string; // ISO date string (YYYY-MM-DD)
+  count: number;
+}
+
+export interface UserGrowthData {
+  series: TimeSeriesPoint[];
+  total: number;
+  periodStart: string;
+  periodEnd: string;
+}
+
+export interface RevenueMetrics {
+  totalRevenue: number;        // KES, all time
+  currentMonthRevenue: number; // KES, this calendar month
+  lastMonthRevenue: number;    // KES, previous calendar month
+  series: Array<{ date: string; amount: number }>; // monthly totals
+  byProvider: { STRIPE: number; MPESA: number };
+  successRate: number; // 0–100
+}
+
+export interface AIUsageMetrics {
+  totalQueries: number;
+  totalPolicies: number;
+  totalChecklists: number;
+  totalGapAnalyses: number;
+  queriesThisMonth: number;
+  policiesThisMonth: number;
+  series: TimeSeriesPoint[]; // daily query counts
+}
+
+export interface SubscriptionBreakdown {
+  byPlan: Record<string, number>;
+  byStatus: Record<string, number>;
+  total: number;
+}
+
+// ============================================================================
+// User Creation Types
+// ============================================================================
+
+export interface CreateUserInput {
+  email: string;
+  fullName: string;
+  password: string;
+  role: 'REGULATOR' | 'STARTUP' | 'ENTERPRISE' | 'ADMIN';
+  organizationId?: string;
+  sendWelcomeEmail?: boolean;
+}
+
+// ============================================================================
+// Login History Types
+// ============================================================================
+
+export interface LoginHistoryFilters {
+  userId?: string;
+  email?: string;
+  success?: boolean;
+  dateFrom?: Date;
+  dateTo?: Date;
+  page?: number;
+  limit?: number;
+}
+
+export interface LoginHistoryEntry {
+  id: string;
+  userId: string | null;
+  email: string;
+  success: boolean;
+  ipAddress: string | null;
+  userAgent: string | null;
+  failureReason: string | null;
+  location: string | null;
+  createdAt: Date;
+}
+
+export interface PaginatedLoginHistory {
+  items: LoginHistoryEntry[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+// ============================================================================
+// Content Management Types
+// ============================================================================
+
+export interface ContentFilters {
+  contentType: 'BLOG_POST' | 'KNOWLEDGE_BASE_ARTICLE';
+  contentStatus?: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'UNDER_REVIEW';
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface ContentItem {
+  id: string;
+  title: string | null;
+  slug: string | null;
+  excerpt: string | null;
+  contentType: string;
+  contentStatus: string;
+  category: string | null;
+  viewCount: number;
+  publishedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  authorId: string | null;
+}
+
+export interface PaginatedContent {
+  items: ContentItem[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+// ============================================================================
+// Organization Update Types
+// ============================================================================
+
+export interface UpdateOrganizationInput {
+  name?: string;
+  type?: string;
+  registrationNumber?: string;
+  website?: string;
+  address?: string;
+  contactPerson?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  contactPosition?: string;
+}
+
+// ============================================================================
 // Subscription Types
 // ============================================================================
 

@@ -14,6 +14,7 @@ import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@/utils/error';
 import { planCtxCacheKey } from '@/modules/trial';
 import { nanoid } from 'nanoid';
+import { supabaseAdmin } from '@/lib/supabase';
 import {
   toAdminUserDetail,
   toAdminOrgDetail,
@@ -56,6 +57,18 @@ import {
   type SubscriptionPlan,
   type Subscription,
   type SubscriptionOverview,
+  type CreateUserInput,
+  type UpdateOrganizationInput,
+  type UserGrowthData,
+  type RevenueMetrics,
+  type AIUsageMetrics,
+  type SubscriptionBreakdown,
+  type LoginHistoryFilters,
+  type LoginHistoryEntry,
+  type PaginatedLoginHistory,
+  type ContentFilters,
+  type ContentItem,
+  type PaginatedContent,
 } from './admin.types';
 
 const { CACHE_TTL } = ADMIN_CONSTANTS;
@@ -1003,6 +1016,414 @@ class AdminModule {
       status: 'active',
       updatedAt: new Date(),
     };
+  }
+
+  // ==========================================================================
+  // USER CREATION (ADMIN-INITIATED)
+  // ==========================================================================
+
+  async createUser(adminId: string, input: CreateUserInput): Promise<AdminUserDetail> {
+    // Check for existing user
+    const existing = await prisma.user.findUnique({ where: { email: input.email.toLowerCase() } });
+    if (existing) throw new BadRequestError('A user with this email already exists');
+
+    // Create in Supabase Auth
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+      email: input.email.toLowerCase(),
+      password: input.password,
+      email_confirm: true,
+    });
+
+    if (authError || !authData.user) {
+      throw new BadRequestError(authError?.message ?? 'Failed to create user in auth provider');
+    }
+
+    const supabaseAuthId = authData.user.id;
+
+    // Create in Prisma
+    const user = await prisma.user.create({
+      data: {
+        supabaseAuthId,
+        email: input.email.toLowerCase(),
+        fullName: input.fullName,
+        role: input.role as never,
+        emailVerified: true,
+        accountStatus: 'active',
+        status: 'ACTIVE',
+        organizationId: input.organizationId ?? null,
+      },
+      include: { organization: { select: { name: true } } },
+    });
+
+    await this.writeAuditLog(adminId, 'admin_create_user', 'User', user.id, {
+      email: user.email,
+      role: user.role,
+    });
+
+    logger.info({ type: 'admin_user_created', adminId, userId: user.id, role: user.role });
+
+    return toAdminUserDetail(user as unknown as Record<string, unknown>, {
+      sessions: 0,
+      policies: 0,
+      queries: 0,
+    });
+  }
+
+  // ==========================================================================
+  // ORGANIZATION UPDATE
+  // ==========================================================================
+
+  async updateOrganization(
+    adminId: string,
+    orgId: string,
+    input: UpdateOrganizationInput
+  ): Promise<AdminOrgDetail> {
+    const org = await prisma.organization.findUnique({ where: { id: orgId } });
+    if (!org) throw new NotFoundError('Organization');
+
+    const before: Record<string, unknown> = {};
+    const after: Record<string, unknown> = {};
+    for (const key of Object.keys(input) as (keyof UpdateOrganizationInput)[]) {
+      if (input[key] !== undefined) {
+        before[key] = (org as Record<string, unknown>)[key];
+        after[key] = input[key];
+      }
+    }
+
+    await prisma.organization.update({
+      where: { id: orgId },
+      data: input as never,
+    });
+
+    await this.writeAuditLog(adminId, 'admin_update_org', 'Organization', orgId, { before, after });
+    logger.info({ type: 'admin_org_updated', adminId, orgId, fields: Object.keys(input) });
+
+    return this.getOrganizationDetails(orgId);
+  }
+
+  // ==========================================================================
+  // ANALYTICS
+  // ==========================================================================
+
+  async getUserGrowth(
+    period: 'daily' | 'weekly' | 'monthly',
+    dateFrom: Date,
+    dateTo: Date
+  ): Promise<UserGrowthData> {
+    // Fetch all users created within the date range
+    const users = await prisma.user.findMany({
+      where: { createdAt: { gte: dateFrom, lte: dateTo } },
+      select: { createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Group by period
+    const buckets = new Map<string, number>();
+
+    for (const user of users) {
+      const d = user.createdAt;
+      let key: string;
+      if (period === 'daily') {
+        key = d.toISOString().slice(0, 10);
+      } else if (period === 'weekly') {
+        // ISO week start (Monday)
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        const monday = new Date(d);
+        monday.setDate(diff);
+        key = monday.toISOString().slice(0, 10);
+      } else {
+        key = d.toISOString().slice(0, 7); // YYYY-MM
+      }
+      buckets.set(key, (buckets.get(key) ?? 0) + 1);
+    }
+
+    const series = Array.from(buckets.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, count]) => ({ date, count }));
+
+    return {
+      series,
+      total: users.length,
+      periodStart: dateFrom.toISOString(),
+      periodEnd: dateTo.toISOString(),
+    };
+  }
+
+  async getRevenueMetrics(dateFrom: Date, dateTo: Date): Promise<RevenueMetrics> {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+
+    const [allPayments, thisMonthPayments, lastMonthPayments] = await Promise.all([
+      prisma.payment.findMany({
+        where: { status: 'COMPLETED', paidAt: { gte: dateFrom, lte: dateTo } },
+        select: { amount: true, provider: true, paidAt: true },
+      }),
+      prisma.payment.aggregate({
+        where: { status: 'COMPLETED', paidAt: { gte: monthStart } },
+        _sum: { amount: true },
+      }),
+      prisma.payment.aggregate({
+        where: { status: 'COMPLETED', paidAt: { gte: lastMonthStart, lte: lastMonthEnd } },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const totalAll = await prisma.payment.aggregate({
+      where: { status: 'COMPLETED' },
+      _sum: { amount: true },
+    });
+
+    const successCount = await prisma.payment.count({ where: { status: 'COMPLETED', paidAt: { gte: dateFrom, lte: dateTo } } });
+    const totalCount = await prisma.payment.count({ where: { paidAt: { gte: dateFrom, lte: dateTo } } });
+
+    // Monthly series
+    const monthlyBuckets = new Map<string, number>();
+    for (const p of allPayments) {
+      if (!p.paidAt) continue;
+      const key = p.paidAt.toISOString().slice(0, 7);
+      monthlyBuckets.set(key, (monthlyBuckets.get(key) ?? 0) + p.amount);
+    }
+
+    const byProvider = { STRIPE: 0, MPESA: 0 };
+    for (const p of allPayments) {
+      if (p.provider === 'STRIPE') byProvider.STRIPE += p.amount;
+      else if (p.provider === 'MPESA') byProvider.MPESA += p.amount;
+    }
+
+    return {
+      totalRevenue: totalAll._sum.amount ?? 0,
+      currentMonthRevenue: thisMonthPayments._sum.amount ?? 0,
+      lastMonthRevenue: lastMonthPayments._sum.amount ?? 0,
+      series: Array.from(monthlyBuckets.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, amount]) => ({ date, amount })),
+      byProvider,
+      successRate: totalCount > 0 ? Math.round((successCount / totalCount) * 100) : 100,
+    };
+  }
+
+  async getAIUsageMetrics(dateFrom: Date, dateTo: Date): Promise<AIUsageMetrics> {
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+    const [totalQueries, totalPolicies, totalChecklists, totalGapAnalyses,
+           queriesThisMonth, policiesThisMonth] = await Promise.all([
+      prisma.complianceQuery.count({ where: { createdAt: { gte: dateFrom, lte: dateTo } } }),
+      prisma.policy.count({ where: { status: 'COMPLETED', createdAt: { gte: dateFrom, lte: dateTo } } }),
+      prisma.checklist.count({ where: { status: 'COMPLETED', createdAt: { gte: dateFrom, lte: dateTo } } }),
+      prisma.gapAnalysis.count({ where: { status: 'COMPLETED', createdAt: { gte: dateFrom, lte: dateTo } } }),
+      prisma.complianceQuery.count({ where: { createdAt: { gte: monthStart } } }),
+      prisma.policy.count({ where: { status: 'COMPLETED', createdAt: { gte: monthStart } } }),
+    ]);
+
+    // Daily query series
+    const dailyQueries = await prisma.complianceQuery.findMany({
+      where: { createdAt: { gte: dateFrom, lte: dateTo } },
+      select: { createdAt: true },
+    });
+
+    const buckets = new Map<string, number>();
+    for (const q of dailyQueries) {
+      const key = q.createdAt.toISOString().slice(0, 10);
+      buckets.set(key, (buckets.get(key) ?? 0) + 1);
+    }
+
+    return {
+      totalQueries,
+      totalPolicies,
+      totalChecklists,
+      totalGapAnalyses,
+      queriesThisMonth,
+      policiesThisMonth,
+      series: Array.from(buckets.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, count]) => ({ date, count })),
+    };
+  }
+
+  async getSubscriptionBreakdown(): Promise<SubscriptionBreakdown> {
+    const orgs = await prisma.organization.findMany({
+      select: { plan: true, subscriptionStatus: true },
+    });
+
+    const byPlan: Record<string, number> = {};
+    const byStatus: Record<string, number> = {};
+
+    for (const org of orgs) {
+      const plan = String(org.plan);
+      const status = String(org.subscriptionStatus);
+      byPlan[plan] = (byPlan[plan] ?? 0) + 1;
+      byStatus[status] = (byStatus[status] ?? 0) + 1;
+    }
+
+    return { byPlan, byStatus, total: orgs.length };
+  }
+
+  // ==========================================================================
+  // LOGIN HISTORY
+  // ==========================================================================
+
+  async recordLoginHistory(entry: Omit<LoginHistoryEntry, 'id' | 'createdAt'>): Promise<void> {
+    try {
+      await prisma.loginHistory.create({ data: entry });
+    } catch (err: unknown) {
+      logger.warn({ type: 'login_history_write_failed', error: (err as Error).message });
+    }
+  }
+
+  async getLoginHistory(filters: LoginHistoryFilters): Promise<PaginatedLoginHistory> {
+    const page = filters.page ?? 1;
+    const limit = filters.limit ?? 50;
+    const skip = (page - 1) * limit;
+
+    const where: Record<string, unknown> = {
+      ...(filters.userId && { userId: filters.userId }),
+      ...(filters.email && { email: { contains: filters.email, mode: 'insensitive' } }),
+      ...(filters.success !== undefined && { success: filters.success }),
+      ...((filters.dateFrom || filters.dateTo) && {
+        createdAt: {
+          ...(filters.dateFrom && { gte: filters.dateFrom }),
+          ...(filters.dateTo && { lte: filters.dateTo }),
+        },
+      }),
+    };
+
+    const [items, total] = await Promise.all([
+      prisma.loginHistory.findMany({
+        where: where as never,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.loginHistory.count({ where: where as never }),
+    ]);
+
+    return { items, total, page, limit };
+  }
+
+  // ==========================================================================
+  // CONTENT MANAGEMENT (BLOG + KNOWLEDGE BASE)
+  // ==========================================================================
+
+  async listContent(filters: ContentFilters): Promise<PaginatedContent> {
+    const page = filters.page ?? 1;
+    const limit = filters.limit ?? 20;
+    const skip = (page - 1) * limit;
+
+    const where: Record<string, unknown> = {
+      contentType: filters.contentType,
+      deletedAt: null,
+      ...(filters.contentStatus && { contentStatus: filters.contentStatus }),
+      ...(filters.search && {
+        OR: [
+          { title: { contains: filters.search, mode: 'insensitive' } },
+          { excerpt: { contains: filters.search, mode: 'insensitive' } },
+        ],
+      }),
+    };
+
+    const [docs, total] = await Promise.all([
+      prisma.legalDocument.findMany({
+        where: where as never,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          title: true,
+          slug: true,
+          excerpt: true,
+          contentType: true,
+          contentStatus: true,
+          category: true,
+          viewCount: true,
+          publishedAt: true,
+          createdAt: true,
+          updatedAt: true,
+          authorId: true,
+        },
+      }),
+      prisma.legalDocument.count({ where: where as never }),
+    ]);
+
+    return {
+      items: docs.map((d) => ({
+        id: d.id,
+        title: d.title,
+        slug: d.slug,
+        excerpt: d.excerpt,
+        contentType: String(d.contentType),
+        contentStatus: String(d.contentStatus),
+        category: d.category,
+        viewCount: d.viewCount,
+        publishedAt: d.publishedAt,
+        createdAt: d.createdAt,
+        updatedAt: d.updatedAt,
+        authorId: d.authorId,
+      })),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  async updateContentStatus(
+    adminId: string,
+    documentId: string,
+    contentStatus: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'UNDER_REVIEW'
+  ): Promise<ContentItem> {
+    const doc = await prisma.legalDocument.findUnique({ where: { id: documentId } });
+    if (!doc) throw new NotFoundError('Content item');
+
+    const data: Record<string, unknown> = { contentStatus };
+    if (contentStatus === 'PUBLISHED' && !doc.publishedAt) {
+      data['publishedAt'] = new Date();
+      data['publishedBy'] = adminId;
+    }
+
+    const updated = await prisma.legalDocument.update({
+      where: { id: documentId },
+      data: data as never,
+    });
+
+    await this.writeAuditLog(adminId, 'admin_update_content_status', 'LegalDocument', documentId, {
+      before: String(doc.contentStatus),
+      after: contentStatus,
+    });
+
+    return {
+      id: updated.id,
+      title: updated.title,
+      slug: updated.slug,
+      excerpt: updated.excerpt,
+      contentType: String(updated.contentType),
+      contentStatus: String(updated.contentStatus),
+      category: updated.category,
+      viewCount: updated.viewCount,
+      publishedAt: updated.publishedAt,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      authorId: updated.authorId,
+    };
+  }
+
+  async deleteContent(adminId: string, documentId: string): Promise<void> {
+    const doc = await prisma.legalDocument.findUnique({ where: { id: documentId } });
+    if (!doc) throw new NotFoundError('Content item');
+
+    await prisma.legalDocument.update({
+      where: { id: documentId },
+      data: { deletedAt: new Date() },
+    });
+
+    await this.writeAuditLog(adminId, 'admin_delete_content', 'LegalDocument', documentId, {
+      title: doc.title,
+      contentType: String(doc.contentType),
+    });
+
+    logger.info({ type: 'admin_content_deleted', adminId, documentId });
   }
 
   // ==========================================================================

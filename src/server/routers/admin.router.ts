@@ -1428,4 +1428,303 @@ export const adminRouter = router({
         });
       }
     }),
+
+  // ─── USER CREATION (ADMIN-INITIATED) ─────────────────────────────────────
+
+  createUser: adminProcedure
+    .input(
+      z.object({
+        email: z.string().email(),
+        fullName: z.string().min(2).max(100),
+        password: z.string().min(8).max(100),
+        role: z.enum(['REGULATOR', 'STARTUP', 'ENTERPRISE', 'ADMIN']),
+        organizationId: z.string().optional(),
+        sendWelcomeEmail: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const user = await adminModule.createUser(ctx.user!.id, input);
+        logger.info({ type: 'admin_create_user', adminId: ctx.user!.id, email: input.email });
+        return user;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: error.message ?? 'Failed to create user', cause: error });
+      }
+    }),
+
+  // ─── FORCE PASSWORD RESET ─────────────────────────────────────────────────
+
+  forcePasswordReset: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        await adminModule.forcePasswordReset(ctx.user!.id, input.userId);
+        logger.info({ type: 'admin_force_password_reset', adminId: ctx.user!.id, userId: input.userId });
+        return { success: true };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to force password reset', cause: error });
+      }
+    }),
+
+  // ─── IMPERSONATION ────────────────────────────────────────────────────────
+
+  impersonateUser: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const token = await adminModule.impersonateUser(ctx.user!.id, input.userId);
+        logger.info({ type: 'admin_impersonate_user', adminId: ctx.user!.id, targetUserId: input.userId });
+        return token;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create impersonation token', cause: error });
+      }
+    }),
+
+  // ─── ORGANIZATION UPDATE ──────────────────────────────────────────────────
+
+  updateOrganization: adminProcedure
+    .input(
+      z.object({
+        orgId: z.string(),
+        name: z.string().min(2).max(200).optional(),
+        type: z.string().optional(),
+        registrationNumber: z.string().optional(),
+        website: z.string().url().optional(),
+        address: z.string().optional(),
+        contactPerson: z.string().optional(),
+        contactEmail: z.string().email().optional(),
+        contactPhone: z.string().optional(),
+        contactPosition: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const { orgId, ...data } = input;
+        const result = await adminModule.updateOrganization(ctx.user!.id, orgId, data);
+        logger.info({ type: 'admin_update_org', adminId: ctx.user!.id, orgId });
+        return result;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update organization', cause: error });
+      }
+    }),
+
+  updateOrganizationPlan: adminProcedure
+    .input(
+      z.object({
+        orgId: z.string(),
+        plan: z.enum(['REGULATOR', 'STARTUP', 'BUSINESS', 'ENTERPRISE']),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.updateOrganizationPlan(ctx.user!.id, input.orgId, input.plan as never);
+        logger.info({ type: 'admin_update_org_plan', adminId: ctx.user!.id, orgId: input.orgId, plan: input.plan });
+        return result;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update organization plan', cause: error });
+      }
+    }),
+
+  // ─── ANALYTICS ────────────────────────────────────────────────────────────
+
+  getUserGrowth: adminProcedure
+    .input(
+      z.object({
+        period: z.enum(['daily', 'weekly', 'monthly']).default('daily'),
+        dateFrom: z.string().datetime().optional(),
+        dateTo: z.string().datetime().optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const dateTo = input.dateTo ? new Date(input.dateTo) : new Date();
+        const dateFrom = input.dateFrom
+          ? new Date(input.dateFrom)
+          : new Date(dateTo.getTime() - 30 * 24 * 60 * 60 * 1000);
+        const result = await adminModule.getUserGrowth(input.period, dateFrom, dateTo);
+        logger.info({ type: 'admin_user_growth_retrieved', adminId: ctx.user!.id });
+        return result;
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get user growth', cause: error });
+      }
+    }),
+
+  getRevenueMetrics: adminProcedure
+    .input(
+      z.object({
+        dateFrom: z.string().datetime().optional(),
+        dateTo: z.string().datetime().optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const dateTo = input.dateTo ? new Date(input.dateTo) : new Date();
+        const dateFrom = input.dateFrom
+          ? new Date(input.dateFrom)
+          : new Date(dateTo.getTime() - 180 * 24 * 60 * 60 * 1000);
+        const result = await adminModule.getRevenueMetrics(dateFrom, dateTo);
+        logger.info({ type: 'admin_revenue_metrics_retrieved', adminId: ctx.user!.id });
+        return result;
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get revenue metrics', cause: error });
+      }
+    }),
+
+  getAIUsageMetrics: adminProcedure
+    .input(
+      z.object({
+        dateFrom: z.string().datetime().optional(),
+        dateTo: z.string().datetime().optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const dateTo = input.dateTo ? new Date(input.dateTo) : new Date();
+        const dateFrom = input.dateFrom
+          ? new Date(input.dateFrom)
+          : new Date(dateTo.getTime() - 30 * 24 * 60 * 60 * 1000);
+        const result = await adminModule.getAIUsageMetrics(dateFrom, dateTo);
+        logger.info({ type: 'admin_ai_usage_retrieved', adminId: ctx.user!.id });
+        return result;
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get AI usage metrics', cause: error });
+      }
+    }),
+
+  getSubscriptionBreakdown: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const result = await adminModule.getSubscriptionBreakdown();
+      logger.info({ type: 'admin_subscription_breakdown_retrieved', adminId: ctx.user!.id });
+      return result;
+    } catch (error: any) {
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get subscription breakdown', cause: error });
+    }
+  }),
+
+  // ─── LOGIN HISTORY ────────────────────────────────────────────────────────
+
+  getLoginHistory: adminProcedure
+    .input(
+      z.object({
+        userId: z.string().optional(),
+        email: z.string().optional(),
+        success: z.boolean().optional(),
+        dateFrom: z.string().datetime().optional(),
+        dateTo: z.string().datetime().optional(),
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().min(1).max(200).default(50),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.getLoginHistory({
+          ...input,
+          dateFrom: input.dateFrom ? new Date(input.dateFrom) : undefined,
+          dateTo: input.dateTo ? new Date(input.dateTo) : undefined,
+        });
+        logger.info({ type: 'admin_login_history_retrieved', adminId: ctx.user!.id });
+        return result;
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get login history', cause: error });
+      }
+    }),
+
+  // ─── CONTENT MANAGEMENT ───────────────────────────────────────────────────
+
+  listContent: adminProcedure
+    .input(
+      z.object({
+        contentType: z.enum(['BLOG_POST', 'KNOWLEDGE_BASE_ARTICLE']),
+        contentStatus: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED', 'UNDER_REVIEW']).optional(),
+        search: z.string().optional(),
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().min(1).max(100).default(20),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.listContent(input);
+        logger.info({ type: 'admin_content_listed', adminId: ctx.user!.id, contentType: input.contentType });
+        return result;
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to list content', cause: error });
+      }
+    }),
+
+  updateContentStatus: adminProcedure
+    .input(
+      z.object({
+        documentId: z.string(),
+        contentStatus: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED', 'UNDER_REVIEW']),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.updateContentStatus(ctx.user!.id, input.documentId, input.contentStatus);
+        logger.info({ type: 'admin_content_status_updated', adminId: ctx.user!.id, documentId: input.documentId });
+        return result;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update content status', cause: error });
+      }
+    }),
+
+  deleteContent: adminProcedure
+    .input(z.object({ documentId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        await adminModule.deleteContent(ctx.user!.id, input.documentId);
+        logger.info({ type: 'admin_content_deleted', adminId: ctx.user!.id, documentId: input.documentId });
+        return { success: true };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to delete content', cause: error });
+      }
+    }),
+
+  // ─── SUBSCRIPTION OVERVIEW ────────────────────────────────────────────────
+
+  getSubscriptionOverview: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const result = await adminModule.getSubscriptionOverview();
+      logger.info({ type: 'admin_subscription_overview_retrieved', adminId: ctx.user!.id });
+      return result;
+    } catch (error: any) {
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get subscription overview', cause: error });
+    }
+  }),
+
+  // ─── RECENT PAYMENTS (ALL ORGS, ADMIN-ONLY) ──────────────────────────────
+
+  getRecentPayments: adminProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(100).default(20) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const payments = await ctx.prisma.payment.findMany({
+          orderBy: { createdAt: 'desc' },
+          take: input.limit,
+          include: { org: { select: { name: true } } },
+        });
+        return payments.map((p) => ({
+          id: p.id,
+          orgId: p.orgId,
+          orgName: p.org.name,
+          provider: p.provider,
+          amount: p.amount,
+          currency: p.currency,
+          status: p.status,
+          invoiceNumber: p.invoiceNumber,
+          subscriptionPlan: p.subscriptionPlan,
+          paidAt: p.paidAt,
+          createdAt: p.createdAt,
+        }));
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get recent payments', cause: error });
+      }
+    }),
 });

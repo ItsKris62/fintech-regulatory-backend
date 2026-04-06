@@ -25,7 +25,7 @@ const supabaseAdmin = createClient(
 );
 
 async function seedAdmin(): Promise<void> {
-  const email = process.env.ADMIN_EMAIL || 'admin@sheriabot.com3';
+  const email = process.env.ADMIN_EMAIL || 'admin@sheriabot.com';
   const password = process.env.ADMIN_PASSWORD || 'SheriaBot-Admin-2024!';
   const fullName = process.env.ADMIN_NAME || 'System Admin';
 
@@ -70,6 +70,7 @@ async function seedAdmin(): Promise<void> {
           password: hashedPw,
           fullName,
           role: 'ADMIN',
+          status: 'ACTIVE',
           emailVerified: true,
           accountStatus: 'active',
         } as any,
@@ -89,6 +90,7 @@ async function seedAdmin(): Promise<void> {
       password: hashedPw,
       fullName,
       role: 'ADMIN',
+      status: 'ACTIVE',
       emailVerified: true,
       accountStatus: 'active',
     } as any,
