@@ -31,16 +31,15 @@ export const adminRouter = router({
         totalDocuments,
         storageUsed,
       ] = await Promise.all([
-        ctx.prisma.user.count({ where: { deletedAt: null } as any }),
+        ctx.prisma.user.count(),
         ctx.prisma.user.count({
           where: {
-            deletedAt: null,
             lastLoginAt: {
-              gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Last 30 days
+              gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
             },
           } as any,
         }),
-        ctx.prisma.organization.count({ where: { deletedAt: null } as any }),
+        ctx.prisma.organization.count(),
         ctx.prisma.policy.count({ where: { deletedAt: null } as any }),
         ctx.prisma.policy.count({
           where: { deletedAt: null, status: 'COMPLETED' } as any,
@@ -148,9 +147,7 @@ export const adminRouter = router({
         const { page, limit, role, status, search } = input;
         const skip = (page - 1) * limit;
 
-        const where: any = {
-          deletedAt: null,
-        };
+        const where: any = {};
 
         if (role) {
           where.role = role;
@@ -189,6 +186,7 @@ export const adminRouter = router({
               fullName: true,
               email: true,
               role: true,
+              status: true,
               emailVerified: true,
               createdAt: true,
               lastLoginAt: true,
