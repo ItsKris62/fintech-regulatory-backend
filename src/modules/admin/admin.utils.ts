@@ -87,6 +87,7 @@ export function toAdminUserDetail(
     emailVerified: user.emailVerified as boolean,
     organizationId: user.organizationId as string | null,
     organizationName: org ? (org.name as string) : null,
+    organizationPlan: org ? (org.subscriptionTier as string) : null,
     lastLoginAt: user.lastLoginAt as Date | null,
     lastLoginIp: user.lastLoginIp as string | null,
     createdAt: user.createdAt as Date,
@@ -153,4 +154,8 @@ export function impersonationKey(token: string): string {
 
 export function frameworksKey(): string {
   return 'admin:regulatory_frameworks';
+}
+
+export function orgStatsKey(): string {
+  return 'admin:org_stats';
 }

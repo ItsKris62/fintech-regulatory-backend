@@ -583,6 +583,7 @@ export const adminRouter = router({
         limit: z.number().min(1).max(100).default(20),
         search: z.string().optional(),
         status: z.string().optional(),
+        tier: z.string().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -592,6 +593,7 @@ export const adminRouter = router({
           limit: input.limit,
           search: input.search,
           subscriptionStatus: input.status,
+          subscriptionTier: input.tier,
         });
 
         logger.info({
@@ -612,6 +614,55 @@ export const adminRouter = router({
           message: 'Failed to list organizations',
           cause: error,
         });
+      }
+    }),
+
+  /**
+   * Get organization stats summary (admin only)
+   *
+   * @admin
+   */
+  getOrganizationStats: adminProcedure
+    .query(async ({ ctx }) => {
+      try {
+        const stats = await adminModule.getOrganizationStats();
+
+        logger.info({
+          type: 'admin_org_stats_retrieved',
+          adminId: ctx.user!.id,
+        });
+
+        return stats;
+      } catch (error: any) {
+        logger.error({
+          type: 'admin_org_stats_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get organization stats',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Get organization members (admin only)
+   *
+   * @admin
+   */
+  getOrgMembers: adminProcedure
+    .input(z.object({ orgId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const members = await adminModule.getOrgMembers(input.orgId);
+        logger.info({ type: 'admin_org_members_retrieved', adminId: ctx.user!.id, orgId: input.orgId });
+        return members;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get org members', cause: error });
       }
     }),
 
@@ -1468,6 +1519,24 @@ export const adminRouter = router({
       }
     }),
 
+  // ─── UPDATE USER ROLE ─────────────────────────────────────────────────────
+
+  updateUserRole: adminProcedure
+    .input(z.object({
+      userId: z.string(),
+      role: z.enum(['REGULATOR', 'STARTUP', 'ENTERPRISE', 'ADMIN']),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const user = await adminModule.updateUserRole(ctx.user!.id, input.userId, input.role);
+        logger.info({ type: 'admin_update_user_role', adminId: ctx.user!.id, userId: input.userId, role: input.role });
+        return user;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update user role', cause: error });
+      }
+    }),
+
   // ─── IMPERSONATION ────────────────────────────────────────────────────────
 
   impersonateUser: adminProcedure
@@ -1684,6 +1753,26 @@ export const adminRouter = router({
       } catch (error: any) {
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to delete content', cause: error });
+      }
+    }),
+
+  // ─── CREATE CONTENT ────────────────────────────────────────────────────────
+
+  createContent: adminProcedure
+    .input(z.object({
+      contentType: z.enum(['BLOG_POST', 'KNOWLEDGE_BASE_ARTICLE']),
+      title: z.string().min(1).max(500),
+      excerpt: z.string().max(1000).optional(),
+      category: z.string().max(100).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.createContent(ctx.user!.id, input);
+        logger.info({ type: 'admin_content_created', adminId: ctx.user!.id, contentType: input.contentType });
+        return result;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create content', cause: error });
       }
     }),
 

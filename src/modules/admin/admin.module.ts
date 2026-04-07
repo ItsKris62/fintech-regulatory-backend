@@ -24,6 +24,7 @@ import {
   maintenanceKey,
   impersonationKey,
   frameworksKey,
+  orgStatsKey,
 } from './admin.utils';
 import {
   ADMIN_CONSTANTS,
@@ -69,6 +70,7 @@ import {
   type ContentFilters,
   type ContentItem,
   type PaginatedContent,
+  type OrganizationStats,
 } from './admin.types';
 
 const { CACHE_TTL } = ADMIN_CONSTANTS;
@@ -98,7 +100,7 @@ class AdminModule {
     const [users, total] = await Promise.all([
       prisma.user.findMany({
         where: where as any,
-        include: { organization: { select: { name: true } } },
+        include: { organization: { select: { name: true, subscriptionTier: true } } },
         orderBy: { [filters.sortBy ?? 'createdAt']: filters.sortOrder ?? 'desc' },
         skip,
         take: limit,
@@ -135,7 +137,7 @@ class AdminModule {
   async getUserDetails(userId: string): Promise<AdminUserDetail> {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: { organization: { select: { name: true } } },
+      include: { organization: { select: { name: true, subscriptionTier: true } } },
     });
     if (!user) throw new NotFoundError('User');
 
@@ -322,6 +324,34 @@ class AdminModule {
     };
   }
 
+  async getOrganizationStats(): Promise<OrganizationStats> {
+    const cached = await redis.get<string>(orgStatsKey());
+    if (cached) return JSON.parse(cached) as OrganizationStats;
+
+    const [total, active, byTierRaw] = await Promise.all([
+      prisma.organization.count(),
+      prisma.organization.count({
+        where: { subscriptionStatus: 'ACTIVE' },
+      }),
+      prisma.organization.groupBy({
+        by: ['subscriptionTier'],
+        _count: { _all: true },
+      }),
+    ]);
+
+    const byTier = { REGULATOR: 0, STARTUP: 0, BUSINESS: 0, ENTERPRISE: 0 };
+    for (const row of byTierRaw) {
+      const tier = row.subscriptionTier as keyof typeof byTier;
+      if (tier in byTier) byTier[tier] = row._count._all;
+    }
+
+    const stats: OrganizationStats = { total, active, byTier };
+    await redis.set(orgStatsKey(), JSON.stringify(stats), { ex: CACHE_TTL.ORG_STATS });
+
+    logger.info({ type: 'admin_org_stats_computed', total, active });
+    return stats;
+  }
+
   async getOrganizationDetails(orgId: string): Promise<AdminOrgDetail> {
     const org = await prisma.organization.findUnique({ where: { id: orgId } });
     if (!org) throw new NotFoundError('Organization');
@@ -337,6 +367,15 @@ class AdminModule {
       documents,
       policies,
     });
+  }
+
+  async getOrgMembers(orgId: string): Promise<{ id: string; fullName: string; email: string; role: string; status: string; createdAt: Date }[]> {
+    const members = await prisma.user.findMany({
+      where: { organizationId: orgId, deletedAt: null },
+      select: { id: true, fullName: true, email: true, role: true, status: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return members as unknown as { id: string; fullName: string; email: string; role: string; status: string; createdAt: Date }[];
   }
 
   async suspendOrganization(
@@ -1052,7 +1091,7 @@ class AdminModule {
         status: 'ACTIVE',
         organizationId: input.organizationId ?? null,
       },
-      include: { organization: { select: { name: true } } },
+      include: { organization: { select: { name: true, subscriptionTier: true } } },
     });
 
     await this.writeAuditLog(adminId, 'admin_create_user', 'User', user.id, {
@@ -1306,6 +1345,36 @@ class AdminModule {
   // ==========================================================================
   // CONTENT MANAGEMENT (BLOG + KNOWLEDGE BASE)
   // ==========================================================================
+
+  async createContent(
+    adminId: string,
+    input: { contentType: 'BLOG_POST' | 'KNOWLEDGE_BASE_ARTICLE'; title: string; excerpt?: string; category?: string }
+  ): Promise<{ id: string }> {
+    const doc = await prisma.legalDocument.create({
+      data: {
+        actName: input.title,
+        documentType: 'CONTENT',
+        originalFilename: '',
+        fileUrl: '',
+        fileSize: 0,
+        mimeType: 'text/html',
+        contentType: input.contentType as never,
+        contentStatus: 'DRAFT' as never,
+        title: input.title,
+        excerpt: input.excerpt ?? null,
+        category: input.category ?? null,
+        authorId: adminId,
+      },
+    });
+
+    await this.writeAuditLog(adminId, 'admin_create_content', 'LegalDocument', doc.id, {
+      contentType: input.contentType,
+      title: input.title,
+    });
+
+    logger.info({ type: 'admin_content_created', adminId, documentId: doc.id, contentType: input.contentType });
+    return { id: doc.id };
+  }
 
   async listContent(filters: ContentFilters): Promise<PaginatedContent> {
     const page = filters.page ?? 1;

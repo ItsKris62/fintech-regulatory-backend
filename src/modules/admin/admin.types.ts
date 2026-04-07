@@ -21,6 +21,7 @@ export const ADMIN_CONSTANTS = {
     SYSTEM_CONFIG: 3600,      // 1 hour
     IMPERSONATION_TTL: 900,   // 15 minutes
     STATS: 60,                // 1 minute
+    ORG_STATS: 300,           // 5 minutes
   },
   SOFT_DELETE_RETENTION_DAYS: 30,
 } as const;
@@ -50,6 +51,7 @@ export interface AdminUserDetail {
   emailVerified: boolean;
   organizationId: string | null;
   organizationName: string | null;
+  organizationPlan: string | null;
   lastLoginAt: Date | null;
   lastLoginIp: string | null;
   createdAt: Date;
@@ -108,6 +110,17 @@ export interface PaginatedOrganizations {
   total: number;
   page: number;
   limit: number;
+}
+
+export interface OrganizationStats {
+  total: number;
+  active: number;
+  byTier: {
+    REGULATOR: number;
+    STARTUP: number;
+    BUSINESS: number;
+    ENTERPRISE: number;
+  };
 }
 
 // ============================================================================
