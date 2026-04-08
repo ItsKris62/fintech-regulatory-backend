@@ -273,7 +273,25 @@ class AuthModule {
       // 8. Update last login
       await prisma.user.update({
         where: { id: user.id },
-        data: { lastLoginAt: new Date() },
+        data: {
+          lastLoginAt: new Date(),
+          ...(options?.ipAddress ? { lastLoginIp: options.ipAddress } : {}),
+        },
+      });
+
+      // Write audit log entry for login
+      await prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'USER_LOGIN',
+          entityType: 'User',
+          entityId: user.id,
+          ipAddress: options?.ipAddress,
+          userAgent: options?.userAgent,
+          metadata: { email: user.email },
+        },
+      }).catch((err: unknown) => {
+        logger.warn({ type: 'auth_login_audit_log_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
       });
 
       logger.info({

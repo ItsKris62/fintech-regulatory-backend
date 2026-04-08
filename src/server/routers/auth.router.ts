@@ -437,9 +437,25 @@ export const authRouter = router({
             });
         }
 
-        await ctx.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+        const loginIp = ctx.req.ip || ctx.req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() || null;
+        await ctx.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), lastLoginIp: loginIp } });
 
-        logger.info({ type: 'auth_login_success', userId: user.id, duration: Date.now() - startTime });
+        // Write audit log entry for login
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: user.id,
+            action: 'USER_LOGIN',
+            entityType: 'User',
+            entityId: user.id,
+            ipAddress: loginIp ?? undefined,
+            userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
+            metadata: { email: user.email, sessionId: dbSessionId },
+          },
+        }).catch((err: unknown) => {
+          logger.warn({ type: 'auth_login_audit_log_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
+        });
+
+        logger.info({ type: 'auth_login_success', userId: user.id, loginIp, duration: Date.now() - startTime });
 
         return {
           accessToken: authData.session.access_token,

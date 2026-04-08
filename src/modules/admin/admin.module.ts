@@ -371,7 +371,7 @@ class AdminModule {
 
   async getOrgMembers(orgId: string): Promise<{ id: string; fullName: string; email: string; role: string; status: string; createdAt: Date }[]> {
     const members = await prisma.user.findMany({
-      where: { organizationId: orgId, deletedAt: null },
+      where: { organizationId: orgId },
       select: { id: true, fullName: true, email: true, role: true, status: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     });
