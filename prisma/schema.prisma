@@ -29,6 +29,7 @@ model User {
   lastLoginIp              String?
   createdAt                DateTime                 @default(now())
   updatedAt                DateTime                 @updatedAt
+  deletedAt                DateTime?                // Soft delete timestamp — null means active
   preferences              Json?
   totpEnabled              Boolean                  @default(false)
   totpSecret               String?
@@ -61,6 +62,7 @@ model User {
   @@index([organizationId])
   @@index([role])
   @@index([accountStatus])
+  @@index([deletedAt])
 }
 
 model Organization {

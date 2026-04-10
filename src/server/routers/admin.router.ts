@@ -40,11 +40,10 @@ export const adminRouter = router({
           } as any,
         }),
         ctx.prisma.organization.count(),
-        ctx.prisma.policy.count({ where: { deletedAt: null } as any }),
-        ctx.prisma.policy.count({
-          where: { deletedAt: null, status: 'COMPLETED' } as any,
-        }),
-        ctx.prisma.complianceQuery.count({ where: { deletedAt: null } as any }),
+        // Policy and ComplianceQuery don't support soft delete — they use status fields instead
+        ctx.prisma.policy.count(),
+        ctx.prisma.policy.count({ where: { status: 'COMPLETED' } }),
+        ctx.prisma.complianceQuery.count(),
         ctx.prisma.legalDocument.count({ where: { deletedAt: null } }),
         ctx.prisma.legalDocument.aggregate({
           where: { deletedAt: null },
@@ -54,7 +53,6 @@ export const adminRouter = router({
 
       // Get recent activity
       const recentPolicies = await ctx.prisma.policy.findMany({
-        where: { deletedAt: null } as any,
         take: 5,
         orderBy: { createdAt: 'desc' },
         select: {
@@ -69,7 +67,6 @@ export const adminRouter = router({
       });
 
       const recentQueries = await ctx.prisma.complianceQuery.findMany({
-        where: { deletedAt: null } as any,
         take: 5,
         orderBy: { createdAt: 'desc' },
         select: {
@@ -440,6 +437,7 @@ export const adminRouter = router({
         // Soft delete user
         await ctx.prisma.user.update({
           where: { id: input.userId },
+          // Safe after migration: User model now has deletedAt field
           data: { deletedAt: new Date() } as any,
         });
 

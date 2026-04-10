@@ -1153,50 +1153,71 @@ class AdminModule {
     if (isNaN(dateFrom.getTime()) || isNaN(dateTo.getTime())) {
       throw new BadRequestError('Invalid date range: dateFrom and dateTo must be valid Date objects');
     }
-    // Fetch all users created within the date range
-    const users = await prisma.user.findMany({
-      where: { createdAt: { gte: dateFrom, lte: dateTo } },
-      select: { createdAt: true },
-      orderBy: { createdAt: 'asc' },
-    });
-
-    // Group by period
-    const buckets = new Map<string, number>();
-
-    for (const user of users) {
-      // Defensive null check for createdAt
-      if (!user.createdAt) continue;
-
-      const d = user.createdAt;
-      let key: string;
-      if (period === 'daily') {
-        key = d.toISOString().slice(0, 10);
-      } else if (period === 'weekly') {
-        // ISO week start (Monday)
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-        const monday = new Date(d);
-        monday.setDate(diff);
-        // Check if Monday calculation produced Invalid Date
-        if (isNaN(monday.getTime())) continue;
-        key = monday.toISOString().slice(0, 10);
-      } else {
-        key = d.toISOString().slice(0, 7); // YYYY-MM
-      }
-      buckets.set(key, (buckets.get(key) ?? 0) + 1);
+    if (dateFrom > dateTo) {
+      throw new BadRequestError('dateFrom cannot be after dateTo');
     }
 
-    const series = Array.from(buckets.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, count]) => ({ date, count }));
-
-    return {
-      series,
-      total: users.length,
-      // Safe ISO conversion with fallback
+    const emptyResult: UserGrowthData = {
+      series: [],
+      total: 0,
       periodStart: dateFrom.toISOString(),
       periodEnd: dateTo.toISOString(),
     };
+
+    try {
+      // Fetch only active (non-deleted) users created within the date range.
+      // The Prisma client extension automatically filters deletedAt: null on user.findMany.
+      const users = await prisma.user.findMany({
+        where: { createdAt: { gte: dateFrom, lte: dateTo } },
+        select: { createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      // Group by period bucket
+      const buckets = new Map<string, number>();
+
+      for (const user of users) {
+        if (!user.createdAt) continue;
+
+        const d = user.createdAt;
+        let key: string;
+        if (period === 'daily') {
+          key = d.toISOString().slice(0, 10);
+        } else if (period === 'weekly') {
+          const day = d.getDay();
+          const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+          const monday = new Date(d);
+          monday.setDate(diff);
+          if (isNaN(monday.getTime())) continue;
+          key = monday.toISOString().slice(0, 10);
+        } else {
+          key = d.toISOString().slice(0, 7); // YYYY-MM
+        }
+        buckets.set(key, (buckets.get(key) ?? 0) + 1);
+      }
+
+      const series = Array.from(buckets.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, count]) => ({ date, count }));
+
+      return {
+        series,
+        total: users.length,
+        periodStart: dateFrom.toISOString(),
+        periodEnd: dateTo.toISOString(),
+      };
+    } catch (error: any) {
+      logger.error({
+        type: 'admin_get_user_growth_error',
+        period,
+        dateFrom: dateFrom.toISOString(),
+        dateTo: dateTo.toISOString(),
+        error: { name: error.name, message: error.message, code: error.code },
+      });
+
+      // Return safe empty result instead of propagating raw Prisma errors
+      return emptyResult;
+    }
   }
 
   async getRevenueMetrics(dateFrom: Date, dateTo: Date): Promise<RevenueMetrics> {
