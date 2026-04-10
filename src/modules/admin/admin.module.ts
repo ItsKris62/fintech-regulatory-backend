@@ -1149,6 +1149,10 @@ class AdminModule {
     dateFrom: Date,
     dateTo: Date
   ): Promise<UserGrowthData> {
+    // Validate dates at module boundary
+    if (isNaN(dateFrom.getTime()) || isNaN(dateTo.getTime())) {
+      throw new BadRequestError('Invalid date range: dateFrom and dateTo must be valid Date objects');
+    }
     // Fetch all users created within the date range
     const users = await prisma.user.findMany({
       where: { createdAt: { gte: dateFrom, lte: dateTo } },
@@ -1160,6 +1164,9 @@ class AdminModule {
     const buckets = new Map<string, number>();
 
     for (const user of users) {
+      // Defensive null check for createdAt
+      if (!user.createdAt) continue;
+
       const d = user.createdAt;
       let key: string;
       if (period === 'daily') {
@@ -1170,6 +1177,8 @@ class AdminModule {
         const diff = d.getDate() - day + (day === 0 ? -6 : 1);
         const monday = new Date(d);
         monday.setDate(diff);
+        // Check if Monday calculation produced Invalid Date
+        if (isNaN(monday.getTime())) continue;
         key = monday.toISOString().slice(0, 10);
       } else {
         key = d.toISOString().slice(0, 7); // YYYY-MM
@@ -1184,12 +1193,21 @@ class AdminModule {
     return {
       series,
       total: users.length,
+      // Safe ISO conversion with fallback
       periodStart: dateFrom.toISOString(),
       periodEnd: dateTo.toISOString(),
     };
   }
 
   async getRevenueMetrics(dateFrom: Date, dateTo: Date): Promise<RevenueMetrics> {
+    // validate dates at module boundary
+    if (isNaN(dateFrom.getTime()) || isNaN(dateTo.getTime())) {
+    throw new BadRequestError('Invalid date range: dateFrom and dateTo must be valid Date objects');
+  }
+  if (dateFrom > dateTo) {
+    throw new BadRequestError('dateFrom cannot be after dateTo');
+  }
+
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -1265,6 +1283,9 @@ class AdminModule {
 
     const buckets = new Map<string, number>();
     for (const q of dailyQueries) {
+      // Defensive null check
+      if (!q.createdAt) continue;
+
       const key = q.createdAt.toISOString().slice(0, 10);
       buckets.set(key, (buckets.get(key) ?? 0) + 1);
     }

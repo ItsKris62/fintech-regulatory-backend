@@ -1613,11 +1613,42 @@ export const adminRouter = router({
         const dateFrom = input.dateFrom
           ? new Date(input.dateFrom)
           : new Date(dateTo.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+          // Validate dates before passing to module
+          if (isNaN(dateFrom.getTime()) || isNaN(dateTo.getTime())) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Invalid date range. Expected ISO 8601 datetime strings.',
+            });
+          }
+          if (dateFrom > dateTo) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'dateFrom cannot be after dateTo',
+            });
+          }
+
         const result = await adminModule.getUserGrowth(input.period, dateFrom, dateTo);
         logger.info({ type: 'admin_user_growth_retrieved', adminId: ctx.user!.id });
         return result;
       } catch (error: any) {
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get user growth', cause: error });
+        // Log the actual error for debugging
+      logger.error({
+        type: 'admin_user_growth_error',
+        userId: ctx.user!.id,
+        input,
+        error: {
+          name: error.name,
+          message: error.message,
+          stack: process.env.NODE_ENV === 'production' ? undefined : error.stack,
+        },
+      });
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get user growth',
+        cause: error,
+      });
       }
     }),
 
