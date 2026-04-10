@@ -75,6 +75,110 @@ import {
 
 const { CACHE_TTL } = ADMIN_CONSTANTS;
 
+const CURRENCY_MINOR_UNIT_SCALE = 100;
+const SUBSCRIPTION_PLANS: SubscriptionPlan[] = ['REGULATOR', 'STARTUP', 'BUSINESS', 'ENTERPRISE'];
+
+function toKES(amount: number | bigint | null | undefined): number {
+  return Number(amount ?? 0) / CURRENCY_MINOR_UNIT_SCALE;
+}
+
+function roundCurrency(amount: number): number {
+  return Math.round(amount * 100) / 100;
+}
+
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function startOfUtcWeek(date: Date): Date {
+  const normalized = startOfUtcDay(date);
+  const day = normalized.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  normalized.setUTCDate(normalized.getUTCDate() + diff);
+  return normalized;
+}
+
+function startOfUtcMonth(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function addUtcDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function addUtcMonths(date: Date, months: number): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1));
+}
+
+function formatBucketKey(date: Date, period: 'daily' | 'weekly' | 'monthly'): string {
+  if (period === 'monthly') return date.toISOString().slice(0, 7);
+  return startOfUtcDay(date).toISOString().slice(0, 10);
+}
+
+function buildTimeSeriesKeys(
+  period: 'daily' | 'weekly' | 'monthly',
+  dateFrom: Date,
+  dateTo: Date
+): string[] {
+  if (dateFrom > dateTo) return [];
+
+  const keys: string[] = [];
+
+  if (period === 'daily') {
+    let cursor = startOfUtcDay(dateFrom);
+    const end = startOfUtcDay(dateTo);
+    while (cursor <= end) {
+      keys.push(formatBucketKey(cursor, 'daily'));
+      cursor = addUtcDays(cursor, 1);
+    }
+    return keys;
+  }
+
+  if (period === 'weekly') {
+    let cursor = startOfUtcWeek(dateFrom);
+    const end = startOfUtcWeek(dateTo);
+    while (cursor <= end) {
+      keys.push(formatBucketKey(cursor, 'weekly'));
+      cursor = addUtcDays(cursor, 7);
+    }
+    return keys;
+  }
+
+  let cursor = startOfUtcMonth(dateFrom);
+  const end = startOfUtcMonth(dateTo);
+  while (cursor <= end) {
+    keys.push(formatBucketKey(cursor, 'monthly'));
+    cursor = addUtcMonths(cursor, 1);
+  }
+
+  return keys;
+}
+
+function buildCountSeries(
+  period: 'daily' | 'weekly' | 'monthly',
+  dateFrom: Date,
+  dateTo: Date,
+  buckets: Map<string, number>
+): Array<{ date: string; count: number }> {
+  return buildTimeSeriesKeys(period, dateFrom, dateTo).map((date) => ({
+    date,
+    count: buckets.get(date) ?? 0,
+  }));
+}
+
+function buildAmountSeries(
+  dateFrom: Date,
+  dateTo: Date,
+  buckets: Map<string, number>
+): Array<{ date: string; amount: number }> {
+  return buildTimeSeriesKeys('monthly', dateFrom, dateTo).map((date) => ({
+    date,
+    amount: roundCurrency(buckets.get(date) ?? 0),
+  }));
+}
+
 class AdminModule {
   // ==========================================================================
   // USER MANAGEMENT
@@ -975,13 +1079,9 @@ class AdminModule {
       select: { subscriptionTier: true, subscriptionStatus: true },
     });
 
-    const byPlan = {
-      starter: 0,
-      professional: 0,
-      enterprise: 0,
-      trial: 0,
-      canceled: 0,
-    } as Record<SubscriptionPlan, number>;
+    const byPlan = Object.fromEntries(
+      SUBSCRIPTION_PLANS.map((plan) => [plan, 0])
+    ) as Record<SubscriptionPlan, number>;
 
     for (const org of orgs) {
       const plan = org.subscriptionTier as SubscriptionPlan;
@@ -992,14 +1092,18 @@ class AdminModule {
     const active = orgs.filter((o) => o.subscriptionStatus === 'ACTIVE').length;
     const trials = orgs.filter((o) => o.subscriptionStatus === 'TRIALING').length;
     const converted = orgs.filter(
-      (o) => o.subscriptionStatus === 'ACTIVE' && o.subscriptionTier !== 'starter'
+      (o) => o.subscriptionStatus === 'ACTIVE' && o.subscriptionTier !== 'REGULATOR'
+    ).length;
+    const churned = orgs.filter(
+      (o) => o.subscriptionStatus === 'CANCELLED' || o.subscriptionStatus === 'EXPIRED'
     ).length;
 
     return {
       totalActive: active,
       byPlan,
-      trialConversionRate: trials > 0 ? Math.round((converted / trials) * 100) : 0,
-      churnRate: total > 0 ? Math.round(((total - active - trials) / total) * 100) : 0,
+      trialConversionRate:
+        converted + trials > 0 ? Math.round((converted / (converted + trials)) * 100) : 0,
+      churnRate: total > 0 ? Math.round((churned / total) * 100) : 0,
     };
   }
 
@@ -1182,23 +1286,16 @@ class AdminModule {
         const d = user.createdAt;
         let key: string;
         if (period === 'daily') {
-          key = d.toISOString().slice(0, 10);
+          key = formatBucketKey(d, 'daily');
         } else if (period === 'weekly') {
-          const day = d.getDay();
-          const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-          const monday = new Date(d);
-          monday.setDate(diff);
-          if (isNaN(monday.getTime())) continue;
-          key = monday.toISOString().slice(0, 10);
+          key = formatBucketKey(startOfUtcWeek(d), 'weekly');
         } else {
-          key = d.toISOString().slice(0, 7); // YYYY-MM
+          key = formatBucketKey(d, 'monthly');
         }
         buckets.set(key, (buckets.get(key) ?? 0) + 1);
       }
 
-      const series = Array.from(buckets.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, count]) => ({ date, count }));
+      const series = buildCountSeries(period, dateFrom, dateTo, buckets);
 
       return {
         series,
@@ -1223,11 +1320,11 @@ class AdminModule {
   async getRevenueMetrics(dateFrom: Date, dateTo: Date): Promise<RevenueMetrics> {
     // validate dates at module boundary
     if (isNaN(dateFrom.getTime()) || isNaN(dateTo.getTime())) {
-    throw new BadRequestError('Invalid date range: dateFrom and dateTo must be valid Date objects');
-  }
-  if (dateFrom > dateTo) {
-    throw new BadRequestError('dateFrom cannot be after dateTo');
-  }
+      throw new BadRequestError('Invalid date range: dateFrom and dateTo must be valid Date objects');
+    }
+    if (dateFrom > dateTo) {
+      throw new BadRequestError('dateFrom cannot be after dateTo');
+    }
 
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1262,23 +1359,24 @@ class AdminModule {
     for (const p of allPayments) {
       if (!p.paidAt) continue;
       const key = p.paidAt.toISOString().slice(0, 7);
-      monthlyBuckets.set(key, (monthlyBuckets.get(key) ?? 0) + p.amount);
+      monthlyBuckets.set(key, (monthlyBuckets.get(key) ?? 0) + toKES(p.amount));
     }
 
     const byProvider = { STRIPE: 0, MPESA: 0 };
     for (const p of allPayments) {
-      if (p.provider === 'STRIPE') byProvider.STRIPE += p.amount;
-      else if (p.provider === 'MPESA') byProvider.MPESA += p.amount;
+      if (p.provider === 'STRIPE') byProvider.STRIPE += toKES(p.amount);
+      else if (p.provider === 'MPESA') byProvider.MPESA += toKES(p.amount);
     }
 
     return {
-      totalRevenue: totalAll._sum.amount ?? 0,
-      currentMonthRevenue: thisMonthPayments._sum.amount ?? 0,
-      lastMonthRevenue: lastMonthPayments._sum.amount ?? 0,
-      series: Array.from(monthlyBuckets.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, amount]) => ({ date, amount })),
-      byProvider,
+      totalRevenue: roundCurrency(toKES(totalAll._sum.amount)),
+      currentMonthRevenue: roundCurrency(toKES(thisMonthPayments._sum.amount)),
+      lastMonthRevenue: roundCurrency(toKES(lastMonthPayments._sum.amount)),
+      series: buildAmountSeries(dateFrom, dateTo, monthlyBuckets),
+      byProvider: {
+        STRIPE: roundCurrency(byProvider.STRIPE),
+        MPESA: roundCurrency(byProvider.MPESA),
+      },
       successRate: totalCount > 0 ? Math.round((successCount / totalCount) * 100) : 100,
     };
   }
@@ -1307,7 +1405,7 @@ class AdminModule {
       // Defensive null check
       if (!q.createdAt) continue;
 
-      const key = q.createdAt.toISOString().slice(0, 10);
+      const key = formatBucketKey(q.createdAt, 'daily');
       buckets.set(key, (buckets.get(key) ?? 0) + 1);
     }
 
@@ -1318,22 +1416,22 @@ class AdminModule {
       totalGapAnalyses,
       queriesThisMonth,
       policiesThisMonth,
-      series: Array.from(buckets.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, count]) => ({ date, count })),
+      series: buildCountSeries('daily', dateFrom, dateTo, buckets),
     };
   }
 
   async getSubscriptionBreakdown(): Promise<SubscriptionBreakdown> {
     const orgs = await prisma.organization.findMany({
-      select: { plan: true, subscriptionStatus: true },
+      select: { subscriptionTier: true, plan: true, subscriptionStatus: true },
     });
 
-    const byPlan: Record<string, number> = {};
+    const byPlan: Record<string, number> = Object.fromEntries(
+      SUBSCRIPTION_PLANS.map((plan) => [plan, 0])
+    );
     const byStatus: Record<string, number> = {};
 
     for (const org of orgs) {
-      const plan = String(org.plan);
+      const plan = String(org.subscriptionTier ?? org.plan);
       const status = String(org.subscriptionStatus);
       byPlan[plan] = (byPlan[plan] ?? 0) + 1;
       byStatus[status] = (byStatus[status] ?? 0) + 1;

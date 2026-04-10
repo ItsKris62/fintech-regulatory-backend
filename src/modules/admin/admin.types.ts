@@ -484,7 +484,7 @@ export interface UpdateOrganizationInput {
 // Subscription Types
 // ============================================================================
 
-export type SubscriptionPlan = 'starter' | 'professional' | 'enterprise' | 'trial' | 'canceled';
+export type SubscriptionPlan = 'REGULATOR' | 'STARTUP' | 'BUSINESS' | 'ENTERPRISE';
 
 export interface Subscription {
   userId: string;

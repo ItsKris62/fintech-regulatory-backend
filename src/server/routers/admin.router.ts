@@ -1831,7 +1831,7 @@ export const adminRouter = router({
           orgId: p.orgId,
           orgName: p.org.name,
           provider: p.provider,
-          amount: p.amount,
+          amount: Number(p.amount) / 100,
           currency: p.currency,
           status: p.status,
           invoiceNumber: p.invoiceNumber,
