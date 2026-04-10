@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 import type { AdminUserDetail, AdminOrgDetail, AuditLogEntry } from './admin.types';
+import { subscriptionTierToPlan } from '@/utils/plan-mapping';
 
 // ============================================================================
 // Validation Schemas
@@ -87,7 +88,7 @@ export function toAdminUserDetail(
     emailVerified: user.emailVerified as boolean,
     organizationId: user.organizationId as string | null,
     organizationName: org ? (org.name as string) : null,
-    organizationPlan: org ? (org.subscriptionTier as string) : null,
+    organizationPlan: org ? resolveOrganizationPlan(org) : null,
     lastLoginAt: user.lastLoginAt as Date | null,
     lastLoginIp: user.lastLoginIp as string | null,
     createdAt: user.createdAt as Date,
@@ -102,21 +103,63 @@ export function toAdminOrgDetail(
   org: Record<string, unknown>,
   counts: { members: number; documents: number; policies: number }
 ): AdminOrgDetail {
+  const plan = resolveOrganizationPlan(org);
+  const users = Array.isArray(org.users)
+    ? (org.users as Record<string, unknown>[]).map((user) => ({
+        id: user.id as string,
+        fullName: user.fullName as string,
+        email: user.email as string,
+        role: user.role as string,
+        status: user.status as string,
+        createdAt: user.createdAt as Date,
+      }))
+    : [];
+
   return {
     id: org.id as string,
     name: org.name as string,
     type: org.type as string,
+    organizationType: (org.organizationType as string | undefined) ?? (org.type as string),
     registrationNumber: org.registrationNumber as string | null,
-    subscriptionTier: org.subscriptionTier as string,
+    cbkLicenseNumber: org.cbkLicenseNumber as string | null,
+    website: org.website as string | null,
+    industry: org.industry as string | null,
+    size: org.size as string | null,
+    verificationStatus: org.verificationStatus as string,
+    address: org.address as string | null,
+    contactPerson: org.contactPerson as string | null,
+    contactPosition: org.contactPosition as string | null,
+    contactEmail: org.contactEmail as string | null,
+    contactPhone: org.contactPhone as string | null,
+    subscriptionTier: plan,
+    plan,
     subscriptionStatus: org.subscriptionStatus as string,
     trialEndsAt: org.trialEndsAt as Date | null,
+    gracePeriodEndsAt: org.gracePeriodEndsAt as Date | null,
+    cancelledAt: org.cancelledAt as Date | null,
     subscriptionEndsAt: org.subscriptionEndsAt as Date | null,
+    planStartDate: org.planStartDate as Date | null,
+    planEndDate: org.planEndDate as Date | null,
+    maxSeats: typeof org.maxSeats === 'number' ? org.maxSeats : 0,
     memberCount: counts.members,
     documentCount: counts.documents,
     policyCount: counts.policies,
+    users,
     createdAt: org.createdAt as Date,
     updatedAt: org.updatedAt as Date,
   };
+}
+
+function resolveOrganizationPlan(org: Record<string, unknown>): string {
+  if (typeof org.plan === 'string' && org.plan.length > 0) {
+    return org.plan;
+  }
+
+  if (typeof org.subscriptionTier === 'string' && org.subscriptionTier.length > 0) {
+    return subscriptionTierToPlan(org.subscriptionTier)?.toString() ?? org.subscriptionTier.toUpperCase();
+  }
+
+  return 'REGULATOR';
 }
 
 export function toAuditLogEntry(log: Record<string, unknown>): AuditLogEntry {

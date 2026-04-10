@@ -577,9 +577,11 @@ export const adminRouter = router({
       z.object({
         page: z.number().min(1).default(1),
         limit: z.number().min(1).max(100).default(20),
-        search: z.string().optional(),
+        search: z.string().trim().optional(),
         status: z.string().optional(),
         tier: z.string().optional(),
+        sortBy: z.enum(['name', 'organizationType', 'subscriptionTier', 'subscriptionStatus', 'memberCount', 'createdAt']).default('createdAt'),
+        sortOrder: z.enum(['asc', 'desc']).default('desc'),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -590,6 +592,8 @@ export const adminRouter = router({
           search: input.search,
           subscriptionStatus: input.status,
           subscriptionTier: input.tier,
+          sortBy: input.sortBy,
+          sortOrder: input.sortOrder,
         });
 
         logger.info({

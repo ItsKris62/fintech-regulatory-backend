@@ -86,20 +86,49 @@ export interface AdminOrgFilters {
   search?: string;
   page?: number;
   limit?: number;
+  sortBy?: 'name' | 'organizationType' | 'subscriptionTier' | 'subscriptionStatus' | 'memberCount' | 'createdAt';
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface AdminOrgMember {
+  id: string;
+  fullName: string;
+  email: string;
+  role: string;
+  status: string;
+  createdAt: Date;
 }
 
 export interface AdminOrgDetail {
   id: string;
   name: string;
   type: string;
+  organizationType: string;
   registrationNumber: string | null;
+  cbkLicenseNumber: string | null;
+  website: string | null;
+  industry: string | null;
+  size: string | null;
+  verificationStatus: string;
+  address: string | null;
+  contactPerson: string | null;
+  contactPosition: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
   subscriptionTier: string;
+  plan: string;
   subscriptionStatus: string;
   trialEndsAt: Date | null;
+  gracePeriodEndsAt: Date | null;
+  cancelledAt: Date | null;
   subscriptionEndsAt: Date | null;
+  planStartDate: Date | null;
+  planEndDate: Date | null;
+  maxSeats: number;
   memberCount: number;
   documentCount: number;
   policyCount: number;
+  users: AdminOrgMember[];
   createdAt: Date;
   updatedAt: Date;
 }

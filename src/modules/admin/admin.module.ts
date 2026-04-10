@@ -12,6 +12,7 @@ import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@/utils/error';
+import { subscriptionTierToPlan } from '@/utils/plan-mapping';
 import { planCtxCacheKey } from '@/modules/trial';
 import { nanoid } from 'nanoid';
 import { supabaseAdmin } from '@/lib/supabase';
@@ -77,6 +78,12 @@ const { CACHE_TTL } = ADMIN_CONSTANTS;
 
 const CURRENCY_MINOR_UNIT_SCALE = 100;
 const SUBSCRIPTION_PLANS: SubscriptionPlan[] = ['REGULATOR', 'STARTUP', 'BUSINESS', 'ENTERPRISE'];
+const ORG_TIER_ALIASES: Record<SubscriptionPlan, string[]> = {
+  REGULATOR: ['REGULATOR', 'regulator', 'starter', 'free'],
+  STARTUP: ['STARTUP', 'startup'],
+  BUSINESS: ['BUSINESS', 'business', 'professional', 'growth'],
+  ENTERPRISE: ['ENTERPRISE', 'enterprise', 'custom'],
+};
 
 function toKES(amount: number | bigint | null | undefined): number {
   return Number(amount ?? 0) / CURRENCY_MINOR_UNIT_SCALE;
@@ -84,6 +91,11 @@ function toKES(amount: number | bigint | null | undefined): number {
 
 function roundCurrency(amount: number): number {
   return Math.round(amount * 100) / 100;
+}
+
+function getSubscriptionTierAliases(planOrTier: string): string[] {
+  const normalized = planOrTier.toUpperCase() as SubscriptionPlan;
+  return Array.from(new Set([planOrTier, ...(ORG_TIER_ALIASES[normalized] ?? [planOrTier])]));
 }
 
 function startOfUtcDay(date: Date): Date {
@@ -204,7 +216,7 @@ class AdminModule {
     const [users, total] = await Promise.all([
       prisma.user.findMany({
         where: where as any,
-        include: { organization: { select: { name: true, subscriptionTier: true } } },
+        include: { organization: { select: { name: true, subscriptionTier: true, plan: true } } },
         orderBy: { [filters.sortBy ?? 'createdAt']: filters.sortOrder ?? 'desc' },
         skip,
         take: limit,
@@ -241,7 +253,7 @@ class AdminModule {
   async getUserDetails(userId: string): Promise<AdminUserDetail> {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: { organization: { select: { name: true, subscriptionTier: true } } },
+      include: { organization: { select: { name: true, subscriptionTier: true, plan: true } } },
     });
     if (!user) throw new NotFoundError('User');
 
@@ -383,19 +395,48 @@ class AdminModule {
     const page = filters.page ?? 1;
     const limit = filters.limit ?? 20;
     const skip = (page - 1) * limit;
+    const search = filters.search?.trim();
+    const requestedPlan = filters.subscriptionTier?.trim();
+    const mappedPlan = requestedPlan ? subscriptionTierToPlan(requestedPlan) : null;
+    const sortBy = filters.sortBy ?? 'createdAt';
+    const sortOrder = filters.sortOrder ?? 'desc';
 
     const where: Record<string, unknown> = {
-      ...(filters.subscriptionTier && { subscriptionTier: filters.subscriptionTier }),
       ...(filters.subscriptionStatus && { subscriptionStatus: filters.subscriptionStatus }),
-      ...(filters.search && {
-        name: { contains: filters.search, mode: 'insensitive' },
+      ...(search && {
+        name: { contains: search, mode: 'insensitive' },
       }),
     };
+
+    if (requestedPlan) {
+      const tierConditions: Record<string, unknown>[] = [
+        { subscriptionTier: { in: getSubscriptionTierAliases(requestedPlan) } },
+      ];
+
+      if (mappedPlan) {
+        tierConditions.unshift({ plan: mappedPlan });
+      }
+
+      where['OR'] = tierConditions;
+    }
+
+    const orderBy =
+      sortBy === 'memberCount'
+        ? [{ users: { _count: sortOrder } }, { createdAt: 'desc' }]
+        : sortBy === 'name'
+          ? [{ name: sortOrder }, { createdAt: 'desc' }]
+          : sortBy === 'organizationType'
+            ? [{ organizationType: sortOrder }, { name: 'asc' }]
+            : sortBy === 'subscriptionTier'
+              ? [{ subscriptionTier: sortOrder }, { name: 'asc' }]
+              : sortBy === 'subscriptionStatus'
+                ? [{ subscriptionStatus: sortOrder }, { name: 'asc' }]
+                : [{ createdAt: sortOrder }, { name: 'asc' }];
 
     const [orgs, total] = await Promise.all([
       prisma.organization.findMany({
         where: where as any,
-        orderBy: { createdAt: 'desc' },
+        orderBy: orderBy as any,
         skip,
         take: limit,
       }),
@@ -432,42 +473,56 @@ class AdminModule {
     const cached = await redis.get<string>(orgStatsKey());
     if (cached) return JSON.parse(cached) as OrganizationStats;
 
-    const [total, active, byTierRaw] = await Promise.all([
-      prisma.organization.count(),
-      prisma.organization.count({
-        where: { subscriptionStatus: 'ACTIVE' },
-      }),
-      prisma.organization.groupBy({
-        by: ['subscriptionTier'],
-        _count: { _all: true },
-      }),
-    ]);
+    const orgs = await prisma.organization.findMany({
+      select: { subscriptionTier: true, subscriptionStatus: true, plan: true },
+    });
 
     const byTier = { REGULATOR: 0, STARTUP: 0, BUSINESS: 0, ENTERPRISE: 0 };
-    for (const row of byTierRaw) {
-      const tier = row.subscriptionTier as keyof typeof byTier;
-      if (tier in byTier) byTier[tier] = row._count._all;
+    let active = 0;
+
+    for (const org of orgs) {
+      const plan = org.plan ?? subscriptionTierToPlan(org.subscriptionTier) ?? PrismaSubscriptionPlan.REGULATOR;
+      if (plan in byTier) {
+        byTier[plan as keyof typeof byTier] += 1;
+      }
+      if (org.subscriptionStatus === 'ACTIVE') {
+        active += 1;
+      }
     }
 
-    const stats: OrganizationStats = { total, active, byTier };
+    const stats: OrganizationStats = { total: orgs.length, active, byTier };
     await redis.set(orgStatsKey(), JSON.stringify(stats), { ex: CACHE_TTL.ORG_STATS });
 
-    logger.info({ type: 'admin_org_stats_computed', total, active });
+    logger.info({ type: 'admin_org_stats_computed', total: orgs.length, active });
     return stats;
   }
 
   async getOrganizationDetails(orgId: string): Promise<AdminOrgDetail> {
-    const org = await prisma.organization.findUnique({ where: { id: orgId } });
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      include: {
+        users: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            role: true,
+            status: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
     if (!org) throw new NotFoundError('Organization');
 
-    const [members, documents, policies] = await Promise.all([
-      prisma.user.count({ where: { organizationId: orgId } }),
+    const [documents, policies] = await Promise.all([
       prisma.legalDocument.count({ where: { organizationId: orgId, deletedAt: null } }),
       prisma.policy.count({ where: { user: { organizationId: orgId } } }),
     ]);
 
     return toAdminOrgDetail(org as unknown as Record<string, unknown>, {
-      members,
+      members: org.users.length,
       documents,
       policies,
     });
@@ -503,6 +558,7 @@ class AdminModule {
 
     await this.writeAuditLog(adminId, 'admin_suspend_org', 'Organization', orgId, { reason });
     logger.info({ type: 'admin_org_suspended', adminId, orgId, reason });
+    await this.invalidateOrganizationStatsCache();
 
     return this.getOrganizationDetails(orgId);
   }
@@ -522,6 +578,7 @@ class AdminModule {
     });
 
     await this.writeAuditLog(adminId, 'admin_reactivate_org', 'Organization', orgId, {});
+    await this.invalidateOrganizationStatsCache();
     return this.getOrganizationDetails(orgId);
   }
 
@@ -572,6 +629,7 @@ class AdminModule {
     });
 
     await this.invalidatePlanCacheForOrg(orgId, 'admin_update_org_plan');
+    await this.invalidateOrganizationStatsCache();
 
     await this.writeAuditLog(adminId, 'admin_update_org_plan', 'Organization', orgId, {
       before,
@@ -1146,6 +1204,7 @@ class AdminModule {
     });
 
     await this.invalidatePlanCacheForOrg(orgId, 'admin_update_user_subscription');
+    await this.invalidateOrganizationStatsCache();
 
     await this.writeAuditLog(adminId, 'admin_update_subscription', 'Organization', orgId, {
       plan,
@@ -1195,7 +1254,7 @@ class AdminModule {
         status: 'ACTIVE',
         organizationId: input.organizationId ?? null,
       },
-      include: { organization: { select: { name: true, subscriptionTier: true } } },
+      include: { organization: { select: { name: true, subscriptionTier: true, plan: true } } },
     });
 
     await this.writeAuditLog(adminId, 'admin_create_user', 'User', user.id, {
@@ -1240,6 +1299,7 @@ class AdminModule {
 
     await this.writeAuditLog(adminId, 'admin_update_org', 'Organization', orgId, { before, after });
     logger.info({ type: 'admin_org_updated', adminId, orgId, fields: Object.keys(input) });
+    await this.invalidateOrganizationStatsCache();
 
     return this.getOrganizationDetails(orgId);
   }
@@ -1667,6 +1727,14 @@ class AdminModule {
       });
     } catch (err) {
       logger.warn({ type: 'plan_cache_invalidation_failed', orgId, source, err: String(err) });
+    }
+  }
+
+  private async invalidateOrganizationStatsCache(): Promise<void> {
+    try {
+      await redis.del(orgStatsKey());
+    } catch (err) {
+      logger.warn({ type: 'org_stats_cache_invalidation_failed', err: String(err) });
     }
   }
 
