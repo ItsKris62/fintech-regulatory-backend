@@ -600,4 +600,4 @@ export async function resetDailyCost(): Promise<void> {
 }
 
 // Export Anthropic client for advanced usage
-export { anthropic };
+export { Anthropic };
