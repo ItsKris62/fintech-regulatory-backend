@@ -22,7 +22,6 @@
 import type Stripe from 'stripe';
 import { PaymentProvider, PaymentStatus, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { stripe } from './client';
-import { PRICE_TO_PLAN } from '@/config/stripe.config';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
@@ -30,6 +29,7 @@ import { appConfig } from '@/config/app.config';
 import { reactMailer } from '@/lib/email/react-mailer.service';
 import { paymentService } from '@/modules/billing/payment.service';
 import { planCtxCacheKey } from '@/modules/trial';
+import { getRuntimePriceToPlanMap } from '@/lib/runtime-billing-plans';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -267,8 +267,9 @@ class StripeWebhookService {
     const trialEndsAt = subscription.trial_end ? new Date(subscription.trial_end * 1000) : null;
 
     // Detect plan change via price ID
+    const priceToPlan = await getRuntimePriceToPlanMap();
     const priceId = subscription.items.data[0]?.price?.id;
-    const newPlan = priceId ? (PRICE_TO_PLAN[priceId] ?? null) : null;
+    const newPlan = priceId ? (priceToPlan[priceId] ?? null) : null;
 
     await prisma.organization.update({
       where: { id: org.id },
@@ -462,8 +463,9 @@ class StripeWebhookService {
 
       // Derive plan from invoice line items price ID
       const lines     = invoiceAny['lines'] as { data?: Array<{ price?: { id?: string } }> } | undefined;
+      const priceToPlan = await getRuntimePriceToPlanMap();
       const priceId   = lines?.data?.[0]?.price?.id;
-      const derivedPlan = priceId ? (PRICE_TO_PLAN[priceId] ?? null) : null;
+      const derivedPlan = priceId ? (priceToPlan[priceId] ?? null) : null;
       const planLabel = derivedPlan ?? org.plan;
 
       const invoiceNumber = await paymentService.generateInvoiceNumber();

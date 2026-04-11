@@ -6,6 +6,34 @@ import { redis } from '@/lib/redis/client';
 import { adminModule } from '@/modules/admin';
 import { appConfig } from '@/config/app.config';
 import { getStats as getChecklistStats } from '@/lib/metrics/checklist-metrics';
+import { BadRequestError } from '@/utils/error';
+
+const billingPlanCatalogUpdateItemSchema = z.object({
+  id: z.enum(['STARTUP', 'BUSINESS']),
+  price: z
+    .object({
+      monthly: z.number().finite().min(0),
+      yearly: z.number().finite().min(0).nullable(),
+    })
+    .refine((value) => value.yearly === null || value.yearly >= value.monthly, {
+      message: 'Yearly price must be greater than or equal to the monthly price.',
+      path: ['yearly'],
+    }),
+  trialDays: z.number().int().min(0).max(90),
+  stripe: z
+    .object({
+      monthlyPriceId: z.string().trim().min(1),
+      yearlyPriceId: z.string().trim().nullable(),
+    })
+    .refine((value) => value.yearlyPriceId !== '', {
+      message: 'Yearly Stripe price ID must be null or a non-empty string.',
+      path: ['yearlyPriceId'],
+    }),
+});
+
+const billingPlanCatalogUpdateSchema = z.object({
+  plans: z.array(billingPlanCatalogUpdateItemSchema).min(1).max(2),
+});
 
 /**
  * Admin Router
@@ -369,7 +397,7 @@ export const adminRouter = router({
     .input(
       z.object({
         page: z.number().min(1).default(1),
-        limit: z.number().min(1).max(100).default(50),
+        limit: z.number().min(1).max(200).default(50),
         userId: z.string().optional(),
         action: z.string().optional(),
         entityType: z.string().optional(),
@@ -701,6 +729,25 @@ export const adminRouter = router({
     }),
 
   /**
+   * Return the audit log entries for a specific organization (actions taken
+   * by any user who belongs to that org), up to 500 most-recent rows.
+   *
+   * @admin
+   */
+  getOrgAuditLog: adminProcedure
+    .input(z.object({ orgId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.getOrganizationAuditLog(input.orgId);
+        logger.info({ type: 'admin_org_audit_log_retrieved', adminId: ctx.user!.id, orgId: input.orgId });
+        return result;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get organization audit log', cause: error });
+      }
+    }),
+
+  /**
    * Suspend an organization (admin only)
    *
    * @admin
@@ -829,6 +876,14 @@ export const adminRouter = router({
           userId: ctx.user!.id,
           error: error.message,
         });
+
+        if (error instanceof BadRequestError || error instanceof TypeError) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: error.message,
+            cause: error,
+          });
+        }
 
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
@@ -1012,12 +1067,26 @@ export const adminRouter = router({
     }),
 
   getDetailedHealth: adminProcedure.query(async ({ ctx }) => {
+    // All external probes must complete within this window.
+    // If Upstash or Supabase hangs rather than throwing, the race rejects
+    // and the catch block returns a TRPCError immediately instead of hanging.
+    const HEALTH_PROBE_TIMEOUT_MS = 5000;
     try {
-      const [health, cacheStats, storageStats, connections] = await Promise.all([
-        adminModule.getSystemHealth(),
-        adminModule.getCacheStats(),
-        adminModule.getStorageStats(),
-        adminModule.getActiveConnections(),
+      const probeDeadline = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Health check timed out after 5 s')),
+          HEALTH_PROBE_TIMEOUT_MS,
+        )
+      );
+
+      const [health, cacheStats, storageStats, connections] = await Promise.race([
+        Promise.all([
+          adminModule.getSystemHealth(),
+          adminModule.getCacheStats(),
+          adminModule.getStorageStats(),
+          adminModule.getActiveConnections(),
+        ]),
+        probeDeadline,
       ]);
 
       logger.info({
@@ -1696,15 +1765,26 @@ export const adminRouter = router({
       }
     }),
 
-  getSubscriptionBreakdown: adminProcedure.query(async ({ ctx }) => {
-    try {
-      const result = await adminModule.getSubscriptionBreakdown();
-      logger.info({ type: 'admin_subscription_breakdown_retrieved', adminId: ctx.user!.id });
-      return result;
-    } catch (error: any) {
-      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get subscription breakdown', cause: error });
-    }
-  }),
+  getSubscriptionBreakdown: adminProcedure
+    .input(
+      z.object({
+        dateFrom: z.string().datetime().optional(),
+        dateTo: z.string().datetime().optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const filters = {
+          dateFrom: input.dateFrom ? new Date(input.dateFrom) : undefined,
+          dateTo: input.dateTo ? new Date(input.dateTo) : undefined,
+        };
+        const result = await adminModule.getSubscriptionBreakdown(filters);
+        logger.info({ type: 'admin_subscription_breakdown_retrieved', adminId: ctx.user!.id });
+        return result;
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get subscription breakdown', cause: error });
+      }
+    }),
 
   // ─── LOGIN HISTORY ────────────────────────────────────────────────────────
 
@@ -1819,32 +1899,154 @@ export const adminRouter = router({
     }
   }),
 
+  getBillingPlanCatalog: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const catalog = await adminModule.getBillingPlanCatalog();
+      logger.info({ type: 'admin_billing_plan_catalog_retrieved', adminId: ctx.user!.id });
+      return catalog;
+    } catch (error: any) {
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get billing plan catalog', cause: error });
+    }
+  }),
+
+  updateBillingPlanCatalog: adminProcedure
+    .input(billingPlanCatalogUpdateSchema)
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const catalog = await adminModule.updateBillingPlanCatalog(ctx.user!.id, input);
+        logger.info({ type: 'admin_billing_plan_catalog_updated', adminId: ctx.user!.id, planIds: input.plans.map((plan) => plan.id) });
+        return catalog;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update billing plan catalog', cause: error });
+      }
+    }),
+
   // ─── RECENT PAYMENTS (ALL ORGS, ADMIN-ONLY) ──────────────────────────────
 
   getRecentPayments: adminProcedure
     .input(z.object({ limit: z.number().int().min(1).max(100).default(20) }))
     .query(async ({ input, ctx }) => {
       try {
-        const payments = await ctx.prisma.payment.findMany({
-          orderBy: { createdAt: 'desc' },
-          take: input.limit,
-          include: { org: { select: { name: true } } },
-        });
-        return payments.map((p) => ({
-          id: p.id,
-          orgId: p.orgId,
-          orgName: p.org.name,
-          provider: p.provider,
-          amount: Number(p.amount) / 100,
-          currency: p.currency,
-          status: p.status,
-          invoiceNumber: p.invoiceNumber,
-          subscriptionPlan: p.subscriptionPlan,
-          paidAt: p.paidAt,
-          createdAt: p.createdAt,
-        }));
+        const result = await adminModule.getRecentPayments(input.limit);
+        logger.info({ type: 'admin_recent_payments_retrieved', adminId: ctx.user!.id, limit: input.limit });
+        return result;
       } catch (error: any) {
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get recent payments', cause: error });
+      }
+    }),
+
+  // ─── ORG PAYMENT HISTORY ─────────────────────────────────────────────────
+
+  getOrgPaymentHistory: adminProcedure
+    .input(
+      z.object({
+        orgId: z.string(),
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().min(1).max(50).default(20),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.getOrgPaymentHistory(input.orgId, input.page, input.limit);
+        logger.info({ type: 'admin_org_payment_history_retrieved', adminId: ctx.user!.id, orgId: input.orgId });
+        return result;
+      } catch (error: any) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get org payment history', cause: error });
+      }
+    }),
+
+  // ─── SECURITY — SESSION LISTING & SIGN-OUT ───────────────────────────────
+
+  /**
+   * List all currently-active (non-expired) sessions for a given user.
+   * Read-only — individual session revocation is not supported.
+   * Use signOutUserEverywhere to invalidate all tokens at once.
+   *
+   * @admin
+   */
+  listUserActiveSessions: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const result = await adminModule.listUserActiveSessions(input.userId);
+        logger.info({ type: 'admin_list_user_sessions', adminId: ctx.user!.id, userId: input.userId });
+        return result;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to list user sessions', cause: error });
+      }
+    }),
+
+  /**
+   * Sign a user out of ALL devices simultaneously.
+   *
+   * This writes a user-level JWT revocation sentinel in Redis so that every
+   * in-flight token the user currently holds is rejected on its next request
+   * (covers the full 1-hour Supabase access-token lifetime plus a 1-hour
+   * safety margin).  All Session DB rows for the user are also deleted.
+   *
+   * This is NOT a per-session revoke — it revokes every token the user holds.
+   *
+   * @admin
+   */
+  signOutUserEverywhere: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        await adminModule.signOutUserEverywhere(ctx.user!.id, input.userId);
+        logger.info({ type: 'admin_sign_out_user_everywhere', adminId: ctx.user!.id, userId: input.userId });
+        return { success: true };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to sign out user', cause: error });
+      }
+    }),
+
+  // ─── AUDIT LOG EXPORT ─────────────────────────────────────────────────────
+
+  /**
+   * Generate a server-side audit log export and return a 60-minute presigned
+   * download URL.
+   *
+   * Format caps (hardcoded):
+   *   - csv:  up to 10 000 rows
+   *   - docx: up to  2 000 rows
+   *
+   * The file is stored at `exports/audit-logs/<id>.<ext>` in the private R2
+   * bucket.  The presigned URL expires after 60 minutes.
+   *
+   * @admin
+   */
+  exportAuditLogs: adminProcedure
+    .input(
+      z.object({
+        format:     z.enum(['csv', 'docx']),
+        userId:     z.string().optional(),
+        action:     z.string().optional(),
+        entityType: z.string().optional(),
+        dateFrom:   z.string().datetime().optional(),
+        dateTo:     z.string().datetime().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const { format, ...rawFilters } = input;
+        const result = await adminModule.exportAuditLogs(
+          {
+            userId:     rawFilters.userId,
+            action:     rawFilters.action,
+            entityType: rawFilters.entityType,
+            dateFrom:   rawFilters.dateFrom ? new Date(rawFilters.dateFrom) : undefined,
+            dateTo:     rawFilters.dateTo   ? new Date(rawFilters.dateTo)   : undefined,
+          },
+          format,
+        );
+        logger.info({ type: 'admin_audit_log_export', adminId: ctx.user!.id, format });
+        return result;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to export audit logs', cause: error });
       }
     }),
 });

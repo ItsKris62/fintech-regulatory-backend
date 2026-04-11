@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { aiConfig, getModelForUseCase, calculateCost, isRetryableError } from '@/config/ai.config';
 import { logger, logPerformance } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
+import { getRuntimeAIConfig, getSystemConfigNumber } from '@/lib/system-config';
 import { AIServiceError } from '@/utils/error';
 import { aiRateLimiter } from './rate-limiter';
 
@@ -47,13 +48,21 @@ export interface AIStreamOptions extends AICompletionOptions {
   onError?: (error: Error) => void;
 }
 
-/**
- * Initialize Anthropic client
- */
-const anthropic = new Anthropic({
-  apiKey: aiConfig.api.key,
-  maxRetries: 0, // We'll handle retries ourselves
-});
+let anthropicClientCache: { apiKey: string; client: Anthropic } | null = null;
+
+function getAnthropicClient(apiKey: string): Anthropic {
+  if (anthropicClientCache?.apiKey === apiKey) {
+    return anthropicClientCache.client;
+  }
+
+  const client = new Anthropic({
+    apiKey,
+    maxRetries: 0, // We'll handle retries ourselves
+  });
+
+  anthropicClientCache = { apiKey, client };
+  return client;
+}
 
 /**
  * Track daily AI costs
@@ -70,7 +79,7 @@ async function trackCost(cost: number): Promise<void> {
     // Warn at 80 % and log at 100 % — the hard block happens in checkCostLimit()
     // before the request is sent, so we only log here (the cost is already spent).
     const totalCost = parseFloat(await redis.get<string>(key) || '0');
-    const limit = aiConfig.costs.dailyLimit;
+    const limit = await getSystemConfigNumber('aiDailyCostLimit', aiConfig.costs.dailyLimit);
 
     if (totalCost > limit) {
       logger.error({
@@ -116,7 +125,7 @@ export async function getTodayAICost(): Promise<number> {
  */
 async function checkCostLimit(estimatedCost: number): Promise<void> {
   const todayCost = await getTodayAICost();
-  const limit = aiConfig.costs.dailyLimit;
+  const limit = await getSystemConfigNumber('aiDailyCostLimit', aiConfig.costs.dailyLimit);
   const projected = todayCost + estimatedCost;
 
   if (projected > limit) {
@@ -243,10 +252,12 @@ export async function complete(
   cacheTTL: number = 0
 ): Promise<AICompletionResult> {
   const startTime = Date.now();
+  const resolvedAIConfig = await getRuntimeAIConfig(useCase || 'query');
+  const anthropic = getAnthropicClient(resolvedAIConfig.apiKey);
 
   // Select model based on use case or use provided model
-  const model = options.model || getModelForUseCase(useCase || 'query');
-  const temperature = options.temperature ?? aiConfig.parameters.queryTemperature;
+  const model = options.model || resolvedAIConfig.model || getModelForUseCase(useCase || 'query');
+  const temperature = options.temperature ?? resolvedAIConfig.temperature;
   const maxTokens = options.maxTokens ?? aiConfig.parameters.queryMaxTokens;
 
   // Check cache if TTL > 0
@@ -395,9 +406,11 @@ export async function stream(
   useCase?: 'policy' | 'checklist' | 'query' | 'verification'
 ): Promise<AICompletionResult> {
   const startTime = Date.now();
+  const resolvedAIConfig = await getRuntimeAIConfig(useCase || 'query');
+  const anthropic = getAnthropicClient(resolvedAIConfig.apiKey);
 
-  const model = options.model || getModelForUseCase(useCase || 'query');
-  const temperature = options.temperature ?? aiConfig.parameters.queryTemperature;
+  const model = options.model || resolvedAIConfig.model || getModelForUseCase(useCase || 'query');
+  const temperature = options.temperature ?? resolvedAIConfig.temperature;
   const maxTokens = options.maxTokens ?? aiConfig.parameters.queryMaxTokens;
 
   // Check cost limit
@@ -553,7 +566,7 @@ export async function getAIStats(): Promise<{
   percentUsed: number;
 }> {
   const todayCost = await getTodayAICost();
-  const dailyLimit = aiConfig.costs.dailyLimit;
+  const dailyLimit = await getSystemConfigNumber('aiDailyCostLimit', aiConfig.costs.dailyLimit);
   const remainingBudget = Math.max(0, dailyLimit - todayCost);
   const percentUsed = (todayCost / dailyLimit) * 100;
 

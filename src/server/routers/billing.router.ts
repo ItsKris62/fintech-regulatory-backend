@@ -7,13 +7,18 @@ import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { stripe } from '@/lib/stripe/client';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
-import { stripeConfig, PRICE_TO_PLAN } from '@/config/stripe.config';
+import { stripeConfig } from '@/config/stripe.config';
 import { appConfig } from '@/config/app.config';
 import { reactMailer } from '@/lib/email/react-mailer.service';
 import { logger } from '@/utils/logger';
 import { getTrialStatus } from '@/modules/trial';
 import { intaSendService, normalisePhoneNumber } from '@/modules/intasend';
 import { paymentService } from '@/modules/billing/payment.service';
+import {
+  getBillingPlanCatalog,
+  getRuntimePlan,
+  resolvePlanPriceForInterval,
+} from '@/lib/runtime-billing-plans';
 
 /** Redis key for enterprise inquiry rate-limiting (max 3 per org per day) */
 const enterpriseInquiryKey = (orgId: string) => {
@@ -38,10 +43,6 @@ async function readUsageCount(scopeId: string, metric: BillingMetric): Promise<n
     return 0;
   }
 }
-
-// Suppress unused-var warning — PRICE_TO_PLAN is the canonical reverse-lookup map
-// used by stripeWebhookService (Task 4). Re-exported here for tree-shaking convenience.
-export { PRICE_TO_PLAN };
 
 // ============================================================================
 // Router
@@ -95,21 +96,41 @@ export const billingRouter = router({
             : null;
 
         // ── Billing + subscription metadata (org row) ──────────────────────
-        const org = orgId
-          ? await prisma.organization.findUnique({
-              where: { id: orgId },
-              select: {
-                planStartDate:      true,
-                planEndDate:        true,
-                stripeCustomerId:   true,
-                subscriptionStatus: true,
-                trialEndsAt:        true,
-                gracePeriodEndsAt:  true,
-                cancelledAt:        true,
-                subscriptionEndsAt: true,
+        const [org, catalog] = await Promise.all([
+          orgId
+            ? prisma.organization.findUnique({
+                where: { id: orgId },
+                select: {
+                  planStartDate:      true,
+                  planEndDate:        true,
+                  stripeCustomerId:   true,
+                  subscriptionStatus: true,
+                  trialEndsAt:        true,
+                  gracePeriodEndsAt:  true,
+                  cancelledAt:        true,
+                  subscriptionEndsAt: true,
+                },
+              })
+            : Promise.resolve(null),
+          // Catalog prices are Redis-cached (5-min TTL) — this is a fast read.
+          // Returned so the UpgradeBanner can display live-overridable KES prices
+          // instead of hardcoded strings.
+          getBillingPlanCatalog(),
+        ]);
+
+        // Build a price map for self-serve plans only (STARTUP, BUSINESS).
+        const catalogPrice = Object.fromEntries(
+          catalog.plans
+            .filter((p) => (catalog.managedPlanIds as readonly string[]).includes(p.id))
+            .map((p) => [
+              p.id,
+              {
+                monthly:  p.price.monthly  ?? 0,
+                yearly:   p.price.yearly   ?? p.price.monthly ?? 0,
+                currency: 'KES' as const,
               },
-            })
-          : null;
+            ])
+        ) as Record<'STARTUP' | 'BUSINESS', { monthly: number; yearly: number; currency: 'KES' }>;
 
         logger.info({
           type: 'billing_plan_usage_fetched',
@@ -150,6 +171,7 @@ export const billingRouter = router({
             gracePeriodEndsAt:  org?.gracePeriodEndsAt?.toISOString()  ?? null,
             cancelledAt:        org?.cancelledAt?.toISOString()        ?? null,
             subscriptionEndsAt: org?.subscriptionEndsAt?.toISOString() ?? null,
+            catalogPrice,
           },
           trial: trialStatus,
         };
@@ -172,6 +194,10 @@ export const billingRouter = router({
       }
     }),
 
+  getPlanCatalog: protectedProcedure.query(async () => {
+    return getBillingPlanCatalog();
+  }),
+
   /**
    * Create a Stripe Checkout Session for upgrading to STARTUP or BUSINESS.
    *
@@ -188,6 +214,7 @@ export const billingRouter = router({
     .input(
       z.object({
         plan: z.enum(['STARTUP', 'BUSINESS']),
+        interval: z.enum(['monthly', 'yearly']).default('monthly'),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -224,8 +251,17 @@ export const billingRouter = router({
         });
       }
 
-      // Resolve price ID for requested plan
-      const priceId = stripeConfig.prices[input.plan].monthly;
+      const runtimePlan = await getRuntimePlan(input.plan);
+      const priceId = input.interval === 'yearly'
+        ? (runtimePlan.stripe?.yearlyPriceId ?? null)
+        : (runtimePlan.stripe?.monthlyPriceId ?? null);
+
+      if (!priceId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `The ${input.plan} ${input.interval} Stripe price is not configured.`,
+        });
+      }
 
       // ── Find or create Stripe Customer ─────────────────────────────────
       let customerId = org.stripeCustomerId ?? undefined;
@@ -257,10 +293,11 @@ export const billingRouter = router({
         mode:       'subscription',
         line_items: [{ price: priceId, quantity: 1 }],
         subscription_data: {
-          trial_period_days: stripeConfig.subscription.trialPeriodDays,
+          trial_period_days: runtimePlan.trialDays,
           metadata: {
             organizationId: orgId,
             plan:           input.plan,
+            interval:       input.interval,
           },
         },
         success_url: stripeConfig.redirectUrls.checkoutSuccess,
@@ -268,6 +305,7 @@ export const billingRouter = router({
         metadata: {
           organizationId: orgId,
           plan:           input.plan,
+          interval:       input.interval,
           userId:         user.id,
         },
       });
@@ -277,6 +315,7 @@ export const billingRouter = router({
         userId:         user.id,
         orgId,
         plan:           input.plan,
+        interval:       input.interval,
         sessionId:      session.id,
         customerId,
       });
@@ -558,12 +597,16 @@ export const billingRouter = router({
         });
       }
 
-      // Plan prices in KES (whole number) and KES cents (for DB)
-      const PLAN_KES: Record<string, number> = {
-        STARTUP:  25000,
-        BUSINESS: 75000,
-      };
-      const amountKes   = PLAN_KES[input.plan] ?? 0;
+      const runtimePlan = await getRuntimePlan(input.plan);
+      const amountKes = resolvePlanPriceForInterval(runtimePlan, 'monthly') ?? 0;
+
+      if (amountKes <= 0) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `The ${input.plan} monthly M-Pesa price is not configured.`,
+        });
+      }
+
       const amountCents = amountKes * 100; // DB stores smallest unit
 
       // Idempotency guard: return existing PENDING payment if created within last 15 minutes

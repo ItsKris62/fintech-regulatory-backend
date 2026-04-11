@@ -8,24 +8,52 @@
  */
 
 import { SubscriptionPlan as PrismaSubscriptionPlan, SubscriptionStatus } from '@prisma/client';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import {
+  AlignmentType,
+  BorderStyle,
+  Document,
+  Packer,
+  Paragraph,
+  Table,
+  TableCell,
+  TableRow,
+  TextRun,
+  WidthType,
+  ShadingType,
+} from 'docx';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@/utils/error';
 import { subscriptionTierToPlan } from '@/utils/plan-mapping';
 import { planCtxCacheKey } from '@/modules/trial';
+import { revokeAllUserTokens } from '@/utils/token-revocation';
+import { appConfig } from '@/config/app.config';
 import { nanoid } from 'nanoid';
 import { supabaseAdmin } from '@/lib/supabase';
+import {
+  loadSystemConfig,
+  normalizeSystemConfigPatch,
+  sanitizeSystemConfigForAudit,
+  toAdminSystemConfig,
+  updateSystemConfigSnapshot,
+} from '@/lib/system-config';
+import {
+  getBillingPlanCatalog as loadBillingPlanCatalog,
+  updateBillingPlanCatalog as persistBillingPlanCatalog,
+} from '@/lib/runtime-billing-plans';
 import {
   toAdminUserDetail,
   toAdminOrgDetail,
   toAuditLogEntry,
   featureFlagsKey,
-  systemConfigKey,
   maintenanceKey,
   impersonationKey,
   frameworksKey,
   orgStatsKey,
+  systemConfigUpdateSchema,
 } from './admin.utils';
 import {
   ADMIN_CONSTANTS,
@@ -56,6 +84,8 @@ import {
   type RegulatoryFramework,
   type FrameworkParams,
   type PendingInvitation,
+  type BillingPlanCatalog,
+  type BillingPlanCatalogUpdateInput,
   type SubscriptionPlan,
   type Subscription,
   type SubscriptionOverview,
@@ -72,6 +102,10 @@ import {
   type ContentItem,
   type PaginatedContent,
   type OrganizationStats,
+  type PaymentSummary,
+  type OrgPaymentHistory,
+  type SessionSummary,
+  type AuditLogExportFilters,
 } from './admin.types';
 
 const { CACHE_TTL } = ADMIN_CONSTANTS;
@@ -743,41 +777,51 @@ class AdminModule {
   // ==========================================================================
 
   async getSystemConfig(): Promise<SystemConfig> {
-    const cached = await redis.get<string>(systemConfigKey());
-    if (cached) return JSON.parse(cached) as SystemConfig;
-
-    const persisted = await redis.get<string>('admin:system_config:persisted');
-    if (persisted) {
-      const config = JSON.parse(persisted) as SystemConfig;
-      await redis.set(systemConfigKey(), persisted, { ex: CACHE_TTL.SYSTEM_CONFIG });
-      return config;
-    }
-
-    await redis.set(
-      systemConfigKey(),
-      JSON.stringify(DEFAULT_SYSTEM_CONFIG),
-      { ex: CACHE_TTL.SYSTEM_CONFIG }
-    );
-    return { ...DEFAULT_SYSTEM_CONFIG };
+    const config = await loadSystemConfig({ syncDefinitions: true });
+    return toAdminSystemConfig(config);
   }
 
   async updateSystemConfig(
     adminId: string,
     config: Partial<SystemConfig>
   ): Promise<SystemConfig> {
-    const existing = await this.getSystemConfig();
-    const updated = { ...existing, ...config };
+    const existing = await loadSystemConfig();
+    const normalized = normalizeSystemConfigPatch(config as Record<string, unknown>);
+    const currentMaskedKey = typeof toAdminSystemConfig(existing).aiApiKeyMasked === 'string'
+      ? toAdminSystemConfig(existing).aiApiKeyMasked
+      : null;
 
-    const serialized = JSON.stringify(updated);
-    await redis.set('admin:system_config:persisted', serialized);
-    await redis.set(systemConfigKey(), serialized, { ex: CACHE_TTL.SYSTEM_CONFIG });
+    if (
+      typeof normalized.aiApiKey === 'string'
+      && currentMaskedKey
+      && normalized.aiApiKey.trim() === currentMaskedKey
+    ) {
+      delete normalized.aiApiKey;
+    }
+
+    const validated = systemConfigUpdateSchema.parse(normalized);
+    const merged = { ...existing, ...validated };
+    const availableModels = Array.isArray(merged.availableAIModels)
+      ? merged.availableAIModels.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+
+    if (availableModels.length > 0) {
+      for (const key of ['aiPolicyModel', 'aiQueryModel', 'aiVerificationModel', 'aiComplexAnalysisModel'] as const) {
+        const selectedModel = merged[key];
+        if (typeof selectedModel === 'string' && selectedModel.trim().length > 0 && !availableModels.includes(selectedModel)) {
+          throw new BadRequestError(`${key} must be present in availableAIModels.`);
+        }
+      }
+    }
+
+    const updated = await updateSystemConfigSnapshot(validated, adminId);
 
     await this.writeAuditLog(adminId, 'admin_update_system_config', 'System', 'config', {
-      changes: config,
+      changes: sanitizeSystemConfigForAudit(validated as Record<string, unknown>),
     });
 
-    logger.info({ type: 'admin_system_config_updated', adminId, changes: Object.keys(config) });
-    return updated;
+    logger.info({ type: 'admin_system_config_updated', adminId, changes: Object.keys(validated) });
+    return toAdminSystemConfig(updated);
   }
 
   async getFeatureFlags(): Promise<FeatureFlags> {
@@ -839,6 +883,13 @@ class AdminModule {
     };
 
     await redis.set(maintenanceKey(), JSON.stringify(status), { ex: 86400 });
+    await updateSystemConfigSnapshot(
+      {
+        maintenanceMode: enabled,
+        ...(message !== undefined ? { maintenanceMessage: status.message } : {}),
+      },
+      adminId
+    );
 
     // Also update feature flag
     await this.updateFeatureFlag(adminId, 'maintenanceMode', enabled);
@@ -1165,6 +1216,47 @@ class AdminModule {
     };
   }
 
+  async getBillingPlanCatalog(): Promise<BillingPlanCatalog> {
+    return loadBillingPlanCatalog();
+  }
+
+  async updateBillingPlanCatalog(
+    adminId: string,
+    input: BillingPlanCatalogUpdateInput
+  ): Promise<BillingPlanCatalog> {
+    // Defence-in-depth validation. The router Zod schema enforces structure and ranges;
+    // these checks enforce business rules that Zod cannot express.
+    const STRIPE_PRICE_ID_RE = /^price_[a-zA-Z0-9_]+$/;
+    for (const plan of input.plans) {
+      if (plan.price.monthly !== null && plan.price.monthly <= 0) {
+        throw new BadRequestError(`Plan ${plan.id}: monthly price must be greater than zero.`);
+      }
+      if (plan.price.yearly !== null && plan.price.yearly !== undefined && plan.price.yearly <= 0) {
+        throw new BadRequestError(`Plan ${plan.id}: yearly price must be greater than zero.`);
+      }
+      if (plan.stripe.monthlyPriceId && !STRIPE_PRICE_ID_RE.test(plan.stripe.monthlyPriceId)) {
+        throw new BadRequestError(`Plan ${plan.id}: invalid Stripe price ID format: ${plan.stripe.monthlyPriceId}`);
+      }
+      if (plan.stripe.yearlyPriceId && !STRIPE_PRICE_ID_RE.test(plan.stripe.yearlyPriceId)) {
+        throw new BadRequestError(`Plan ${plan.id}: invalid Stripe price ID format: ${plan.stripe.yearlyPriceId}`);
+      }
+    }
+
+    const catalog = await persistBillingPlanCatalog(input, adminId);
+
+    await this.writeAuditLog(adminId, 'admin_update_billing_plan_catalog', 'System', 'billing-plan-catalog', {
+      plans: input.plans,
+    });
+
+    logger.info({
+      type: 'admin_billing_plan_catalog_updated',
+      adminId,
+      planIds: input.plans.map((plan) => plan.id),
+    });
+
+    return catalog;
+  }
+
   async updateUserSubscription(
     adminId: string,
     userId: string,
@@ -1480,8 +1572,87 @@ class AdminModule {
     };
   }
 
-  async getSubscriptionBreakdown(): Promise<SubscriptionBreakdown> {
+  /**
+   * Returns the most recent payments across all orgs.
+   * Amounts are normalized to major units (KES) via toKES().
+   */
+  async getRecentPayments(limit: number): Promise<PaymentSummary[]> {
+    const payments = await prisma.payment.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: { org: { select: { name: true } } },
+    });
+
+    return payments.map((p) => ({
+      id: p.id,
+      orgId: p.orgId,
+      orgName: p.org.name,
+      provider: String(p.provider),
+      amount: toKES(p.amount),
+      currency: p.currency,
+      status: String(p.status),
+      invoiceNumber: p.invoiceNumber ?? null,
+      subscriptionPlan: p.subscriptionPlan ?? null,
+      paidAt: p.paidAt ?? null,
+      createdAt: p.createdAt,
+    }));
+  }
+
+  /**
+   * Returns payment history for a single organization, paginated.
+   * Amounts are normalized to major units (KES) via toKES().
+   */
+  async getOrgPaymentHistory(
+    orgId: string,
+    page: number,
+    limit: number,
+  ): Promise<OrgPaymentHistory> {
+    const skip = (page - 1) * limit;
+    const where = { orgId };
+
+    const [rawItems, total] = await Promise.all([
+      prisma.payment.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: { org: { select: { name: true } } },
+      }),
+      prisma.payment.count({ where }),
+    ]);
+
+    const items: PaymentSummary[] = rawItems.map((p) => ({
+      id: p.id,
+      orgId: p.orgId,
+      orgName: p.org.name,
+      provider: String(p.provider),
+      amount: toKES(p.amount),
+      currency: p.currency,
+      status: String(p.status),
+      invoiceNumber: p.invoiceNumber ?? null,
+      subscriptionPlan: p.subscriptionPlan ?? null,
+      paidAt: p.paidAt ?? null,
+      createdAt: p.createdAt,
+    }));
+
+    return { items, total, page, limit };
+  }
+
+  /**
+   * Subscription plan/status breakdown across all organizations.
+   * Optional dateFrom/dateTo filters to cohort by org creation date.
+   */
+  async getSubscriptionBreakdown(filters?: { dateFrom?: Date; dateTo?: Date }): Promise<SubscriptionBreakdown> {
+    const where: Record<string, unknown> = {};
+    if (filters?.dateFrom || filters?.dateTo) {
+      where.createdAt = {
+        ...(filters.dateFrom && { gte: filters.dateFrom }),
+        ...(filters.dateTo && { lte: filters.dateTo }),
+      };
+    }
+
     const orgs = await prisma.organization.findMany({
+      where: where as never,
       select: { subscriptionTier: true, plan: true, subscriptionStatus: true },
     });
 
@@ -1693,6 +1864,284 @@ class AdminModule {
     });
 
     logger.info({ type: 'admin_content_deleted', adminId, documentId });
+  }
+
+  // ==========================================================================
+  // SECURITY — SESSION LISTING & SIGN-OUT
+  // ==========================================================================
+
+  /**
+   * Returns all currently-active (non-expired) sessions for a user.
+   * Read-only — individual session revocation is not exposed; use
+   * signOutUserEverywhere to invalidate all tokens at once.
+   */
+  async listUserActiveSessions(userId: string): Promise<SessionSummary[]> {
+    const sessions = await prisma.session.findMany({
+      where: { userId, expiresAt: { gte: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return sessions.map((s) => ({
+      id: s.id,
+      userId: s.userId,
+      device: s.device ?? null,
+      ipAddress: s.ipAddress ?? null,
+      userAgent: s.userAgent ?? null,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+    }));
+  }
+
+  /**
+   * Signs a user out of ALL devices by:
+   *   1. Writing a user-level token revocation sentinel in Redis — every
+   *      in-flight JWT issued before this timestamp will be rejected on its
+   *      next request (covers the full 1-hour Supabase token lifetime + margin).
+   *   2. Deleting all Session rows for the user so the session list is empty.
+   *   3. Writing an audit log entry.
+   *
+   * This does NOT revoke a single session — it revokes every token the user
+   * currently holds.  Callers should make this semantics clear in the UI.
+   */
+  async signOutUserEverywhere(adminId: string, userId: string): Promise<void> {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!user) throw new NotFoundError('User');
+
+    // Revoke all live JWTs by setting the user-level revocation timestamp.
+    // TTL = 7200s (2 h) — safely outlives the 1-hour Supabase access-token lifetime.
+    await revokeAllUserTokens(userId, 'admin_revoke');
+
+    // Remove all DB session rows so the admin UI session list reflects the change.
+    await prisma.session.deleteMany({ where: { userId } });
+
+    await this.writeAuditLog(adminId, 'admin_sign_out_user_everywhere', 'User', userId, {
+      note: 'All user tokens revoked; all session rows deleted.',
+    });
+
+    logger.info({ type: 'admin_sign_out_user_everywhere', adminId, userId });
+  }
+
+  // ==========================================================================
+  // AUDIT LOG EXPORT
+  // ==========================================================================
+
+  /** Maximum rows fetched for each export format (hardcoded — not configurable). */
+  private static readonly AUDIT_LOG_CSV_MAX_ROWS  = 10_000;
+  private static readonly AUDIT_LOG_DOCX_MAX_ROWS =  2_000;
+  /** Presigned URL TTL in seconds (60 minutes). */
+  private static readonly AUDIT_LOG_EXPORT_URL_TTL = 3_600;
+
+  /**
+   * Generates a server-side audit log export, uploads it to R2, and returns
+   * a 60-minute presigned GET URL.
+   *
+   * - CSV: up to 10 000 rows; content-type text/csv
+   * - DOCX: up to 2 000 rows; content-type application/vnd.openxmlformats-officedocument.wordprocessingml.document
+   *
+   * The export key is `exports/audit-logs/<nanoid(12)>.<ext>`.
+   */
+  async exportAuditLogs(
+    filters: AuditLogExportFilters,
+    format: 'csv' | 'docx',
+  ): Promise<{ url: string; expiresAt: Date }> {
+    const maxRows = format === 'csv'
+      ? AdminModule.AUDIT_LOG_CSV_MAX_ROWS
+      : AdminModule.AUDIT_LOG_DOCX_MAX_ROWS;
+
+    const where: Record<string, unknown> = {
+      ...(filters.userId     && { userId:     filters.userId }),
+      ...(filters.action     && { action:     { contains: filters.action } }),
+      ...(filters.entityType && { entityType: filters.entityType }),
+      ...((filters.dateFrom || filters.dateTo) && {
+        createdAt: {
+          ...(filters.dateFrom && { gte: filters.dateFrom }),
+          ...(filters.dateTo   && { lte: filters.dateTo }),
+        },
+      }),
+    };
+
+    const rows = await prisma.auditLog.findMany({
+      where: where as never,
+      orderBy: { createdAt: 'desc' },
+      take: maxRows,
+    });
+
+    const logs: AuditLogEntry[] = rows.map((l) =>
+      toAuditLogEntry(l as unknown as Record<string, unknown>)
+    );
+
+    const buffer = format === 'csv'
+      ? this.buildAuditLogCsv(logs)
+      : await this.buildAuditLogDocx(logs);
+
+    const contentType = format === 'csv'
+      ? 'text/csv'
+      : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    const ext = format;
+    const key = `exports/audit-logs/${nanoid(12)}.${ext}`;
+
+    const s3 = new S3Client({
+      region: 'auto',
+      endpoint: `https://${appConfig.storage.accountId}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId:     appConfig.storage.accessKeyId,
+        secretAccessKey: appConfig.storage.secretAccessKey,
+      },
+    });
+
+    const bucket = appConfig.storage.bucketName;
+
+    await s3.send(new PutObjectCommand({
+      Bucket:      bucket,
+      Key:         key,
+      Body:        buffer,
+      ContentType: contentType,
+      Metadata:    { 'generated-by': 'sheriabot-admin', format },
+    }));
+
+    const ttl = AdminModule.AUDIT_LOG_EXPORT_URL_TTL;
+    const url = await getSignedUrl(
+      s3,
+      new GetObjectCommand({
+        Bucket:                      bucket,
+        Key:                         key,
+        ResponseContentType:         contentType,
+        ResponseContentDisposition:  `attachment; filename="audit-logs.${ext}"`,
+      }),
+      { expiresIn: ttl },
+    );
+
+    const expiresAt = new Date(Date.now() + ttl * 1000);
+
+    logger.info({
+      type:    'admin_audit_log_export_generated',
+      format,
+      rowCount: logs.length,
+      key,
+      expiresAt,
+    });
+
+    return { url, expiresAt };
+  }
+
+  // ── CSV builder ─────────────────────────────────────────────────────────────
+
+  private buildAuditLogCsv(logs: AuditLogEntry[]): Buffer {
+    const esc = (v: string | null | undefined): string => {
+      const s = v ?? '';
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"`
+        : s;
+    };
+
+    const header = ['Timestamp', 'Action', 'Entity Type', 'Entity ID', 'User ID', 'IP Address'].join(',');
+    const lines = logs.map((l) =>
+      [
+        esc(l.createdAt.toISOString()),
+        esc(l.action),
+        esc(l.entityType),
+        esc(l.entityId),
+        esc(l.userId),
+        esc(l.ipAddress),
+      ].join(',')
+    );
+
+    return Buffer.from([header, ...lines].join('\r\n'), 'utf-8');
+  }
+
+  // ── DOCX builder ────────────────────────────────────────────────────────────
+
+  private async buildAuditLogDocx(logs: AuditLogEntry[]): Promise<Buffer> {
+    /** A4 content width in DXA (11906 - 2*1440). */
+    const CONTENT_W = 9026;
+    const CELL_BORDER = { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' } as const;
+    const ALL_BORDERS = {
+      top: CELL_BORDER, bottom: CELL_BORDER,
+      left: CELL_BORDER, right: CELL_BORDER,
+    } as const;
+
+    const COL_WIDTHS = [2000, 2400, 1200, 1200, 1226, 1000]; // sum = CONTENT_W
+
+    const COLUMNS = ['Timestamp', 'Action', 'Entity Type', 'Entity ID', 'User ID', 'IP Address'];
+
+    const headerRow = new TableRow({
+      tableHeader: true,
+      children: COLUMNS.map((text, i) =>
+        new TableCell({
+          width:   { size: COL_WIDTHS[i], type: WidthType.DXA },
+          shading: { type: ShadingType.CLEAR, fill: '1A2B4A', color: 'FFFFFF' },
+          borders: ALL_BORDERS,
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.LEFT,
+              children: [new TextRun({ text, color: 'FFFFFF', bold: true, size: 18 })],
+            }),
+          ],
+        })
+      ),
+    });
+
+    const dataRows = logs.map((log) => {
+      const cells = [
+        log.createdAt.toISOString(),
+        log.action,
+        log.entityType ?? '',
+        log.entityId   ?? '',
+        log.userId     ?? '',
+        log.ipAddress  ?? '',
+      ];
+      return new TableRow({
+        children: cells.map((text, i) =>
+          new TableCell({
+            width:   { size: COL_WIDTHS[i], type: WidthType.DXA },
+            shading: { type: ShadingType.CLEAR, fill: 'FFFFFF', color: 'auto' },
+            borders: ALL_BORDERS,
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.LEFT,
+                children: [new TextRun({ text, size: 16 })],
+              }),
+            ],
+          })
+        ),
+      });
+    });
+
+    const generatedAt = new Date().toISOString();
+
+    const doc = new Document({
+      sections: [{
+        properties: {
+          page: {
+            size: { width: 11906, height: 16838 },
+            margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 },
+          },
+        },
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.LEFT,
+            children: [
+              new TextRun({ text: 'SheriaBot — Audit Log Export', bold: true, size: 28, color: '1A2B4A' }),
+            ],
+            spacing: { after: 120 },
+          }),
+          new Paragraph({
+            alignment: AlignmentType.LEFT,
+            children: [
+              new TextRun({ text: `Generated: ${generatedAt}  |  Rows: ${logs.length}`, size: 18, color: '4A5568' }),
+            ],
+            spacing: { after: 400 },
+          }),
+          new Table({
+            width: { size: CONTENT_W, type: WidthType.DXA },
+            rows:  [headerRow, ...dataRows],
+          }),
+        ],
+      }],
+    });
+
+    return Buffer.from(await Packer.toBuffer(doc));
   }
 
   // ==========================================================================

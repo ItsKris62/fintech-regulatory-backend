@@ -15,6 +15,7 @@ import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { mailer as _mailer } from '@/lib/email/mailer.service';
 import { sendEmail } from '@/lib/email/client';
+import { getSystemConfigNumber } from '@/lib/system-config';
 import { logger } from '@/utils/logger';
 import { config } from '@/config';
 import { policyGenerator } from './policy-generator';
@@ -1093,10 +1094,11 @@ class PolicyModule {
   private async checkGenerationRateLimit(userId: string): Promise<void> {
     const key = `${REDIS_KEYS.GENERATION_RATE}${userId}`;
     const count = await redis.get<string>(key);
+    const limit = await getSystemConfigNumber('maxPoliciesPerHour', MAX_GENERATIONS_PER_HOUR);
 
-    if (count && parseInt(count) >= MAX_GENERATIONS_PER_HOUR) {
+    if (count && parseInt(count) >= limit) {
       throw new PolicyError(
-        'Rate limit exceeded. Maximum 10 policy generations per hour.',
+        `Rate limit exceeded. Maximum ${limit} policy generations per hour.`,
         'RATE_LIMIT_EXCEEDED',
         429
       );

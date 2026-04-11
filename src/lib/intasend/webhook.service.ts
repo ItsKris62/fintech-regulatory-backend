@@ -29,6 +29,7 @@ import { intaSendService } from '@/modules/intasend/intasend.service';
 import { normaliseIntaSendState, type IntaSendWebhookPayload } from '@/modules/intasend/intasend.types';
 import { planCtxCacheKey } from '@/modules/trial';
 import { appConfig } from '@/config/app.config';
+import { getRuntimePlan, resolvePlanPriceForInterval } from '@/lib/runtime-billing-plans';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -45,13 +46,6 @@ const PLAN_LABELS: Record<string, string> = {
   STARTUP:    'Startup',
   BUSINESS:   'Business',
   ENTERPRISE: 'Enterprise',
-};
-
-/** Plan price in KES (whole number) — used for receipt email formatting. */
-const PLAN_PRICES: Record<string, number> = {
-  STARTUP:    25000,
-  BUSINESS:   75000,
-  ENTERPRISE: 0, // Enterprise is custom-priced
 };
 
 const frontendUrl = () => appConfig.frontendUrl.replace(/\/$/, '');
@@ -224,7 +218,7 @@ class IntaSendWebhookService {
     const now          = new Date();
     const periodStart  = now;
     const periodEnd    = new Date(now.getTime() + MPESA_SUBSCRIPTION_DAYS * 24 * 60 * 60 * 1000);
-    const planName     = org.plan as string;
+    const planName     = org.plan as SubscriptionPlan;
 
     // Generate invoice number
     const invoiceNumber = await paymentService.generateInvoiceNumber();
@@ -277,7 +271,12 @@ class IntaSendWebhookService {
     const contact = await findOrgOwnerContact(orgId);
     if (contact) {
       const planLabel    = PLAN_LABELS[planName] ?? planName;
-      const amountKes    = PLAN_PRICES[planName] ?? (payment.amount / 100);
+      const runtimePlan = (planName === SubscriptionPlan.STARTUP || planName === SubscriptionPlan.BUSINESS)
+        ? await getRuntimePlan(planName)
+        : null;
+      const amountKes = runtimePlan
+        ? (resolvePlanPriceForInterval(runtimePlan, 'monthly') ?? (payment.amount / 100))
+        : (payment.amount / 100);
       const amountStr    = `KES ${amountKes.toLocaleString('en-KE')}`;
       const mpesaPhone   = (payment.metadata as Record<string, unknown>)?.['phone_number'] as string | undefined;
       const maskedPhone  = mpesaPhone ? `M-Pesa (**** ${mpesaPhone.slice(-4)})` : 'M-Pesa';

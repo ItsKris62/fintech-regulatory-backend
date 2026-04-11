@@ -18,6 +18,7 @@ import { ragService } from '@/lib/rag/rag.service';
 import { mailer as _mailer } from '@/lib/email/mailer.service';
 import { sendEmail } from '@/lib/email/client';
 import { storageService } from '@/lib/storage/storage.service';
+import { getSystemConfigNumber } from '@/lib/system-config';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError } from '@/utils/error';
 import { Prisma, UserRole } from '@prisma/client';
@@ -1163,12 +1164,13 @@ Follow-up Question: ${followUp}
   private async checkQueryRateLimit(userId: string): Promise<void> {
     const key = `${REDIS_KEYS.QUERY_RATE}${userId}`;
     const count = await redis.incr(key);
+    const limit = await getSystemConfigNumber('maxQueriesPerHour', MAX_QUERIES_PER_HOUR);
     
     if (count === 1) {
       await redis.expire(key, 3600); // 1 hour
     }
 
-    if (count > MAX_QUERIES_PER_HOUR) {
+    if (count > limit) {
       throw new ComplianceError(
         'Query rate limit exceeded. Please try again later.',
         'RATE_LIMIT_EXCEEDED',

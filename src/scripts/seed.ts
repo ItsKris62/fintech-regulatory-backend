@@ -57,11 +57,16 @@ async function seed(): Promise<void> {
 
   // ── 3. Default system configs ──────────────────────────────────────────
   const systemConfigs = [
-    { key: 'max_upload_size_mb', value: '50', description: 'Maximum file upload size in MB' },
-    { key: 'max_policies_per_user', value: '100', description: 'Maximum policies per user' },
-    { key: 'ai_daily_cost_limit', value: '10.00', description: 'Daily AI cost limit in USD' },
-    { key: 'session_timeout_hours', value: '24', description: 'Session timeout in hours' },
-    { key: 'password_min_length', value: '8', description: 'Minimum password length' },
+    { key: 'max_upload_size_mb', value: '50', type: 'number', category: 'storage', description: 'Maximum file upload size in MB' },
+    { key: 'max_queries_per_hour', value: '50', type: 'number', category: 'ai', description: 'Maximum compliance queries per user per hour' },
+    { key: 'max_policies_per_hour', value: '10', type: 'number', category: 'ai', description: 'Maximum policy generations per user per hour' },
+    { key: 'ai_daily_cost_limit', value: '500', type: 'number', category: 'ai', description: 'Daily AI cost limit in USD' },
+    { key: 'ai_policy_model', value: 'claude-sonnet-4-6', type: 'string', category: 'ai', description: 'Default policy generation model' },
+    { key: 'ai_query_model', value: 'claude-haiku-4-5-20251001', type: 'string', category: 'ai', description: 'Default compliance query model' },
+    { key: 'ai_policy_temperature', value: '0.3', type: 'number', category: 'ai', description: 'Policy generation temperature' },
+    { key: 'ai_query_temperature', value: '0.5', type: 'number', category: 'ai', description: 'Compliance query temperature' },
+    { key: 'session_timeout_hours', value: '8', type: 'number', category: 'security', description: 'Absolute session timeout in hours' },
+    { key: 'password_min_length', value: '10', type: 'number', category: 'security', description: 'Minimum password length' },
   ];
 
   for (const config of systemConfigs) {

@@ -31,7 +31,12 @@ export type {
   RegulatoryFramework,
   FrameworkParams,
   PendingInvitation,
+  BillingPlanCatalog,
+  BillingPlanCatalogEntry,
+  BillingPlanCatalogUpdateInput,
+  BillingPlanOverrides,
   SubscriptionPlan,
+  SelfServeBillingPlan,
   Subscription,
   SubscriptionOverview,
 } from './admin.types';
