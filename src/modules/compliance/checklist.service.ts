@@ -18,6 +18,7 @@
  */
 
 import { prisma } from '@/lib/prisma/client';
+import { logPilotEvent } from '@/modules/pilot';
 import { ragService, type SearchResult } from '@/lib/rag/rag.service';
 import { aiService } from '@/lib/ai/ai.service';
 import { checklistProgressPubSub } from '@/lib/redis/pubsub';
@@ -115,6 +116,14 @@ class ChecklistService {
       orgId,
       checklistId: checklist.id,
     });
+
+    // Pilot event -- fire-and-forget, never throws.
+    logPilotEvent({
+      userId,
+      action:   'CHECKLIST_GENERATED',
+      feature:  'compliance',
+      metadata: { checklistId: checklist.id, productType: input.productType },
+    }).catch((err) => logger.error({ type: 'PILOT_EVENT_LOG_FAILED', err }));
 
     // Fire-and-forget.  Errors are caught inside runGeneration and persisted
     // as a FAILED status on the DB record — they do NOT propagate here.

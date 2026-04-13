@@ -84,5 +84,24 @@ export type { TicketStatusUpdateEmailProps } from './templates/support/TicketSta
 export { TicketResponseEmail, getTicketResponseSubject } from './templates/support/TicketResponseEmail';
 export type { TicketResponseEmailProps } from './templates/support/TicketResponseEmail';
 
+// Pilot lifecycle templates
+export { PilotWelcomeEmail, PilotWelcomeEmailSubject } from './templates/pilot/PilotWelcomeEmail';
+export type { PilotWelcomeEmailProps } from './templates/pilot/PilotWelcomeEmail';
+
+export { PilotDay3NudgeEmail, PilotDay3NudgeEmailSubject } from './templates/pilot/PilotDay3NudgeEmail';
+export type { PilotDay3NudgeEmailProps } from './templates/pilot/PilotDay3NudgeEmail';
+
+export { PilotDay7CheckinEmail, getPilotDay7CheckinSubject } from './templates/pilot/PilotDay7CheckinEmail';
+export type { PilotDay7CheckinEmailProps } from './templates/pilot/PilotDay7CheckinEmail';
+
+export { PilotDay10FeaturesEmail, PilotDay10FeaturesEmailSubject } from './templates/pilot/PilotDay10FeaturesEmail';
+export type { PilotDay10FeaturesEmailProps } from './templates/pilot/PilotDay10FeaturesEmail';
+
+export { PilotDay13WarningEmail, PilotDay13WarningEmailSubject } from './templates/pilot/PilotDay13WarningEmail';
+export type { PilotDay13WarningEmailProps } from './templates/pilot/PilotDay13WarningEmail';
+
+export { PilotExpiredEmail, PilotExpiredEmailSubject } from './templates/pilot/PilotExpiredEmail';
+export type { PilotExpiredEmailProps } from './templates/pilot/PilotExpiredEmail';
+
 // Render utilities
 export { renderEmailToHtml, renderEmailToText } from './render';

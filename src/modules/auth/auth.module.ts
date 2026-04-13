@@ -13,6 +13,7 @@
  */
 
 import { prisma } from '@/lib/prisma/client';
+import { logPilotEvent } from '@/modules/pilot';
 import { redis } from '@/lib/redis/client';
 import { mailer as _mailer } from '@/lib/email/mailer.service';
 import { logger } from '@/utils/logger';
@@ -299,6 +300,16 @@ class AuthModule {
         userId: user.id,
         email: user.email,
       });
+
+      // Pilot event -- only for pilot testers; user is already fetched so no extra DB read.
+      if (user.isPilot) {
+        logPilotEvent({
+          userId:   user.id,
+          action:   'LOGIN',
+          feature:  'auth',
+          metadata: { ipAddress: options?.ipAddress },
+        }).catch((err) => logger.error({ type: 'PILOT_EVENT_LOG_FAILED', err }));
+      }
 
       return {
         accessToken,

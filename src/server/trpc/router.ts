@@ -18,6 +18,7 @@ import { calendarRouter } from '../routers/calendar.router';
 import { usageRouter } from '../routers/usage.router';
 import { trialRouter } from '../routers/trial.router';
 import { sessionRouter } from '../routers/session.router';
+import { pilotRouter } from '../routers/pilot.router';
 
 /**
  * Root Application Router
@@ -40,6 +41,7 @@ import { sessionRouter } from '../routers/session.router';
  * - /trpc/usage.*         - Per-org monthly usage tracking, history and comparison
  * - /trpc/support.*       - User support ticket submission and tracking
  * - /trpc/adminSupport.*  - Admin ticket management (ADMIN role only)
+ * - /trpc/pilot.*         - Pilot Programme dashboard (ADMIN role only)
  */
 export const appRouter = router({
   auth: authRouter,
@@ -61,6 +63,7 @@ export const appRouter = router({
   usage: usageRouter,
   trial: trialRouter,
   session: sessionRouter,
+  pilot: pilotRouter,
 });
 
 /**

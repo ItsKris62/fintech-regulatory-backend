@@ -57,12 +57,22 @@ model User {
   freeTrialExpiresAt       DateTime?
   freeTrialUsage           Json?       // TrialUsage: { complianceQueries, gapAnalyses, checklists, vaultUploads, totalTokensUsed }
 
+  // Pilot testing fields (14-day closed beta -- additive, never touched for non-pilot users)
+  isPilot                  Boolean   @default(false)
+  pilotCohort              String?                 // e.g. "PILOT_COHORT_001"
+  pilotStartedAt           DateTime?
+  pilotExpiresAt           DateTime?
+  postPilotTier            String    @default("REGULATOR") // tier to revert to after pilot expires
+  pilotConvertedAt         DateTime?               // set when pilot converts to a paid plan
+  pilotEvents              PilotEvent[]
+
   @@index([email])
   @@index([supabaseAuthId])
   @@index([organizationId])
   @@index([role])
   @@index([accountStatus])
   @@index([deletedAt])
+  @@index([isPilot])
 }
 
 model Organization {
@@ -1142,4 +1152,22 @@ model RegulatoryFramework {
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// ============================================================================
+// Pilot Testing Infrastructure
+// ============================================================================
+
+model PilotEvent {
+  id        String   @id                   // cuid() generated in application layer
+  userId    String
+  action    String                         // LOGIN | CHECKLIST_GENERATED | DOCUMENT_UPLOADED | etc.
+  feature   String                         // product area e.g. "compliance", "vault"
+  metadata  Json?
+  sessionId String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
 }

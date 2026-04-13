@@ -73,6 +73,18 @@ import {
   getFreeTrialExpiringSubject,
   FreeTrialExpiredEmail,
   FreeTrialExpiredEmailSubject,
+  PilotWelcomeEmail,
+  PilotWelcomeEmailSubject,
+  PilotDay3NudgeEmail,
+  PilotDay3NudgeEmailSubject,
+  PilotDay7CheckinEmail,
+  getPilotDay7CheckinSubject,
+  PilotDay10FeaturesEmail,
+  PilotDay10FeaturesEmailSubject,
+  PilotDay13WarningEmail,
+  PilotDay13WarningEmailSubject,
+  PilotExpiredEmail,
+  PilotExpiredEmailSubject,
 } from '@/emails';
 
 import type {
@@ -103,6 +115,12 @@ import type {
   FreeTrialActivatedEmailProps,
   FreeTrialExpiringEmailProps,
   FreeTrialExpiredEmailProps,
+  PilotWelcomeEmailProps,
+  PilotDay3NudgeEmailProps,
+  PilotDay7CheckinEmailProps,
+  PilotDay10FeaturesEmailProps,
+  PilotDay13WarningEmailProps,
+  PilotExpiredEmailProps,
 } from '@/emails';
 
 // ─── Notification Preference Keys ────────────────────────────────────────────
@@ -500,6 +518,74 @@ class ReactMailerService {
       element: React.createElement(FreeTrialExpiredEmail, props),
       tags: [{ name: 'category', value: 'trial' }, { name: 'type', value: 'trial_expired' }],
       logType: 'free_trial_expired_email',
+    });
+  }
+
+  // ── PILOT LIFECYCLE EMAILS (always sent — no preference toggle) ──
+
+  /** Sent immediately on pilot account creation via the provisioning script / cron. */
+  async sendPilotWelcomeEmail(to: string, props: PilotWelcomeEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: PilotWelcomeEmailSubject,
+      element: React.createElement(PilotWelcomeEmail, props),
+      tags: [{ name: 'category', value: 'pilot' }, { name: 'type', value: 'pilot_welcome' }],
+      logType: 'pilot_welcome_email',
+    });
+  }
+
+  /** Sent on day 3 when the pilot user has not yet logged in (re-engagement nudge). */
+  async sendPilotDay3NudgeEmail(to: string, props: PilotDay3NudgeEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: PilotDay3NudgeEmailSubject,
+      element: React.createElement(PilotDay3NudgeEmail, props),
+      tags: [{ name: 'category', value: 'pilot' }, { name: 'type', value: 'pilot_day3_nudge' }],
+      logType: 'pilot_day3_nudge_email',
+    });
+  }
+
+  /** Sent on day 7 — mid-point check-in with optional survey link. */
+  async sendPilotDay7CheckinEmail(to: string, props: PilotDay7CheckinEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getPilotDay7CheckinSubject(props.daysRemaining),
+      element: React.createElement(PilotDay7CheckinEmail, props),
+      tags: [{ name: 'category', value: 'pilot' }, { name: 'type', value: 'pilot_day7_checkin' }],
+      logType: 'pilot_day7_checkin_email',
+    });
+  }
+
+  /** Sent on day 10 — highlights unused features with 4 days remaining. */
+  async sendPilotDay10FeaturesEmail(to: string, props: PilotDay10FeaturesEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: PilotDay10FeaturesEmailSubject,
+      element: React.createElement(PilotDay10FeaturesEmail, props),
+      tags: [{ name: 'category', value: 'pilot' }, { name: 'type', value: 'pilot_day10_features' }],
+      logType: 'pilot_day10_features_email',
+    });
+  }
+
+  /** Sent on day 13 — 1-day expiry warning with conversion CTA. */
+  async sendPilotDay13WarningEmail(to: string, props: PilotDay13WarningEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: PilotDay13WarningEmailSubject,
+      element: React.createElement(PilotDay13WarningEmail, props),
+      tags: [{ name: 'category', value: 'pilot' }, { name: 'type', value: 'pilot_day13_warning' }],
+      logType: 'pilot_day13_warning_email',
+    });
+  }
+
+  /** Sent after pilot expiry — thank you, data assurance, founding member offer, survey link. */
+  async sendPilotExpiredEmail(to: string, props: PilotExpiredEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: PilotExpiredEmailSubject,
+      element: React.createElement(PilotExpiredEmail, props),
+      tags: [{ name: 'category', value: 'pilot' }, { name: 'type', value: 'pilot_expired' }],
+      logType: 'pilot_expired_email',
     });
   }
 }

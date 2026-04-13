@@ -11,6 +11,7 @@
  */
 
 import { prisma } from '@/lib/prisma/client';
+import { logPilotEvent } from '@/modules/pilot';
 import { redis } from '@/lib/redis/client';
 import { ragService } from '@/lib/rag/rag.service';
 import { storageService } from '@/lib/storage/storage.service';
@@ -164,6 +165,14 @@ class DocumentModule {
         documentId: doc.id,
         userId: params.userId,
       });
+
+      // Pilot event -- fire-and-forget, never throws.
+      logPilotEvent({
+        userId:   params.userId,
+        action:   'DOCUMENT_UPLOADED',
+        feature:  'vault',
+        metadata: { documentId: doc.id, filename: params.filename },
+      }).catch((err) => logger.error({ type: 'PILOT_EVENT_LOG_FAILED', err }));
 
       return toDocumentSummary(doc as unknown as Record<string, unknown>);
     } catch (error: unknown) {

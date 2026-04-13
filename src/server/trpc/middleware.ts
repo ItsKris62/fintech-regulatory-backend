@@ -194,6 +194,9 @@ type CachedPlanCtx = {
   // M-Pesa renewal fields
   preferredPaymentMethod:   PaymentProvider | null;
   mpesaNextPaymentDueDate:  string | null; // ISO-8601
+  // Pilot testing fields
+  isPilot:                  boolean;
+  pilotExpiresAt:           string | null; // ISO-8601
 };
 
 /**
@@ -250,6 +253,9 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
   let trialExpiresAt:           string | null               = null;
   let preferredPaymentMethod:   PaymentProvider | null      = null;
   let mpesaNextPaymentDueDate:  string | null               = null;
+  // Pilot testing fields (only non-zero for users with isPilot === true)
+  let isPilot:                  boolean                     = false;
+  let pilotExpiresAt:           string | null               = null;
   let fromCache = false;
 
   try {
@@ -263,6 +269,8 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
       trialExpiresAt          = cached.trialExpiresAt ?? null;
       preferredPaymentMethod  = cached.preferredPaymentMethod ?? null;
       mpesaNextPaymentDueDate = cached.mpesaNextPaymentDueDate ?? null;
+      isPilot                 = cached.isPilot        ?? false;
+      pilotExpiresAt          = cached.pilotExpiresAt ?? null;
       fromCache               = true;
     }
   } catch {
@@ -279,11 +287,15 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
         freeTrialExpiresAt:   true,
         freeTrialUsage:       true,
         fullName:             true,
+        isPilot:              true,
+        pilotExpiresAt:       true,
       },
     });
 
     trialActivatedAt = userRow?.freeTrialActivatedAt?.toISOString() ?? null;
     trialExpiresAt   = userRow?.freeTrialExpiresAt?.toISOString()   ?? null;
+    isPilot          = userRow?.isPilot                              ?? false;
+    pilotExpiresAt   = userRow?.pilotExpiresAt?.toISOString()       ?? null;
 
     // Fetch org subscription state only if the user belongs to an org
     if (orgId) {
@@ -319,6 +331,8 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
         trialExpiresAt,
         preferredPaymentMethod,
         mpesaNextPaymentDueDate,
+        isPilot,
+        pilotExpiresAt,
       }),
       { ex: PLAN_CACHE_TTL },
     ).catch(() => { /* non-fatal */ });
@@ -542,12 +556,53 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     }
   }
 
+  // ── Pilot override (Option A: derived, no Org mutation) ──────────────────
+  //
+  // Runs ONLY when isPilot === true. Non-pilot users skip this block entirely
+  // -- zero performance or behavioural impact on the non-pilot code path.
+  //
+  // Security: pilotExpiresAt is always read from the server-side Redis cache
+  // (populated from the DB) and is never derived from client input.
+  //
+  // pilotEffectivePlan is non-null only when isPilot === true. When set, it
+  // replaces the standard resolution result at the final return next() below.
+  // The DB downgrade (clearing isPilot, PilotEvent logging) is the cron job's
+  // responsibility. This middleware is read-only.
+  let pilotEffectivePlan: EffectivePlan | null = null;
+  if (isPilot && pilotExpiresAt !== null) {
+    const now = new Date();
+    if (new Date(pilotExpiresAt) <= now) {
+      // Pilot window has closed -- invalidate cache so the cron's DB update
+      // is picked up on the next request, then cap access at REGULATOR.
+      try { await redis.del(cacheKey); } catch { /* non-fatal */ }
+      logger.info({
+        type:          'PILOT_EXPIRED_GATE',
+        userId,
+        pilotExpiresAt,
+      });
+      pilotEffectivePlan = SubscriptionPlan.REGULATOR;
+    } else {
+      // Pilot is active -- override to ENTERPRISE regardless of org plan.
+      const msRemaining   = new Date(pilotExpiresAt).getTime() - now.getTime();
+      const daysRemaining = Math.max(0, Math.floor(msRemaining / (1000 * 60 * 60 * 24)));
+      logger.debug({
+        type:          'PILOT_ACTIVE_GATE',
+        userId,
+        daysRemaining,
+        pilotExpiresAt,
+      });
+      pilotEffectivePlan = SubscriptionPlan.ENTERPRISE;
+    }
+  }
+
   // ── Resolve effective plan (priority order) ───────────────────────────────
   //
   //  1. Active paid subscription (ACTIVE or TRIALING from Stripe)
   //  2. Grace period active (not yet expired)
   //  3. Free trial active
   //  4. REGULATOR fallback
+  //
+  // Pilot users bypass this block: pilotEffectivePlan replaces the result below.
 
   let effectivePlan: EffectivePlan = SubscriptionPlan.REGULATOR;
   let trialState: { isActive: boolean; daysRemaining: number | null } | undefined;
@@ -598,22 +653,26 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
   }
   // Step 4: falls through to REGULATOR (default above)
 
+  // Pilot override replaces the standard resolution when set.
+  const finalPlan: EffectivePlan = pilotEffectivePlan ?? effectivePlan;
+
   logger.debug({
     type:   'plan_context_loaded',
     userId,
     orgId,
-    effectivePlan,
+    effectivePlan: finalPlan,
     subscriptionStatus,
     fromCache,
+    isPilot,
   });
 
   return next({
     ctx: {
       ...ctx,
       user,
-      plan:         effectivePlan,
-      customLimits,
-      trialState,
+      plan:         finalPlan,
+      customLimits: pilotEffectivePlan !== null ? null : customLimits,
+      trialState:   pilotEffectivePlan !== null ? undefined : trialState,
     },
   });
 });

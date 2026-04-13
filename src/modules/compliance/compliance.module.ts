@@ -12,6 +12,7 @@
  */
 
 import { prisma } from '@/lib/prisma/client';
+import { logPilotEvent } from '@/modules/pilot';
 import { redis } from '@/lib/redis/client';
 import { aiService } from '@/lib/ai/ai.service';
 import { ragService } from '@/lib/rag/rag.service';
@@ -490,6 +491,14 @@ class ComplianceModule {
         queryId: savedQuery.id,
         processingTimeMs: result.processingTimeMs,
       });
+
+      // Pilot event -- fire-and-forget, never throws.
+      logPilotEvent({
+        userId,
+        action:   'AI_QUERY_SENT',
+        feature:  'compliance-query',
+        metadata: { queryId: savedQuery.id },
+      }).catch((err) => logger.error({ type: 'PILOT_EVENT_LOG_FAILED', err }));
 
       return result;
     } catch (error: any) {
@@ -1017,6 +1026,14 @@ Follow-up Question: ${followUp}
         orgId,
         totalRisks: summary.totalRisks,
       });
+
+      // Pilot event -- fire-and-forget, never throws.
+      logPilotEvent({
+        userId,
+        action:   'REPORT_GENERATED',
+        feature:  'compliance-risk',
+        metadata: { orgId, periodDays, totalRisks: summary.totalRisks },
+      }).catch((err) => logger.error({ type: 'PILOT_EVENT_LOG_FAILED', err }));
 
       return report;
     } catch (error: any) {
