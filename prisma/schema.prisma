@@ -66,6 +66,11 @@ model User {
   pilotConvertedAt         DateTime?               // set when pilot converts to a paid plan
   pilotEvents              PilotEvent[]
 
+  // Account deletion fields (GDPR compliant scheduled deletion)
+  deletionScheduledAt      DateTime?
+  deletionReason           String?
+  deletionFeedback         String?
+
   @@index([email])
   @@index([supabaseAuthId])
   @@index([organizationId])

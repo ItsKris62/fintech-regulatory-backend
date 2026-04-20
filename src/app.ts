@@ -8,6 +8,7 @@ import { logger } from './utils/logger';
 import { prisma } from './lib/prisma/client';
 import { redis } from './lib/redis/client';
 import { errorTracker } from './lib/error-tracker';
+import { supabaseAdmin } from './lib/supabase';
 import securityPlugin from './plugins/security.plugin';
 import { registerSecurityMiddleware } from './middleware/security.middleware';
 import { stripeWebhookService } from './lib/stripe/webhook.service';
@@ -196,8 +197,39 @@ export async function buildApp(): Promise<FastifyInstance> {
     };
   });
 
-  // ── Detailed health check ─────────────────────────────────────────────────
-  app.get('/health/detailed', async (_request, reply) => {
+  // ── Detailed health check (admin-only) ───────────────────────────────────
+  app.get('/health/detailed', async (request, reply) => {
+    // ── Auth gate: valid Supabase JWT with role === 'ADMIN' required ─────────
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
+
+    const token = authHeader.substring(7);
+    try {
+      const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
+      if (authError || !authData?.user?.id) {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+
+      const dbUser = await prisma.user.findUnique({
+        where: { supabaseAuthId: authData.user.id },
+        select: { role: true },
+      });
+
+      if (!dbUser || dbUser.role !== 'ADMIN') {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
+    } catch (err: unknown) {
+      logger.warn({
+        type: 'health_detailed_auth_error',
+        error: err instanceof Error ? err.message : String(err),
+        ip: request.ip,
+      });
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
+    // ── End auth gate ────────────────────────────────────────────────────────
+
     const checks: Record<string, { status: string; latencyMs?: number; message?: string }> = {};
     let overallStatus: 'ok' | 'degraded' | 'down' = 'ok';
 

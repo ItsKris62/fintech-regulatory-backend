@@ -48,10 +48,34 @@ class ErrorTracker {
   }
 
   /**
+   * Strip internal paths and stack traces from error messages before storage.
+   * Prevents Prisma invocation paths, Render file paths, and node_modules from
+   * accumulating in memory and appearing in health endpoint responses.
+   */
+  private sanitize(raw: string): string {
+    // Drop everything from the first stack frame onward
+    const stackStart = raw.indexOf('\n    at ');
+    const message = stackStart !== -1 ? raw.substring(0, stackStart) : raw;
+
+    // Categorize by known internal path patterns
+    if (/\/prisma\/|prisma\.|PrismaClient/i.test(message)) {
+      return 'Database error';
+    }
+    if (/\/opt\/render\/|\/opt\/app\//.test(message)) {
+      return 'Internal server error';
+    }
+    if (/node_modules/.test(message)) {
+      return 'Internal server error';
+    }
+
+    return message.slice(0, 200);
+  }
+
+  /**
    * Record an error occurrence.
    */
   track(error: Error | string, code: string = 'UNKNOWN'): void {
-    const message = error instanceof Error ? error.message : error;
+    const message = this.sanitize(error instanceof Error ? error.message : error);
     const key = `${code}:${message.slice(0, 120)}`;
     const now = Date.now();
 

@@ -116,6 +116,18 @@ class StripeWebhookService {
       appConfig.stripe.webhookSecret,
     );
 
+    // Idempotency guard — Stripe retries webhooks for up to 3 days.
+    // SET NX is atomic: only one concurrent delivery wins; retries see the key and skip.
+    const alreadyProcessed = await this.markProcessed(event.id);
+    if (alreadyProcessed) {
+      logger.info({
+        type: 'webhook_duplicate_skipped',
+        eventId: event.id,
+        eventType: event.type,
+      });
+      return;
+    }
+
     logger.info({ type: 'stripe_webhook_received', eventType: event.type, eventId: event.id });
 
     switch (event.type) {
@@ -544,6 +556,34 @@ class StripeWebhookService {
   // ──────────────────────────────────────────────────────────────────────────
   // Shared utilities
   // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Atomically mark a Stripe event as processed using Redis SET NX.
+   *
+   * Returns true  → key already existed → duplicate, skip processing.
+   * Returns false → key was just set    → new event, proceed normally.
+   *
+   * Fails open: Redis unavailability is logged as a warning and returns false
+   * so the event is processed rather than silently dropped.
+   *
+   * TTL is 30 days — longer than Stripe's maximum 3-day retry window.
+   */
+  private async markProcessed(eventId: string): Promise<boolean> {
+    const IDEMPOTENCY_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
+    try {
+      const key = `sheriabot:stripe:evt:${eventId}`;
+      const result = await redis.set(key, '1', { ex: IDEMPOTENCY_TTL_SECONDS, nx: true });
+      // 'OK' = key newly set (new event); null = key already existed (duplicate)
+      return result === null;
+    } catch (error: unknown) {
+      logger.warn({
+        type: 'webhook_idempotency_check_failed',
+        eventId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false; // Fail open — process rather than silently drop
+    }
+  }
 
   private async findOrgByCustomerId(customerId: string): Promise<{
     id: string;

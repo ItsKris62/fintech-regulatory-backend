@@ -390,7 +390,7 @@ class UserModule {
       }
 
       // 3. Parse preferences
-      const preferences = parsePreferences((user as any).preferences);
+      const preferences = parsePreferences(user.preferences);
 
       // 4. Cache result
       await redis.set(
@@ -493,7 +493,17 @@ class UserModule {
         userAgent: options?.userAgent,
       });
 
-      await (prisma as any).activityLog.create({ data: entry });
+      await prisma.auditLog.create({
+        data: {
+          userId: entry.userId,
+          action: entry.action,
+          entityType: entry.resourceType,
+          entityId: entry.resourceId,
+          metadata: entry.metadata,
+          ipAddress: entry.ipAddress,
+          userAgent: entry.userAgent,
+        },
+      });
 
       // Invalidate activity cache
       const cacheKey = USER_CACHE_KEYS.ACTIVITY(userId);
@@ -505,13 +515,13 @@ class UserModule {
         action,
         resourceType,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Don't throw - activity logging should never break main operations
       logger.error({
         type: 'user_activity_tracking_error',
         userId,
         action,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -535,11 +545,16 @@ class UserModule {
       const { page, limit, action, resourceType, startDate, endDate } = validated;
       const skip = (page - 1) * limit;
 
-      // 2. Build where clause
-      const where: any = { userId };
-      
+      // 2. Build where clause — AuditLog uses entityType/entityId instead of resourceType/resourceId
+      const where: {
+        userId: string;
+        action?: string;
+        entityType?: string;
+        createdAt?: { gte?: Date; lte?: Date };
+      } = { userId };
+
       if (action) where.action = action;
-      if (resourceType) where.resourceType = resourceType;
+      if (resourceType) where.entityType = resourceType;
       if (startDate || endDate) {
         where.createdAt = {};
         if (startDate) where.createdAt.gte = startDate;
@@ -547,15 +562,28 @@ class UserModule {
       }
 
       // 3. Get total count
-      const total = await (prisma as any).activityLog.count({ where });
+      const total = await prisma.auditLog.count({ where });
 
       // 4. Get items
-      const items = await (prisma as any).activityLog.findMany({
+      const rawItems = await prisma.auditLog.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
       });
+
+      // 5. Map AuditLog shape back to ActivityLogEntry interface
+      const items: ActivityLogEntry[] = rawItems.map((item) => ({
+        id: item.id,
+        userId: item.userId ?? userId,
+        action: item.action as ActivityAction,
+        resourceType: (item.entityType ?? 'USER') as ResourceType,
+        resourceId: item.entityId ?? null,
+        metadata: (item.metadata ?? {}) as Record<string, unknown>,
+        ipAddress: item.ipAddress ?? null,
+        userAgent: item.userAgent ?? null,
+        createdAt: item.createdAt,
+      }));
 
       logger.info({
         type: 'user_get_activity_log_success',
@@ -564,17 +592,17 @@ class UserModule {
       });
 
       return {
-        items: items as ActivityLogEntry[],
+        items,
         total,
         page,
         limit,
         totalPages: Math.ceil(total / limit),
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error({
         type: 'user_get_activity_log_error',
         userId,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
       throw error;
     }
@@ -627,37 +655,19 @@ class UserModule {
         prisma.policy.count({ where: { userId, status: 'COMPLETED' } }),
         prisma.complianceQuery.count({ where: { userId } }),
         prisma.legalDocument.count({ where: { userId } }),
-        (prisma as any).activityLog.count({
-          where: { userId, action: 'LOGIN' },
-        }),
+        prisma.auditLog.count({ where: { userId, action: 'LOGIN' } }),
       ]);
 
       // 4. Calculate storage used (sum of document sizes)
       const storageResult = await prisma.legalDocument.aggregate({
         where: { userId },
-        _sum: { fileSize: true } as any,
+        _sum: { fileSize: true },
       });
-      const storageUsedBytes = (storageResult._sum as any)?.fileSize || 0;
+      const storageUsedBytes = storageResult._sum.fileSize ?? 0;
 
-      // 5. Get AI token usage (this month)
-      const startOfMonth = new Date();
-      startOfMonth.setDate(1);
-      startOfMonth.setHours(0, 0, 0, 0);
-
-      const tokenUsageResult = await (prisma as any).aiUsage.aggregate({
-        where: {
-          userId,
-          createdAt: { gte: startOfMonth },
-        },
-        _sum: { tokensUsed: true },
-      });
-      const aiTokensThisMonth = tokenUsageResult._sum.tokensUsed || 0;
-
-      const totalTokensResult = await (prisma as any).aiUsage.aggregate({
-        where: { userId },
-        _sum: { tokensUsed: true },
-      });
-      const totalAITokensUsed = totalTokensResult._sum.tokensUsed || 0;
+      // 5. AI token usage — no token-tracking table exists; return 0
+      const aiTokensThisMonth = 0;
+      const totalAITokensUsed = 0;
 
       // 6. Calculate quotas (these would come from subscription/plan)
       const quotas = {
@@ -694,11 +704,11 @@ class UserModule {
       });
 
       return stats;
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error({
         type: 'user_get_stats_error',
         userId,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
       throw error;
     }
@@ -763,15 +773,17 @@ class UserModule {
 
       // 5. Anonymize user data immediately
       const anonymizedData = anonymizeUserData(userId);
-      
-      await (prisma as any).user.update({
+
+      await prisma.user.update({
         where: { id: userId },
         data: {
-          ...anonymizedData,
+          email: anonymizedData.email,
+          fullName: anonymizedData.name,
+          phone: anonymizedData.phone,
           status: 'SUSPENDED',
           deletionScheduledAt: scheduledDeletionDate,
-          deletionReason: validated.reason,
-          deletionFeedback: validated.feedback,
+          deletionReason: validated.reason ?? null,
+          deletionFeedback: validated.feedback ?? null,
           updatedAt: new Date(),
         },
       });
@@ -825,11 +837,11 @@ class UserModule {
         scheduledDeletionDate,
         dataExportUrl,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error({
         type: 'user_delete_account_error',
         userId,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
       throw error;
     }
@@ -847,14 +859,14 @@ class UserModule {
     try {
       const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { status: true, deletionScheduledAt: true } as any,
+        select: { status: true, deletionScheduledAt: true },
       });
 
       if (!user) {
         throw new UserError('User not found', 'USER_NOT_FOUND', 404);
       }
 
-      if ((user as any).status !== 'SUSPENDED') {
+      if (user.status !== 'SUSPENDED') {
         return {
           success: false,
           message: 'No pending deletion to cancel.',
@@ -862,7 +874,7 @@ class UserModule {
       }
 
       // Restore user status
-      await (prisma as any).user.update({
+      await prisma.user.update({
         where: { id: userId },
         data: {
           status: 'ACTIVE',
@@ -885,11 +897,11 @@ class UserModule {
         success: true,
         message: 'Account deletion cancelled. Your account is now active.',
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error({
         type: 'user_cancel_deletion_error',
         userId,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
       throw error;
     }
@@ -918,17 +930,17 @@ class UserModule {
       }
 
       // 2. Get all user data (parallel queries)
-      const [policies, queries, documents, activityLog] = await Promise.all([
-        (prisma as any).policy.findMany({
+      const [policies, queries, documents, auditLogEntries] = await Promise.all([
+        prisma.policy.findMany({
           where: { userId },
           select: {
             id: true,
             title: true,
-            content: true,
+            analysis: true,
             createdAt: true,
           },
         }),
-        (prisma as any).complianceQuery.findMany({
+        prisma.complianceQuery.findMany({
           where: { userId },
           select: {
             id: true,
@@ -945,37 +957,47 @@ class UserModule {
             createdAt: true,
           },
         }),
-        (prisma as any).activityLog.findMany({
+        prisma.auditLog.findMany({
           where: { userId },
           orderBy: { createdAt: 'desc' },
-          take: 1000, // Last 1000 activities
+          take: 1000,
         }),
       ]);
 
       // 3. Build export object
       const exportData: UserDataExport = {
         user: {
-          profile: toUserProfile(user as any),
-          preferences: parsePreferences((user as any).preferences),
+          profile: toUserProfile({ ...user, name: user.fullName, avatarUrl: user.avatar }),
+          preferences: parsePreferences(user.preferences),
         },
-        policies: policies.map((p: any) => ({
+        policies: policies.map((p) => ({
           id: p.id,
-          title: p.title,
-          content: p.content || '',
+          title: p.title ?? '',
+          content: p.analysis ?? '',
           createdAt: p.createdAt,
         })),
-        queries: queries.map((q: any) => ({
+        queries: queries.map((q) => ({
           id: q.id,
           query: q.query,
-          response: q.response || '',
+          response: q.response ?? '',
           createdAt: q.createdAt,
         })),
         documents: documents.map((d) => ({
           id: d.id,
-          name: (d as any).title || (d as any).name || '',
+          name: d.title ?? '',
           uploadedAt: d.createdAt,
         })),
-        activityLog: activityLog as ActivityLogEntry[],
+        activityLog: auditLogEntries.map((item) => ({
+          id: item.id,
+          userId: item.userId ?? userId,
+          action: item.action as ActivityAction,
+          resourceType: (item.entityType ?? 'USER') as ResourceType,
+          resourceId: item.entityId ?? null,
+          metadata: (item.metadata ?? {}) as Record<string, unknown>,
+          ipAddress: item.ipAddress ?? null,
+          userAgent: item.userAgent ?? null,
+          createdAt: item.createdAt,
+        })),
         exportedAt: new Date(),
       };
 
@@ -1018,11 +1040,11 @@ class UserModule {
         expiresAt,
         fileSizeBytes: buffer.length,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error({
         type: 'user_export_data_error',
         userId,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
       throw new UserError(
         'Failed to export user data',

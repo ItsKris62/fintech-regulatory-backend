@@ -191,7 +191,9 @@ export const policyRouter = router({
     .use(rateLimited('policyGeneration'))
     .use(withPlanContext)
     .use(requirePlanFeature('policyGeneration'))
-    .use(checkUsageLimit(BillingMetric.POLICY_GENERATIONS))
+    // deferIncrement: true — usage counter is committed only after the DB record is
+    // created, preventing lost credits if the policy.create itself fails.
+    .use(checkUsageLimit(BillingMetric.POLICY_GENERATIONS, { deferIncrement: true }))
     .input(generatePolicySchema)
     .mutation(async ({ input, ctx }) => {
       const startTime = Date.now();
@@ -221,137 +223,160 @@ export const policyRouter = router({
           },
         });
 
+        // Commit usage counter now that the DB record exists.
+        // Consumed at queue time (not AI completion) to prevent free retries on AI failure.
+        await ctx.incrementUsage?.();
+
         // Capture user info for async closure
         const currentUser = ctx.user!;
 
         // Generate policy asynchronously with AI
-        (async () => {
-          try {
-            // Publish progress: started
-            await policyProgressPubSub.publish(policy.id, {
-              type: 'generation_started',
-              progress: 10,
-              message: 'Starting policy generation...',
-            });
-
-            // Generate policy content with AI
-            const result = await ctx.aiService.generatePolicy({
-              scenario: input.scenario,
-              organizationType: input.organizationType,
-              regulatoryAreas: input.regulatoryAreas,
-              specificRequirements: input.specificRequirements,
-              targetAudience: input.targetAudience,
-            });
-
-            // Publish progress: content generated
-            await policyProgressPubSub.publish(policy.id, {
-              type: 'generating_recommendations',
-              progress: 70,
-              message: 'Policy content generated, adding citations...',
-            });
-
-            // Create citations from sections.citations (string array)
-            await Promise.all(
-              (result.sections.citations || []).map((citationText: string) =>
-                (ctx.prisma.citation.create as any)({
-                  data: {
-                    policyId: policy.id,
-                    actName: citationText,
-                    section: '',
-                    textSnippet: citationText,
-                    confidence: 'high',
-                    verified: true,
-                  },
-                })
-              )
-            );
-
-            // Update policy with generated content
-            const updatedPolicy = await (ctx.prisma.policy.update as any)({
-              where: { id: policy.id },
-              data: {
-                content: result.content,
-                executiveSummary: result.sections.executiveSummary,
-                analysis: result.sections.regulatoryLandscape,
-                status: 'COMPLETED',
-                generationMetadata: {
-                  aiModel: result.model,
-                  tokensUsed: result.inputTokens + result.outputTokens,
-                  generatedAt: new Date().toISOString(),
-                },
-              },
-              include: {
-                citations: true,
-              },
-            });
-
-            // Clear cache
-            await policyCache.delete(policy.id);
-
-            // Send completion email
+        // setImmediate defers to the next event loop tick so the tRPC response
+        // is returned before async work begins. The outer catch ensures that any
+        // error thrown inside the catch block itself (e.g. a failed FAILED-status
+        // update) never escapes as an unhandled rejection that could crash Fastify.
+        setImmediate(() => {
+          void (async () => {
             try {
-              await (ctx.mailer.sendPolicyReadyEmail as any)({
-                to: currentUser.email,
-                name: currentUser.email,
-                policyTitle: updatedPolicy.title,
-                policyId: updatedPolicy.id,
-                policyUrl: '',
-                regulatoryAreas: [],
-                generationTime: Date.now() - startTime,
+              // Publish progress: started
+              await policyProgressPubSub.publish(policy.id, {
+                type: 'generation_started',
+                progress: 10,
+                message: 'Starting policy generation...',
               });
-            } catch (emailError: any) {
-              logger.error({
-                type: 'policy_email_failed',
-                policyId: policy.id,
-                error: emailError.message,
+
+              // Generate policy content with AI
+              const result = await ctx.aiService.generatePolicy({
+                scenario: input.scenario,
+                organizationType: input.organizationType,
+                regulatoryAreas: input.regulatoryAreas,
+                specificRequirements: input.specificRequirements,
+                targetAudience: input.targetAudience,
               });
-            }
 
-            // Publish progress: completed
-            await policyProgressPubSub.publish(policy.id, {
-              type: 'generation_complete',
-              progress: 100,
-              message: 'Policy generated successfully!',
-            });
+              // Publish progress: content generated
+              await policyProgressPubSub.publish(policy.id, {
+                type: 'generating_recommendations',
+                progress: 70,
+                message: 'Policy content generated, adding citations...',
+              });
 
-            const duration = Date.now() - startTime;
+              // Create citations from sections.citations (string array)
+              await Promise.all(
+                (result.sections.citations || []).map((citationText: string) =>
+                  (ctx.prisma.citation.create as any)({
+                    data: {
+                      policyId: policy.id,
+                      actName: citationText,
+                      section: '',
+                      textSnippet: citationText,
+                      confidence: 'high',
+                      verified: true,
+                    },
+                  })
+                )
+              );
 
-            logger.info({
-              type: 'policy_generation_success',
-              userId: currentUser.id,
-              policyId: policy.id,
-              duration,
-              tokensUsed: result.inputTokens + result.outputTokens,
-            });
-          } catch (error: any) {
-            // Update policy status to FAILED
-            await (ctx.prisma.policy.update as any)({
-              where: { id: policy.id },
-              data: {
-                status: 'FAILED',
-                generationMetadata: {
-                  error: error.message,
-                  failedAt: new Date().toISOString(),
+              // Update policy with generated content
+              const updatedPolicy = await (ctx.prisma.policy.update as any)({
+                where: { id: policy.id },
+                data: {
+                  content: result.content,
+                  executiveSummary: result.sections.executiveSummary,
+                  analysis: result.sections.regulatoryLandscape,
+                  status: 'COMPLETED',
+                  generationMetadata: {
+                    aiModel: result.model,
+                    tokensUsed: result.inputTokens + result.outputTokens,
+                    generatedAt: new Date().toISOString(),
+                  },
                 },
-              },
-            });
+                include: {
+                  citations: true,
+                },
+              });
 
-            // Publish progress: failed
-            await policyProgressPubSub.publish(policy.id, {
-              type: 'generation_failed',
-              progress: 0,
-              message: 'Policy generation failed. Please try again.',
-              data: { error: error.message },
-            });
+              // Clear cache
+              await policyCache.delete(policy.id);
 
-            logger.error({
-              type: 'policy_generation_failed',
-              userId: currentUser.id,
-              policyId: policy.id,
-              error: error.message,
-            });
-          }
-        })();
+              // Fetch user's display name — ctx.user only carries id/email/role,
+              // so a small select is needed to get fullName for the email.
+              const emailUser = await ctx.prisma.user.findUnique({
+                where: { id: currentUser.id },
+                select: { fullName: true },
+              });
+
+              // Send completion email
+              try {
+                await (ctx.mailer.sendPolicyReadyEmail as any)({
+                  to: currentUser.email,
+                  name: emailUser?.fullName ?? currentUser.email,
+                  policyTitle: updatedPolicy.title,
+                  policyId: updatedPolicy.id,
+                  policyUrl: '',
+                  regulatoryAreas: [],
+                  generationTime: Date.now() - startTime,
+                });
+              } catch (emailError: unknown) {
+                logger.error({
+                  type: 'policy_email_failed',
+                  policyId: policy.id,
+                  error: emailError instanceof Error ? emailError.message : String(emailError),
+                });
+              }
+
+              // Publish progress: completed
+              await policyProgressPubSub.publish(policy.id, {
+                type: 'generation_complete',
+                progress: 100,
+                message: 'Policy generated successfully!',
+              });
+
+              logger.info({
+                type: 'policy_generation_success',
+                userId: currentUser.id,
+                policyId: policy.id,
+                duration: Date.now() - startTime,
+                tokensUsed: result.inputTokens + result.outputTokens,
+              });
+            } catch (error: unknown) {
+              logger.error({
+                type: 'policy_generation_unhandled_error',
+                policyId: policy.id,
+                userId: currentUser.id,
+                error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+              });
+              // Recovery: mark FAILED and notify the frontend.
+              // Wrapped in its own try/catch — a DB or pubsub failure here must
+              // never produce a second unhandled rejection.
+              try {
+                await (ctx.prisma.policy.update as any)({
+                  where: { id: policy.id },
+                  data: {
+                    status: 'FAILED',
+                    generationMetadata: {
+                      error: error instanceof Error ? error.message : String(error),
+                      failedAt: new Date().toISOString(),
+                    },
+                  },
+                });
+                await policyProgressPubSub.publish(policy.id, {
+                  type: 'generation_failed',
+                  progress: 0,
+                  message: 'Policy generation failed. Please try again.',
+                  data: { error: error instanceof Error ? error.message : String(error) },
+                });
+              } catch (recoveryError: unknown) {
+                logger.error({
+                  type: 'policy_status_update_failed',
+                  policyId: policy.id,
+                  error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+                });
+              }
+            }
+          })();
+        });
 
         // Return immediately with policy ID
         return {
