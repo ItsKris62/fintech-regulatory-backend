@@ -20,9 +20,9 @@ import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { extractJti, extractExp, extractIat } from '@/utils/jwt';
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Key factories
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /** Redis key for a single revoked JWT ID. */
 export const revokedJtiKey = (jti: string) => `sheriabot:revoked:${jti}`;
@@ -34,9 +34,9 @@ export const revokedJtiKey = (jti: string) => `sheriabot:revoked:${jti}`;
 export const userRevokedAfterKey = (userId: string) =>
   `sheriabot:user_tokens_revoked_after:${userId}`;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Write helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /**
  * Blocklist a specific JWT by its JTI claim.
@@ -104,15 +104,15 @@ export async function revokeAllUserTokens(
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Check helpers (used in context.ts)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /**
  * Returns true if the token has been explicitly revoked (either by JTI
  * or because all tokens for this user were revoked after its `iat`).
  *
- * Fails **open** on Redis errors — if the blocklist is unreachable we still
+ * Fails **open** on Redis errors  -  if the blocklist is unreachable we still
  * let the Supabase-verified token through rather than knocking everyone out.
  * The primary revocation path (Supabase `admin.signOut`) is unaffected.
  */
@@ -162,6 +162,6 @@ export async function isTokenRevoked(
       error:  err instanceof Error ? err.message : String(err),
       action: 'fail_open',
     });
-    return false; // fail open — Supabase verified the signature; allow through
+    return false; // fail open  -  Supabase verified the signature; allow through
   }
 }

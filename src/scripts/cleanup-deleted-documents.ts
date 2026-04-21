@@ -14,7 +14,7 @@
  *   Example cron expression: "0 2 * * *"  (02:00 UTC every day)
  *
  * Environment variables:
- *   RETENTION_DAYS — days to retain soft-deleted documents before hard delete
+ *   RETENTION_DAYS  -  days to retain soft-deleted documents before hard delete
  *                    Defaults to 90 if not set.
  */
 
@@ -54,7 +54,7 @@ async function cleanupDeletedDocuments(): Promise<void> {
 
   for (const doc of expired) {
     try {
-      // 1. Delete from R2 (best-effort — continue if the object is already gone)
+      // 1. Delete from R2 (best-effort  -  continue if the object is already gone)
       try {
         await storageService.deleteFile(doc.fileUrl);
         logger.info({
@@ -63,7 +63,7 @@ async function cleanupDeletedDocuments(): Promise<void> {
           key: doc.fileUrl,
         });
       } catch (storageErr: any) {
-        // Log but continue — object may already be deleted or key may be stale
+        // Log but continue  -  object may already be deleted or key may be stale
         logger.warn({
           type: 'cleanup_r2_delete_failed',
           documentId: doc.id,

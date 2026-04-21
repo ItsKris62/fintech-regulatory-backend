@@ -1,5 +1,5 @@
 /**
- * Shared Plan Configuration — Single Source of Truth
+ * Shared Plan Configuration  -  Single Source of Truth
  *
  * This file defines EVERYTHING about subscription plans: display metadata,
  * feature entitlements, pricing, and Stripe configuration. Both the billing
@@ -11,28 +11,28 @@
 import { PLAN_ENTITLEMENTS, SubscriptionPlan } from './entitlements.config';
 import { stripeConfig } from './stripe.config';
 
-// ── Plan display feature rows (subset shown on plan cards) ──────────────────
+// -- Plan display feature rows (subset shown on plan cards) ------------------
 
 export interface PlanFeatureRow {
   text: string;
   included: boolean;
 }
 
-// ── Plan CTA shape ──────────────────────────────────────────────────────────
+// -- Plan CTA shape ----------------------------------------------------------
 
 export type PlanCta =
   | { type: 'none' }
   | { type: 'subscribe'; label: string }
   | { type: 'contact-sales'; label: string };
 
-// ── Stripe sub-config per plan ──────────────────────────────────────────────
+// -- Stripe sub-config per plan ----------------------------------------------
 
 export interface PlanStripeConfig {
   monthlyPriceId: string;
   yearlyPriceId: string | null;
 }
 
-// ── Full plan shape ─────────────────────────────────────────────────────────
+// -- Full plan shape ---------------------------------------------------------
 
 export interface PlanConfig {
   id: SubscriptionPlan;
@@ -52,7 +52,7 @@ export interface PlanConfig {
   stripe: PlanStripeConfig | null;
 }
 
-// ── Comparison table rows ───────────────────────────────────────────────────
+// -- Comparison table rows ---------------------------------------------------
 
 export interface ComparisonRow {
   feature: string;
@@ -62,7 +62,7 @@ export interface ComparisonRow {
   enterprise: string;
 }
 
-// ── Plans config ────────────────────────────────────────────────────────────
+// -- Plans config ------------------------------------------------------------
 
 export const PLANS: Record<SubscriptionPlan, PlanConfig> = {
   REGULATOR: {
@@ -162,7 +162,7 @@ export const PLANS: Record<SubscriptionPlan, PlanConfig> = {
   },
 };
 
-// ── Comparison table (matches pricing page and billing page) ────────────────
+// -- Comparison table (matches pricing page and billing page) ----------------
 
 export const PLAN_COMPARISON_ROWS: ComparisonRow[] = [
   {
@@ -237,7 +237,7 @@ export const PLAN_COMPARISON_ROWS: ComparisonRow[] = [
   },
 ];
 
-// ── Ordered plan IDs (least to most permissive) ─────────────────────────────
+// -- Ordered plan IDs (least to most permissive) -----------------------------
 
 export const PLAN_ORDER: SubscriptionPlan[] = [
   SubscriptionPlan.REGULATOR,
@@ -246,6 +246,6 @@ export const PLAN_ORDER: SubscriptionPlan[] = [
   SubscriptionPlan.ENTERPRISE,
 ];
 
-// ── Re-export for convenience ────────────────────────────────────────────────
+// -- Re-export for convenience ------------------------------------------------
 
 export type PlanId = SubscriptionPlan;

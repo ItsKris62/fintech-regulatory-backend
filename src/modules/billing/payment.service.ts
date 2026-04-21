@@ -6,7 +6,7 @@
  *   1. Stripe webhook handlers (after successful/failed payments)
  *   2. tRPC payment router (for paginated history reads)
  *
- * All writes are idempotent — duplicate providerTransactionId entries
+ * All writes are idempotent  -  duplicate providerTransactionId entries
  * are silently ignored (upsert semantics via `createOrUpdate` guard).
  */
 
@@ -15,7 +15,7 @@ import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 
-// Invoice sequence Redis key — one counter per calendar year
+// Invoice sequence Redis key  -  one counter per calendar year
 const invoiceSeqKey = (year: number) => `sheriabot:invoice_seq:${year}`;
 
 export interface CreatePaymentInput {
@@ -29,7 +29,7 @@ export interface CreatePaymentInput {
   description?:          string;
   paidAt?:               Date;
   metadata?:             Record<string, unknown>;
-  // Invoice fields — generated at payment creation time
+  // Invoice fields  -  generated at payment creation time
   invoiceNumber?:        string;
   subscriptionPlan?:     string;
   billingPeriodStart?:   Date;
@@ -42,7 +42,7 @@ export interface GetPaymentsInput {
   limit:  number;    // max 50
 }
 
-// ── Payment service ─────────────────────────────────────────────────────────
+// -- Payment service ---------------------------------------------------------
 
 class PaymentService {
   /**
@@ -53,7 +53,7 @@ class PaymentService {
    * a duplicate.
    */
   async createPaymentRecord(input: CreatePaymentInput) {
-    // Idempotency guard — skip if this transaction was already recorded
+    // Idempotency guard  -  skip if this transaction was already recorded
     if (input.providerTransactionId) {
       const existing = await prisma.payment.findFirst({
         where: {

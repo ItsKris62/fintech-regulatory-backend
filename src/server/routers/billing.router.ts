@@ -52,9 +52,9 @@ async function readUsageCount(scopeId: string, metric: BillingMetric): Promise<n
  * Billing Router
  *
  * Routes:
- *  - billing.getPlanAndUsage        — current plan, entitlements, usage, subscription status
- *  - billing.createCheckoutSession  — Stripe Checkout for STARTUP / BUSINESS plans
- *  - billing.createPortalSession    — Stripe Customer Portal (manage / cancel subscription)
+ *  - billing.getPlanAndUsage         -  current plan, entitlements, usage, subscription status
+ *  - billing.createCheckoutSession   -  Stripe Checkout for STARTUP / BUSINESS plans
+ *  - billing.createPortalSession     -  Stripe Customer Portal (manage / cancel subscription)
  */
 export const billingRouter = router({
   /**
@@ -63,7 +63,7 @@ export const billingRouter = router({
    * Called once on dashboard mount (stale 5 min). The frontend caches this
    * and exposes it via `usePlan()` to drive all feature-gate UI.
    *
-   * @protected — requires isAuthenticated + withPlanContext
+   * @protected  -  requires isAuthenticated + withPlanContext
    */
   getPlanAndUsage: protectedProcedure
     .use(withPlanContext)
@@ -74,7 +74,7 @@ export const billingRouter = router({
         const scopeId = orgId ?? ctx.user.id;
         const entitlements = PLAN_ENTITLEMENTS[plan];
 
-        // ── Usage counts (Redis, parallel reads) ──────────────────────────
+        // -- Usage counts (Redis, parallel reads) --------------------------
         const [
           complianceQueriesCount,
           checklistGenerationsCount,
@@ -87,15 +87,15 @@ export const billingRouter = router({
           readUsageCount(scopeId, BillingMetric.DOCUMENT_STORAGE_MB),
         ]);
 
-        // ── Trial status (user-scoped, fetched for FREE_TRIAL and REGULATOR so
+        // -- Trial status (user-scoped, fetched for FREE_TRIAL and REGULATOR so
         //    the frontend knows whether the user is eligible or has already used
-        //    their trial — prevents showing the activation banner to expired users)
+        //    their trial  -  prevents showing the activation banner to expired users)
         const trialStatus =
           plan === 'FREE_TRIAL' || plan === 'REGULATOR'
             ? await getTrialStatus(ctx.user.id)
             : null;
 
-        // ── Billing + subscription metadata (org row) ──────────────────────
+        // -- Billing + subscription metadata (org row) ----------------------
         const [org, catalog] = await Promise.all([
           orgId
             ? prisma.organization.findUnique({
@@ -112,7 +112,7 @@ export const billingRouter = router({
                 },
               })
             : Promise.resolve(null),
-          // Catalog prices are Redis-cached (5-min TTL) — this is a fast read.
+          // Catalog prices are Redis-cached (5-min TTL)  -  this is a fast read.
           // Returned so the UpgradeBanner can display live-overridable KES prices
           // instead of hardcoded strings.
           getBillingPlanCatalog(),
@@ -202,12 +202,12 @@ export const billingRouter = router({
    * Create a Stripe Checkout Session for upgrading to STARTUP or BUSINESS.
    *
    * - Creates or reuses the org's Stripe Customer record.
-   * - Starts a 14-day free trial (Stripe enforces this — no charges until trial ends).
-   * - Enterprise is sales-led only; REGULATOR is free — neither goes through Stripe.
+   * - Starts a 14-day free trial (Stripe enforces this  -  no charges until trial ends).
+   * - Enterprise is sales-led only; REGULATOR is free  -  neither goes through Stripe.
    *
-   * Returns { url } — the frontend redirects the user to this URL.
+   * Returns { url }  -  the frontend redirects the user to this URL.
    *
-   * @protected — requires authentication + an organization
+   * @protected  -  requires authentication + an organization
    */
   createCheckoutSession: protectedProcedure
     .use(withPlanContext)
@@ -263,7 +263,7 @@ export const billingRouter = router({
         });
       }
 
-      // ── Find or create Stripe Customer ─────────────────────────────────
+      // -- Find or create Stripe Customer ---------------------------------
       let customerId = org.stripeCustomerId ?? undefined;
 
       if (!customerId) {
@@ -287,7 +287,7 @@ export const billingRouter = router({
         });
       }
 
-      // ── Create Checkout Session ────────────────────────────────────────
+      // -- Create Checkout Session ----------------------------------------
       const session = await stripe.checkout.sessions.create({
         customer:   customerId,
         mode:       'subscription',
@@ -331,9 +331,9 @@ export const billingRouter = router({
    *
    * Requires an existing stripeCustomerId on the organization.
    *
-   * Returns { url } — the frontend redirects the user to this URL.
+   * Returns { url }  -  the frontend redirects the user to this URL.
    *
-   * @protected — requires authentication + an organization with an active Stripe customer
+   * @protected  -  requires authentication + an organization with an active Stripe customer
    */
   createPortalSession: protectedProcedure
     .use(withPlanContext)
@@ -385,7 +385,7 @@ export const billingRouter = router({
    * Sends a notification email to the SheriaBot admin inbox and returns success.
    * Rate-limited to 3 submissions per org per calendar day (UTC).
    *
-   * @protected — requires authentication + an organization
+   * @protected  -  requires authentication + an organization
    */
   requestEnterprise: protectedProcedure
     .use(withPlanContext)
@@ -408,7 +408,7 @@ export const billingRouter = router({
 
       const orgId = user.organizationId;
 
-      // ── Rate limiting: max 3 per org per day ─────────────────────────────
+      // -- Rate limiting: max 3 per org per day -----------------------------
       const rateKey = enterpriseInquiryKey(orgId);
       const currentCount = await redis.get<number>(rateKey);
       const count = typeof currentCount === 'number' ? currentCount
@@ -424,11 +424,11 @@ export const billingRouter = router({
 
       const newCount = await redis.incr(rateKey);
       if (newCount === 1) {
-        // First submission today — set TTL to end of day (86400s max)
+        // First submission today  -  set TTL to end of day (86400s max)
         await redis.expire(rateKey, 86400);
       }
 
-      // ── Fetch org details ─────────────────────────────────────────────────
+      // -- Fetch org details -------------------------------------------------
       const org = await prisma.organization.findUnique({
         where:  { id: orgId },
         select: { name: true, plan: true },
@@ -439,7 +439,7 @@ export const billingRouter = router({
         ? org.plan.charAt(0) + org.plan.slice(1).toLowerCase()
         : 'Unknown';
 
-      // ── Send inquiry email (non-blocking on the response) ─────────────────
+      // -- Send inquiry email (non-blocking on the response) -----------------
       void reactMailer.sendEnterpriseInquiryEmail(adminEmail, {
         contactName:  input.name,
         contactEmail: input.email,
@@ -467,7 +467,7 @@ export const billingRouter = router({
    * Update the preferred payment method (Card/Stripe or M-Pesa) for the org.
    *
    * When switching to M-Pesa, a phone number is required (now or previously stored).
-   * Switching methods does NOT cancel an existing Stripe subscription — it only
+   * Switching methods does NOT cancel an existing Stripe subscription  -  it only
    * affects the next payment initiated by the user.
    */
   updatePaymentMethod: protectedProcedure
@@ -644,7 +644,7 @@ export const billingRouter = router({
         amount:           amountCents,
         currency:         'KES',
         status:           PaymentStatus.PENDING,
-        description:      `${input.plan} plan — M-Pesa payment`,
+        description:      `${input.plan} plan  -  M-Pesa payment`,
         invoiceNumber,
         subscriptionPlan: input.plan,
         metadata:         { phone_number: phoneNumber, plan: input.plan },
@@ -730,7 +730,7 @@ export const billingRouter = router({
           const liveStatus = await intaSendService.getPaymentStatus(payment.providerTransactionId);
 
           if (liveStatus.state === 'COMPLETE') {
-            // Webhook may not have fired yet — optimistically reflect completed status
+            // Webhook may not have fired yet  -  optimistically reflect completed status
             // (webhook will do the full activation; we just return the current DB state)
             logger.info({
               type:      'mpesa_poll_status_complete_not_yet_webhoooked',
@@ -739,7 +739,7 @@ export const billingRouter = router({
             });
           }
         } catch {
-          // Non-fatal — just return current DB status
+          // Non-fatal  -  just return current DB status
         }
       }
 

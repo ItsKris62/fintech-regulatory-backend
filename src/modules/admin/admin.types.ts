@@ -447,7 +447,7 @@ export interface RevenueMetrics {
   lastMonthRevenue: number;    // KES, previous calendar month
   series: Array<{ date: string; amount: number }>; // monthly totals
   byProvider: { STRIPE: number; MPESA: number };
-  successRate: number; // 0–100
+  successRate: number; // 0-100
 }
 
 export interface AIUsageMetrics {
@@ -473,7 +473,7 @@ export interface SubscriptionBreakdown {
 /**
  * A single payment record normalized to major currency units (KES).
  * All `amount` values have been divided by CURRENCY_MINOR_UNIT_SCALE (100)
- * at the AdminModule boundary — callers receive KES, not KES-cents.
+ * at the AdminModule boundary  -  callers receive KES, not KES-cents.
  */
 export interface PaymentSummary {
   id: string;
@@ -502,7 +502,7 @@ export interface OrgPaymentHistory {
 
 /**
  * A single active (non-expired) session for a user.
- * Returned by listUserActiveSessions — read-only; callers may not revoke
+ * Returned by listUserActiveSessions  -  read-only; callers may not revoke
  * individual sessions (use signOutUserEverywhere to revoke all at once).
  */
 export interface SessionSummary {

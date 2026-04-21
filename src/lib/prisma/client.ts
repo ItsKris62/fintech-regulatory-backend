@@ -46,7 +46,7 @@ function getLogConfig(): (Prisma.LogLevel | Prisma.LogDefinition)[] {
 /**
  * Create base Prisma Client then extend with query middleware.
  *
- * Prisma v7 removed $use() — all middleware is now done via $extends().
+ * Prisma v7 removed $use()  -  all middleware is now done via $extends().
  * The datasource URL is read from prisma.config.ts / schema.prisma
  * (no more `datasources` constructor property).
  */
@@ -108,7 +108,7 @@ const base = new PrismaClient({
         },
       },
 
-      // Soft delete: intercept delete → update with deletedAt
+      // Soft delete: intercept delete -> update with deletedAt
       user: {
         async delete({ args, query: _query }) {
           return (base.user as any).update({
@@ -198,6 +198,36 @@ const base = new PrismaClient({
           return query(args);
         },
       },
+
+      policy: {
+        async delete({ args, query: _query }) {
+          return base.policy.update({
+            ...args,
+            data: { deletedAt: new Date() },
+          });
+        },
+        async deleteMany({ args, query: _query }) {
+          return base.policy.updateMany({
+            ...args,
+            data: { deletedAt: new Date() },
+          });
+        },
+        async findMany({ args, query }) {
+          args.where = { ...args.where, deletedAt: args.where?.deletedAt ?? null };
+          return query(args);
+        },
+        async findFirst({ args, query }) {
+          args.where = { ...args.where, deletedAt: args.where?.deletedAt ?? null };
+          return query(args);
+        },
+        async findUnique({ args, query }) {
+          return query(args);
+        },
+        async count({ args, query }) {
+          args.where = { ...args.where, deletedAt: args.where?.deletedAt ?? null };
+          return query(args);
+        },
+      },
     },
   });
 
@@ -252,7 +282,7 @@ export async function connectDatabase(maxRetries: number = 5): Promise<void> {
 }
 
 /**
- * Disconnect from database — called during graceful shutdown
+ * Disconnect from database  -  called during graceful shutdown
  */
 export async function disconnectDatabase(): Promise<void> {
   try {
@@ -284,7 +314,7 @@ export async function checkDatabaseHealth(): Promise<boolean> {
 
 /**
  * Get database connection stats.
- * Prisma v7 removed $metrics — we use a connectivity check instead.
+ * Prisma v7 removed $metrics  -  we use a connectivity check instead.
  */
 export async function getDatabaseStats(): Promise<{
   connected: boolean;
@@ -358,7 +388,7 @@ export async function transaction<T>(
 }
 
 /**
- * Batch operation helper — splits large operations to avoid timeouts
+ * Batch operation helper  -  splits large operations to avoid timeouts
  */
 export async function batchOperation<T, R>(
   items: T[],
@@ -383,7 +413,7 @@ export async function batchOperation<T, R>(
 }
 
 /**
- * Soft delete helper (manual — bypasses middleware)
+ * Soft delete helper (manual  -  bypasses middleware)
  */
 export async function softDelete(
   model: keyof typeof prisma,

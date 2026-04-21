@@ -6,11 +6,11 @@
  * are skipped without error.
  *
  * Fields:
- *   email        — work email address (invite sent here)
- *   name         — full name (used for the User.fullName DB field)
- *   organization — company name (used to create their isolated Organization)
- *   role         — their job title (informational only, stored in metadata)
- *   cohort       — cohort identifier written to User.pilotCohort
+ *   email         -  work email address (invite sent here)
+ *   name          -  full name (used for the User.fullName DB field)
+ *   organization  -  company name (used to create their isolated Organization)
+ *   role          -  their job title (informational only, stored in metadata)
+ *   cohort        -  cohort identifier written to User.pilotCohort
  *                  e.g. "PILOT_COHORT_001"
  */
 
@@ -23,7 +23,7 @@ export interface PilotTester {
 }
 
 export const PILOT_TESTERS: PilotTester[] = [
-  // ── Add pilot testers here before running the provisioning script ──────────
+  // -- Add pilot testers here before running the provisioning script ----------
   //
   // Example entries (replace with real tester data):
   //

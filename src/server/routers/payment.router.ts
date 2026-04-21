@@ -10,15 +10,15 @@ import { logger } from '@/utils/logger';
  * Payment Router
  *
  * Routes:
- *  - payment.list      — paginated payment history for the authenticated user's org
- *  - payment.getById   — single payment detail (org-scoped ownership check)
- *  - payment.getDetail — full invoice data with org + user join for the invoice modal
+ *  - payment.list       -  paginated payment history for the authenticated user's org
+ *  - payment.getById    -  single payment detail (org-scoped ownership check)
+ *  - payment.getDetail  -  full invoice data with org + user join for the invoice modal
  */
 export const paymentRouter = router({
   /**
    * List paginated payment history for the user's organization.
    *
-   * @protected — requires authentication + organization membership
+   * @protected  -  requires authentication + organization membership
    */
   list: protectedProcedure
     .input(
@@ -70,7 +70,7 @@ export const paymentRouter = router({
   /**
    * Get a single payment by ID, scoped to the user's organization.
    *
-   * @protected — requires authentication + org ownership
+   * @protected  -  requires authentication + org ownership
    */
   getById: protectedProcedure
     .input(z.object({ id: z.string().cuid() }))
@@ -105,7 +105,7 @@ export const paymentRouter = router({
    * Get full invoice detail for a single payment.
    *
    * Joins Payment + Organization + User to return everything the invoice
-   * modal needs in one call. Org-scoped — returns 404 if payment does not
+   * modal needs in one call. Org-scoped  -  returns 404 if payment does not
    * belong to the authenticated user's organization.
    */
   getDetail: protectedProcedure
@@ -150,7 +150,7 @@ export const paymentRouter = router({
           ? `M-Pesa (**** ${phone.slice(-4)})`
           : 'M-Pesa';
       } else {
-        // Stripe — try to extract card last4 from metadata
+        // Stripe  -  try to extract card last4 from metadata
         const last4 = (meta?.['card_last4'] as string | undefined) ?? null;
         paymentMethodDisplay = last4 ? `Card ending in ${last4}` : 'Card (Stripe)';
       }

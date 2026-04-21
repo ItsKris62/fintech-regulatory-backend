@@ -545,7 +545,7 @@ class UserModule {
       const { page, limit, action, resourceType, startDate, endDate } = validated;
       const skip = (page - 1) * limit;
 
-      // 2. Build where clause — AuditLog uses entityType/entityId instead of resourceType/resourceId
+      // 2. Build where clause  -  AuditLog uses entityType/entityId instead of resourceType/resourceId
       const where: {
         userId: string;
         action?: string;
@@ -665,7 +665,7 @@ class UserModule {
       });
       const storageUsedBytes = storageResult._sum.fileSize ?? 0;
 
-      // 5. AI token usage — no token-tracking table exists; return 0
+      // 5. AI token usage  -  no token-tracking table exists; return 0
       const aiTokensThisMonth = 0;
       const totalAITokensUsed = 0;
 
@@ -788,19 +788,20 @@ class UserModule {
         },
       });
 
-      // 6. Revoke all sessions
-      const sessionPattern = `session:*`;
-      const sessionKeys = await redis.keys(sessionPattern);
-      
+      // 6. Revoke all sessions via per-user tracking set (no keyspace scan)
+      const sessionIdxKey = `sheriabot:idx:sessions:${userId}`;
+      const sessionKeys = await redis.smembers<string[]>(sessionIdxKey);
+
       for (const key of sessionKeys) {
         const sessionData = await redis.get<string>(key);
         if (sessionData) {
-          const session = JSON.parse(sessionData);
+          const session = JSON.parse(sessionData) as { userId?: string };
           if (session.userId === userId) {
             await redis.del(key);
           }
         }
       }
+      await redis.del(sessionIdxKey);
 
       // 7. Invalidate all caches
       await this.invalidateUserCache(userId);

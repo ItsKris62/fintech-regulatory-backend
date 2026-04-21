@@ -3,15 +3,15 @@
  *
  * Generates a professional Word document from a validated GapAnalysisResult.
  * Uses the `docx` npm package (v9). All text is passed through TextRun which
- * escapes content natively — never use raw HTML or markdown injection.
+ * escapes content natively  -  never use raw HTML or markdown injection.
  *
  * Critical docx rules observed:
- *   - WidthType.DXA everywhere (never PERCENTAGE — breaks Google Docs)
- *   - ShadingType.CLEAR (never SOLID — causes black cell backgrounds)
+ *   - WidthType.DXA everywhere (never PERCENTAGE  -  breaks Google Docs)
+ *   - ShadingType.CLEAR (never SOLID  -  causes black cell backgrounds)
  *   - LevelFormat.BULLET for bullet lists (no raw unicode bullets in TextRun)
- *   - No \n inside TextRun — use separate Paragraphs
+ *   - No \n inside TextRun  -  use separate Paragraphs
  *   - PageBreak must be inside a Paragraph
- *   - Tables never used in headers/footers — use tab stops instead
+ *   - Tables never used in headers/footers  -  use tab stops instead
  *   - A4 page size (width: 11906, height: 16838 DXA); 1-inch margins
  *   - Content width: 9026 DXA (11906 - 2 * 1440)
  */
@@ -40,7 +40,7 @@ import {
 } from 'docx';
 import type { GapAnalysisResult, GapItem, ActionPlanItem } from '@/lib/ai/prompts/gap-analysis';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// --- Constants ----------------------------------------------------------------
 
 /** A4 content width in DXA (11906 - 2*1440). */
 const CONTENT_W = 9026;
@@ -70,7 +70,7 @@ const C = {
   lowTx:      '2563EB',
 } as const;
 
-// ─── Parameter type ───────────────────────────────────────────────────────────
+// --- Parameter type -----------------------------------------------------------
 
 export interface DocxExportParams {
   result: GapAnalysisResult;
@@ -85,7 +85,7 @@ export interface DocxExportParams {
   userName?: string;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// --- Helpers ------------------------------------------------------------------
 
 function scoreColor(score: number): string {
   if (score >= 75) return C.emerald;
@@ -125,7 +125,7 @@ function formatDate(d: Date): string {
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-/** Safe string — never undefined. */
+/** Safe string  -  never undefined. */
 function s(v: string | undefined | null): string {
   return v ?? '';
 }
@@ -161,7 +161,7 @@ function checkBullet(text: string): Paragraph {
   return bullet(text, 'evidence-checklist');
 }
 
-/** Mandatory page break — must be inside a Paragraph. */
+/** Mandatory page break  -  must be inside a Paragraph. */
 function pageBreak(): Paragraph {
   return new Paragraph({ children: [new PageBreak()] });
 }
@@ -248,7 +248,7 @@ function evidenceCell(items: string[], width: number): TableCell {
   });
 }
 
-// ─── Gap table columns ────────────────────────────────────────────────────────
+// --- Gap table columns --------------------------------------------------------
 // Total must equal CONTENT_W (9026)
 const GAP_COLS = [
   { label: '#',            width: 320  },
@@ -261,15 +261,15 @@ const GAP_COLS = [
   { label: 'Owner',       width: 706  },
   { label: 'Effort',      width: 500  },
   { label: 'Pri.',        width: 300  },
-  // Total: 320+1400+700+1100+1100+1100+1100+706+500+300 = 8326. Add to Reg.Ref. → 1800 - diff
+  // Total: 320+1400+700+1100+1100+1100+1100+706+500+300 = 8326. Add to Reg.Ref. -> 1800 - diff
 ] as const;
-// Recalc: 320+1400+700+1800+1100+1100+1100+706+500+300 = 9026 — adjust Reg.Ref. to 1800
+// Recalc: 320+1400+700+1800+1100+1100+1100+706+500+300 = 9026  -  adjust Reg.Ref. to 1800
 const GAP_COL_WIDTHS = [320, 1400, 700, 1800, 1100, 1100, 1100, 706, 500, 300] as const;
 
 const ACTION_COL_WIDTHS = [600, 2200, 1000, 1000, 1500, 726, 2000] as const;
 // Total: 600+2200+1000+1000+1500+726+2000 = 9026
 
-// ─── Section builders ─────────────────────────────────────────────────────────
+// --- Section builders ---------------------------------------------------------
 
 function buildCoverSection(params: DocxExportParams): object {
   const { result, documentName, analysisDepth, createdAt, organizationName, userName } = params;
@@ -391,15 +391,15 @@ function buildMainSection(params: DocxExportParams): object {
 
   const children: Paragraph[] = [];
 
-  // ── Table of Contents ────────────────────────────────────────────────────
+  // -- Table of Contents ----------------------------------------------------
   children.push(
     new Paragraph({ heading: HeadingLevel.HEADING_1, text: 'Table of Contents' }),
-    // @ts-expect-error — TableOfContents is a valid Document child but typed as Paragraph in some docx versions
+    // @ts-expect-error  -  TableOfContents is a valid Document child but typed as Paragraph in some docx versions
     new TableOfContents('Table of Contents', { hyperlink: true, headingStyleRange: '1-3' }),
     pageBreak(),
   );
 
-  // ── Executive Summary ────────────────────────────────────────────────────
+  // -- Executive Summary ----------------------------------------------------
   children.push(h1('Executive Summary'), rule());
 
   if (!ragGrounded) {
@@ -449,7 +449,7 @@ function buildMainSection(params: DocxExportParams): object {
     pageBreak(),
   );
 
-  // ── Methodology ──────────────────────────────────────────────────────────
+  // -- Methodology ----------------------------------------------------------
   children.push(h1('Methodology'), rule());
 
   const methodRows: TableRow[] = [
@@ -487,7 +487,7 @@ function buildMainSection(params: DocxExportParams): object {
     pageBreak(),
   );
 
-  // ── Per-Framework Sections ───────────────────────────────────────────────
+  // -- Per-Framework Sections -----------------------------------------------
   frameworks.forEach((fw, fwIdx) => {
     children.push(
       h1(`Framework ${fwIdx + 1}: ${fw.name}`),
@@ -560,7 +560,7 @@ function buildMainSection(params: DocxExportParams): object {
     children.push(pageBreak());
   });
 
-  // ── Action Plan ──────────────────────────────────────────────────────────
+  // -- Action Plan ----------------------------------------------------------
   children.push(h1('Remediation Action Plan'), rule());
 
   children.push(body(
@@ -622,7 +622,7 @@ function buildMainSection(params: DocxExportParams): object {
     pageBreak(),
   );
 
-  // ── Appendix A: Regulatory References ───────────────────────────────────
+  // -- Appendix A: Regulatory References -----------------------------------
   children.push(h1('Appendix A: Regulatory References'), rule());
 
   let hasRefs = false;
@@ -645,7 +645,7 @@ function buildMainSection(params: DocxExportParams): object {
 
   children.push(pageBreak());
 
-  // ── Appendix B: Evidence Checklist ──────────────────────────────────────
+  // -- Appendix B: Evidence Checklist --------------------------------------
   children.push(h1('Appendix B: Required Evidence & Documentation Checklist'), rule());
   children.push(body(
     'The following documents must be produced or obtained to close the identified compliance gaps. ' +
@@ -679,7 +679,7 @@ function buildMainSection(params: DocxExportParams): object {
 
   children.push(pageBreak());
 
-  // ── Appendix C: Glossary ─────────────────────────────────────────────────
+  // -- Appendix C: Glossary -------------------------------------------------
   children.push(h1('Appendix C: Glossary of Regulatory Terms'), rule());
 
   const glossaryData: Array<[string, string, string]> = [
@@ -738,7 +738,7 @@ function buildMainSection(params: DocxExportParams): object {
     }) as unknown as Paragraph,
   );
 
-  // ── Headers & Footers ─────────────────────────────────────────────────────
+  // -- Headers & Footers -----------------------------------------------------
   const mainHeader = new Header({
     children: [
       new Paragraph({
@@ -779,7 +779,7 @@ function buildMainSection(params: DocxExportParams): object {
   };
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// --- Public API ---------------------------------------------------------------
 
 class GapAnalysisExportService {
   /**

@@ -1,5 +1,5 @@
 /**
- * Document Module — Public API
+ * Document Module  -  Public API
  */
 
 export { documentModule, DocumentModule } from './document.module';

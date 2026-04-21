@@ -3,7 +3,7 @@ import { logger } from '@/utils/logger';
 /**
  * Lightweight error tracking for production.
  * Tracks error rates and logs critical alerts when thresholds are breached.
- * No external dependency — uses structured logging for Railway log drain.
+ * No external dependency  -  uses structured logging for Railway log drain.
  */
 
 interface ErrorEntry {
@@ -66,6 +66,14 @@ class ErrorTracker {
     }
     if (/node_modules/.test(message)) {
       return 'Internal server error';
+    }
+    // Strip connection strings that may contain credentials
+    if (/\b(postgres(?:ql)?|redis|mongodb|mysql):\/\/[^@\s]*@/i.test(message)) {
+      return 'Internal server error';
+    }
+    // Strip raw SQL fragments (SELECT...FROM, INSERT INTO, UPDATE...SET, DELETE FROM)
+    if (/\bSELECT\b.{0,120}\bFROM\b|\bINSERT\s+INTO\b|\bUPDATE\b.{0,120}\bSET\b|\bDELETE\s+FROM\b/i.test(message)) {
+      return 'Database error';
     }
 
     return message.slice(0, 200);
@@ -138,6 +146,6 @@ class ErrorTracker {
   }
 }
 
-/** Singleton error tracker — 5 min window, alert at 10 occurrences */
+/** Singleton error tracker  -  5 min window, alert at 10 occurrences */
 export const errorTracker = new ErrorTracker(5 * 60 * 1000, 10);
 export { ErrorTracker };

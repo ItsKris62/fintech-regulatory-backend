@@ -121,7 +121,7 @@ async function testEmbeddings() {
     // Integrated mode: Pinecone handles embedding generation during upsert/search
     return {
       success: true,
-      message: `Integrated embeddings enabled — model: ${config.model} (${config.dimension}d, managed by Pinecone)`,
+      message: `Integrated embeddings enabled  -  model: ${config.model} (${config.dimension}d, managed by Pinecone)`,
     };
   });
 }
@@ -135,16 +135,16 @@ async function testChunking() {
 DATA PROTECTION ACT 2019
 
 SECTION 1: INTERPRETATION
-In this Act, unless the context otherwise requires—
+In this Act, unless the context otherwise requires - 
 "data controller" means a person who either alone, jointly with other persons or in common with other persons or as a statutory body determines the purposes for which and the manner in which any personal data is processed or is to be processed;
 
 SECTION 2: APPLICATION
-This Act applies to—
+This Act applies to - 
 (a) a data controller or data processor who is established in Kenya and processes personal data in the context of that establishment;
 (b) a data controller or data processor not established in Kenya, but in a place where the law of Kenya applies by virtue of public international law;
 
 SECTION 3: PRINCIPLES
-Personal data shall be—
+Personal data shall be - 
 (a) processed lawfully, fairly and in a transparent manner in relation to the data subject;
 (b) collected for explicit, specified and legitimate purposes and not further processed in a manner incompatible with those purposes;
     `.trim();

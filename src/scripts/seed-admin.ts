@@ -2,7 +2,7 @@
  * Seed Script: Admin Account
  *
  * Creates an admin user in both Supabase Auth and Prisma.
- * Safe to run multiple times — skips if the email already exists.
+ * Safe to run multiple times  -  skips if the email already exists.
  *
  * Usage:
  *   ADMIN_EMAIL=admin@yourcompany.com ADMIN_PASSWORD=YourPass123! pnpm seed:admin
@@ -33,7 +33,7 @@ async function seedAdmin(): Promise<void> {
 
   console.log(`\n🔐 Creating admin account: ${email}\n`);
 
-  // ── 1. Check if already exists in Prisma ──────────────────────────────────
+  // -- 1. Check if already exists in Prisma ----------------------------------
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
     console.log(`  ⚠️  User already exists in DB (id: ${existing.id})`);
@@ -41,12 +41,12 @@ async function seedAdmin(): Promise<void> {
       await prisma.user.update({ where: { email }, data: { role: 'ADMIN' } });
       console.log('  ✅ Role upgraded to ADMIN');
     } else {
-      console.log('  ℹ️  Already has ADMIN role — nothing to do');
+      console.log('  ℹ️  Already has ADMIN role  -  nothing to do');
     }
     return;
   }
 
-  // ── 2. Create in Supabase Auth ─────────────────────────────────────────────
+  // -- 2. Create in Supabase Auth ---------------------------------------------
   const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
     email,
     password,
@@ -57,7 +57,7 @@ async function seedAdmin(): Promise<void> {
   if (authError || !authData?.user) {
     // Check if user already exists in Supabase but not in Prisma (orphaned)
     if (authError?.message?.includes('already been registered') || authError?.code === 'email_exists') {
-      console.log('  ℹ️  Supabase user already exists — checking for orphaned Prisma record...');
+      console.log('  ℹ️  Supabase user already exists  -  checking for orphaned Prisma record...');
       // List users to find the supabase ID
       const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
       const supabaseUser = listData?.users?.find((u: any) => u.email === email);
@@ -83,7 +83,7 @@ async function seedAdmin(): Promise<void> {
     throw new Error(`Supabase error: ${authError?.message ?? 'unknown'}`);
   }
 
-  // ── 3. Create in Prisma ────────────────────────────────────────────────────
+  // -- 3. Create in Prisma ----------------------------------------------------
   const hashedPw = await bcrypt.hash(password, 12);
   const user = await prisma.user.create({
     data: {

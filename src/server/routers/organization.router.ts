@@ -33,7 +33,7 @@ export const organizationRouter = router({
         const { page, limit, type, search } = input;
         const skip = (page - 1) * limit;
 
-        // Build where clause — Organization has no deletedAt, use as any
+        // Build where clause  -  Organization has no deletedAt, use as any
         const where: any = {};
 
         if (type) {
@@ -485,7 +485,7 @@ export const organizationRouter = router({
    * Admin or org owner can change a user's role. The user must already belong
    * to this organization. Updates the global `role` field on the User record.
    *
-   * @protected — must be ADMIN, or a member of the same organization
+   * @protected  -  must be ADMIN, or a member of the same organization
    */
   updateMemberRole: protectedProcedure
     .input(
@@ -580,12 +580,12 @@ export const organizationRouter = router({
       }
     }),
 
-  // ─── SETTINGS PAGE PROCEDURES ─────────────────────────────────────────────
+  // --- SETTINGS PAGE PROCEDURES ---------------------------------------------
 
   /**
    * Get the current user's organization settings fields
    *
-   * @protected — resolves org from ctx.user.organizationId (no id param)
+   * @protected  -  resolves org from ctx.user.organizationId (no id param)
    */
   getSettings: protectedProcedure.query(async ({ ctx }) => {
     try {
@@ -643,7 +643,7 @@ export const organizationRouter = router({
   /**
    * Update the current user's organization settings
    *
-   * @protected — REGULATOR role is blocked (read-only)
+   * @protected  -  REGULATOR role is blocked (read-only)
    */
   updateSettings: protectedProcedure
     .input(updateOrganizationSettingsSchema)

@@ -5,7 +5,7 @@
  * Run manually AFTER running the add_usage_period.sql migration:
  *   npx ts-node -r tsconfig-paths/register src/scripts/backfill-usage-periods.ts
  *
- * Safe to run multiple times — uses upserts (createMany with skipDuplicates).
+ * Safe to run multiple times  -  uses upserts (createMany with skipDuplicates).
  *
  * Caveats:
  * - Plan limits are snapshotted from each org's CURRENT plan (imperfect for
@@ -38,7 +38,7 @@ function toEATMonthKey(utcDate: Date): string {
 
 /**
  * Compute the UTC timestamps for the boundaries of a calendar month in EAT.
- * e.g. "2026-03" → { start: 2026-02-28T21:00:00.000Z, end: 2026-03-31T20:59:59.999Z }
+ * e.g. "2026-03" -> { start: 2026-02-28T21:00:00.000Z, end: 2026-03-31T20:59:59.999Z }
  */
 function eatMonthBoundaries(monthKey: string): { start: Date; end: Date } {
   const [yearStr, monthStr] = monthKey.split('-');
@@ -58,7 +58,7 @@ function eatMonthBoundaries(monthKey: string): { start: Date; end: Date } {
 
 /**
  * Resolve the limit snapshot for a given plan.
- * Boolean features (gapAnalysis, policyGeneration) → -1 if enabled, 0 if not.
+ * Boolean features (gapAnalysis, policyGeneration) -> -1 if enabled, 0 if not.
  */
 function resolveLimits(plan: SubscriptionPlan): {
   planTier: string;
@@ -97,7 +97,7 @@ type OrgPeriodMap = Map<string, PeriodAccumulator>; // key = "YYYY-MM"
 async function main(): Promise<void> {
   console.log('🔁 Starting UsagePeriod backfill...\n');
 
-  // ── 1. Load all organizations ──────────────────────────────────────────────
+  // -- 1. Load all organizations ----------------------------------------------
   const orgs = await prisma.organization.findMany({
     select: { id: true, plan: true, name: true },
   });
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
       return periodMap.get(key)!;
     };
 
-    // ── 2a. Compliance Queries ─────────────────────────────────────────────
+    // -- 2a. Compliance Queries ---------------------------------------------
     const queries = await prisma.complianceQuery.findMany({
       where: { organizationId: org.id },
       select: { createdAt: true },
@@ -131,7 +131,7 @@ async function main(): Promise<void> {
       ensure(key).complianceQueries += 1;
     }
 
-    // ── 2b. Checklist Generations ──────────────────────────────────────────
+    // -- 2b. Checklist Generations ------------------------------------------
     // Only count checklists that were actually generated (not in GENERATING state)
     const checklists = await prisma.checklist.findMany({
       where: {
@@ -146,7 +146,7 @@ async function main(): Promise<void> {
       ensure(key).checklistGenerations += 1;
     }
 
-    // ── 2c. Gap Analyses ───────────────────────────────────────────────────
+    // -- 2c. Gap Analyses ---------------------------------------------------
     const gapAnalyses = await prisma.gapAnalysis.findMany({
       where: { organizationId: org.id },
       select: { createdAt: true },
@@ -156,7 +156,7 @@ async function main(): Promise<void> {
       ensure(key).gapAnalyses += 1;
     }
 
-    // ── 2d. Policy Generations ─────────────────────────────────────────────
+    // -- 2d. Policy Generations ---------------------------------------------
     // Policies are scoped by userId on the Policy model, not organizationId.
     // Join via user.organizationId.
     const policies = await prisma.policy.findMany({
@@ -172,15 +172,15 @@ async function main(): Promise<void> {
     }
 
     if (periodMap.size === 0) {
-      console.log(`  ${org.name}: no historical activity — skipping.`);
+      console.log(`  ${org.name}: no historical activity  -  skipping.`);
       totalSkipped += 1;
       continue;
     }
 
-    // ── 3. Resolve plan limits snapshot ───────────────────────────────────
+    // -- 3. Resolve plan limits snapshot -----------------------------------
     const limits = resolveLimits(org.plan);
 
-    // ── 4. Build upsert data ──────────────────────────────────────────────
+    // -- 4. Build upsert data ----------------------------------------------
     const periodsToCreate = Array.from(periodMap.entries()).map(([monthKey, counts]) => {
       const { start, end } = eatMonthBoundaries(monthKey);
       return {
@@ -199,7 +199,7 @@ async function main(): Promise<void> {
       };
     });
 
-    // ── 5. Upsert (createMany with skipDuplicates for idempotency) ─────────
+    // -- 5. Upsert (createMany with skipDuplicates for idempotency) ---------
     const result = await prisma.usagePeriod.createMany({
       data: periodsToCreate,
       skipDuplicates: true,
@@ -208,7 +208,7 @@ async function main(): Promise<void> {
     const skippedForOrg = periodsToCreate.length - result.count;
     console.log(
       `  ${org.name} (${org.plan}): ` +
-      `${periodMap.size} period(s) found — ` +
+      `${periodMap.size} period(s) found  -  ` +
       `${result.count} created, ${skippedForOrg} already existed.`,
     );
     totalCreated += result.count;

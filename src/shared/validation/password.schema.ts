@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { z } from 'zod';
 import { isCommonPassword } from '../security/common-passwords';
 
-// ── Constants ────────────────────────────────────────────────────────────────
+// -- Constants ----------------------------------------------------------------
 
 export const PASSWORD_MIN_LENGTH = 10;
 export const PASSWORD_MAX_LENGTH = 128;
@@ -30,15 +30,15 @@ const BLOCKED_SEQUENCES = [
   'mnbvcxz',
 ];
 
-// ── Core validation function ─────────────────────────────────────────────────
+// -- Core validation function -------------------------------------------------
 
 export interface PasswordValidationResult {
   isValid: boolean;
   /** Human-readable error messages for failed rules. */
   errors: string[];
-  /** 0–5 strength score. */
+  /** 0-5 strength score. */
   score: number;
-  /** Per-rule pass/fail map — used by the frontend strength indicator. */
+  /** Per-rule pass/fail map  -  used by the frontend strength indicator. */
   rules: {
     minLength: boolean;
     maxLength: boolean;
@@ -58,7 +58,7 @@ export interface PasswordValidationResult {
  * Returns granular per-rule results so the caller can decide what to surface.
  *
  * @param password  The candidate password.
- * @param email     Optional — used for the "email-in-password" check.
+ * @param email     Optional  -  used for the "email-in-password" check.
  */
 export function validatePassword(
   password: string,
@@ -66,7 +66,7 @@ export function validatePassword(
 ): PasswordValidationResult {
   const errors: string[] = [];
 
-  // ── Structural checks ────────────────────────────────────────────────────
+  // -- Structural checks ----------------------------------------------------
   const minLength = password.length >= PASSWORD_MIN_LENGTH;
   const maxLength = password.length <= PASSWORD_MAX_LENGTH;
   const hasUppercase = /[A-Z]/.test(password);
@@ -79,15 +79,15 @@ export function validatePassword(
   if (!maxLength)
     errors.push(`Password must be no more than ${PASSWORD_MAX_LENGTH} characters.`);
   if (!hasUppercase)
-    errors.push('Include at least one uppercase letter (A–Z).');
+    errors.push('Include at least one uppercase letter (A-Z).');
   if (!hasLowercase)
-    errors.push('Include at least one lowercase letter (a–z).');
+    errors.push('Include at least one lowercase letter (a-z).');
   if (!hasDigit)
-    errors.push('Include at least one number (0–9).');
+    errors.push('Include at least one number (0-9).');
   if (!hasSpecial)
     errors.push('Include at least one special character (e.g., !, @, #, $, %).');
 
-  // ── Semantic checks (only run when structural checks pass, for perf) ──────
+  // -- Semantic checks (only run when structural checks pass, for perf) ------
   const structuralPassed = minLength && maxLength && hasUppercase && hasLowercase && hasDigit && hasSpecial;
 
   const notCommon = structuralPassed ? !isCommonPassword(password) : true;
@@ -127,7 +127,7 @@ export function validatePassword(
   if (foundSequential)
     errors.push('Avoid keyboard patterns or sequential characters (e.g., "abcd", "1234", "qwer").');
 
-  // ── Strength score ───────────────────────────────────────────────────────
+  // -- Strength score -------------------------------------------------------
   let score = 0;
   if (minLength) score++;
   if (password.length >= 14) score++;          // bonus for length
@@ -156,7 +156,7 @@ export function validatePassword(
   };
 }
 
-// ── Zod schema (structural rules only — used at tRPC input boundary) ─────────
+// -- Zod schema (structural rules only  -  used at tRPC input boundary) ---------
 //
 // Uses chained .regex() calls so Zod accumulates ALL failed checks at once.
 // Each rule has a specific, actionable message.
@@ -181,7 +181,7 @@ export const passwordSchema = z
     'Include at least one special character (e.g., !, @, #, $, %).'
   );
 
-// ── Shared rule definitions ───────────────────────────────────────────────────
+// -- Shared rule definitions ---------------------------------------------------
 //
 // PASSWORD_RULES is a machine-readable form of the policy rules.
 // Frontend components iterate this array to render the per-rule checklist.
@@ -249,7 +249,7 @@ export const PASSWORD_RULES: PasswordRule[] = [
   },
 ];
 
-// ── Strong password generator ─────────────────────────────────────────────────
+// -- Strong password generator -------------------------------------------------
 
 const UPPER_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const LOWER_CHARS = 'abcdefghijklmnopqrstuvwxyz';
@@ -302,7 +302,7 @@ export function generateStrongPassword(length: number = 16): string {
 
     const password = chars.join('');
 
-    // Validate before returning — rejects accidental common passwords.
+    // Validate before returning  -  rejects accidental common passwords.
     if (passwordSchema.safeParse(password).success) {
       return password;
     }

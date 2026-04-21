@@ -5,26 +5,26 @@
  * using Upstash Redis hash counters.
  *
  * Keys:
- *   sheriabot:checklist:metrics:alltime       — persistent global hash (no TTL)
- *   sheriabot:checklist:metrics:daily:{date}  — daily hash (TTL 35 days)
+ *   sheriabot:checklist:metrics:alltime        -  persistent global hash (no TTL)
+ *   sheriabot:checklist:metrics:daily:{date}   -  daily hash (TTL 35 days)
  *
  * Hash fields:
- *   attempts            — total runGeneration() calls (fresh + retries)
- *   success:full        — Tier 1 successes
- *   success:simplified  — Tier 2 successes
- *   success:minimal     — Tier 3 successes
- *   success:partial     — partial-recovery successes (any tier)
- *   failure             — all-tiers-failed outcomes
- *   retry_attempts      — retryChecklist() initiations
+ *   attempts             -  total runGeneration() calls (fresh + retries)
+ *   success:full         -  Tier 1 successes
+ *   success:simplified   -  Tier 2 successes
+ *   success:minimal      -  Tier 3 successes
+ *   success:partial      -  partial-recovery successes (any tier)
+ *   failure              -  all-tiers-failed outcomes
+ *   retry_attempts       -  retryChecklist() initiations
  *
- * All counter calls are fire-and-forget with a silent .catch() — metrics
+ * All counter calls are fire-and-forget with a silent .catch()  -  metrics
  * must NEVER block or throw in the generation hot path.
  */
 
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 
-// ─── Key helpers ─────────────────────────────────────────────────────────────
+// --- Key helpers -------------------------------------------------------------
 
 const ALLTIME_KEY = 'sheriabot:checklist:metrics:alltime';
 const DAILY_TTL   = 35 * 24 * 60 * 60; // 35 days in seconds
@@ -35,11 +35,11 @@ function dailyKey(): string {
 
 type SuccessTier = 'full' | 'simplified' | 'minimal' | 'partial';
 
-// ─── Internal helper ──────────────────────────────────────────────────────────
+// --- Internal helper ----------------------------------------------------------
 
 /**
  * Increment a single field on both the all-time and today's daily hash.
- * Fire-and-forget — never awaited in the hot path.
+ * Fire-and-forget  -  never awaited in the hot path.
  */
 function inc(field: string): void {
   const key = dailyKey();
@@ -58,10 +58,10 @@ function inc(field: string): void {
   });
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// --- Public API ---------------------------------------------------------------
 
 /**
- * Call at the start of runGeneration() — counts every attempt including retries.
+ * Call at the start of runGeneration()  -  counts every attempt including retries.
  */
 export function recordAttempt(): void {
   inc('attempts');
@@ -89,7 +89,7 @@ export function recordRetryAttempt(): void {
   inc('retry_attempts');
 }
 
-// ─── Stats reader ─────────────────────────────────────────────────────────────
+// --- Stats reader -------------------------------------------------------------
 
 export interface ChecklistMetricsStats {
   /** Window: 'alltime' or an ISO date string for the daily snapshot. */

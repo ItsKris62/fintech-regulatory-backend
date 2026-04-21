@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 /**
- * Supabase admin client — uses the service role key.
+ * Supabase admin client  -  uses the service role key.
  * Bypasses Row Level Security. NEVER expose this to the frontend.
  * Used for: creating users, admin auth operations, and backend-only queries.
  */
@@ -17,7 +17,7 @@ export const supabaseAdmin = createClient(
 );
 
 /**
- * Supabase public client — uses the anon key.
+ * Supabase public client  -  uses the anon key.
  * Used for: proxying user sign-in / sign-up from the backend when we want
  * Supabase to issue the JWT directly.
  */

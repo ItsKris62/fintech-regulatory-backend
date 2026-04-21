@@ -6,7 +6,7 @@
 
 import { z } from 'zod';
 
-// ─── Input Types ─────────────────────────────────────────────────────────────
+// --- Input Types -------------------------------------------------------------
 
 export interface GapAnalysisParams {
   policyText: string;
@@ -18,7 +18,7 @@ export interface GapAnalysisParams {
   ragContext?: string; // Retrieved regulatory passages from Pinecone
 }
 
-// ─── Zod Validation Schemas + Inferred Types ─────────────────────────────────
+// --- Zod Validation Schemas + Inferred Types ---------------------------------
 //
 // These are the canonical output types for gap analysis.  All types are derived
 // directly from their Zod schemas so the runtime validator and TypeScript type
@@ -100,7 +100,7 @@ export const RawChunkGapItemSchema = GapItemSchema.extend({
 /** Zod schema for the full JSON array a single chunk analysis returns. */
 export const ChunkOutputSchema = z.array(RawChunkGapItemSchema);
 
-// Inferred types — use these throughout the codebase instead of manual interfaces.
+// Inferred types  -  use these throughout the codebase instead of manual interfaces.
 export type GapItem = z.infer<typeof GapItemSchema>;
 export type FrameworkResult = z.infer<typeof FrameworkResultSchema>;
 export type ActionPlanItem = z.infer<typeof ActionPlanItemSchema>;
@@ -108,7 +108,7 @@ export type GapAnalysisResult = z.infer<typeof GapAnalysisResultSchema>;
 export type RawChunkGapItem = z.infer<typeof RawChunkGapItemSchema>;
 export type ChunkOutput = z.infer<typeof ChunkOutputSchema>;
 
-// ─── Chunking Strategy (T1) ─────────────────────────────────────────────────
+// --- Chunking Strategy (T1) -------------------------------------------------
 
 export interface PolicyChunk {
   index: number;
@@ -128,7 +128,7 @@ export const CHUNK_OVERLAP = 800;
 
 /**
  * Split policy text into overlapping chunks that respect paragraph boundaries.
- * If the text fits within CHUNK_SIZE the result is a single-element array —
+ * If the text fits within CHUNK_SIZE the result is a single-element array  - 
  * callers should check length === 1 to skip the multi-pass path.
  */
 export function chunkPolicyText(
@@ -160,7 +160,7 @@ export function chunkPolicyText(
         charStart = charEnd - tail.length;
         current = `${tail}\n\n${para}`;
       } else {
-        // Single paragraph larger than chunkSize — split at nearest word boundary
+        // Single paragraph larger than chunkSize  -  split at nearest word boundary
         let pos = 0;
         while (pos < para.length) {
           let end = pos + chunkSize;
@@ -204,7 +204,7 @@ export function chunkPolicyText(
   return chunks;
 }
 
-// ─── Prompt Injection Sanitization ───────────────────────────────────────────
+// --- Prompt Injection Sanitization -------------------------------------------
 
 /**
  * Patterns that are characteristic of prompt injection attacks embedded inside
@@ -243,7 +243,7 @@ export function sanitizePolicyText(text: string): { sanitized: string; wasModifi
   return { sanitized, wasModified };
 }
 
-// ─── Shared Schema Example ────────────────────────────────────────────────────
+// --- Shared Schema Example ----------------------------------------------------
 
 /**
  * Returns the required JSON schema example string embedded in prompts.
@@ -268,7 +268,7 @@ function buildRequiredJsonSchema(params: {
           "id": "DPA-G001",
           "title": "No Data Subject Rights Procedure",
           "severity": "HIGH",
-          "regulatoryBasis": "Data Protection Act 2019, Section 26 — Right of access; Section 30 — Right to erasure",
+          "regulatoryBasis": "Data Protection Act 2019, Section 26  -  Right of access; Section 30  -  Right to erasure",
           "description": "The policy does not define procedures for handling data subject requests (access, rectification, erasure, objection). The DPA requires responses within 21 days.",
           "policyCurrentState": "Policy mentions 'we respect privacy' but contains no operational procedure for handling subject rights requests.",
           "recommendation": "Draft and implement a Data Subject Rights Procedure covering: request intake form, 21-day response SLA, escalation process, and rejection grounds as per DPA Section 26-32.",
@@ -276,7 +276,7 @@ function buildRequiredJsonSchema(params: {
           "priority": 1,
           "evidenceRequired": ["Data Subject Rights Request Form", "Procedure SOP document", "Staff training records on DPA rights"],
           "responsibleRole": "Data Protection Officer",
-          "regulatoryDeadline": "Immediate — DPA 2019 is in force; non-compliance risks ODPC enforcement"
+          "regulatoryDeadline": "Immediate  -  DPA 2019 is in force; non-compliance risks ODPC enforcement"
         }
       ],
       "strengths": [
@@ -313,7 +313,7 @@ function buildRequiredJsonSchema(params: {
 }`;
 }
 
-// ─── Prompt Builders ─────────────────────────────────────────────────────────
+// --- Prompt Builders ---------------------------------------------------------
 
 /**
  * System prompt for gap analysis (T4: expanded regulation list).
@@ -346,14 +346,14 @@ CRITICAL OUTPUT RULES:
 2. Every gap must cite a real, specific Kenyan regulatory provision (e.g., "DPA 2019, Section 32(1)(b)").
 3. Do not fabricate gaps that do not exist based on the policy text provided.
 4. Be specific about WHAT is missing in the policy, not generic statements.
-5. Overall score must reflect actual gap severity — a policy with CRITICAL gaps cannot score above 50.
+5. Overall score must reflect actual gap severity  -  a policy with CRITICAL gaps cannot score above 50.
 
 ADDITIONAL OUTPUT REQUIREMENTS:
 
 For each gap identified, you MUST provide:
-- evidenceRequired: An array of specific documents or artefacts the organisation must produce or maintain to close this gap. Be specific — not "update policies" but "Draft: Data Subject Access Request (DSAR) Procedure Document aligned to DPA 2019 Section 26" or "Obtain: Signed Data Processing Agreement with each third-party processor per DPA 2019 Section 31". Each item should start with a verb: Draft, Obtain, Implement, Review, Update, Establish, Document, Register.
+- evidenceRequired: An array of specific documents or artefacts the organisation must produce or maintain to close this gap. Be specific  -  not "update policies" but "Draft: Data Subject Access Request (DSAR) Procedure Document aligned to DPA 2019 Section 26" or "Obtain: Signed Data Processing Agreement with each third-party processor per DPA 2019 Section 31". Each item should start with a verb: Draft, Obtain, Implement, Review, Update, Establish, Document, Register.
 - responsibleRole: The specific organisational role responsible for leading the remediation. Use standard titles: "Data Protection Officer (DPO)", "Chief Information Security Officer (CISO)", "Chief Compliance Officer (CCO)", "Chief Financial Officer (CFO)", "Head of Legal", "Head of IT/Engineering", "Board of Directors", "Head of Risk Management", "Head of Human Resources".
-- regulatoryDeadline: If the regulation specifies a compliance deadline or timeline, state it explicitly with the source reference (e.g., "DPA 2019 Section 18 — DPO registration with ODPC required before processing personal data", "Digital Credit Providers Regulations 2022 — Licence application required per Regulation 4"). If no specific deadline exists, state "Ongoing obligation — continuous compliance required."
+- regulatoryDeadline: If the regulation specifies a compliance deadline or timeline, state it explicitly with the source reference (e.g., "DPA 2019 Section 18  -  DPO registration with ODPC required before processing personal data", "Digital Credit Providers Regulations 2022  -  Licence application required per Regulation 4"). If no specific deadline exists, state "Ongoing obligation  -  continuous compliance required."
 
 For each action plan item, you MUST include:
 - responsibleRole: Same role assignment as above.
@@ -361,14 +361,14 @@ For each action plan item, you MUST include:
 
 KENYAN REGULATORY CONTEXT UPDATES:
 Pay special attention to:
-- ODPC Data Protection (General) Regulations 2021 (SI No. 3 of 2021) — implementing regulations under DPA 2019, covering data controller/processor registration, DPIA requirements, and breach notification timelines (72 hours to ODPC).
-- Kenya Information and Communications Act (KICA) — cybersecurity obligations on providers of electronic communications services.
-- CBK Guidance Note on Cybersecurity (CBS/PG/82) — specific cybersecurity requirements for banks and payment service providers regulated by CBK.`;
+- ODPC Data Protection (General) Regulations 2021 (SI No. 3 of 2021)  -  implementing regulations under DPA 2019, covering data controller/processor registration, DPIA requirements, and breach notification timelines (72 hours to ODPC).
+- Kenya Information and Communications Act (KICA)  -  cybersecurity obligations on providers of electronic communications services.
+- CBK Guidance Note on Cybersecurity (CBS/PG/82)  -  specific cybersecurity requirements for banks and payment service providers regulated by CBK.`;
 }
 
 /**
  * User prompt for the first-pass per-chunk phase.
- * Only identifies gaps in the given chunk — no scoring or consolidation.
+ * Only identifies gaps in the given chunk  -  no scoring or consolidation.
  */
 export function generateChunkAnalysisUserPrompt(
   params: Omit<GapAnalysisParams, 'policyText'> & { chunkText: string },
@@ -433,19 +433,19 @@ export function generateMergeUserPrompt(
   return `You have received pre-identified compliance gaps from a ${params.chunkCount}-chunk analysis of "${params.documentName}".
 Your task: consolidate, de-duplicate, score, and produce the final GapAnalysisResult JSON.
 
-Analysis depth: ${params.analysisDepth} — ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
+Analysis depth: ${params.analysisDepth}  -  ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
 Frameworks: ${params.regulatoryFrameworks.join(', ')}
 ${ragSection}
-## RAW GAPS FROM ALL CHUNKS (${(rawGaps as unknown[]).length} total — some may be duplicates)
+## RAW GAPS FROM ALL CHUNKS (${(rawGaps as unknown[]).length} total  -  some may be duplicates)
 \`\`\`json
 ${JSON.stringify(rawGaps, null, 2)}
 \`\`\`
 
 ## CONSOLIDATION INSTRUCTIONS
-1. De-duplicate gaps describing the same issue — keep the most detailed entry, reassign sequential priority numbers. If a gap was identified in multiple sections of the document, this STRENGTHENS the finding — do not discard it. Merge with the most complete description and the highest severity.
+1. De-duplicate gaps describing the same issue  -  keep the most detailed entry, reassign sequential priority numbers. If a gap was identified in multiple sections of the document, this STRENGTHENS the finding  -  do not discard it. Merge with the most complete description and the highest severity.
 2. When merging duplicate gaps: combine their evidenceRequired arrays (deduplicate identical items), take the most specific regulatoryDeadline (prefer a concrete section citation over a generic statement), and use the most senior responsibleRole if chunks disagree.
 3. Group final gaps by framework into the frameworks array.
-4. Score each framework (0–100) based on severity/count of retained gaps.
+4. Score each framework (0-100) based on severity/count of retained gaps.
 5. Write a concise executiveSummary (2-4 sentences).
 6. Build a prioritised actionPlan with dependsOn referencing other action titles or empty []. Every action plan item must include responsibleRole.
 7. Set metadata.chunksProcessed = ${params.chunkCount}.
@@ -456,11 +456,11 @@ ${JSON.stringify(rawGaps, null, 2)}
 ${buildRequiredJsonSchema({ documentName: params.documentName, analysisDepth: params.analysisDepth, regulatoryFrameworks: params.regulatoryFrameworks })}
 \`\`\`
 
-Analyse EVERY specified framework — include frameworks with no gaps (score them high). Return ONLY valid JSON.`;
+Analyse EVERY specified framework  -  include frameworks with no gaps (score them high). Return ONLY valid JSON.`;
 }
 
 /**
- * User prompt for gap analysis — used for single-pass (document <= CHUNK_SIZE).
+ * User prompt for gap analysis  -  used for single-pass (document <= CHUNK_SIZE).
  */
 export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string {
   const depthInstructions: Record<string, string> = {
@@ -483,7 +483,7 @@ export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string
 ## ANALYSIS SCOPE
 - **Document:** ${params.documentName} (${params.documentType.toUpperCase()})
 - **Regulatory Frameworks:** ${params.regulatoryFrameworks.join(', ')}
-- **Analysis Depth:** ${params.analysisDepth} — ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
+- **Analysis Depth:** ${params.analysisDepth}  -  ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
 ${focusSection}${ragSection}
 
 ## POLICY DOCUMENT TO ANALYSE
@@ -501,7 +501,7 @@ ${buildRequiredJsonSchema(params)}
 Analyse EVERY specified framework. Compute metadata counts from your actual gaps after writing all frameworks. Overall score = weighted average of framework scores, with CRITICAL gaps reducing it proportionally. Return ONLY valid JSON.`;
 }
 
-// ─── Output Parser ────────────────────────────────────────────────────────────
+// --- Output Parser ------------------------------------------------------------
 
 /**
  * Parse and validate AI gap analysis output using Zod (T3).
@@ -529,13 +529,13 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
     parsed = JSON.parse(jsonMatch[0]);
   }
 
-  // Zod validation — coerces defaults (evidenceRequired: [], dependsOn: [])
+  // Zod validation  -  coerces defaults (evidenceRequired: [], dependsOn: [])
   const result = GapAnalysisResultSchema.safeParse(parsed);
   if (!result.success) {
     // Surface the first Zod error to help with debugging
     const firstError = result.error.issues[0];
     throw new Error(
-      `Invalid gap analysis structure: ${firstError.path.join('.')} — ${firstError.message}`
+      `Invalid gap analysis structure: ${firstError.path.join('.')}  -  ${firstError.message}`
     );
   }
 
@@ -601,7 +601,7 @@ export function parseChunkAnalysisOutput(rawContent: string, chunkIndex: number)
   if (!result.success) {
     const firstError = result.error.issues[0];
     throw new Error(
-      `Chunk ${chunkIndex} validation failed: ${firstError.path.join('.')} — ${firstError.message}`
+      `Chunk ${chunkIndex} validation failed: ${firstError.path.join('.')}  -  ${firstError.message}`
     );
   }
 

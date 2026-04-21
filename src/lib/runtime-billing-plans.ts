@@ -119,7 +119,7 @@ function mergePlan(planId: SubscriptionPlan, overrides: BillingPlanOverrides): B
   if (stripe && override?.stripe) {
     // BillingPlanStripeOverride fields are `string | null | undefined`.
     // The `!== null` guard narrows to `string`, which is what PlanConfig.stripe requires.
-    // A null override ID means "no override — keep the base plan's ID unchanged."
+    // A null override ID means "no override  -  keep the base plan's ID unchanged."
     if (override.stripe.monthlyPriceId !== undefined && override.stripe.monthlyPriceId !== null) {
       stripe.monthlyPriceId = override.stripe.monthlyPriceId;
     }

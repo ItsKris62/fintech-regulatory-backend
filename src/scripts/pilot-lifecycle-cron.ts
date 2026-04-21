@@ -10,22 +10,22 @@
  *   Region:   Same region as the API service
  *
  * Lifecycle email schedule (days since pilotStartedAt):
- *   Day  0 → PilotWelcomeEmail        (sent by provision-pilot-testers.ts, not here)
- *   Day  3 → PilotDay3NudgeEmail      (only if user has never logged in)
- *   Day  7 → PilotDay7CheckinEmail
- *   Day 10 → PilotDay10FeaturesEmail
- *   Day 13 → PilotDay13WarningEmail
- *   Day ≥14 → PilotExpiredEmail       (pilotExpiresAt <= now, once per user)
+ *   Day  0 -> PilotWelcomeEmail        (sent by provision-pilot-testers.ts, not here)
+ *   Day  3 -> PilotDay3NudgeEmail      (only if user has never logged in)
+ *   Day  7 -> PilotDay7CheckinEmail
+ *   Day 10 -> PilotDay10FeaturesEmail
+ *   Day 13 -> PilotDay13WarningEmail
+ *   Day ≥14 -> PilotExpiredEmail       (pilotExpiresAt <= now, once per user)
  *
  * Design invariants:
  *   - Acquires a Redis distributed lock (NX + EX) before any work.
  *     If the lock is already held (duplicate cron fire), exits immediately.
- *   - Each email type is gated by a Redis sentinel key (NX write) —
+ *   - Each email type is gated by a Redis sentinel key (NX write)  - 
  *     so each email is sent at most once per user per stage even if the
  *     cron fires multiple times on the same day.
  *   - Plan cache (sheriabot:planctx:{userId}) is DELeted for expired pilots so
  *     the next API request resolves REGULATOR without waiting for TTL.
- *   - Never crashes the process — all per-user errors are caught and logged.
+ *   - Never crashes the process  -  all per-user errors are caught and logged.
  *   - Exits 0 on full success or partial failure (logged); exits 1 only if the
  *     top-level DB query itself fails.
  */
@@ -36,11 +36,11 @@ import { prisma } from '@/lib/prisma/client';
 import { reactMailer } from '@/lib/email/react-mailer.service';
 import { logger } from '@/utils/logger';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants -----------------------------------------------------------------
 
 const LOCK_KEY        = 'sheriabot:pilot:cron:lock';
-const LOCK_TTL_SEC    = 600;  // 10 minutes — max expected run time
-const SENTINEL_TTL_SEC = 60 * 60 * 24 * 60; // 60 days — long enough to be permanent
+const LOCK_TTL_SEC    = 600;  // 10 minutes  -  max expected run time
+const SENTINEL_TTL_SEC = 60 * 60 * 24 * 60; // 60 days  -  long enough to be permanent
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
@@ -48,7 +48,7 @@ const FRONTEND_URL = (process.env.FRONTEND_URL || 'https://app.sheriabot.com')
   .split(',')[0]
   .trim();
 
-// ── Sentinel key helpers ──────────────────────────────────────────────────────
+// -- Sentinel key helpers ------------------------------------------------------
 
 type LifecycleStage =
   | 'day3_nudge'
@@ -64,12 +64,12 @@ function sentinelKey(userId: string, stage: LifecycleStage): string {
 /** Returns true if the sentinel was freshly set (i.e. email not yet sent). */
 async function claimSentinel(userId: string, stage: LifecycleStage): Promise<boolean> {
   const key = sentinelKey(userId, stage);
-  // SET NX EX — returns "OK" if key was created, null if it already existed.
+  // SET NX EX  -  returns "OK" if key was created, null if it already existed.
   const result = await redis.set(key, '1', { nx: true, ex: SENTINEL_TTL_SEC });
   return result !== null;
 }
 
-// ── Per-pilot processing ──────────────────────────────────────────────────────
+// -- Per-pilot processing ------------------------------------------------------
 
 interface PilotUser {
   id:               string;
@@ -100,7 +100,7 @@ async function processPilot(user: PilotUser, now: Date): Promise<StageResult[]> 
   const daysSinceStart = Math.floor((now.getTime() - user.pilotStartedAt.getTime()) / MS_PER_DAY);
   const isExpired    = user.pilotExpiresAt !== null && user.pilotExpiresAt <= now;
 
-  // ── Expired ────────────────────────────────────────────────────────────────
+  // -- Expired ----------------------------------------------------------------
   if (isExpired && user.pilotConvertedAt === null) {
     try {
       const claimed = await claimSentinel(user.id, 'expired');
@@ -125,7 +125,7 @@ async function processPilot(user: PilotUser, now: Date): Promise<StageResult[]> 
     return results; // Don't send lifecycle emails to expired pilots.
   }
 
-  // ── Day 13 — expiry warning ────────────────────────────────────────────────
+  // -- Day 13  -  expiry warning ------------------------------------------------
   if (daysSinceStart >= 13 && user.pilotExpiresAt !== null) {
     try {
       const claimed = await claimSentinel(user.id, 'day13_warning');
@@ -147,7 +147,7 @@ async function processPilot(user: PilotUser, now: Date): Promise<StageResult[]> 
     }
   }
 
-  // ── Day 10 — features spotlight ────────────────────────────────────────────
+  // -- Day 10  -  features spotlight --------------------------------------------
   if (daysSinceStart >= 10) {
     try {
       const claimed = await claimSentinel(user.id, 'day10_features');
@@ -172,7 +172,7 @@ async function processPilot(user: PilotUser, now: Date): Promise<StageResult[]> 
     }
   }
 
-  // ── Day 7 — mid-point check-in ─────────────────────────────────────────────
+  // -- Day 7  -  mid-point check-in ---------------------------------------------
   if (daysSinceStart >= 7) {
     try {
       const claimed = await claimSentinel(user.id, 'day7_checkin');
@@ -197,7 +197,7 @@ async function processPilot(user: PilotUser, now: Date): Promise<StageResult[]> 
     }
   }
 
-  // ── Day 3 — nudge (only if user has never logged in) ──────────────────────
+  // -- Day 3  -  nudge (only if user has never logged in) ----------------------
   if (daysSinceStart >= 3) {
     try {
       const claimed = await claimSentinel(user.id, 'day3_nudge');
@@ -216,7 +216,7 @@ async function processPilot(user: PilotUser, now: Date): Promise<StageResult[]> 
           logger.info({ type: 'PILOT_DAY3_EMAIL_SENT', userId: user.id });
           results.push({ userId: user.id, stage: 'day3_nudge', sent: true });
         } else {
-          // User has logged in — sentinel is already set; skip email.
+          // User has logged in  -  sentinel is already set; skip email.
           logger.debug({ type: 'PILOT_DAY3_NUDGE_SKIPPED_HAS_LOGIN', userId: user.id });
           results.push({ userId: user.id, stage: 'day3_nudge', sent: false });
         }
@@ -237,28 +237,28 @@ async function processPilot(user: PilotUser, now: Date): Promise<StageResult[]> 
   return results;
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// -- Main ----------------------------------------------------------------------
 
 async function main(): Promise<void> {
   const now = new Date();
 
   logger.info({ type: 'PILOT_CRON_START', runAt: now.toISOString() });
 
-  // ── Acquire distributed lock ───────────────────────────────────────────────
+  // -- Acquire distributed lock -----------------------------------------------
   const lockAcquired = await redis.set(LOCK_KEY, now.toISOString(), {
     nx:  true,
     ex:  LOCK_TTL_SEC,
   });
 
   if (lockAcquired === null) {
-    logger.warn({ type: 'PILOT_CRON_LOCK_HELD', message: 'Another instance is running — exiting.' });
+    logger.warn({ type: 'PILOT_CRON_LOCK_HELD', message: 'Another instance is running  -  exiting.' });
     return;
   }
 
   logger.info({ type: 'PILOT_CRON_LOCK_ACQUIRED' });
 
   try {
-    // ── Fetch all active pilot users ─────────────────────────────────────────
+    // -- Fetch all active pilot users -----------------------------------------
     const pilots = await (prisma as any).user.findMany({
       where: { isPilot: true },
       select: {
@@ -279,7 +279,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    // ── Process each pilot sequentially (avoids Resend rate limits) ──────────
+    // -- Process each pilot sequentially (avoids Resend rate limits) ----------
     let totalSent    = 0;
     let totalSkipped = 0;
     let totalErrors  = 0;
@@ -294,7 +294,7 @@ async function main(): Promise<void> {
       }
     }
 
-    // ── Summary log ───────────────────────────────────────────────────────────
+    // -- Summary log -----------------------------------------------------------
     logger.info({
       type:         'PILOT_CRON_COMPLETE',
       pilots:       pilots.length,
@@ -305,7 +305,7 @@ async function main(): Promise<void> {
     });
 
     console.log('\n====================================================');
-    console.log('  Pilot Lifecycle Cron — Summary');
+    console.log('  Pilot Lifecycle Cron  -  Summary');
     console.log('====================================================');
     console.log(`  Pilot users processed: ${pilots.length}`);
     console.log(`  Emails sent:           ${totalSent}`);

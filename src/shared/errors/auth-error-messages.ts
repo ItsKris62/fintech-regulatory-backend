@@ -11,7 +11,7 @@
  * - Server errors never expose stack traces or internal details.
  */
 
-// ── Error code registry ───────────────────────────────────────────────────────
+// -- Error code registry -------------------------------------------------------
 
 export const AUTH_ERROR_CODES = {
   // Credentials / session
@@ -60,10 +60,10 @@ export const AUTH_ERROR_CODES = {
 
 export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[keyof typeof AUTH_ERROR_CODES];
 
-// ── User-facing message map ───────────────────────────────────────────────────
+// -- User-facing message map ---------------------------------------------------
 
 export const AUTH_ERROR_MESSAGES: Record<AuthErrorCode, string> = {
-  // Credentials / session — generic to prevent enumeration
+  // Credentials / session  -  generic to prevent enumeration
   INVALID_CREDENTIALS:
     'Invalid email or password. Please check your credentials and try again.',
   SESSION_EXPIRED:
@@ -79,7 +79,7 @@ export const AUTH_ERROR_MESSAGES: Record<AuthErrorCode, string> = {
   ACCOUNT_NOT_ACTIVE:
     'Your account is not active. Please contact support@sheriabot.com for assistance.',
 
-  // Registration — safe: never reveal whether email is registered
+  // Registration  -  safe: never reveal whether email is registered
   EMAIL_UNAVAILABLE:
     "If this email is available, you'll receive a verification link shortly. Check your inbox (and spam folder).",
   FREE_EMAIL_NOT_ALLOWED:
@@ -89,7 +89,7 @@ export const AUTH_ERROR_MESSAGES: Record<AuthErrorCode, string> = {
   REGISTRATION_FAILED:
     'Registration failed. Please try again. If the problem continues, contact support@sheriabot.com.',
 
-  // Password policy — granular, actionable
+  // Password policy  -  granular, actionable
   WEAK_PASSWORD:
     'Password does not meet the required complexity. Please review the requirements below.',
   COMMON_PASSWORD:
@@ -111,7 +111,7 @@ export const AUTH_ERROR_MESSAGES: Record<AuthErrorCode, string> = {
   INVALID_VERIFICATION_TOKEN:
     'This verification link is invalid or has expired. Please request a new verification email.',
 
-  // Rate limiting — includes guidance
+  // Rate limiting  -  includes guidance
   RATE_LIMITED_LOGIN:
     'Too many sign-in attempts. Please wait 15 minutes before trying again, or reset your password.',
   RATE_LIMITED_REGISTER:

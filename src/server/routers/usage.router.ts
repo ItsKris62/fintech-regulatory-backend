@@ -2,14 +2,14 @@
  * Usage Router
  *
  * tRPC procedures for per-organisation usage data.
- * All business logic is delegated to UsageTrackingService — this router
+ * All business logic is delegated to UsageTrackingService  -  this router
  * only handles input validation, calls the service, and formats errors.
  *
  * Procedures:
- *   usage.current      — Current period summary (dashboard card)
- *   usage.history      — Last N completed months (for period selector)
- *   usage.compare      — Side-by-side comparison with a past period
- *   usage.periodDetail — Full breakdown for any single period (drill-down)
+ *   usage.current       -  Current period summary (dashboard card)
+ *   usage.history       -  Last N completed months (for period selector)
+ *   usage.compare       -  Side-by-side comparison with a past period
+ *   usage.periodDetail  -  Full breakdown for any single period (drill-down)
  */
 
 import { z } from 'zod';
@@ -21,7 +21,7 @@ import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
 import type { UsagePeriod } from '@prisma/client';
 
-// ── Local helper ──────────────────────────────────────────────────────────────
+// -- Local helper --------------------------------------------------------------
 
 /** Mirror the service's category builder for direct DB records in periodDetail. */
 function periodRecordToCategories(
@@ -40,7 +40,7 @@ function periodRecordToCategories(
   ];
 }
 
-// ── Zod output schemas ────────────────────────────────────────────────────────
+// -- Zod output schemas --------------------------------------------------------
 
 const categorySummarySchema = z.object({
   /** Field name on UsagePeriod (e.g. "complianceQueries") */
@@ -53,7 +53,7 @@ const categorySummarySchema = z.object({
    */
   limit:       z.number(),
   available:   z.boolean(),
-  /** 0–100; 0 when unlimited or unavailable */
+  /** 0-100; 0 when unlimited or unavailable */
   percentUsed: z.number(),
 });
 
@@ -92,7 +92,7 @@ const usageComparisonSchema = z.object({
   changes:  z.array(usageChangeItemSchema),
 });
 
-// ── Router ────────────────────────────────────────────────────────────────────
+// -- Router --------------------------------------------------------------------
 
 export const usageRouter = router({
   /**
@@ -102,9 +102,9 @@ export const usageRouter = router({
    * breakdown (current / limit / percentUsed / available).
    *
    * Hot path: reads live Redis counters and triggers a non-blocking DB sync.
-   * Frontend should set staleTime to ~60 s — usage changes infrequently per session.
+   * Frontend should set staleTime to ~60 s  -  usage changes infrequently per session.
    *
-   * @protected — requires authentication + withPlanContext
+   * @protected  -  requires authentication + withPlanContext
    */
   current: protectedProcedure
     .use(withPlanContext)
@@ -150,12 +150,12 @@ export const usageRouter = router({
    * Get usage summaries for the last N completed months.
    *
    * "Completed" = any billing period before the current EAT calendar month.
-   * Results are ordered newest → oldest.
-   * Reads entirely from the UsagePeriod DB table — no Redis access.
+   * Results are ordered newest -> oldest.
+   * Reads entirely from the UsagePeriod DB table  -  no Redis access.
    *
    * Used to populate the comparison month selector in the UI.
    *
-   * @protected — requires authentication
+   * @protected  -  requires authentication
    */
   history: protectedProcedure
     .use(withPlanContext)
@@ -203,7 +203,7 @@ export const usageRouter = router({
    * Returns current + previous summaries and a per-category change breakdown
    * with direction ("up" | "down" | "same") and change percentage.
    *
-   * @protected — requires authentication
+   * @protected  -  requires authentication
    */
   compare: protectedProcedure
     .use(withPlanContext)
@@ -263,11 +263,11 @@ export const usageRouter = router({
   /**
    * Get the full usage breakdown for a specific period by its DB record ID.
    *
-   * Useful for drill-down views. Always reads from the DB snapshot — not Redis.
+   * Useful for drill-down views. Always reads from the DB snapshot  -  not Redis.
    * The current period's live counters are NOT reflected here; use `usage.current`
    * for the live view.
    *
-   * @protected — requires authentication; org-scoped (cannot access another org's data)
+   * @protected  -  requires authentication; org-scoped (cannot access another org's data)
    */
   periodDetail: protectedProcedure
     .use(withPlanContext)

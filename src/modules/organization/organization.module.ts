@@ -686,11 +686,12 @@ class OrganizationModule {
           createdAt: new Date(),
         };
 
-        await redis.set(
-          `${REDIS_KEYS.INVITATION}${token}`,
-          JSON.stringify(invitationData),
-          { ex: ORGANIZATION_CONSTANTS.INVITATION_EXPIRY_DAYS * 24 * 60 * 60 }
-        );
+        const inviteKey = `${REDIS_KEYS.INVITATION}${token}`;
+        const inviteExTtl = ORGANIZATION_CONSTANTS.INVITATION_EXPIRY_DAYS * 24 * 60 * 60;
+        await redis.set(inviteKey, JSON.stringify(invitationData), { ex: inviteExTtl });
+        // Register in global tracking set so admin.getPendingInvitations() can enumerate
+        await redis.sadd('sheriabot:idx:invitations', inviteKey);
+        await redis.expire('sheriabot:idx:invitations', inviteExTtl);
 
         // Send invitation email
         if (validated.sendInvite) {
@@ -763,12 +764,10 @@ class OrganizationModule {
 
       // 2. Check if expired
       if (new Date(invitation.expiresAt) < new Date()) {
-        await redis.del(`${REDIS_KEYS.INVITATION}${token}`);
-        throw new OrganizationError(
-          'Invitation has expired',
-          'INVITATION_EXPIRED',
-          400
-        );
+        const expiredKey = `${REDIS_KEYS.INVITATION}${token}`;
+        await redis.del(expiredKey);
+        await redis.srem('sheriabot:idx:invitations', expiredKey);
+        throw new OrganizationError('Invitation has expired', 'INVITATION_EXPIRED', 400);
       }
 
       // 3. Get user and verify email matches
@@ -804,12 +803,10 @@ class OrganizationModule {
       });
 
       if (existingMember) {
-        await redis.del(`${REDIS_KEYS.INVITATION}${token}`);
-        throw new OrganizationError(
-          'You are already a member of this organization',
-          'ALREADY_MEMBER',
-          409
-        );
+        const dupKey = `${REDIS_KEYS.INVITATION}${token}`;
+        await redis.del(dupKey);
+        await redis.srem('sheriabot:idx:invitations', dupKey);
+        throw new OrganizationError('You are already a member of this organization', 'ALREADY_MEMBER', 409);
       }
 
       // 5. Add member
@@ -842,8 +839,10 @@ class OrganizationModule {
         });
       }
 
-      // 7. Delete invitation
-      await redis.del(`${REDIS_KEYS.INVITATION}${token}`);
+      // 7. Delete invitation and deregister from tracking set
+      const acceptedKey = `${REDIS_KEYS.INVITATION}${token}`;
+      await redis.del(acceptedKey);
+      await redis.srem('sheriabot:idx:invitations', acceptedKey);
 
       // 8. Invalidate cache
       await this.invalidateMembersCache(invitation.organizationId);

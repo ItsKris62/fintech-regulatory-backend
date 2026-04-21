@@ -19,7 +19,7 @@ import { logger } from '@/utils/logger';
  * All business logic lives in CalendarModule.
  *
  * All queries/mutations are scoped to ctx.user.organizationId so no
- * org ID is required in the input — multi-tenant isolation is enforced here.
+ * org ID is required in the input  -  multi-tenant isolation is enforced here.
  */
 export const calendarRouter = router({
   /**
@@ -52,7 +52,7 @@ export const calendarRouter = router({
     }),
 
   /**
-   * List events for the calendar grid — filtered by month/year and optional
+   * List events for the calendar grid  -  filtered by month/year and optional
    * status/priority filters.
    */
   list: protectedProcedure
@@ -96,7 +96,7 @@ export const calendarRouter = router({
     }),
 
   /**
-   * Update an existing event (partial — only provided fields are changed).
+   * Update an existing event (partial  -  only provided fields are changed).
    */
   update: protectedProcedure
     .use(withPlanContext)
@@ -152,7 +152,7 @@ export const calendarRouter = router({
           daysAhead: input.daysAhead,
         });
 
-        // Fire-and-forget lazy reminder evaluation — does not block the response
+        // Fire-and-forget lazy reminder evaluation  -  does not block the response
         void calendarModule.evaluateAndGenerateReminders(organizationId).catch((err: unknown) => {
           logger.error({ type: 'calendar_reminder_eval_error', organizationId, error: String(err) });
         });

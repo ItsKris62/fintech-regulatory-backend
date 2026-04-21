@@ -16,7 +16,7 @@ async function migrate(): Promise<void> {
       throw new Error('DATABASE_URL environment variable is not set');
     }
 
-    // Run prisma migrate deploy (safe for production — applies pending migrations only)
+    // Run prisma migrate deploy (safe for production  -  applies pending migrations only)
     const output = execSync('npx prisma migrate deploy', {
       encoding: 'utf-8',
       stdio: 'pipe',

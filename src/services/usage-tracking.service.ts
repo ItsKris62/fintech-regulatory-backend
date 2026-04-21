@@ -2,19 +2,19 @@
  * UsageTrackingService
  *
  * Handles all usage tracking business logic:
- *   – Period management (get/create current EAT calendar-month UsagePeriod)
- *   – Lazy sync of Redis counters → UsagePeriod DB record
- *   – Dashboard summary (current usage with period context)
- *   – Usage history (last N completed months from DB)
- *   – Usage comparison (current vs a past period)
- *   – Document storage increment (float-safe Redis INCRBYFLOAT)
- *   – Plan limit snapshotting on plan change
+ *   - Period management (get/create current EAT calendar-month UsagePeriod)
+ *   - Lazy sync of Redis counters -> UsagePeriod DB record
+ *   - Dashboard summary (current usage with period context)
+ *   - Usage history (last N completed months from DB)
+ *   - Usage comparison (current vs a past period)
+ *   - Document storage increment (float-safe Redis INCRBYFLOAT)
+ *   - Plan limit snapshotting on plan change
  *
  * Design principles:
- *   – Redis is the real-time enforcement source of truth (read by checkUsageLimit middleware).
- *   – UsagePeriod DB records are the durable history store, synced lazily on reads.
- *   – Period boundaries use EAT (UTC+3) calendar months, stored as UTC equivalents.
- *   – Redis key format matches checkUsageLimit middleware exactly (UTC YYYY-MM month key).
+ *   - Redis is the real-time enforcement source of truth (read by checkUsageLimit middleware).
+ *   - UsagePeriod DB records are the durable history store, synced lazily on reads.
+ *   - Period boundaries use EAT (UTC+3) calendar months, stored as UTC equivalents.
+ *   - Redis key format matches checkUsageLimit middleware exactly (UTC YYYY-MM month key).
  */
 
 import { BillingMetric, SubscriptionPlan, type UsagePeriod } from '@prisma/client';
@@ -23,7 +23,7 @@ import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 
-// ── Constants ──────────────────────────────────────────────────────────────────
+// -- Constants ------------------------------------------------------------------
 
 /** EAT = UTC+3 in milliseconds */
 const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
@@ -34,7 +34,7 @@ const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
  */
 const USAGE_TTL_SECONDS = 35 * 24 * 60 * 60;
 
-// ── Internal types ─────────────────────────────────────────────────────────────
+// -- Internal types -------------------------------------------------------------
 
 interface PeriodCounters {
   complianceQueries:    number;
@@ -55,7 +55,7 @@ interface PeriodLimits {
   policyGenerationLimit:    number;
 }
 
-// ── Public types ───────────────────────────────────────────────────────────────
+// -- Public types ---------------------------------------------------------------
 
 export interface CategorySummary {
   /** Field name on UsagePeriod (e.g. "complianceQueries") */
@@ -70,7 +70,7 @@ export interface CategorySummary {
   limit:       number;
   /** false when limit === 0 (feature not in plan) */
   available:   boolean;
-  /** 0–100; 0 when unlimited or unavailable */
+  /** 0-100; 0 when unlimited or unavailable */
   percentUsed: number;
 }
 
@@ -109,7 +109,7 @@ export interface UsageComparison {
   changes:  UsageChangeItem[];
 }
 
-// ── Category metadata ──────────────────────────────────────────────────────────
+// -- Category metadata ----------------------------------------------------------
 
 /**
  * Ordered list of trackable usage categories.
@@ -129,7 +129,7 @@ const CATEGORIES: ReadonlyArray<{
   { key: 'policyGenerations',    limitKey: 'policyGenerationLimit',    label: 'Policy Generations' },
 ] as const;
 
-// ── Period helpers ─────────────────────────────────────────────────────────────
+// -- Period helpers -------------------------------------------------------------
 
 /** Return the current year and 1-based month in EAT (UTC+3). */
 function getCurrentEATMonth(): { year: number; month: number } {
@@ -143,7 +143,7 @@ function getCurrentEATMonth(): { year: number; month: number } {
 /**
  * Compute UTC Date boundaries for a calendar month expressed in EAT.
  *
- * Example — March 2026:
+ * Example  -  March 2026:
  *   start: 2026-02-28T21:00:00.000Z  (= 2026-03-01 00:00:00 EAT)
  *   end:   2026-03-31T20:59:59.999Z  (= 2026-03-31 23:59:59.999 EAT)
  */
@@ -169,7 +169,7 @@ function daysRemainingInPeriod(periodEnd: Date): number {
 }
 
 /**
- * Redis key for a usage metric — matches the key format used by checkUsageLimit
+ * Redis key for a usage metric  -  matches the key format used by checkUsageLimit
  * middleware exactly (UTC-based YYYY-MM month suffix).
  */
 function redisUsageKey(orgId: string, metric: BillingMetric): string {
@@ -177,7 +177,7 @@ function redisUsageKey(orgId: string, metric: BillingMetric): string {
   return `sheriabot:usage:${orgId}:${metric}:${period}`;
 }
 
-// ── Plan limits helper ────────────────────────────────────────────────────────
+// -- Plan limits helper --------------------------------------------------------
 
 /**
  * Derive the UsagePeriod limit snapshot fields from PLAN_ENTITLEMENTS.
@@ -199,7 +199,7 @@ function resolvePlanLimits(plan: SubscriptionPlan): PeriodLimits {
   };
 }
 
-// ── Category builder ──────────────────────────────────────────────────────────
+// -- Category builder ----------------------------------------------------------
 
 function buildCategorySummary(
   meta:     (typeof CATEGORIES)[number],
@@ -223,10 +223,10 @@ function buildCategories(counters: PeriodCounters, limits: PeriodLimits): Catego
   return CATEGORIES.map((meta) => buildCategorySummary(meta, counters, limits));
 }
 
-// ── Service class ─────────────────────────────────────────────────────────────
+// -- Service class -------------------------------------------------------------
 
 class UsageTrackingService {
-  // ── Period management ─────────────────────────────────────────────────────
+  // -- Period management -----------------------------------------------------
 
   /**
    * Get or create the UsagePeriod record for the current EAT calendar month.
@@ -256,7 +256,7 @@ class UsageTrackingService {
         periodEnd:   end,
         ...limits,
       },
-      // Never overwrite existing counters on read — sync is a separate step
+      // Never overwrite existing counters on read  -  sync is a separate step
       update: {},
     });
 
@@ -294,7 +294,7 @@ class UsageTrackingService {
     });
   }
 
-  // ── Redis reads ───────────────────────────────────────────────────────────
+  // -- Redis reads -----------------------------------------------------------
 
   /**
    * Read all six usage counters from Redis for the current UTC month.
@@ -342,7 +342,7 @@ class UsageTrackingService {
     };
   }
 
-  // ── Lazy sync ─────────────────────────────────────────────────────────────
+  // -- Lazy sync -------------------------------------------------------------
 
   /**
    * Write the current Redis counter values into the UsagePeriod DB record.
@@ -369,7 +369,7 @@ class UsageTrackingService {
     });
   }
 
-  // ── Document storage increment ────────────────────────────────────────────
+  // -- Document storage increment --------------------------------------------
 
   /**
    * Atomically add to the document storage usage counter for an org.
@@ -410,7 +410,7 @@ class UsageTrackingService {
     }
   }
 
-  // ── Dashboard summary ──────────────────────────────────────────────────────
+  // -- Dashboard summary ------------------------------------------------------
 
   /**
    * Return the current period's usage summary for the dashboard card.
@@ -426,7 +426,7 @@ class UsageTrackingService {
       this.readRedisCounters(organizationId),
     ]);
 
-    // Non-blocking lazy sync to DB — failures are logged but never propagated
+    // Non-blocking lazy sync to DB  -  failures are logged but never propagated
     void this.syncRedisToDb(period.id, counters).catch((err: unknown) => {
       logger.warn({
         type:           'usage_redis_sync_failed',
@@ -461,7 +461,7 @@ class UsageTrackingService {
     };
   }
 
-  // ── Usage history ─────────────────────────────────────────────────────────
+  // -- Usage history ---------------------------------------------------------
 
   /**
    * Return summaries for the last N completed billing periods.
@@ -469,8 +469,8 @@ class UsageTrackingService {
    * "Completed" means any UsagePeriod with a periodStart before the current
    * EAT month. The current period is always excluded.
    *
-   * Results are ordered newest → oldest.
-   * Reads entirely from DB — no Redis access.
+   * Results are ordered newest -> oldest.
+   * Reads entirely from DB  -  no Redis access.
    */
   async getUsageHistory(
     organizationId: string,
@@ -513,7 +513,7 @@ class UsageTrackingService {
     });
   }
 
-  // ── Usage comparison ──────────────────────────────────────────────────────
+  // -- Usage comparison ------------------------------------------------------
 
   /**
    * Compare current period usage against a specific past period.
@@ -598,7 +598,7 @@ class UsageTrackingService {
       if (prev > 0) {
         changePercent = Math.round((delta / prev) * 100);
       } else if (curr > 0) {
-        changePercent = 100; // 0 → n = 100% increase
+        changePercent = 100; // 0 -> n = 100% increase
       } else {
         changePercent = 0;
       }
@@ -620,7 +620,7 @@ class UsageTrackingService {
   }
 }
 
-// ── Singleton export ───────────────────────────────────────────────────────────
+// -- Singleton export -----------------------------------------------------------
 
 export const usageTrackingService = new UsageTrackingService();
 export { UsageTrackingService };

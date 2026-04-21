@@ -404,7 +404,7 @@ export function createStorageService(deps?: {
         // Compute sha256 while streaming
         const { stream: hashedStream, hashPromise } = hashStream(stream);
 
-        // For streams, we don’t know sha256 until upload completes.
+        // For streams, we don't know sha256 until upload completes.
         // We return it, and you can persist it in DB.
         const metadata: Record<string, string> = {
           ...(options.metadata ?? {}),

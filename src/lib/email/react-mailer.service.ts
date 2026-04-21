@@ -7,7 +7,7 @@
  *   2. Renders the React Email template to HTML
  *   3. Sends via Resend (using the existing sendEmail client)
  *   4. Logs the attempt
- *   5. Handles errors gracefully — email failures never crash the app
+ *   5. Handles errors gracefully  -  email failures never crash the app
  */
 
 import * as React from 'react';
@@ -16,7 +16,7 @@ import { renderEmailToHtml, renderEmailToText } from '@/emails/render';
 import { logger } from '@/utils/logger';
 import { prisma } from '@/lib/prisma/client';
 
-// ─── Template Imports ────────────────────────────────────────────────────────
+// --- Template Imports --------------------------------------------------------
 
 import {
   NewTicketAdminEmail,
@@ -123,7 +123,7 @@ import type {
   PilotExpiredEmailProps,
 } from '@/emails';
 
-// ─── Notification Preference Keys ────────────────────────────────────────────
+// --- Notification Preference Keys --------------------------------------------
 
 type ToggleableNotificationType =
   | 'paymentDueReminder'
@@ -159,7 +159,7 @@ async function shouldSendNotification(
   }
 }
 
-// ─── Helper ──────────────────────────────────────────────────────────────────
+// --- Helper ------------------------------------------------------------------
 
 async function sendReactEmail(opts: {
   to: string;
@@ -199,10 +199,10 @@ async function sendReactEmail(opts: {
   }
 }
 
-// ─── React Email Mailer ───────────────────────────────────────────────────────
+// --- React Email Mailer -------------------------------------------------------
 
 class ReactMailerService {
-  // ── AUTH EMAILS (always sent, no preference check) ──
+  // -- AUTH EMAILS (always sent, no preference check) --
 
   async sendVerificationEmail(to: string, props: VerificationEmailProps): Promise<void> {
     await sendReactEmail({
@@ -244,9 +244,9 @@ class ReactMailerService {
     });
   }
 
-  // ── BILLING EMAILS ──
+  // -- BILLING EMAILS --
 
-  /** Mandatory — always sent */
+  /** Mandatory  -  always sent */
   async sendPaymentReceiptEmail(to: string, props: PaymentReceiptEmailProps): Promise<void> {
     await sendReactEmail({
       to,
@@ -282,7 +282,7 @@ class ReactMailerService {
     });
   }
 
-  /** Mandatory — sent on checkout completion (trial start or direct subscription) */
+  /** Mandatory  -  sent on checkout completion (trial start or direct subscription) */
   async sendPlanActivatedEmail(to: string, props: PlanActivatedEmailProps): Promise<void> {
     await sendReactEmail({
       to,
@@ -293,7 +293,7 @@ class ReactMailerService {
     });
   }
 
-  /** Mandatory — sent when Stripe fires customer.subscription.trial_will_end */
+  /** Mandatory  -  sent when Stripe fires customer.subscription.trial_will_end */
   async sendTrialEndingReminderEmail(to: string, props: TrialEndingReminderEmailProps): Promise<void> {
     await sendReactEmail({
       to,
@@ -304,7 +304,7 @@ class ReactMailerService {
     });
   }
 
-  /** Mandatory — sent on subscription cancellation (grace period begins) */
+  /** Mandatory  -  sent on subscription cancellation (grace period begins) */
   async sendSubscriptionCancelledEmail(to: string, props: SubscriptionCancelledEmailProps): Promise<void> {
     await sendReactEmail({
       to,
@@ -315,7 +315,7 @@ class ReactMailerService {
     });
   }
 
-  /** Mandatory — sent when grace period expires and plan is downgraded to free */
+  /** Mandatory  -  sent when grace period expires and plan is downgraded to free */
   async sendPlanDowngradedEmail(to: string, props: PlanDowngradedEmailProps): Promise<void> {
     await sendReactEmail({
       to,
@@ -326,7 +326,7 @@ class ReactMailerService {
     });
   }
 
-  // ── COMPLIANCE EMAILS (toggleable) ──
+  // -- COMPLIANCE EMAILS (toggleable) --
 
   async sendComplianceQueryReadyEmail(
     to: string,
@@ -379,7 +379,7 @@ class ReactMailerService {
     });
   }
 
-  // ── ACCOUNT EMAILS (mandatory) ──
+  // -- ACCOUNT EMAILS (mandatory) --
 
   async sendInvitationEmail(to: string, props: InvitationEmailProps): Promise<void> {
     await sendReactEmail({
@@ -431,7 +431,7 @@ class ReactMailerService {
     });
   }
 
-  // ── SUPPORT TICKET EMAILS (mandatory — always sent) ──
+  // -- SUPPORT TICKET EMAILS (mandatory  -  always sent) --
 
   async sendNewTicketAdminEmail(to: string, props: NewTicketAdminEmailProps): Promise<void> {
     await sendReactEmail({
@@ -473,7 +473,7 @@ class ReactMailerService {
     });
   }
 
-  // ── ENTERPRISE INQUIRY EMAIL (sent to admin) ──
+  // -- ENTERPRISE INQUIRY EMAIL (sent to admin) --
 
   /** Sent to the SheriaBot admin inbox when an org submits an Enterprise inquiry. */
   async sendEnterpriseInquiryEmail(to: string, props: EnterpriseInquiryEmailProps): Promise<void> {
@@ -486,7 +486,7 @@ class ReactMailerService {
     });
   }
 
-  // ── FREE TRIAL EMAILS (always sent, user-scoped) ──
+  // -- FREE TRIAL EMAILS (always sent, user-scoped) --
 
   /** Sent immediately when a user activates their 7-day free trial. */
   async sendFreeTrialActivatedEmail(to: string, props: FreeTrialActivatedEmailProps): Promise<void> {
@@ -521,7 +521,7 @@ class ReactMailerService {
     });
   }
 
-  // ── PILOT LIFECYCLE EMAILS (always sent — no preference toggle) ──
+  // -- PILOT LIFECYCLE EMAILS (always sent  -  no preference toggle) --
 
   /** Sent immediately on pilot account creation via the provisioning script / cron. */
   async sendPilotWelcomeEmail(to: string, props: PilotWelcomeEmailProps): Promise<void> {
@@ -545,7 +545,7 @@ class ReactMailerService {
     });
   }
 
-  /** Sent on day 7 — mid-point check-in with optional survey link. */
+  /** Sent on day 7  -  mid-point check-in with optional survey link. */
   async sendPilotDay7CheckinEmail(to: string, props: PilotDay7CheckinEmailProps): Promise<void> {
     await sendReactEmail({
       to,
@@ -556,7 +556,7 @@ class ReactMailerService {
     });
   }
 
-  /** Sent on day 10 — highlights unused features with 4 days remaining. */
+  /** Sent on day 10  -  highlights unused features with 4 days remaining. */
   async sendPilotDay10FeaturesEmail(to: string, props: PilotDay10FeaturesEmailProps): Promise<void> {
     await sendReactEmail({
       to,
@@ -567,7 +567,7 @@ class ReactMailerService {
     });
   }
 
-  /** Sent on day 13 — 1-day expiry warning with conversion CTA. */
+  /** Sent on day 13  -  1-day expiry warning with conversion CTA. */
   async sendPilotDay13WarningEmail(to: string, props: PilotDay13WarningEmailProps): Promise<void> {
     await sendReactEmail({
       to,
@@ -578,7 +578,7 @@ class ReactMailerService {
     });
   }
 
-  /** Sent after pilot expiry — thank you, data assurance, founding member offer, survey link. */
+  /** Sent after pilot expiry  -  thank you, data assurance, founding member offer, survey link. */
   async sendPilotExpiredEmail(to: string, props: PilotExpiredEmailProps): Promise<void> {
     await sendReactEmail({
       to,

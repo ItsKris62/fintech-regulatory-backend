@@ -2,7 +2,7 @@ import type { DocumentCategory, VaultDocumentStatus } from '@prisma/client';
 
 export type { DocumentCategory, VaultDocumentStatus };
 
-// ─── Prisma select shape returned by list queries ─────────────────────────────
+// --- Prisma select shape returned by list queries -----------------------------
 
 export interface VaultDocumentListItem {
   id: string;
@@ -33,7 +33,7 @@ export interface VaultDocumentListItem {
   };
 }
 
-// ─── List result with pagination ──────────────────────────────────────────────
+// --- List result with pagination ----------------------------------------------
 
 export interface VaultDocumentListResult {
   documents: VaultDocumentListItem[];
@@ -45,7 +45,7 @@ export interface VaultDocumentListResult {
   };
 }
 
-// ─── Stats ────────────────────────────────────────────────────────────────────
+// --- Stats --------------------------------------------------------------------
 
 export interface VaultDocumentStats {
   total: number;
@@ -54,7 +54,7 @@ export interface VaultDocumentStats {
   expiringSoon: number;
 }
 
-// ─── Service input types ──────────────────────────────────────────────────────
+// --- Service input types ------------------------------------------------------
 
 export interface GenerateUploadUrlParams {
   userId: string;
@@ -62,7 +62,7 @@ export interface GenerateUploadUrlParams {
   filename: string;
   fileType: string;
   fileSize: number;
-  /** The caller's effective plan — used to enforce per-tier file size and MIME limits. */
+  /** The caller's effective plan  -  used to enforce per-tier file size and MIME limits. */
   plan: import('@/types/plan.types').EffectivePlan;
 }
 
@@ -157,6 +157,6 @@ export interface ReplaceDocumentParams {
   filename: string;
   fileType: string;
   fileSize: number;
-  /** The caller's effective plan — used to enforce per-tier file size and MIME limits. */
+  /** The caller's effective plan  -  used to enforce per-tier file size and MIME limits. */
   plan: import('@/types/plan.types').EffectivePlan;
 }

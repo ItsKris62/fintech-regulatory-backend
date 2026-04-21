@@ -25,7 +25,7 @@ export interface VectorMetadata {
 
 /**
  * Record used for integrated embedding upsert.
- * Flat structure — all fields at top level (Pinecone SDK v7 upsertRecords requirement).
+ * Flat structure  -  all fields at top level (Pinecone SDK v7 upsertRecords requirement).
  */
 export interface IntegratedVectorRecord extends VectorMetadata {
   id: string;

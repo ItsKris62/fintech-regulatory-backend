@@ -37,14 +37,14 @@ import {
 import { sendEmail } from '@/lib/email/client';
 
 // Stubs: JWT token generation replaced by Supabase Auth in auth.router.ts.
-// These methods in AuthModule are legacy/dead code — kept for reference only.
+// These methods in AuthModule are legacy/dead code  -  kept for reference only.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const generateAccessToken = (_user: any, _sessionId: string, _secret: string): string => '';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const generateRefreshToken = (_userId: string, _tokenId: string, _secret: string): string => '';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const verifyToken = <T>(_token: string, _secret: string): T => {
-  throw new Error('JWT auth replaced by Supabase — use auth.router.ts procedures');
+  throw new Error('JWT auth replaced by Supabase  -  use auth.router.ts procedures');
 };
 import {
   type RegisterUserInput,
@@ -98,7 +98,7 @@ class AuthModule {
       // 2. Validate password strength
       const passwordValidation = validatePasswordStrength(params.password);
       if (!passwordValidation.isValid) {
-        // Log specific failures internally — never expose rule details to clients.
+        // Log specific failures internally  -  never expose rule details to clients.
         logger.warn({
           type: 'auth_register_password_weak',
           email: params.email,
@@ -368,7 +368,7 @@ class AuthModule {
       });
 
       if (!user) {
-        // Do not reveal whether the account exists — treat as an invalid token.
+        // Do not reveal whether the account exists  -  treat as an invalid token.
         throw new AuthError('Invalid refresh token', 'INVALID_REFRESH_TOKEN', 401);
       }
 
@@ -538,7 +538,7 @@ class AuthModule {
       // 3. Validate new password strength
       const passwordValidation = validatePasswordStrength(newPassword);
       if (!passwordValidation.isValid) {
-        // Log specific failures internally — never expose rule details to clients.
+        // Log specific failures internally  -  never expose rule details to clients.
         logger.warn({
           type: 'auth_password_reset_weak',
           userId: resetTokenData.userId,
@@ -752,7 +752,7 @@ class AuthModule {
       // 3. Validate new password
       const passwordValidation = validatePasswordStrength(newPassword);
       if (!passwordValidation.isValid) {
-        // Log specific failures internally — never expose rule details to clients.
+        // Log specific failures internally  -  never expose rule details to clients.
         logger.warn({
           type: 'auth_password_change_weak',
           userId,
@@ -836,12 +836,12 @@ class AuthModule {
     });
 
     try {
-      // Get all session keys for user
-      const sessionPattern = `${AUTH_CONSTANTS.REDIS_KEYS.SESSION}*`;
-      const sessionKeys = await redis.keys(sessionPattern);
-      
+      // Use per-user tracking sets instead of O(N) keyspace scan
+      const sessionIdxKey = `sheriabot:idx:sessions:${userId}`;
+      const sessionKeys = await redis.smembers<string[]>(sessionIdxKey);
+
       let revokedCount = 0;
-      
+
       for (const key of sessionKeys) {
         const sessionData = await redis.get<string>(key);
         if (sessionData) {
@@ -852,11 +852,12 @@ class AuthModule {
           }
         }
       }
+      await redis.del(sessionIdxKey);
 
-      // Also revoke all refresh tokens
-      const refreshPattern = `${AUTH_CONSTANTS.REDIS_KEYS.REFRESH_TOKEN}*`;
-      const refreshKeys = await redis.keys(refreshPattern);
-      
+      // Also revoke all refresh tokens for this user
+      const refreshIdxKey = `sheriabot:idx:refresh-tokens:${userId}`;
+      const refreshKeys = await redis.smembers<string[]>(refreshIdxKey);
+
       for (const key of refreshKeys) {
         const tokenData = await redis.get<string>(key);
         if (tokenData) {
@@ -866,6 +867,7 @@ class AuthModule {
           }
         }
       }
+      await redis.del(refreshIdxKey);
 
       logger.info({
         type: 'auth_revoke_all_sessions_success',
@@ -901,21 +903,21 @@ class AuthModule {
     });
 
     try {
-      const sessionPattern = `${AUTH_CONSTANTS.REDIS_KEYS.SESSION}*`;
-      const sessionKeys = await redis.keys(sessionPattern);
-      
+      const sessionIdxKey = `sheriabot:idx:sessions:${userId}`;
+      const sessionKeys = await redis.smembers<string[]>(sessionIdxKey);
+
       let revokedCount = 0;
-      
+      const currentKey = `${AUTH_CONSTANTS.REDIS_KEYS.SESSION}${currentSessionId}`;
+
       for (const key of sessionKeys) {
-        if (key === `${AUTH_CONSTANTS.REDIS_KEYS.SESSION}${currentSessionId}`) {
-          continue; // Skip current session
-        }
-        
+        if (key === currentKey) continue;
+
         const sessionData = await redis.get<string>(key);
         if (sessionData) {
           const session: SessionData = JSON.parse(sessionData);
           if (session.userId === userId) {
             await redis.del(key);
+            await redis.srem(sessionIdxKey, key);
             revokedCount++;
           }
         }
@@ -980,21 +982,20 @@ class AuthModule {
    * Get user's active sessions
    */
   async getActiveSessions(userId: string): Promise<SessionData[]> {
-    const sessionPattern = `${AUTH_CONSTANTS.REDIS_KEYS.SESSION}*`;
-    const sessionKeys = await redis.keys(sessionPattern);
-    
+    const sessionKeys = await redis.smembers<string[]>(`sheriabot:idx:sessions:${userId}`);
     const sessions: SessionData[] = [];
-    
+
     for (const key of sessionKeys) {
       const sessionData = await redis.get<string>(key);
       if (sessionData) {
         const session: SessionData = JSON.parse(sessionData);
+        // Defensive check: stale entries from natural key expiry are filtered out
         if (session.userId === userId) {
           sessions.push(session);
         }
       }
     }
-    
+
     return sessions;
   }
 
@@ -1004,11 +1005,11 @@ class AuthModule {
 
   private async storeSession(sessionId: string, data: SessionData): Promise<void> {
     const key = `${AUTH_CONSTANTS.REDIS_KEYS.SESSION}${sessionId}`;
-    await redis.set(
-      key,
-      JSON.stringify(data),
-      { ex: AUTH_CONSTANTS.SESSION_EXPIRY }
-    );
+    await redis.set(key, JSON.stringify(data), { ex: AUTH_CONSTANTS.SESSION_EXPIRY });
+    // Register in per-user tracking set to avoid O(N) redis.keys() scans
+    const idxKey = `sheriabot:idx:sessions:${data.userId}`;
+    await redis.sadd(idxKey, key);
+    await redis.expire(idxKey, AUTH_CONSTANTS.SESSION_EXPIRY);
   }
 
   private async getSession(sessionId: string): Promise<SessionData | null> {
@@ -1037,17 +1038,14 @@ class AuthModule {
       userId,
       sessionId,
       createdAt: new Date().toISOString(),
-      expiresAt: new Date(
-        Date.now() + AUTH_CONSTANTS.REFRESH_TOKEN_EXPIRY * 1000
-      ).toISOString(),
+      expiresAt: new Date(Date.now() + AUTH_CONSTANTS.REFRESH_TOKEN_EXPIRY * 1000).toISOString(),
       rotationCount,
     };
-    
-    await redis.set(
-      key,
-      JSON.stringify(data),
-      { ex: AUTH_CONSTANTS.REFRESH_TOKEN_EXPIRY }
-    );
+    await redis.set(key, JSON.stringify(data), { ex: AUTH_CONSTANTS.REFRESH_TOKEN_EXPIRY });
+    // Register in per-user tracking set to avoid O(N) redis.keys() scans
+    const idxKey = `sheriabot:idx:refresh-tokens:${userId}`;
+    await redis.sadd(idxKey, key);
+    await redis.expire(idxKey, AUTH_CONSTANTS.REFRESH_TOKEN_EXPIRY);
   }
 
   private async getRefreshToken(tokenId: string): Promise<RefreshTokenData | null> {

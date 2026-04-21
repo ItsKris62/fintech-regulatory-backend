@@ -2,7 +2,7 @@
 /**
  * verify-checklist.ts
  *
- * Sprint 3B — E2E verification script for the three-tier checklist generation pipeline.
+ * Sprint 3B  -  E2E verification script for the three-tier checklist generation pipeline.
  *
  * Usage:
  *   pnpm tsx src/scripts/verify-checklist.ts            # Parse/prompt layer tests only
@@ -10,10 +10,10 @@
  *   pnpm tsx src/scripts/verify-checklist.ts --live --all-tiers  # + live Tier 1+2+3 calls
  *
  * Sections:
- *   1. Parse layer unit tests  — parseWithTierSchema accepts/rejects synthetic inputs
- *   2. Prompt builder tests    — buildTier1/2/3Prompt return well-formed prompts
- *   3. Live AI test (--live)   — real Claude call via aiService.executeChecklistStream()
- *   4. Retry service test      — checklistService.retryChecklist() rejects invalid states
+ *   1. Parse layer unit tests   -  parseWithTierSchema accepts/rejects synthetic inputs
+ *   2. Prompt builder tests     -  buildTier1/2/3Prompt return well-formed prompts
+ *   3. Live AI test (--live)    -  real Claude call via aiService.executeChecklistStream()
+ *   4. Retry service test       -  checklistService.retryChecklist() rejects invalid states
  */
 
 import 'dotenv/config';
@@ -31,12 +31,12 @@ import {
 import { aiService } from '../lib/ai/ai.service';
 import { aiConfig } from '../config/ai.config';
 
-// ─── CLI flags ────────────────────────────────────────────────────────────────
+// --- CLI flags ----------------------------------------------------------------
 
 const LIVE      = process.argv.includes('--live');
 const ALL_TIERS = process.argv.includes('--all-tiers');
 
-// ─── Test harness ─────────────────────────────────────────────────────────────
+// --- Test harness -------------------------------------------------------------
 
 interface TestResult {
   name:     string;
@@ -52,9 +52,9 @@ let currentSection = '';
 
 function section(name: string): void {
   currentSection = name;
-  console.log(`\n${'─'.repeat(60)}`);
+  console.log(`\n${'-'.repeat(60)}`);
   console.log(`  ${name}`);
-  console.log('─'.repeat(60));
+  console.log('-'.repeat(60));
 }
 
 async function runTest(
@@ -69,17 +69,17 @@ async function runTest(
     results.push({ name, section: currentSection, durationMs, ...result });
     const icon = result.passed ? '✅' : '❌';
     console.log(`  ${icon} ${name} (${durationMs}ms)`);
-    if (!result.passed) console.log(`     → ${result.message}`);
+    if (!result.passed) console.log(`     -> ${result.message}`);
     if (result.details) console.log(`     ℹ ${result.details}`);
   } catch (err: unknown) {
     const durationMs = Date.now() - start;
     const message = err instanceof Error ? err.message : String(err);
     results.push({ name, section: currentSection, passed: false, message, durationMs });
-    console.log(`  ❌ ${name} (${durationMs}ms) — threw: ${message}`);
+    console.log(`  ❌ ${name} (${durationMs}ms)  -  threw: ${message}`);
   }
 }
 
-// ─── Synthetic fixtures ───────────────────────────────────────────────────────
+// --- Synthetic fixtures -------------------------------------------------------
 
 const VALID_ITEM = {
   id:              'LIC-001',
@@ -95,7 +95,7 @@ const VALID_ITEM = {
     'Submit application package to Director, National Payments System, CBK',
   ],
   deadline: 'Before commencing any payment service operations',
-  penalty:  'Fine not exceeding KES 10,000,000 and/or imprisonment not exceeding 5 years — NPSA 2011, Section 36',
+  penalty:  'Fine not exceeding KES 10,000,000 and/or imprisonment not exceeding 5 years  -  NPSA 2011, Section 36',
 };
 
 function makeCategory(id: string, name: string, itemCount: number) {
@@ -141,10 +141,10 @@ const INPUT_FIXTURE = {
   businessStage:  'Pre-launch / Licensing Phase',
 };
 
-// ─── Section 1: Parse layer unit tests ───────────────────────────────────────
+// --- Section 1: Parse layer unit tests ---------------------------------------
 
 async function runParseLayerTests(): Promise<void> {
-  section('Section 1 — Parse layer (parseWithTierSchema)');
+  section('Section 1  -  Parse layer (parseWithTierSchema)');
 
   // 1a. Tier 1: valid full response
   await runTest('Tier 1 accepts a valid 5-category / 25-item response', async () => {
@@ -160,7 +160,7 @@ async function runParseLayerTests(): Promise<void> {
 
   // 1b. Tier 1: rejects too-few items
   await runTest('Tier 1 rejects response with < 25 items', async () => {
-    const payload = makeValidChecklist(4, 4); // 4 × 4 = 16 items — below Tier1 min 25
+    const payload = makeValidChecklist(4, 4); // 4 × 4 = 16 items  -  below Tier1 min 25
     const json = JSON.stringify(payload);
     try {
       parseWithTierSchema(json, 1, { input: INPUT_FIXTURE });
@@ -216,10 +216,10 @@ async function runParseLayerTests(): Promise<void> {
       const result = parseWithTierSchema(json, 2, { input: INPUT_FIXTURE });
       return {
         passed:  result.categories.length >= 1,
-        message: `Repaired — recovered ${result.categories.length} categories`,
+        message: `Repaired  -  recovered ${result.categories.length} categories`,
       };
     } catch (err: unknown) {
-      // It's acceptable for extreme truncation to still fail — this tests the attempt
+      // It's acceptable for extreme truncation to still fail  -  this tests the attempt
       const msg = err instanceof Error ? err.message : String(err);
       return {
         passed:  msg.includes('repaired') || msg.includes('partial') || msg.includes('recovery'),
@@ -228,7 +228,7 @@ async function runParseLayerTests(): Promise<void> {
     }
   });
 
-  // 1g. Partial category recovery: 1 invalid category out of 4 — should still pass at Tier 2
+  // 1g. Partial category recovery: 1 invalid category out of 4  -  should still pass at Tier 2
   await runTest('Partial recovery accepts 3/4 valid categories at Tier 2', async () => {
     const payload = makeValidChecklist(4, 3); // 4 categories × 3 items = 12 items
     // Corrupt the 4th category (remove required 'description' field)
@@ -263,10 +263,10 @@ async function runParseLayerTests(): Promise<void> {
   });
 }
 
-// ─── Section 2: Prompt builder tests ─────────────────────────────────────────
+// --- Section 2: Prompt builder tests -----------------------------------------
 
 async function runPromptBuilderTests(): Promise<void> {
-  section('Section 2 — Prompt builders (buildTier1/2/3Prompt)');
+  section('Section 2  -  Prompt builders (buildTier1/2/3Prompt)');
 
   const INPUT = {
     productType:        'Digital Lending / Credit Provider',
@@ -330,7 +330,7 @@ async function runPromptBuilderTests(): Promise<void> {
     const hasRag = user.includes('REGULATORY CONTEXT') || user.includes('Retrieved');
     return {
       passed:  !hasRag,
-      message: hasRag ? 'Unexpected RAG section in Tier 3' : 'No RAG context — correct',
+      message: hasRag ? 'Unexpected RAG section in Tier 3' : 'No RAG context  -  correct',
     };
   });
 
@@ -340,7 +340,7 @@ async function runPromptBuilderTests(): Promise<void> {
       chunkText:     'A'.repeat(400), // ~100 tokens each
       documentTitle: `Doc ${i}`,
     }));
-    const trimmed = trimRagPassages(passages, 500); // budget 500 tokens → max ~5 passages
+    const trimmed = trimRagPassages(passages, 500); // budget 500 tokens -> max ~5 passages
     return {
       passed:  trimmed.length <= 6 && trimmed.length >= 1,
       message: `${trimmed.length} passages kept within ~500-token budget`,
@@ -378,10 +378,10 @@ async function runPromptBuilderTests(): Promise<void> {
   });
 }
 
-// ─── Section 3: Live AI test (--live) ────────────────────────────────────────
+// --- Section 3: Live AI test (--live) ----------------------------------------
 
 async function runLiveAiTests(allTiers: boolean): Promise<void> {
-  section(`Section 3 — Live AI tests (flag: --live${allTiers ? ' --all-tiers' : ''})`);
+  section(`Section 3  -  Live AI tests (flag: --live${allTiers ? ' --all-tiers' : ''})`);
 
   const INPUT = {
     productType:    'Mobile Money Operator',
@@ -391,7 +391,7 @@ async function runLiveAiTests(allTiers: boolean): Promise<void> {
   };
 
   if (allTiers) {
-    // Tier 1 — most expensive, most comprehensive
+    // Tier 1  -  most expensive, most comprehensive
     await runTest('Live Tier 1 generation (full RAG, 8192 tokens, 240s)', async () => {
       const { system, user } = buildTier1Prompt(INPUT, []);
       const { content, inputTokens, outputTokens, stopReason } = await aiService.executeChecklistStream(
@@ -407,7 +407,7 @@ async function runLiveAiTests(allTiers: boolean): Promise<void> {
       };
     });
 
-    // Tier 2 — medium
+    // Tier 2  -  medium
     await runTest('Live Tier 2 generation (simplified, 6144 tokens, 200s)', async () => {
       const { system, user } = buildTier2Prompt(INPUT, []);
       const { content, inputTokens, outputTokens, stopReason } = await aiService.executeChecklistStream(
@@ -424,7 +424,7 @@ async function runLiveAiTests(allTiers: boolean): Promise<void> {
     });
   }
 
-  // Tier 3 — always run with --live (cheapest, fastest)
+  // Tier 3  -  always run with --live (cheapest, fastest)
   await runTest('Live Tier 3 generation (minimal no-RAG, 4096 tokens, 150s)', async () => {
     const { system, user } = buildTier3Prompt(INPUT);
     const { content, inputTokens, outputTokens, stopReason } = await aiService.executeChecklistStream(
@@ -441,7 +441,7 @@ async function runLiveAiTests(allTiers: boolean): Promise<void> {
   });
 }
 
-// ─── Summary ──────────────────────────────────────────────────────────────────
+// --- Summary ------------------------------------------------------------------
 
 function printSummary(): void {
   const total   = results.length;
@@ -484,12 +484,12 @@ function printSummary(): void {
   }
 }
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
+// --- Entry point -------------------------------------------------------------
 
 async function main(): Promise<void> {
   console.log('');
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║   SheriaBot — Sprint 3B Checklist Pipeline Verification  ║');
+  console.log('║   SheriaBot  -  Sprint 3B Checklist Pipeline Verification  ║');
   console.log('╚══════════════════════════════════════════════════════════╝');
   console.log(`  Mode: ${LIVE ? (ALL_TIERS ? 'live (all tiers)' : 'live (tier 3 only)') : 'offline (parse + prompt tests)'}`);
 
@@ -499,7 +499,7 @@ async function main(): Promise<void> {
   if (LIVE) {
     await runLiveAiTests(ALL_TIERS);
   } else {
-    console.log('\n  ℹ  Live AI tests skipped — pass --live to run them');
+    console.log('\n  ℹ  Live AI tests skipped  -  pass --live to run them');
   }
 
   printSummary();

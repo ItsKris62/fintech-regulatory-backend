@@ -4,10 +4,10 @@
  * sharing, and knowledge base content (blog posts / KB articles).
  *
  * Integrations:
- * - Cloudflare R2 (storageService) — file storage
- * - Pinecone (ragService)          — vector embeddings & semantic search
- * - Prisma                         — metadata persistence
- * - Redis                          — caching & processing status
+ * - Cloudflare R2 (storageService)  -  file storage
+ * - Pinecone (ragService)           -  vector embeddings & semantic search
+ * - Prisma                          -  metadata persistence
+ * - Redis                           -  caching & processing status
  */
 
 import { prisma } from '@/lib/prisma/client';
@@ -327,7 +327,7 @@ class DocumentModule {
     try {
       await ragService.deleteDocument(documentId);
     } catch {
-      // Non-fatal — might not have been indexed yet
+      // Non-fatal  -  might not have been indexed yet
     }
 
     // Clear chunk records in DB
@@ -354,7 +354,7 @@ class DocumentModule {
 
     if (!doc) throw new NotFoundError('Document');
 
-    // Verify access — org members or the author can view
+    // Verify access  -  org members or the author can view
     if (
       doc.organizationId &&
       doc.userId !== userId
@@ -734,7 +734,7 @@ class DocumentModule {
       ? new Date(shareParams.expiresAt)
       : new Date(Date.now() + LIMITS.SHARE_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
 
-    // Store share in Redis (lightweight — can persist in DB if needed)
+    // Store share in Redis (lightweight  -  can persist in DB if needed)
     const shareData = {
       id: token,
       documentId,
@@ -1228,9 +1228,12 @@ class DocumentModule {
 
   private async invalidateOrgCache(orgId: string): Promise<void> {
     try {
-      const keys = await redis.keys(`${REDIS_KEYS.ORG_DOCS}${orgId}:*`);
-      if (keys.length > 0) {
-        await redis.del(...keys);
+      // Enumerate via tracking set  -  no O(N) keyspace scan.
+      // Keys are registered in the set when orgDocsCacheKey() entries are written.
+      const idxKey = `sheriabot:idx:doc-cache:${orgId}`;
+      const cacheKeys = await redis.smembers<string[]>(idxKey);
+      if (cacheKeys.length > 0) {
+        await redis.del(...cacheKeys, idxKey);
       }
     } catch {
       // Non-fatal

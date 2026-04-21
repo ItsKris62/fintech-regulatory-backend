@@ -23,7 +23,7 @@ import {
 
 // ---------------------------------------------------------------------------
 // SDK instance (lazy singleton)
-// intasend-node is CommonJS — require() is appropriate here
+// intasend-node is CommonJS  -  require() is appropriate here
 // ---------------------------------------------------------------------------
 
 interface IntaSendCollection {
@@ -112,7 +112,7 @@ class IntaSendService {
   async initiateSTKPush(input: STKPushInput): Promise<STKPushResponse> {
     const sdk = getSDK();
 
-    // Mask phone for logging — show only last 4 digits
+    // Mask phone for logging  -  show only last 4 digits
     const maskedPhone = `254*****${input.phoneNumber.slice(-4)}`;
 
     logger.info({

@@ -168,13 +168,13 @@ export const userRouter = router({
    * 7. Other Prisma sessions deleted.
    * 8. Success logged.
    *
-   * The caller (frontend) must call logout() after receiving success — all
+   * The caller (frontend) must call logout() after receiving success  -  all
    * Supabase sessions are invalidated so the current token is no longer valid.
    */
   changePassword: protectedProcedure
     .input(changePasswordSchema)
     .mutation(async ({ input, ctx }) => {
-      // ── 1. Rate limit (must be first, before any DB queries) ─────────────
+      // -- 1. Rate limit (must be first, before any DB queries) -------------
       const rateCheck = await rateLimiter.check(ctx.user.id, 'change-password', 5, 900);
       if (!rateCheck.allowed) {
         logger.warn({
@@ -197,7 +197,7 @@ export const userRouter = router({
           throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
         }
 
-        // ── 2. Verify current password ────────────────────────────────────
+        // -- 2. Verify current password ------------------------------------
         // Users registered after the B4 migration have no local bcrypt hash
         // (Supabase is the authoritative credential store). They must reset
         // their password via the "Forgot Password" flow before using this endpoint.
@@ -229,7 +229,7 @@ export const userRouter = router({
           });
         }
 
-        // ── 3. Hash and save new password to Prisma ───────────────────────
+        // -- 3. Hash and save new password to Prisma -----------------------
         const newHashedPassword = await hashPassword(input.newPassword);
 
         await ctx.prisma.user.update({
@@ -237,7 +237,7 @@ export const userRouter = router({
           data: { password: newHashedPassword, updatedAt: new Date() },
         });
 
-        // ── 4. Sync Supabase Auth password (CRITICAL) ─────────────────────
+        // -- 4. Sync Supabase Auth password (CRITICAL) ---------------------
         // Without this, the old password continues to work via Supabase-native
         // auth flows (SDK, mobile, etc.) even after a successful change here.
         const supabaseAuthId = (user as { supabaseAuthId?: string | null }).supabaseAuthId;
@@ -254,11 +254,11 @@ export const userRouter = router({
             });
             throw new TRPCError({
               code: 'INTERNAL_SERVER_ERROR',
-              message: 'Failed to sync password — please try again.',
+              message: 'Failed to sync password  -  please try again.',
             });
           }
 
-          // ── 5. Revoke all Supabase sessions ───────────────────────────
+          // -- 5. Revoke all Supabase sessions ---------------------------
           // Mirrors auth.resetPassword. All existing JWTs become invalid.
           // The frontend must call logout() after success.
           await supabaseAdmin.auth.admin.signOut(supabaseAuthId).catch((signOutErr: unknown) => {
@@ -269,11 +269,11 @@ export const userRouter = router({
             });
           });
 
-          // ── 6. Clear Redis user-session cache ─────────────────────────
+          // -- 6. Clear Redis user-session cache -------------------------
           await redis.del(`user:session:${supabaseAuthId}`);
         }
 
-        // ── 7. Revoke other Prisma sessions ───────────────────────────────
+        // -- 7. Revoke other Prisma sessions -------------------------------
         if (ctx.user.sessionId) {
           await ctx.prisma.session.deleteMany({
             where: {
@@ -528,7 +528,7 @@ export const userRouter = router({
   }),
 
   /**
-   * Initiate TOTP setup — returns secret + otpauth URI for QR code display
+   * Initiate TOTP setup  -  returns secret + otpauth URI for QR code display
    */
   setupTotp: protectedProcedure.input(setupTotpSchema).mutation(async ({ ctx }) => {
     try {
@@ -568,7 +568,7 @@ export const userRouter = router({
   }),
 
   /**
-   * Confirm TOTP setup — verify first code from authenticator app and enable 2FA
+   * Confirm TOTP setup  -  verify first code from authenticator app and enable 2FA
    */
   confirmTotpSetup: protectedProcedure
     .input(confirmTotpSchema)
@@ -626,7 +626,7 @@ export const userRouter = router({
     }),
 
   /**
-   * Disable TOTP 2FA — requires current password for security confirmation
+   * Disable TOTP 2FA  -  requires current password for security confirmation
    */
   disableTotp: protectedProcedure
     .input(disableTotpSchema)
@@ -730,7 +730,7 @@ export const userRouter = router({
       }
     }),
 
-  // ─── NOTIFICATION PREFERENCES ─────────────────────────────────────────────
+  // --- NOTIFICATION PREFERENCES ---------------------------------------------
 
   /**
    * Get the current user's notification preferences
@@ -794,7 +794,7 @@ export const userRouter = router({
     }
   }),
 
-  // ─── AVATAR ───────────────────────────────────────────────────────────────
+  // --- AVATAR ---------------------------------------------------------------
 
   /**
    * Get a presigned PUT URL for direct browser-to-R2 avatar upload.
@@ -819,7 +819,7 @@ export const userRouter = router({
     }),
 
   /**
-   * Confirm a completed avatar upload — persists the public URL to the user
+   * Confirm a completed avatar upload  -  persists the public URL to the user
    * profile and invalidates the profile cache.
    */
   confirmAvatarUpload: protectedProcedure

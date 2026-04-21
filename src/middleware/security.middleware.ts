@@ -35,7 +35,7 @@ function scanObject(obj: unknown): boolean {
 }
 
 export function registerSecurityMiddleware(app: FastifyInstance): void {
-  // ── Request ID injection ──────────────────────────────────────────────
+  // -- Request ID injection ----------------------------------------------
   app.addHook('onRequest', async (request: FastifyRequest) => {
     const existingId =
       (request.headers['x-request-id'] as string) ||
@@ -44,7 +44,7 @@ export function registerSecurityMiddleware(app: FastifyInstance): void {
     (request as any).requestId = existingId || randomUUID();
   });
 
-  // ── Client IP extraction (behind Railway proxy) ───────────────────────
+  // -- Client IP extraction (behind Railway proxy) -----------------------
   app.addHook('onRequest', async (request: FastifyRequest) => {
     const forwarded = request.headers['x-forwarded-for'];
     const clientIp = typeof forwarded === 'string'
@@ -54,7 +54,7 @@ export function registerSecurityMiddleware(app: FastifyInstance): void {
     (request as any).clientIp = clientIp;
   });
 
-  // ── Suspicious payload detection ─────────────────────────────────────
+  // -- Suspicious payload detection -------------------------------------
   app.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!request.body) return;
 
@@ -79,7 +79,7 @@ export function registerSecurityMiddleware(app: FastifyInstance): void {
     }
   });
 
-  // ── Response security headers ─────────────────────────────────────────
+  // -- Response security headers -----------------------------------------
   app.addHook('onSend', async (_request: FastifyRequest, reply: FastifyReply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Frame-Options', 'DENY');

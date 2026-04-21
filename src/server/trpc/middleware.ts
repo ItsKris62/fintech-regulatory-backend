@@ -244,7 +244,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
 
   const cacheKey = planCtxCacheKey(userId);
 
-  // ── Try user-scoped plan context cache ────────────────────────────────────
+  // -- Try user-scoped plan context cache ------------------------------------
   let orgPlan:                  SubscriptionPlan            = SubscriptionPlan.REGULATOR;
   let customLimits:             Record<string, unknown> | null = null;
   let subscriptionStatus:       SubscriptionStatus | null   = null;
@@ -277,7 +277,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     // Cache miss or parse error -- fall through to DB
   }
 
-  // ── DB lookup on cache miss ────────────────────────────────────────────────
+  // -- DB lookup on cache miss ------------------------------------------------
   if (!fromCache) {
     // Always fetch trial fields from the User row
     const userRow = await prisma.user.findUnique({
@@ -337,7 +337,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
       { ex: PLAN_CACHE_TTL },
     ).catch(() => { /* non-fatal */ });
 
-    // ── Lazy trial-expiry email (fires once per trial, on cache miss only) ────
+    // -- Lazy trial-expiry email (fires once per trial, on cache miss only) ----
     // If a trial was previously active but has now expired, fire the email once.
     if (
       trialActivatedAt !== null &&
@@ -358,7 +358,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     }
   }
 
-  // ── Lazy grace-period enforcement ─────────────────────────────────────────
+  // -- Lazy grace-period enforcement -----------------------------------------
   if (orgId && isGracePeriodExpired(subscriptionStatus, gracePeriodEndsAt)) {
     const previousPlan = orgPlan;
 
@@ -409,7 +409,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     })();
   }
 
-  // ── M-Pesa renewal lazy check ─────────────────────────────────────────────
+  // -- M-Pesa renewal lazy check ---------------------------------------------
   //
   // Only runs when the org has elected M-Pesa as their payment method.
   // Stripe subscriptions are managed entirely by Stripe -- do NOT touch them here.
@@ -431,7 +431,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     const daysUntil  = msDiff > 0 ? Math.floor(msDiff / msPerDay) : 0;
 
     if (daysPast > 7) {
-      // Past the 7-day grace window — downgrade to REGULATOR
+      // Past the 7-day grace window  -  downgrade to REGULATOR
       const previousPlan = orgPlan;
 
       await prisma.organization.update({
@@ -481,7 +481,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
         } catch { /* email failure must never affect the request */ }
       })();
     } else if (daysPast > 0) {
-      // Within 7-day grace window — keep current plan, send daily reminder
+      // Within 7-day grace window  -  keep current plan, send daily reminder
       const today       = now.toISOString().slice(0, 10); // YYYY-MM-DD
       const sentinelKey = `sheriabot:mpesa:due_notified:${orgId}:${today}`;
 
@@ -518,7 +518,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
         } catch { /* non-fatal */ }
       })();
     } else if (daysUntil <= 3 && daysUntil >= 0) {
-      // Approaching due date (within 3 days) — send one-time upcoming reminder
+      // Approaching due date (within 3 days)  -  send one-time upcoming reminder
       const sentinelKey = `sheriabot:mpesa:upcoming_notified:${orgId}`;
 
       void (async () => {
@@ -556,7 +556,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     }
   }
 
-  // ── Pilot override (Option A: derived, no Org mutation) ──────────────────
+  // -- Pilot override (Option A: derived, no Org mutation) ------------------
   //
   // Runs ONLY when isPilot === true. Non-pilot users skip this block entirely
   // -- zero performance or behavioural impact on the non-pilot code path.
@@ -595,7 +595,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     }
   }
 
-  // ── Resolve effective plan (priority order) ───────────────────────────────
+  // -- Resolve effective plan (priority order) -------------------------------
   //
   //  1. Active paid subscription (ACTIVE or TRIALING from Stripe)
   //  2. Grace period active (not yet expired)
@@ -626,7 +626,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
 
   if (!hasPaidPlan && !graceStillActive && orgPlan !== SubscriptionPlan.REGULATOR) {
     // Plan is set to a paid tier but status is not ACTIVE/TRIALING/GRACE_PERIOD
-    // (e.g. CANCELLED, PAST_DUE, EXPIRED) — log and fall through to trial/REGULATOR.
+    // (e.g. CANCELLED, PAST_DUE, EXPIRED)  -  log and fall through to trial/REGULATOR.
     logger.warn({
       type:               'plan_downgrade',
       userId,
@@ -743,8 +743,8 @@ const AI_METRICS = new Set<BillingMetric>([
  *   Lifetime: sheriabot:usage:{scopeId}:{metric}:lifetime    (no TTL)
  *
  * Error code semantics:
- *   FORBIDDEN         — feature is not included in the plan at all (limit === 0)
- *   TOO_MANY_REQUESTS — feature is included but the quota is exhausted
+ *   FORBIDDEN          -  feature is not included in the plan at all (limit === 0)
+ *   TOO_MANY_REQUESTS  -  feature is included but the quota is exhausted
  *
  * Options:
  *   deferIncrement?: boolean
@@ -768,7 +768,7 @@ export const checkUsageLimit = (
     const user = ctx.user;
     const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
 
-    // ── FREE_TRIAL branch ──────────────────────────────────────────────────
+    // -- FREE_TRIAL branch --------------------------------------------------
     // Trial users bypass the Redis monthly quota path entirely.
     // Caps are enforced against the freeTrialUsage JSON column via trialService.
     if (plan === 'FREE_TRIAL') {
@@ -829,7 +829,7 @@ export const checkUsageLimit = (
       });
     }
 
-    // ── Standard Redis monthly / lifetime quota path (paid plans + REGULATOR) ─
+    // -- Standard Redis monthly / lifetime quota path (paid plans + REGULATOR) -
     const featureKey = METRIC_FEATURE_MAP[metric];
     const { limit, period } = getQuota(plan, featureKey);
 

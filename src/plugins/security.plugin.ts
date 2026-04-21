@@ -3,7 +3,7 @@ import helmet from '@fastify/helmet';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * Security plugin — production-hardened Helmet configuration.
+ * Security plugin  -  production-hardened Helmet configuration.
  *
  * Registers Helmet with strict CSP, HSTS, and other headers
  * tuned for a JSON API (no inline scripts, no frames).
@@ -12,7 +12,7 @@ async function securityPlugin(app: FastifyInstance): Promise<void> {
   const isProduction = process.env.NODE_ENV === 'production';
 
   await app.register(helmet, {
-    // Content Security Policy — strict in production
+    // Content Security Policy  -  strict in production
     contentSecurityPolicy: isProduction
       ? {
           directives: {
@@ -31,7 +31,7 @@ async function securityPlugin(app: FastifyInstance): Promise<void> {
         }
       : false,
 
-    // HTTP Strict Transport Security — 1 year, include subdomains, preload
+    // HTTP Strict Transport Security  -  1 year, include subdomains, preload
     hsts: isProduction
       ? { maxAge: 31536000, includeSubDomains: true, preload: true }
       : false,
@@ -48,7 +48,7 @@ async function securityPlugin(app: FastifyInstance): Promise<void> {
     // XSS filter
     xssFilter: true,
 
-    // Cross-origin policies — must allow cross-origin resource loading because
+    // Cross-origin policies  -  must allow cross-origin resource loading because
     // the frontend (Vercel) and backend (Render) are on different domains.
     crossOriginEmbedderPolicy: false, // false for APIs that serve to browsers
     crossOriginOpenerPolicy: { policy: 'same-origin' },

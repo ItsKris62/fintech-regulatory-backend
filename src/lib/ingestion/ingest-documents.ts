@@ -1,5 +1,5 @@
 /**
- * Ingestion barrel — re-exports the document ingestion service and its types
+ * Ingestion barrel  -  re-exports the document ingestion service and its types
  * for convenient imports from `@/lib/ingestion`.
  *
  * The actual pipeline implementation lives in `./document-processor`.

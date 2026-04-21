@@ -1,6 +1,6 @@
 import type { EventPriority, EventStatus, EventCategory, EventRecurrence } from '@/server/schemas/calendar.schema';
 
-// ─── Prisma select shape (returned by all queries) ───────────────────────────
+// --- Prisma select shape (returned by all queries) ---------------------------
 
 export interface CalendarEventRecord {
   id:             string;
@@ -20,14 +20,14 @@ export interface CalendarEventRecord {
   updatedAt:      Date;
 }
 
-// ─── Method input shapes ─────────────────────────────────────────────────────
+// --- Method input shapes -----------------------------------------------------
 
 export interface CreateEventParams {
   organizationId: string;
   createdById:    string;
   title:          string;
   description?:   string;
-  dueDate:        string; // ISO string — converted to Date in service
+  dueDate:        string; // ISO string  -  converted to Date in service
   priority:       EventPriority;
   category:       EventCategory;
   regulation?:    string;

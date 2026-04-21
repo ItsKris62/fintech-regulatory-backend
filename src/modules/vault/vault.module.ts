@@ -27,7 +27,7 @@ import type {
   ReplaceDocumentParams,
 } from './vault.types';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// --- Constants ----------------------------------------------------------------
 
 /** Roles permitted to change document verification status */
 const STATUS_CHANGE_ROLES: readonly string[] = ['ADMIN', 'REGULATOR'];
@@ -35,7 +35,7 @@ const STATUS_CHANGE_ROLES: readonly string[] = ['ADMIN', 'REGULATOR'];
 /** Days before expiry considered "expiring soon" */
 const EXPIRING_SOON_DAYS = 30;
 
-// ─── Select shape shared by list and get queries ──────────────────────────────
+// --- Select shape shared by list and get queries ------------------------------
 
 const VAULT_DOCUMENT_SELECT = {
   id: true,
@@ -68,7 +68,7 @@ const VAULT_DOCUMENT_SELECT = {
   },
 } as const;
 
-// ─── Helper: assert organisation is present ───────────────────────────────────
+// --- Helper: assert organisation is present -----------------------------------
 
 function requireOrganization(organizationId: string | undefined | null): string {
   if (!organizationId) {
@@ -80,7 +80,7 @@ function requireOrganization(organizationId: string | undefined | null): string 
   return organizationId;
 }
 
-// ─── Helper: enforce per-tier upload limits ───────────────────────────────────
+// --- Helper: enforce per-tier upload limits -----------------------------------
 
 function assertTierUploadLimits(plan: EffectivePlan, fileType: string, fileSize: number): void {
   const limits = VAULT_UPLOAD_LIMITS[plan];
@@ -108,7 +108,7 @@ function assertTierUploadLimits(plan: EffectivePlan, fileType: string, fileSize:
   }
 }
 
-// ─── Helper: enforce per-org total storage quota ──────────────────────────────
+// --- Helper: enforce per-org total storage quota ------------------------------
 
 async function checkVaultStorageQuota(
   orgId: string,
@@ -117,10 +117,10 @@ async function checkVaultStorageQuota(
 ): Promise<void> {
   const limits = VAULT_UPLOAD_LIMITS[plan];
 
-  // Unlimited storage — no check needed
+  // Unlimited storage  -  no check needed
   if (limits.maxTotalStorageMB === -1) return;
 
-  // Blocked tier — assertTierUploadLimits already handles this, but guard anyway
+  // Blocked tier  -  assertTierUploadLimits already handles this, but guard anyway
   if (limits.maxTotalStorageMB === 0) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -130,7 +130,7 @@ async function checkVaultStorageQuota(
 
   const maxTotalStorageBytes = limits.maxTotalStorageMB * 1024 * 1024;
 
-  // Sum active (non-archived) vault documents for this org — this is the
+  // Sum active (non-archived) vault documents for this org  -  this is the
   // authoritative source of total storage used (Redis counter is for billing
   // dashboards only and resets monthly).
   const agg = await prisma.vaultDocument.aggregate({
@@ -149,7 +149,7 @@ async function checkVaultStorageQuota(
   }
 }
 
-// ─── Helper: assert org-scoped document access ───────────────────────────────
+// --- Helper: assert org-scoped document access -------------------------------
 
 function assertDocumentAccess(
   doc: { organizationId: string; uploadedById: string },
@@ -163,7 +163,7 @@ function assertDocumentAccess(
   }
 }
 
-// ─── Helper: assert ownership or admin ───────────────────────────────────────
+// --- Helper: assert ownership or admin ---------------------------------------
 
 function assertOwnerOrAdmin(
   doc: { organizationId: string; uploadedById: string },
@@ -183,7 +183,7 @@ function assertOwnerOrAdmin(
   }
 }
 
-// ─── VaultModule class ────────────────────────────────────────────────────────
+// --- VaultModule class --------------------------------------------------------
 
 class VaultModule {
   /**

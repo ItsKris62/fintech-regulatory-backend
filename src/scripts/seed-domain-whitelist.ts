@@ -4,7 +4,7 @@
  * Seeds the known Kenyan government regulator domains.
  * Run with: pnpm tsx src/scripts/seed-domain-whitelist.ts
  *
- * Safe to run multiple times — uses upsert.
+ * Safe to run multiple times  -  uses upsert.
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -30,7 +30,7 @@ async function main() {
       create: { domain: entry.domain, orgName: entry.orgName, orgType: entry.orgType, isActive: true },
       update: { orgName: entry.orgName, orgType: entry.orgType, isActive: true },
     });
-    console.log(`  ✔ ${result.domain} → ${result.orgName}`);
+    console.log(`  ✔ ${result.domain} -> ${result.orgName}`);
   }
 
   console.log(`\nDone. Seeded ${REGULATOR_DOMAINS.length} regulator domains.`);

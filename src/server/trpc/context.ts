@@ -21,7 +21,7 @@ export interface User {
   organizationId?: string;
   sessionId?: string;
   supabaseAuthId: string; // Supabase auth.users UUID (= JWT sub)
-  /** Unix ms timestamp of Session.expiresAt — enforced on every request (B6). */
+  /** Unix ms timestamp of Session.expiresAt  -  enforced on every request (B6). */
   sessionExpiresAt?: number;
 }
 
@@ -56,7 +56,7 @@ const USER_CACHE_TTL_SECONDS = 3600;
  *
  * Auth flow:
  * 1. Extract Bearer token from Authorization header.
- * 2. Verify it via supabaseAdmin.auth.getUser() — works for both HS256 and RS256
+ * 2. Verify it via supabaseAdmin.auth.getUser()  -  works for both HS256 and RS256
  *    Supabase project configurations without requiring a local JWT secret.
  * 3. Use the returned user.id (Supabase user UUID) to look up the Prisma User.
  *    Lookup is cached in Upstash Redis for USER_CACHE_TTL_SECONDS.
@@ -76,7 +76,7 @@ export async function createContext({
     const token = authHeader.substring(7);
 
     try {
-      // Verify the JWT via Supabase — handles HS256 and RS256 transparently
+      // Verify the JWT via Supabase  -  handles HS256 and RS256 transparently
       const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
 
       if (authError || !authData?.user?.id) {
@@ -85,7 +85,7 @@ export async function createContext({
 
       const supabaseUserId = authData.user.id;
 
-      // ── B4: JTI blocklist + user-level revocation check ─────────────
+      // -- B4: JTI blocklist + user-level revocation check -------------
       // Run after Supabase signature verification so we only pay the Redis
       // round-trip for valid tokens. Fails open on Redis error (see util).
       const revoked = await isTokenRevoked(token, supabaseUserId);
@@ -98,7 +98,7 @@ export async function createContext({
 
       // Try Redis cache first.
       // @upstash/redis auto-parses JSON responses, so the stored JSON string
-      // is returned as an already-deserialized object — use get<User> directly.
+      // is returned as an already-deserialized object  -  use get<User> directly.
       //
       // Isolated try/catch: a cache parse failure (e.g. stale pre-migration
       // entries stored without JSON.stringify, resulting in "[object Object]")
@@ -123,7 +123,7 @@ export async function createContext({
       }
 
       if (!cacheHit) {
-        // Cache miss or corrupt entry — look up by supabaseAuthId in Prisma
+        // Cache miss or corrupt entry  -  look up by supabaseAuthId in Prisma
         const dbUser = await prisma.user.findUnique({
           where: { supabaseAuthId: supabaseUserId },
           select: {
@@ -158,7 +158,7 @@ export async function createContext({
           role: user.role,
         });
 
-        // ── B6: Enforce Session.expiresAt stored in Redis cache ──────────
+        // -- B6: Enforce Session.expiresAt stored in Redis cache ----------
         if (user.sessionExpiresAt && Date.now() > user.sessionExpiresAt) {
           logger.warn({
             type:   'context_session_expired',
@@ -168,7 +168,7 @@ export async function createContext({
           user = null;
         }
 
-        // ── B3: Idle session timeout (30 min) ────────────────────────────
+        // -- B3: Idle session timeout (30 min) ----------------------------
         if (user) {
           const idleUserId = user.id; // captured before any nulling inside try/catch
           const now = Date.now();
@@ -186,7 +186,7 @@ export async function createContext({
               await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
               user = null;
             } else {
-              // Slide the window — fire-and-forget, never block the request
+              // Slide the window  -  fire-and-forget, never block the request
               void redis.set(lastSeenKey(idleUserId), String(now), {
                 ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS,
               }).catch(() => {});
@@ -201,9 +201,9 @@ export async function createContext({
           }
         }
 
-        // ── B5: Session fingerprint anomaly detection (monitor mode) ─────
+        // -- B5: Session fingerprint anomaly detection (monitor mode) -----
         // Compute the expected fingerprint and compare with what was stored
-        // at login. On mismatch we log only — never block — until this has
+        // at login. On mismatch we log only  -  never block  -  until this has
         // been observed in production for a safe period.
         if (user && user.sessionId) {
           try {

@@ -4,6 +4,9 @@ import { userRouter } from '../routers/user.router';
 import { organizationRouter } from '../routers/organization.router';
 import { policyRouter } from '../routers/policy.router';
 import { complianceRouter } from '../routers/compliance.router';
+import { checklistRouter } from '../routers/checklist.router';
+import { gapAnalysisRouter } from '../routers/gap-analysis.router';
+import { complianceDashboardRouter } from '../routers/compliance-dashboard.router';
 import { documentRouter } from '../routers/document.router';
 import { contentRouter } from '../routers/content.router';
 import { adminRouter } from '../routers/admin.router';
@@ -34,6 +37,9 @@ export const appRouter = router({
   organization: organizationRouter,
   policy: policyRouter,
   compliance: complianceRouter,
+  checklist: checklistRouter,
+  gapAnalysis: gapAnalysisRouter,
+  complianceDashboard: complianceDashboardRouter,
   document: documentRouter,
   content: contentRouter,
   admin: adminRouter,

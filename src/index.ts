@@ -1,4 +1,4 @@
-import 'dotenv/config'; // Must be first – populates process.env before any other import reads it
+import 'dotenv/config'; // Must be first - populates process.env before any other import reads it
 import { buildApp } from './app';
 import { logger } from './utils/logger';
 import { connectionManager } from './lib/connection-manager';
@@ -6,7 +6,7 @@ import { errorTracker } from './lib/error-tracker';
 import { warmCaches } from './lib/cache-warming';
 import type { FastifyInstance } from 'fastify';
 
-// ── Process-level error traps ────────────────────────────────────────────────
+// -- Process-level error traps ------------------------------------------------
 // Registered before start() so they catch failures during initialisation too.
 
 process.on('unhandledRejection', (reason) => {
@@ -22,7 +22,7 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-// ── Graceful shutdown ────────────────────────────────────────────────────────
+// -- Graceful shutdown --------------------------------------------------------
 
 function registerShutdownHandlers(app: FastifyInstance): void {
   const shutdown = async (signal: string) => {
@@ -43,9 +43,9 @@ function registerShutdownHandlers(app: FastifyInstance): void {
   process.on('SIGINT',  () => shutdown('SIGINT'));
 }
 
-// ── Bootstrap ────────────────────────────────────────────────────────────────
+// -- Bootstrap ----------------------------------------------------------------
 
-// Required environment variable guard — fail fast before binding to network
+// Required environment variable guard  -  fail fast before binding to network
 const REQUIRED_ENV_VARS = [
   'FRONTEND_URL',
   'SUPABASE_URL',
@@ -67,7 +67,7 @@ const start = async () => {
     const connectionStatus = await connectionManager.connectAll();
     logger.info({ type: 'connections_ready', status: connectionStatus });
 
-    // 2. Warm caches (non-blocking — logs warnings on failure)
+    // 2. Warm caches (non-blocking  -  logs warnings on failure)
     await warmCaches();
 
     // 3. Start error tracker background cleanup
@@ -93,6 +93,11 @@ const start = async () => {
       trpcUrl: `http://localhost:${port}/trpc`,
       healthUrl: `http://localhost:${port}/health`,
       environment: process.env.NODE_ENV || 'development',
+    });
+
+    logger.info({
+      type: 'server_config',
+      trustProxy: process.env.TRUST_PROXY ?? true,
     });
 
     console.log(`

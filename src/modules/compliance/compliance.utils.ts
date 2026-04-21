@@ -564,7 +564,7 @@ SheriaBot Compliance Team
         <div class="score">${score.overallScore}</div>
         <div class="grade">Grade: ${score.grade}</div>
         <div class="change ${scoreDiff > 0 ? 'positive' : scoreDiff < 0 ? 'negative' : 'neutral'}">
-          ${scoreDiff > 0 ? '↑' : scoreDiff < 0 ? '↓' : '→'} ${Math.abs(scoreDiff)} points from previous
+          ${scoreDiff > 0 ? '↑' : scoreDiff < 0 ? '↓' : '->'} ${Math.abs(scoreDiff)} points from previous
         </div>
       </div>
       

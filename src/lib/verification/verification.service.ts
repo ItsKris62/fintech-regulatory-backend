@@ -12,11 +12,11 @@
 import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
 
-// ─── Free Email Blocklist ─────────────────────────────────────────────────────
+// --- Free Email Blocklist -----------------------------------------------------
 
 /**
  * Domains that are blocked for organizational accounts.
- * Maintained as a static list — changes rarely and requires a deployment.
+ * Maintained as a static list  -  changes rarely and requires a deployment.
  */
 export const FREE_EMAIL_DOMAINS = new Set([
   'gmail.com',
@@ -46,7 +46,7 @@ export function isFreeEmailDomain(email: string): boolean {
 export const FREE_EMAIL_ERROR_MESSAGE =
   'Please use your business email address. Free email providers are not accepted for organizational accounts.';
 
-// ─── Regulator Domain Whitelist ───────────────────────────────────────────────
+// --- Regulator Domain Whitelist -----------------------------------------------
 
 /**
  * Check if an email belongs to a known regulator domain.
@@ -79,7 +79,7 @@ export async function isRegulatorDomain(email: string): Promise<{
   }
 }
 
-// ─── Invitation Lookup ────────────────────────────────────────────────────────
+// --- Invitation Lookup --------------------------------------------------------
 
 export interface ValidatedInvitation {
   id: string;
@@ -135,7 +135,7 @@ export async function consumeInvitation(invitationId: string): Promise<void> {
   });
 }
 
-// ─── Tiered Access ────────────────────────────────────────────────────────────
+// --- Tiered Access ------------------------------------------------------------
 
 export type AccessLevel = 'none' | 'basic' | 'full';
 
@@ -179,11 +179,11 @@ export async function resolveAccessLevel(userId: string): Promise<AccessLevel> {
   }
 }
 
-// ─── Notification Preference Initialization ───────────────────────────────────
+// --- Notification Preference Initialization -----------------------------------
 
 /**
  * Create a NotificationPreference record for a new user (all defaults to true).
- * Safe to call multiple times — uses upsert to avoid duplicates.
+ * Safe to call multiple times  -  uses upsert to avoid duplicates.
  */
 export async function initializeNotificationPreferences(userId: string): Promise<void> {
   try {
@@ -193,7 +193,7 @@ export async function initializeNotificationPreferences(userId: string): Promise
       update: {},
     });
   } catch (error: any) {
-    // Non-fatal — preferences will fall back to defaults
+    // Non-fatal  -  preferences will fall back to defaults
     logger.warn({
       type: 'init_notification_preferences_failed',
       userId,

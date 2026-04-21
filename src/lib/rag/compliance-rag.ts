@@ -17,11 +17,11 @@
  *   const result = await enhancedComplianceQuery({
  *     question: 'What personal data obligations apply to mobile lenders in Kenya?',
  *   });
- *   // result.sources → [{ documentTitle, section, relevanceScore }, ...]
+ *   // result.sources -> [{ documentTitle, section, relevanceScore }, ...]
  *
  * Integration note:
  *   The compliance module's existing `aiService.answerComplianceQuery()` is
- *   called unchanged — the RAG context is injected via the `context` parameter
+ *   called unchanged  -  the RAG context is injected via the `context` parameter
  *   that is already part of `ComplianceQueryParams`. No existing files are
  *   modified by this module.
  */
@@ -44,7 +44,7 @@ export interface ComplianceSource {
 export interface EnhancedComplianceQueryOptions {
   /** Maximum number of RAG chunks to retrieve (default: 8) */
   topK?: number;
-  /** Minimum relevance score (0–1) to include a chunk (default: 0.65) */
+  /** Minimum relevance score (0-1) to include a chunk (default: 0.65) */
   minScore?: number;
   /**
    * Override category filter (e.g. 'DATA_PROTECTION').
@@ -104,7 +104,7 @@ function detectFilters(
 
   const lower = query.toLowerCase();
 
-  // ── Jurisdiction detection ──────────────────────────────────────────────
+  // -- Jurisdiction detection ----------------------------------------------
   if (!filters['jurisdiction']) {
     if (
       lower.includes('gdpr') ||
@@ -128,7 +128,7 @@ function detectFilters(
     }
   }
 
-  // ── Category detection ─────────────────────────────────────────────────
+  // -- Category detection -------------------------------------------------
   if (!filters['category']) {
     if (
       lower.includes('data protection') ||
@@ -196,7 +196,7 @@ function detectFilters(
 }
 
 /**
- * Convert a plain key→value map into Pinecone filter syntax.
+ * Convert a plain key->value map into Pinecone filter syntax.
  * Single key: { "field": { "$eq": "value" } }
  * Multiple keys: { "$and": [{ "field1": { "$eq": "v1" } }, ...] }
  */
@@ -289,7 +289,7 @@ export async function enhancedComplianceQuery(
     autoDetectFilters,
   });
 
-  // ── Step 1: Determine Pinecone metadata filters ────────────────────────────
+  // -- Step 1: Determine Pinecone metadata filters ----------------------------
   let pineconeFilter: Record<string, any> | undefined;
   const filtersApplied: Record<string, string> = {};
 
@@ -324,7 +324,7 @@ export async function enhancedComplianceQuery(
     minScore,
   });
 
-  // ── Step 2: Semantic search ────────────────────────────────────────────────
+  // -- Step 2: Semantic search ------------------------------------------------
   const searchOptions: SearchOptions = {
     topK,
     minScore,
@@ -339,7 +339,7 @@ export async function enhancedComplianceQuery(
     documentsFound: [...new Set(searchResults.map(r => r.documentTitle))].length,
   });
 
-  // ── Step 3: Format context ─────────────────────────────────────────────────
+  // -- Step 3: Format context -------------------------------------------------
   const ragContextString = formatRagContext(searchResults);
 
   const avgRelevanceScore =
@@ -347,7 +347,7 @@ export async function enhancedComplianceQuery(
       ? searchResults.reduce((sum, r) => sum + r.score, 0) / searchResults.length
       : 0;
 
-  // ── Step 4: Call AI compliance query with RAG context ─────────────────────
+  // -- Step 4: Call AI compliance query with RAG context ---------------------
   const complianceParams: ComplianceQueryParams = {
     question,
     organizationType,
@@ -358,7 +358,7 @@ export async function enhancedComplianceQuery(
 
   const aiResult = await aiService.answerComplianceQuery(complianceParams);
 
-  // ── Step 5: Build sources array ───────────────────────────────────────────
+  // -- Step 5: Build sources array -------------------------------------------
   const sources: ComplianceSource[] = searchResults.map(r => ({
     documentTitle: r.documentTitle,
     section: r.section,

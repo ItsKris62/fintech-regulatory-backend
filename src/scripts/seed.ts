@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs';
 /**
  * Idempotent production seed script.
  * Creates default admin user, feature flags, and system configs.
- * Safe to run multiple times — uses upserts.
+ * Safe to run multiple times  -  uses upserts.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -14,7 +14,7 @@ const prisma = new (PrismaClient as any)();
 async function seed(): Promise<void> {
   console.log('🌱 Starting production seed...\n');
 
-  // ── 1. Default admin user ──────────────────────────────────────────────
+  // -- 1. Default admin user ----------------------------------------------
   const adminEmail = process.env.ADMIN_EMAIL || 'admin@sheriabot.co.ke';
   const adminPassword = process.env.ADMIN_PASSWORD || 'SheriaBot-Admin-2024!';
 
@@ -35,7 +35,7 @@ async function seed(): Promise<void> {
 
   console.log(`  ✅ Admin user: ${admin.email} (${admin.id})`);
 
-  // ── 2. Default feature flags ───────────────────────────────────────────
+  // -- 2. Default feature flags -------------------------------------------
   const featureFlags = [
     { name: 'maintenance_mode', enabled: false, description: 'Enable maintenance mode' },
     { name: 'ai_policy_generation', enabled: true, description: 'Enable AI policy generation' },
@@ -55,7 +55,7 @@ async function seed(): Promise<void> {
 
   console.log(`  ✅ Feature flags: ${featureFlags.length} seeded`);
 
-  // ── 3. Default system configs ──────────────────────────────────────────
+  // -- 3. Default system configs ------------------------------------------
   const systemConfigs = [
     { key: 'max_upload_size_mb', value: '50', type: 'number', category: 'storage', description: 'Maximum file upload size in MB' },
     { key: 'max_queries_per_hour', value: '50', type: 'number', category: 'ai', description: 'Maximum compliance queries per user per hour' },

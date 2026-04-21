@@ -1,5 +1,5 @@
 /**
- * Admin Module — Public API
+ * Admin Module  -  Public API
  */
 
 export { adminModule, AdminModule } from './admin.module';

@@ -372,7 +372,7 @@ export const notificationRouter = router({
       }
     }),
 
-  // ── Admin ──────────────────────────────────────────────────────────────────
+  // -- Admin ------------------------------------------------------------------
 
   /**
    * Get all system notifications (admin only)

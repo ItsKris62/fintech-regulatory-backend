@@ -6,15 +6,15 @@
 // Logo is served from the R2 public bucket so it loads even when the
 // frontend is down and is immune to Vercel cold-start delays.
 const R2_PUBLIC_URL = process.env.R2_PUBLIC_BUCKET_URL ?? '';
-// FRONTEND_URL may be comma-separated for multi-origin CORS — use only the first (canonical) URL.
+// FRONTEND_URL may be comma-separated for multi-origin CORS  -  use only the first (canonical) URL.
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'https://sheriabot.com').split(',')[0].trim();
 
 export const SHERIABOT_URL = FRONTEND_URL;
 
 export const EMAIL_THEME = {
   colors: {
-    primary: '#15803D',       // Green-700 — SheriaBot brand green (matches app primary)
-    primaryLight: '#22C55E',  // Green-500 — lighter green for links and accents
+    primary: '#15803D',       // Green-700  -  SheriaBot brand green (matches app primary)
+    primaryLight: '#22C55E',  // Green-500  -  lighter green for links and accents
     accent: '#15803D',        // Brand green accent
     background: '#F8F9FA',    // Light gray background
     cardBackground: '#FFFFFF',// White card/content area

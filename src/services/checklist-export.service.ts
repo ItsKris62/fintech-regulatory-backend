@@ -5,9 +5,9 @@
  * with all its ChecklistItem rows. Uses the `docx` npm package (v9).
  *
  * Critical docx rules (same as gap-analysis-export.service.ts):
- *   - WidthType.DXA everywhere (never PERCENTAGE — breaks Google Docs)
- *   - ShadingType.CLEAR (never SOLID — causes black cell backgrounds)
- *   - No \n inside TextRun — use separate Paragraphs
+ *   - WidthType.DXA everywhere (never PERCENTAGE  -  breaks Google Docs)
+ *   - ShadingType.CLEAR (never SOLID  -  causes black cell backgrounds)
+ *   - No \n inside TextRun  -  use separate Paragraphs
  *   - PageBreak must be inside a Paragraph
  *   - A4 page size (width: 11906, height: 16838 DXA); 1-inch margins
  *   - Content width: 9026 DXA (11906 - 2 * 1440)
@@ -34,7 +34,7 @@ import {
 } from 'docx';
 import { logger } from '@/utils/logger';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// --- Constants ----------------------------------------------------------------
 
 /** A4 content width in DXA (11906 - 2*1440). */
 const CONTENT_W = 9026;
@@ -69,7 +69,7 @@ const C = {
   naTx:       '9CA3AF',
 } as const;
 
-// ─── Input Types ──────────────────────────────────────────────────────────────
+// --- Input Types --------------------------------------------------------------
 
 export interface ChecklistItemExport {
   id:                  string;
@@ -113,7 +113,7 @@ export interface ChecklistExportParams {
   userName?:         string;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// --- Helpers ------------------------------------------------------------------
 
 function s(v: string | null | undefined): string { return v ?? '' }
 
@@ -230,7 +230,7 @@ function multiLineCell(lines: string[], width: number, opts: { bg?: string; colo
   });
 }
 
-// ─── Section builders ─────────────────────────────────────────────────────────
+// --- Section builders ---------------------------------------------------------
 
 function buildHeader(params: ChecklistExportParams): Header {
   const displayName = params.organizationName ?? params.userName ?? 'SheriaBot';
@@ -253,7 +253,7 @@ function buildFooter(): Footer {
     children: [
       new Paragraph({
         children: [
-          new TextRun({ text: 'Confidential — For Internal Use Only  |  ', font: 'Arial', size: 16, color: C.slate }),
+          new TextRun({ text: 'Confidential  -  For Internal Use Only  |  ', font: 'Arial', size: 16, color: C.slate }),
           new TextRun({ text: 'Page ', font: 'Arial', size: 16, color: C.slate }),
           new TextRun({ children: [PageNumber.CURRENT], font: 'Arial', size: 16, color: C.slate }),
           new TextRun({ text: '  |  sheriabot.com', font: 'Arial', size: 16, color: C.slate }),
@@ -465,7 +465,7 @@ function buildDisclaimerSection(): Paragraph[] {
     new Paragraph({
       children: [
         new TextRun({ text: 'SheriaBot ', font: 'Arial', size: 20, bold: true, color: C.navy }),
-        new TextRun({ text: '— AI-Powered Regulatory Compliance for Kenya\'s Fintech Sector', font: 'Arial', size: 20, color: C.slate }),
+        new TextRun({ text: ' -  AI-Powered Regulatory Compliance for Kenya\'s Fintech Sector', font: 'Arial', size: 20, color: C.slate }),
       ],
       spacing: { after: 80 },
     }),
@@ -478,7 +478,7 @@ function buildDisclaimerSection(): Paragraph[] {
   ];
 }
 
-// ─── Main Export Function ─────────────────────────────────────────────────────
+// --- Main Export Function -----------------------------------------------------
 
 class ChecklistExportService {
   /**

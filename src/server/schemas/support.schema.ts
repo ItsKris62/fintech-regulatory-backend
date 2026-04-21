@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TicketCategory, TicketPriority, TicketStatus } from '@prisma/client';
 
-// ── User support schemas ──────────────────────────────────────────────────────
+// -- User support schemas ------------------------------------------------------
 
 export const createTicketSchema = z.object({
   subject: z.string().min(5, 'Subject must be at least 5 characters').max(200),
@@ -25,7 +25,7 @@ export const addCommentSchema = z.object({
   message: z.string().min(1, 'Message cannot be empty').max(5000),
 });
 
-// ── Admin support schemas ─────────────────────────────────────────────────────
+// -- Admin support schemas -----------------------------------------------------
 
 export const adminListTicketsSchema = z.object({
   status: z.nativeEnum(TicketStatus).optional(),

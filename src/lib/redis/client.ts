@@ -89,11 +89,15 @@ export async function ttl(key: string): Promise<number> {
   catch (error: any) { logger.error({ type: 'redis_ttl_error', key, error: error.message }); return -2; }
 }
 
+// WARNING: O(N) over the entire keyspace  -  blocks Upstash on large databases.
+// Only safe for test/migration scripts against small key sets.
+// Production code must use deleteTrackedSet() instead.
 export async function keys(pattern: string): Promise<string[]> {
   try { return await redis.keys(pattern); }
   catch (error: any) { logger.error({ type: 'redis_keys_error', pattern, error: error.message }); return []; }
 }
 
+// WARNING: O(N)  -  same caveat as keys(). Only for test/migration cleanup.
 export async function deletePattern(pattern: string): Promise<number> {
   try {
     const matchingKeys = await keys(pattern);
@@ -103,6 +107,26 @@ export async function deletePattern(pattern: string): Promise<number> {
     return result;
   } catch (error: any) {
     logger.error({ type: 'redis_delete_pattern_error', pattern, error: error.message });
+    return 0;
+  }
+}
+
+/**
+ * Atomically deletes all keys tracked in a Redis Set index, then deletes the
+ * index itself. O(M) where M is the number of tracked members  -  no keyspace scan.
+ *
+ * Members may include expired keys (natural TTL expiry without SREM); DEL on a
+ * non-existent key is a safe no-op.
+ */
+export async function deleteTrackedSet(setKey: string): Promise<number> {
+  try {
+    const members = await redis.smembers<string[]>(setKey);
+    if (members.length === 0) return 0;
+    const result = await redis.del(...members, setKey);
+    logger.info({ type: 'redis_tracked_set_delete', setKey, deleted: result });
+    return result;
+  } catch (error: any) {
+    logger.error({ type: 'redis_tracked_set_delete_error', setKey, error: error.message });
     return 0;
   }
 }

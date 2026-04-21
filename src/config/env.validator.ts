@@ -2,19 +2,19 @@ import { z } from 'zod';
 
 /**
  * Production environment variable validation schema.
- * Stricter than app.config.ts — enforces minimum secret lengths,
+ * Stricter than app.config.ts  -  enforces minimum secret lengths,
  * URL formats, and production-only requirements.
  */
 
 const envSchema = z.object({
-  // ── Application ──────────────────────────────────────────────────────────
+  // -- Application ----------------------------------------------------------
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.string().default('4000').transform(Number).pipe(z.number().min(1).max(65535)),
   APP_URL: z.string().url('APP_URL must be a valid URL'),
   FRONTEND_URL: z.string().url('FRONTEND_URL must be a valid URL'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
-  // ── Database ─────────────────────────────────────────────────────────────
+  // -- Database -------------------------------------------------------------
   DATABASE_URL: z
     .string()
     .min(1, 'DATABASE_URL is required')
@@ -30,7 +30,7 @@ const envSchema = z.object({
       message: 'DIRECT_URL must be a valid PostgreSQL connection string',
     }),
 
-  // ── Upstash Redis ────────────────────────────────────────────────────────
+  // -- Upstash Redis --------------------------------------------------------
   UPSTASH_REDIS_REST_URL: z
     .string()
     .min(1, 'UPSTASH_REDIS_REST_URL is required')
@@ -41,7 +41,7 @@ const envSchema = z.object({
     .string()
     .min(1, 'UPSTASH_REDIS_REST_TOKEN is required'),
 
-  // ── Supabase Auth ────────────────────────────────────────────────────────
+  // -- Supabase Auth --------------------------------------------------------
   SUPABASE_URL: z
     .string()
     .url('SUPABASE_URL must be a valid URL'),
@@ -55,31 +55,31 @@ const envSchema = z.object({
     .string()
     .min(32, 'SUPABASE_JWT_SECRET must be at least 32 characters'),
 
-  // ── Email (Resend) ──────────────────────────────────────────────────────
+  // -- Email (Resend) ------------------------------------------------------
   RESEND_API_KEY: z.string().startsWith('re_', 'RESEND_API_KEY must start with re_'),
   FROM_EMAIL: z.string().email('FROM_EMAIL must be a valid email address'),
 
-  // ── AI (Anthropic Claude) ───────────────────────────────────────────────
+  // -- AI (Anthropic Claude) -----------------------------------------------
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-', 'ANTHROPIC_API_KEY must start with sk-ant-'),
   ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
 
-  // ── Vector Database (Pinecone) ──────────────────────────────────────────
+  // -- Vector Database (Pinecone) ------------------------------------------
   PINECONE_API_KEY: z.string().min(1, 'PINECONE_API_KEY is required'),
   PINECONE_ENVIRONMENT: z.string().default('us-east-1-aws'),
   PINECONE_INDEX_NAME: z.string().default('sheriabot-legal-corpus'),
 
-  // ── Storage (Cloudflare R2) ─────────────────────────────────────────────
+  // -- Storage (Cloudflare R2) ---------------------------------------------
   R2_ACCOUNT_ID: z.string().min(1, 'R2_ACCOUNT_ID is required'),
   R2_ACCESS_KEY_ID: z.string().min(1, 'R2_ACCESS_KEY_ID is required'),
   R2_SECRET_ACCESS_KEY: z.string().min(1, 'R2_SECRET_ACCESS_KEY is required'),
   R2_BUCKET_NAME: z.string().default('sheriabot-documents'),
   R2_PUBLIC_URL: z.string().url('R2_PUBLIC_URL must be a valid URL'),
 
-  // ── Rate Limiting ───────────────────────────────────────────────────────
+  // -- Rate Limiting -------------------------------------------------------
   RATE_LIMIT_MAX: z.string().default('100').transform(Number).pipe(z.number().positive()),
   RATE_LIMIT_WINDOW: z.string().default('15m'),
 
-  // ── Admin Seed (optional, used by seed script) ──────────────────────────
+  // -- Admin Seed (optional, used by seed script) --------------------------
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_PASSWORD: z.string().min(12).optional(),
 });
@@ -130,7 +130,7 @@ export function printEnvSummary(env: EnvConfig): void {
   console.log(
     [
       '',
-      '── Environment Summary ──────────────────────────────',
+      '-- Environment Summary ------------------------------',
       `  NODE_ENV:         ${env.NODE_ENV}`,
       `  PORT:             ${env.PORT}`,
       `  APP_URL:          ${env.APP_URL}`,
@@ -141,7 +141,7 @@ export function printEnvSummary(env: EnvConfig): void {
       `  PINECONE:         ${mask(env.PINECONE_API_KEY)}`,
       `  RESEND:           ${mask(env.RESEND_API_KEY)}`,
       `  R2 BUCKET:        ${env.R2_BUCKET_NAME}`,
-      '────────────────────────────────────────────────────',
+      '----------------------------------------------------',
       '',
     ].join('\n')
   );

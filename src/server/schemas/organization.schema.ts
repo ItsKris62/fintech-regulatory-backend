@@ -118,7 +118,7 @@ export const deleteOrganizationSchema = z.object({
 export type DeleteOrganizationInput = z.infer<typeof deleteOrganizationSchema>;
 
 /**
- * Update organization settings (settings page — uses ctx.user.organizationId, no id param)
+ * Update organization settings (settings page  -  uses ctx.user.organizationId, no id param)
  *
  * All fields optional (partial update). Includes contact information fields.
  */

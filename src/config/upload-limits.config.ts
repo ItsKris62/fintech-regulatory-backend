@@ -1,7 +1,7 @@
 import type { EffectivePlan } from '@/types/plan.types';
 
 // ============================================================================
-// Vault upload limits — single source of truth for per-tier enforcement.
+// Vault upload limits  -  single source of truth for per-tier enforcement.
 // These values are read by vault.module.ts (backend enforcement) and returned
 // via the vault.getUploadLimits tRPC query (frontend display).
 // ============================================================================
@@ -76,7 +76,7 @@ export const VAULT_UPLOAD_LIMITS: Record<EffectivePlan, VaultTierLimits> = {
 };
 
 // ============================================================================
-// Avatar upload limits — flat across all tiers (no tier differentiation).
+// Avatar upload limits  -  flat across all tiers (no tier differentiation).
 // ============================================================================
 
 export const AVATAR_UPLOAD_LIMITS = {
@@ -85,7 +85,7 @@ export const AVATAR_UPLOAD_LIMITS = {
 } as const;
 
 // ============================================================================
-// Gap analysis file upload limits — per-tier maximum single-file size.
+// Gap analysis file upload limits  -  per-tier maximum single-file size.
 // Count limits are enforced separately via checkUsageLimit middleware.
 // ============================================================================
 

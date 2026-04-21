@@ -65,7 +65,7 @@ export const analyticsRouter = router({
   /**
    * Get organization dashboard analytics
    *
-   * @protected — uses caller's org if orgId not supplied
+   * @protected  -  uses caller's org if orgId not supplied
    */
   getOrgDashboard: protectedProcedure
     .use(withPlanContext)
@@ -418,7 +418,7 @@ export const analyticsRouter = router({
       }
     }),
 
-  // ── Admin-only endpoints ───────────────────────────────────────────────────
+  // -- Admin-only endpoints ---------------------------------------------------
 
   /**
    * Get platform-wide overview (admin only)

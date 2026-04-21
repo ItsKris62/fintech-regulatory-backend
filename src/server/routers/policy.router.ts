@@ -36,13 +36,23 @@ export const policyRouter = router({
         const { page, limit, status, regulatoryArea: _regulatoryArea, search } = input;
         const skip = (page - 1) * limit;
 
-        // Build where clause — cast to any since Policy schema differs from what's used
-        const where: any = {
+        // Note: deletedAt filter is also applied by Prisma soft-delete middleware.
+        // Keeping explicit filter as defense-in-depth.
+        const where: import('@prisma/client').Prisma.PolicyWhereInput = {
           deletedAt: null,
         };
 
-        // Filter by organization (unless admin)
-        if (ctx.user!.role !== 'ADMIN') {
+        if (ctx.user!.role === 'ADMIN') {
+          // Admin sees all policies globally  -  audit log required
+          logger.info({
+            type: 'admin_policy_list_accessed',
+            adminUserId: ctx.user!.id,
+          });
+        } else if (ctx.user!.organizationId) {
+          // Org-scoped: show all policies belonging to the user's organization
+          where.organizationId = ctx.user!.organizationId;
+        } else {
+          // No org  -  fall back to user-scoped (legacy policies without organizationId)
           where.userId = ctx.user!.id;
         }
 
@@ -58,7 +68,7 @@ export const policyRouter = router({
         }
 
         const [policies, total] = await Promise.all([
-          (ctx.prisma.policy.findMany as any)({
+          ctx.prisma.policy.findMany({
             where,
             skip,
             take: limit,
@@ -138,16 +148,18 @@ export const policyRouter = router({
           },
         });
 
-        if (!policy || (policy as any).deletedAt) {
+        if (!policy || policy.deletedAt) {
           throw new TRPCError({
             code: 'NOT_FOUND',
             message: 'Policy not found',
           });
         }
 
-        // Check access
+        // Check access  -  org-scoped with userId fallback for legacy policies
         if (ctx.user!.role !== 'ADMIN') {
-          const hasAccess = policy.userId === ctx.user!.id;
+          const hasAccess = policy.organizationId
+            ? policy.organizationId === ctx.user!.organizationId
+            : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
             throw new TRPCError({
@@ -191,7 +203,7 @@ export const policyRouter = router({
     .use(rateLimited('policyGeneration'))
     .use(withPlanContext)
     .use(requirePlanFeature('policyGeneration'))
-    // deferIncrement: true — usage counter is committed only after the DB record is
+    // deferIncrement: true  -  usage counter is committed only after the DB record is
     // created, preventing lost credits if the policy.create itself fails.
     .use(checkUsageLimit(BillingMetric.POLICY_GENERATIONS, { deferIncrement: true }))
     .input(generatePolicySchema)
@@ -206,7 +218,7 @@ export const policyRouter = router({
           regulatoryAreas: input.regulatoryAreas,
         });
 
-        // Create policy record — cast to any since schema differs
+        // Create policy record  -  cast to any since schema differs
         const policy = await (ctx.prisma.policy.create as any)({
           data: {
             title: input.title || `Policy for ${input.organizationType}`,
@@ -261,20 +273,25 @@ export const policyRouter = router({
                 message: 'Policy content generated, adding citations...',
               });
 
-              // Create citations from sections.citations (string array)
+              // Create citations from sections.citations (string array).
+              // Each entry is a raw AI-generated citation string  -  the full text
+              // is stored in textSnippet; actName is extracted as the leading act
+              // reference (everything before the first comma or parenthesis).
               await Promise.all(
-                (result.sections.citations || []).map((citationText: string) =>
-                  (ctx.prisma.citation.create as any)({
+                (result.sections.citations || []).map((citationText: string) => {
+                  const actNameMatch = citationText.match(/^([^,(]+)/);
+                  const actName = actNameMatch ? actNameMatch[1].trim() : citationText.slice(0, 100);
+                  return ctx.prisma.citation.create({
                     data: {
                       policyId: policy.id,
-                      actName: citationText,
+                      actName,
                       section: '',
                       textSnippet: citationText,
                       confidence: 'high',
                       verified: true,
                     },
-                  })
-                )
+                  });
+                })
               );
 
               // Update policy with generated content
@@ -299,7 +316,7 @@ export const policyRouter = router({
               // Clear cache
               await policyCache.delete(policy.id);
 
-              // Fetch user's display name — ctx.user only carries id/email/role,
+              // Fetch user's display name  -  ctx.user only carries id/email/role,
               // so a small select is needed to get fullName for the email.
               const emailUser = await ctx.prisma.user.findUnique({
                 where: { id: currentUser.id },
@@ -348,7 +365,7 @@ export const policyRouter = router({
                 stack: error instanceof Error ? error.stack : undefined,
               });
               // Recovery: mark FAILED and notify the frontend.
-              // Wrapped in its own try/catch — a DB or pubsub failure here must
+              // Wrapped in its own try/catch  -  a DB or pubsub failure here must
               // never produce a second unhandled rejection.
               try {
                 await (ctx.prisma.policy.update as any)({
@@ -419,7 +436,7 @@ export const policyRouter = router({
           where: { id },
         });
 
-        if (!existingPolicy || (existingPolicy as any).deletedAt) {
+        if (!existingPolicy || existingPolicy.deletedAt) {
           throw new TRPCError({
             code: 'NOT_FOUND',
             message: 'Policy not found',
@@ -427,7 +444,9 @@ export const policyRouter = router({
         }
 
         if (ctx.user!.role !== 'ADMIN') {
-          const hasAccess = existingPolicy.userId === ctx.user!.id;
+          const hasAccess = existingPolicy.organizationId
+            ? existingPolicy.organizationId === ctx.user!.organizationId
+            : existingPolicy.userId === ctx.user!.id;
 
           if (!hasAccess) {
             throw new TRPCError({
@@ -490,7 +509,7 @@ export const policyRouter = router({
           where: { id: input.id },
         });
 
-        if (!policy || (policy as any).deletedAt) {
+        if (!policy || policy.deletedAt) {
           throw new TRPCError({
             code: 'NOT_FOUND',
             message: 'Policy not found',
@@ -498,7 +517,9 @@ export const policyRouter = router({
         }
 
         if (ctx.user!.role !== 'ADMIN') {
-          const hasAccess = policy.userId === ctx.user!.id;
+          const hasAccess = policy.organizationId
+            ? policy.organizationId === ctx.user!.organizationId
+            : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
             throw new TRPCError({
@@ -508,7 +529,7 @@ export const policyRouter = router({
           }
         }
 
-        await (ctx.prisma.policy.update as any)({
+        await ctx.prisma.policy.update({
           where: { id: input.id },
           data: { deletedAt: new Date() },
         });
@@ -560,7 +581,7 @@ export const policyRouter = router({
           include: { citations: true },
         });
 
-        if (!policy || (policy as any).deletedAt) {
+        if (!policy || policy.deletedAt) {
           throw new TRPCError({
             code: 'NOT_FOUND',
             message: 'Policy not found',
@@ -569,7 +590,9 @@ export const policyRouter = router({
 
         // Check access
         if (ctx.user!.role !== 'ADMIN') {
-          const hasAccess = policy.userId === ctx.user!.id;
+          const hasAccess = policy.organizationId
+            ? policy.organizationId === ctx.user!.organizationId
+            : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
             throw new TRPCError({
@@ -635,7 +658,7 @@ export const policyRouter = router({
           where: { id: input.id },
         });
 
-        if (!policy || (policy as any).deletedAt) {
+        if (!policy || policy.deletedAt) {
           throw new TRPCError({
             code: 'NOT_FOUND',
             message: 'Policy not found',
@@ -644,7 +667,9 @@ export const policyRouter = router({
 
         // Check access
         if (ctx.user!.role !== 'ADMIN') {
-          const hasAccess = policy.userId === ctx.user!.id;
+          const hasAccess = policy.organizationId
+            ? policy.organizationId === ctx.user!.organizationId
+            : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
             throw new TRPCError({
@@ -704,7 +729,7 @@ export const policyRouter = router({
           include: { citations: true },
         });
 
-        if (!policy || (policy as any).deletedAt) {
+        if (!policy || policy.deletedAt) {
           throw new TRPCError({
             code: 'NOT_FOUND',
             message: 'Policy not found',
@@ -713,7 +738,9 @@ export const policyRouter = router({
 
         // Check access
         if (ctx.user!.role !== 'ADMIN') {
-          const hasAccess = policy.userId === ctx.user!.id;
+          const hasAccess = policy.organizationId
+            ? policy.organizationId === ctx.user!.organizationId
+            : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
             throw new TRPCError({
@@ -723,8 +750,8 @@ export const policyRouter = router({
           }
         }
 
-        // Verify citations with AI — verifyCitations takes string[]
-        const citationTexts = policy.citations.map((c: any) => c.textSnippet);
+        // Verify citations with AI  -  verifyCitations takes string[]
+        const citationTexts = policy.citations.map((c) => c.textSnippet);
         const verificationResults = await ctx.aiService.verifyCitations(citationTexts);
 
         logger.info({
@@ -767,14 +794,16 @@ export const policyRouter = router({
     .input(z.object({ policyId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
-        const policy = await (ctx.prisma.policy.findUnique as any)({
+        const policy = await ctx.prisma.policy.findUnique({
           where: { id: input.policyId },
           select: {
             id: true,
             status: true,
             userId: true,
+            organizationId: true,
             title: true,
             generationMetadata: true,
+            deletedAt: true,
             createdAt: true,
             updatedAt: true,
           },
@@ -788,11 +817,16 @@ export const policyRouter = router({
         }
 
         // Access control
-        if (ctx.user!.role !== 'ADMIN' && policy.userId !== ctx.user!.id) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Access denied to this policy',
-          });
+        if (ctx.user!.role !== 'ADMIN') {
+          const hasAccess = policy.organizationId
+            ? policy.organizationId === ctx.user!.organizationId
+            : policy.userId === ctx.user!.id;
+          if (!hasAccess) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Access denied to this policy',
+            });
+          }
         }
 
         // Derive a numeric progress from the status
@@ -847,12 +881,14 @@ export const policyRouter = router({
     .input(z.object({ policyId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
-        const policy = await (ctx.prisma.policy.findUnique as any)({
+        const policy = await ctx.prisma.policy.findUnique({
           where: { id: input.policyId },
           select: {
             id: true,
             userId: true,
+            organizationId: true,
             parentId: true,
+            deletedAt: true,
             version: true,
           },
         });
@@ -865,18 +901,23 @@ export const policyRouter = router({
         }
 
         // Access control
-        if (ctx.user!.role !== 'ADMIN' && policy.userId !== ctx.user!.id) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Access denied to this policy',
-          });
+        if (ctx.user!.role !== 'ADMIN') {
+          const hasAccess = policy.organizationId
+            ? policy.organizationId === ctx.user!.organizationId
+            : policy.userId === ctx.user!.id;
+          if (!hasAccess) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Access denied to this policy',
+            });
+          }
         }
 
         // Resolve root policy ID (walk up parentId chain if needed)
         const rootId = policy.parentId ?? policy.id;
 
         // Fetch all versions in the family
-        const versions = await (ctx.prisma.policy.findMany as any)({
+        const versions = await ctx.prisma.policy.findMany({
           where: {
             OR: [
               { id: rootId },

@@ -2,16 +2,16 @@
  * Stripe Webhook Service
  *
  * Validates incoming Stripe webhook events and updates org subscription state
- * in the database. All handlers are idempotent — Stripe may deliver the same
+ * in the database. All handlers are idempotent  -  Stripe may deliver the same
  * event more than once.
  *
  * Handled events:
- *   checkout.session.completed          → activate trial / subscription + send PlanActivatedEmail
- *   customer.subscription.updated       → plan change, trial-end, status transitions
- *   customer.subscription.deleted       → enter 7-day grace period + send SubscriptionCancelledEmail
- *   customer.subscription.trial_will_end → send TrialEndingReminderEmail
- *   invoice.payment_failed              → mark PAST_DUE + send PaymentFailedEmail
- *   invoice.payment_succeeded           → clear PAST_DUE back to ACTIVE
+ *   checkout.session.completed          -> activate trial / subscription + send PlanActivatedEmail
+ *   customer.subscription.updated       -> plan change, trial-end, status transitions
+ *   customer.subscription.deleted       -> enter 7-day grace period + send SubscriptionCancelledEmail
+ *   customer.subscription.trial_will_end -> send TrialEndingReminderEmail
+ *   invoice.payment_failed              -> mark PAST_DUE + send PaymentFailedEmail
+ *   invoice.payment_succeeded           -> clear PAST_DUE back to ACTIVE
  *
  * Raw-body requirement:
  *   This service receives the request body as a `Buffer`. The Fastify webhook
@@ -31,7 +31,7 @@ import { paymentService } from '@/modules/billing/payment.service';
 import { planCtxCacheKey } from '@/modules/trial';
 import { getRuntimePriceToPlanMap } from '@/lib/runtime-billing-plans';
 
-// ── Constants ──────────────────────────────────────────────────────────────
+// -- Constants --------------------------------------------------------------
 
 /** Duration of the grace period after cancellation (in days). */
 const GRACE_PERIOD_DAYS = 7;
@@ -39,7 +39,7 @@ const GRACE_PERIOD_DAYS = 7;
 /** Redis key pattern for org plan cache (must match middleware.ts). */
 const planCacheKey = (orgId: string) => `sheriabot:plan:${orgId}`;
 
-/** Key features included in each paid plan — used in activation emails. */
+/** Key features included in each paid plan  -  used in activation emails. */
 const PLAN_FEATURES: Record<string, string[]> = {
   STARTUP: [
     '50 compliance queries / month',
@@ -75,7 +75,7 @@ const PLAN_LABELS: Record<string, string> = {
 
 const frontendUrl = () => appConfig.frontendUrl.replace(/\/$/, '');
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// -- Helpers ----------------------------------------------------------------
 
 /** Extract string ID from an expandable Stripe field. */
 function toId(value: string | { id: string } | null | undefined): string | null {
@@ -89,18 +89,18 @@ function mapStripeStatus(status: Stripe.Subscription['status']): SubscriptionSta
     case 'trialing':  return SubscriptionStatus.TRIALING;
     case 'active':    return SubscriptionStatus.ACTIVE;
     case 'past_due':  return SubscriptionStatus.PAST_DUE;
-    // 'canceled' is handled via customer.subscription.deleted → GRACE_PERIOD
+    // 'canceled' is handled via customer.subscription.deleted -> GRACE_PERIOD
     // Treat incomplete / unpaid / paused as payment problems
     default:          return SubscriptionStatus.PAST_DUE;
   }
 }
 
-// ── Service class ──────────────────────────────────────────────────────────
+// -- Service class ----------------------------------------------------------
 
 class StripeWebhookService {
-  // ──────────────────────────────────────────────────────────────────────────
+  // --------------------------------------------------------------------------
   // Public entry point
-  // ──────────────────────────────────────────────────────────────────────────
+  // --------------------------------------------------------------------------
 
   /**
    * Verify the webhook signature and dispatch to the correct handler.
@@ -116,7 +116,7 @@ class StripeWebhookService {
       appConfig.stripe.webhookSecret,
     );
 
-    // Idempotency guard — Stripe retries webhooks for up to 3 days.
+    // Idempotency guard  -  Stripe retries webhooks for up to 3 days.
     // SET NX is atomic: only one concurrent delivery wins; retries see the key and skip.
     const alreadyProcessed = await this.markProcessed(event.id);
     if (alreadyProcessed) {
@@ -150,14 +150,14 @@ class StripeWebhookService {
         await this.handleTrialWillEnd(event.data.object as Stripe.Subscription);
         break;
       default:
-        // Ignore unhandled event types — Stripe sends many others
+        // Ignore unhandled event types  -  Stripe sends many others
         logger.debug({ type: 'stripe_webhook_unhandled', eventType: event.type });
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
+  // --------------------------------------------------------------------------
   // Event handlers
-  // ──────────────────────────────────────────────────────────────────────────
+  // --------------------------------------------------------------------------
 
   /**
    * checkout.session.completed
@@ -216,7 +216,7 @@ class StripeWebhookService {
       trialEndsAt: trialEndsAt?.toISOString() ?? null,
     });
 
-    // ── Append payment record (trial start — amount 0 until trial ends) ──────
+    // -- Append payment record (trial start  -  amount 0 until trial ends) ------
     {
       const invoiceNumber    = await paymentService.generateInvoiceNumber();
       const periodStart      = new Date();
@@ -231,7 +231,7 @@ class StripeWebhookService {
         status:                subStatus === SubscriptionStatus.TRIALING
           ? PaymentStatus.PENDING
           : PaymentStatus.COMPLETED,
-        description:           `Checkout completed — ${planName} plan`,
+        description:           `Checkout completed  -  ${planName} plan`,
         metadata:              { sessionId: session.id, plan: planName },
         invoiceNumber,
         subscriptionPlan:      planName,
@@ -240,7 +240,7 @@ class StripeWebhookService {
       });
     }
 
-    // ── Fire activation email (non-blocking) ────────────────────────────────
+    // -- Fire activation email (non-blocking) --------------------------------
     const contact = await this.findOrgOwnerContact(orgId);
     if (contact) {
       const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { name: true } });
@@ -330,7 +330,7 @@ class StripeWebhookService {
         subscriptionStatus: SubscriptionStatus.GRACE_PERIOD,
         cancelledAt:        now,
         gracePeriodEndsAt,
-        // Plan is intentionally NOT changed here — grace period retains full access.
+        // Plan is intentionally NOT changed here  -  grace period retains full access.
         // withPlanContext will downgrade to REGULATOR once gracePeriodEndsAt passes.
       },
     });
@@ -344,7 +344,7 @@ class StripeWebhookService {
       gracePeriodEndsAt: gracePeriodEndsAt.toISOString(),
     });
 
-    // ── Fire cancellation email (non-blocking) ───────────────────────────────
+    // -- Fire cancellation email (non-blocking) -------------------------------
     const contact = await this.findOrgOwnerContact(org.id);
     if (contact) {
       const base     = frontendUrl();
@@ -390,7 +390,7 @@ class StripeWebhookService {
       invoiceId: invoice.id,
     });
 
-    // ── Append payment record ─────────────────────────────────────────────────
+    // -- Append payment record -------------------------------------------------
     {
       const amountDue = typeof invoice.amount_due === 'number' ? invoice.amount_due : 0;
       const invoiceAny = invoice as unknown as Record<string, unknown>;
@@ -412,7 +412,7 @@ class StripeWebhookService {
       });
     }
 
-    // ── Fire payment-failed email (non-blocking) ─────────────────────────────
+    // -- Fire payment-failed email (non-blocking) -----------------------------
     const contact = await this.findOrgOwnerContact(org.id);
     if (contact) {
       const base       = frontendUrl();
@@ -442,7 +442,7 @@ class StripeWebhookService {
     if (!customerId) return;
 
     const org = await this.findOrgByCustomerId(customerId);
-    if (!org) return; // Not an error — could be a one-off invoice not tied to a subscription
+    if (!org) return; // Not an error  -  could be a one-off invoice not tied to a subscription
 
     // Only flip status if we're currently PAST_DUE; leave TRIALING / ACTIVE untouched
     if (org.subscriptionStatus === SubscriptionStatus.PAST_DUE) {
@@ -461,7 +461,7 @@ class StripeWebhookService {
       });
     }
 
-    // ── Append payment record for every successful invoice ────────────────────
+    // -- Append payment record for every successful invoice --------------------
     {
       const amountPaid = typeof invoice.amount_paid === 'number' ? invoice.amount_paid : 0;
       const invoiceAny = invoice as unknown as Record<string, unknown>;
@@ -536,7 +536,7 @@ class StripeWebhookService {
       daysRemaining,
     });
 
-    // ── Fire trial-ending reminder email (non-blocking) ──────────────────────
+    // -- Fire trial-ending reminder email (non-blocking) ----------------------
     const contact = await this.findOrgOwnerContact(org.id);
     if (contact) {
       const base      = frontendUrl();
@@ -553,20 +553,20 @@ class StripeWebhookService {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
+  // --------------------------------------------------------------------------
   // Shared utilities
-  // ──────────────────────────────────────────────────────────────────────────
+  // --------------------------------------------------------------------------
 
   /**
    * Atomically mark a Stripe event as processed using Redis SET NX.
    *
-   * Returns true  → key already existed → duplicate, skip processing.
-   * Returns false → key was just set    → new event, proceed normally.
+   * Returns true  -> key already existed -> duplicate, skip processing.
+   * Returns false -> key was just set    -> new event, proceed normally.
    *
    * Fails open: Redis unavailability is logged as a warning and returns false
    * so the event is processed rather than silently dropped.
    *
-   * TTL is 30 days — longer than Stripe's maximum 3-day retry window.
+   * TTL is 30 days  -  longer than Stripe's maximum 3-day retry window.
    */
   private async markProcessed(eventId: string): Promise<boolean> {
     const IDEMPOTENCY_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -581,7 +581,7 @@ class StripeWebhookService {
         eventId,
         error: error instanceof Error ? error.message : String(error),
       });
-      return false; // Fail open — process rather than silently drop
+      return false; // Fail open  -  process rather than silently drop
     }
   }
 
@@ -616,9 +616,9 @@ class StripeWebhookService {
    * Invalidate all plan-related Redis caches after a subscription change.
    *
    * Two key spaces are cleared:
-   *   1. Legacy org-scoped key `sheriabot:plan:{orgId}` — kept for any
+   *   1. Legacy org-scoped key `sheriabot:plan:{orgId}`  -  kept for any
    *      consumers that may still read it directly.
-   *   2. User-scoped plan context keys `sheriabot:planctx:{userId}` — the
+   *   2. User-scoped plan context keys `sheriabot:planctx:{userId}`  -  the
    *      authoritative cache read by `withPlanContext` middleware. Every
    *      member of the org must have their key cleared so the next request
    *      re-fetches the updated plan from the DB within this request cycle
@@ -646,7 +646,7 @@ class StripeWebhookService {
         source:    'stripe_webhook',
       });
     } catch (err) {
-      // Cache invalidation failure is non-fatal — withPlanContext will serve
+      // Cache invalidation failure is non-fatal  -  withPlanContext will serve
       // stale data for up to 5 minutes then re-fetch.
       logger.warn({ type: 'stripe_plan_cache_invalidation_failed', orgId, err: String(err) });
     }

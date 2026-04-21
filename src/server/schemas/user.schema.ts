@@ -67,7 +67,7 @@ export const revokeSessionSchema = z.object({
 export type RevokeSessionInput = z.infer<typeof revokeSessionSchema>;
 
 /**
- * TOTP setup initiation (no input needed — kept for procedure consistency)
+ * TOTP setup initiation (no input needed  -  kept for procedure consistency)
  */
 export const setupTotpSchema = z.object({}).optional();
 
@@ -86,7 +86,7 @@ export const confirmTotpSchema = z.object({
 export type ConfirmTotpInput = z.infer<typeof confirmTotpSchema>;
 
 /**
- * Disable TOTP — requires current password for security
+ * Disable TOTP  -  requires current password for security
  */
 export const disableTotpSchema = z.object({
   password: z.string().min(1, 'Password is required'),
@@ -97,7 +97,7 @@ export type DisableTotpInput = z.infer<typeof disableTotpSchema>;
 /**
  * Update all notification preferences (covers all 11 fields across all sections)
  *
- * All fields optional — supports partial updates (only send changed fields).
+ * All fields optional  -  supports partial updates (only send changed fields).
  * Backward-compatible with the existing 4-field "Specific Email Alerts" section.
  */
 /**
@@ -115,7 +115,7 @@ export const getAvatarUploadUrlSchema = z.object({
 export type GetAvatarUploadUrlInput = z.infer<typeof getAvatarUploadUrlSchema>;
 
 /**
- * Confirm avatar upload — persists the public URL after a successful R2 PUT
+ * Confirm avatar upload  -  persists the public URL after a successful R2 PUT
  */
 export const confirmAvatarUploadSchema = z.object({
   publicUrl: z.string().url('Must be a valid URL'),
@@ -126,7 +126,7 @@ export type ConfirmAvatarUploadInput = z.infer<typeof confirmAvatarUploadSchema>
 /**
  * Update all notification preferences (covers all 11 fields across all sections)
  *
- * All fields optional — supports partial updates (only send changed fields).
+ * All fields optional  -  supports partial updates (only send changed fields).
  * Backward-compatible with the existing 4-field "Specific Email Alerts" section.
  */
 export const updateAllNotificationPreferencesSchema = z.object({
@@ -135,7 +135,7 @@ export const updateAllNotificationPreferencesSchema = z.object({
   deadlineReminders: z.boolean().optional(),
   reportReady: z.boolean().optional(),
   supportResponses: z.boolean().optional(),
-  // Specific Email Alerts (existing 4 — kept for backward compatibility)
+  // Specific Email Alerts (existing 4  -  kept for backward compatibility)
   paymentDueReminder: z.boolean().optional(),
   complianceQueryReady: z.boolean().optional(),
   policyDocumentReady: z.boolean().optional(),

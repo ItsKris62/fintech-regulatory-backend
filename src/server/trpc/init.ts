@@ -31,7 +31,7 @@ function buildSafeFieldErrors(zodError: ZodError): Record<string, string> {
     const fieldName = String(issue.path[issue.path.length - 1] ?? '');
 
     if (PASSWORD_FIELD_NAMES.has(fieldName)) {
-      // Length constraint is acceptable to surface — it guides UX without
+      // Length constraint is acceptable to surface  -  it guides UX without
       // disclosing complexity rules.
       if (issue.code === 'too_small') {
         fieldErrors[path] = 'Password must be at least 8 characters';
@@ -77,7 +77,7 @@ const t = initTRPC.context<Context>().create({
       message: safeMessage,
       data: {
         ...shape.data,
-        // Strip stack traces in production — never expose implementation details.
+        // Strip stack traces in production  -  never expose implementation details.
         stack: isProd ? undefined : shape.data?.stack,
         // Sanitized field errors for client-side form validation display.
         fieldErrors,

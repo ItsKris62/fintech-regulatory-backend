@@ -76,6 +76,6 @@ export async function warmCaches(): Promise<void> {
       systemConfigs: configCount,
       durationMs: duration,
     },
-    `Cache warming complete in ${duration}ms — ${flagCount} flags, ${configCount} configs`
+    `Cache warming complete in ${duration}ms  -  ${flagCount} flags, ${configCount} configs`
   );
 }

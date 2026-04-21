@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { storageConfig } from '@/config/storage.config';
 import { VAULT_MAX_FILE_SIZE_BYTES } from '@/config/upload-limits.config';
 
-// ─── Enum literals (kept in sync with Prisma schema) ──────────────────────────
+// --- Enum literals (kept in sync with Prisma schema) --------------------------
 
 export const documentCategorySchema = z.enum([
   'CORPORATE',
@@ -19,7 +19,7 @@ export const vaultDocumentStatusSchema = z.enum(['PENDING', 'VERIFIED', 'EXPIRED
 export type DocumentCategoryValue = z.infer<typeof documentCategorySchema>;
 export type VaultDocumentStatusValue = z.infer<typeof vaultDocumentStatusSchema>;
 
-// ─── Step 1: Request presigned upload URL ─────────────────────────────────────
+// --- Step 1: Request presigned upload URL -------------------------------------
 
 export const vaultGetUploadUrlSchema = z.object({
   filename: z.string().min(1).max(255),
@@ -32,7 +32,7 @@ export const vaultGetUploadUrlSchema = z.object({
 
 export type VaultGetUploadUrlInput = z.infer<typeof vaultGetUploadUrlSchema>;
 
-// ─── Step 2: Confirm upload and create DB record ──────────────────────────────
+// --- Step 2: Confirm upload and create DB record ------------------------------
 
 export const vaultConfirmUploadSchema = z.object({
   documentId: z.string().min(1),
@@ -50,7 +50,7 @@ export const vaultConfirmUploadSchema = z.object({
 
 export type VaultConfirmUploadInput = z.infer<typeof vaultConfirmUploadSchema>;
 
-// ─── List / filter query ──────────────────────────────────────────────────────
+// --- List / filter query ------------------------------------------------------
 
 export const vaultListQuerySchema = z.object({
   page: z.number().int().min(1).default(1),
@@ -67,7 +67,7 @@ export const vaultListQuerySchema = z.object({
 
 export type VaultListQueryInput = z.infer<typeof vaultListQuerySchema>;
 
-// ─── Single document by ID ────────────────────────────────────────────────────
+// --- Single document by ID ----------------------------------------------------
 
 export const vaultDocumentIdSchema = z.object({
   id: z.string().min(1),
@@ -75,7 +75,7 @@ export const vaultDocumentIdSchema = z.object({
 
 export type VaultDocumentIdInput = z.infer<typeof vaultDocumentIdSchema>;
 
-// ─── Update document metadata ─────────────────────────────────────────────────
+// --- Update document metadata -------------------------------------------------
 
 export const vaultUpdateDocumentSchema = z.object({
   id: z.string().min(1),
@@ -89,7 +89,7 @@ export const vaultUpdateDocumentSchema = z.object({
 
 export type VaultUpdateDocumentInput = z.infer<typeof vaultUpdateDocumentSchema>;
 
-// ─── Update verification status ───────────────────────────────────────────────
+// --- Update verification status -----------------------------------------------
 
 export const vaultUpdateStatusSchema = z.object({
   id: z.string().min(1),
@@ -98,7 +98,7 @@ export const vaultUpdateStatusSchema = z.object({
 
 export type VaultUpdateStatusInput = z.infer<typeof vaultUpdateStatusSchema>;
 
-// ─── Replace document file (new version) ─────────────────────────────────────
+// --- Replace document file (new version) -------------------------------------
 
 export const vaultReplaceDocumentSchema = z.object({
   id: z.string().min(1),

@@ -36,7 +36,7 @@ export function generateComplianceSystemPrompt(): string {
 Structure every response using Markdown. Use level-2 headings (\`##\`) for all main sections and level-3 headings (\`###\`) for sub-sections within a section.
 
 **Critical formatting rules:**
-- Never use \`**ALL CAPS BOLD**\` or \`**Bold Text:**\` lines as section headers — always use \`##\` or \`###\`.
+- Never use \`**ALL CAPS BOLD**\` or \`**Bold Text:**\` lines as section headers  -  always use \`##\` or \`###\`.
 - Never write raw pipe characters outside a properly formatted table (i.e., do not write pseudo-tables using plain text).
 - Separate every major element (paragraph, list, table, sub-heading) with a blank line so renderers parse them correctly.
 
@@ -59,7 +59,7 @@ Use Markdown GFM tables whenever you are:
 Rules for tables:
 1. Every table **must** have a header row followed immediately by a separator row (\`|---|---|\`).
 2. Always insert a **blank line before the first \`|\` row** and a **blank line after the last \`|\` row**. This is required for Markdown parsers to correctly identify table blocks.
-3. Do **not** use bold text (\`**text**\`) as a substitute for table headers — use the pipe-delimited header row.
+3. Do **not** use bold text (\`**text**\`) as a substitute for table headers  -  use the pipe-delimited header row.
 4. Keep cell content concise; prefer short phrases over full sentences inside cells.
 
 Example (note the blank lines surrounding the table):
@@ -76,7 +76,7 @@ Example (note the blank lines surrounding the table):
 - State which regulatory authority (CBK, FRC, CAK, IRA, CMA, ODPC, NCA) has jurisdiction
 
 ## TONE & STYLE
-- Authoritative and precise — write as a senior compliance counsel would
+- Authoritative and precise  -  write as a senior compliance counsel would
 - Enterprise-ready: suitable for board reports and regulatory submissions
 - Clearly distinguish mandatory requirements from best-practice recommendations
 - Use plain-language explanations alongside legal citations
@@ -106,11 +106,11 @@ export function generateComplianceUserPrompt(params: ComplianceQueryParams): str
 
 ---
 
-Provide a comprehensive, enterprise-grade compliance analysis using the exact structure below. Use Markdown tables wherever applicable — especially for requirement comparisons, penalty schedules, and timeline summaries.
+Provide a comprehensive, enterprise-grade compliance analysis using the exact structure below. Use Markdown tables wherever applicable  -  especially for requirement comparisons, penalty schedules, and timeline summaries.
 
 ## Direct Answer
 
-State clearly, in 2–3 sentences, what is required and whether this organisation type must comply.
+State clearly, in 2-3 sentences, what is required and whether this organisation type must comply.
 
 ## Legal Basis
 
@@ -270,7 +270,7 @@ Tailor your answer to the ${industry} context in Kenya.`;
 }
 
 /**
- * Build a map of { lowercase-title → content } by splitting the response
+ * Build a map of { lowercase-title -> content } by splitting the response
  * on ## level-2 headings. Robust to extra blank lines and whitespace.
  */
 function buildSectionMap(response: string): Record<string, string> {
@@ -302,7 +302,7 @@ export function extractAnswerSections(response: string): {
   relatedConsiderations: string;
   citations: string[];
 } {
-  // ── New format: ## Headings ────────────────────────────────────────────────
+  // -- New format: ## Headings ------------------------------------------------
   const map = buildSectionMap(response);
 
   const get = (...keys: string[]): string => {
@@ -323,7 +323,7 @@ export function extractAnswerSections(response: string): {
     relatedConsiderations: get('related considerations', 'additional considerations'),
   };
 
-  // ── Legacy fallback: **BOLD HEADERS** ─────────────────────────────────────
+  // -- Legacy fallback: **BOLD HEADERS** -------------------------------------
   // Used only when the response contains no ## headings (e.g. older stored answers)
   const hasHeadings = Object.values(fromMap).some((v) => v.length > 0);
 
@@ -347,12 +347,12 @@ export function extractAnswerSections(response: string): {
   const relatedConsiderations = fromMap.relatedConsiderations ||
     legacyGet(/\*\*RELATED CONSIDERATIONS\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/i);
 
-  // ── Citations ──────────────────────────────────────────────────────────────
+  // -- Citations --------------------------------------------------------------
   const citationRegex = /([A-Z][A-Za-z\s]+Act\s+\d{4}(?:,\s+[Ss]ection\s+\d+(?:\([a-z0-9]+\))*)?|[A-Z][A-Za-z\s]+Regulations?\s+\d{4})/g;
   const matches = response.match(citationRegex);
   const citations = matches ? [...new Set(matches)] : [];
 
-  void hasHeadings; // suppress unused-var warning — intentionally kept for docs
+  void hasHeadings; // suppress unused-var warning  -  intentionally kept for docs
 
   return {
     directAnswer,

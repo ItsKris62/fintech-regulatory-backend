@@ -166,7 +166,7 @@ export function extractTextFromMarkdown(buffer: Buffer): string {
 
 /**
  * Attempt to extract text from a buffer based on MIME type.
- * For PDF/DOCX, returns null — those need the pdf-parse/mammoth packages
+ * For PDF/DOCX, returns null  -  those need the pdf-parse/mammoth packages
  * which are optional additions. The module gracefully handles the absence.
  */
 export async function extractText(
@@ -195,7 +195,7 @@ export async function extractText(
         const result = await pdfParse(buffer);
         return result.text;
       } catch {
-        // pdf-parse not installed — log warning and continue without text
+        // pdf-parse not installed  -  log warning and continue without text
         return null;
       }
     }

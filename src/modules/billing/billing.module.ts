@@ -30,6 +30,9 @@ const USAGE_PREFIX = 'sheriabot:usage:';
 /** TTL for usage counter keys: 35 days (covers end-of-month billing edge cases). */
 const USAGE_TTL_SECONDS = 35 * 24 * 60 * 60;
 
+/** Tracking set that indexes all active usage keys  -  avoids O(N) redis.keys() scan. */
+const USAGE_INDEX_KEY = 'sheriabot:idx:usage-keys';
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -97,9 +100,12 @@ class BillingModule {
         newCount = await redis.incrby(key, amount);
       }
 
-      // Set TTL on first write (key created this period)
+      // Set TTL on first write (key created this period) and register in tracking set
       if (newCount <= amount) {
         await redis.expire(key, USAGE_TTL_SECONDS);
+        // Register the new key so syncToDatabase() can enumerate without redis.keys()
+        await redis.sadd(USAGE_INDEX_KEY, key);
+        await redis.expire(USAGE_INDEX_KEY, USAGE_TTL_SECONDS);
       }
 
       logger.debug({
@@ -115,7 +121,7 @@ class BillingModule {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error({ type: 'usage_increment_error', scopeId, metric, error: message });
-      // Return 0 rather than crashing the request — the limit check middleware
+      // Return 0 rather than crashing the request  -  the limit check middleware
       // will re-read the key independently, so this is a safe degraded path.
       return 0;
     }
@@ -182,7 +188,7 @@ class BillingModule {
   }
 
   // --------------------------------------------------------------------------
-  // Sync (Redis → Postgres)
+  // Sync (Redis -> Postgres)
   // --------------------------------------------------------------------------
 
   /**
@@ -197,17 +203,18 @@ class BillingModule {
    * IMPORTANT: This method only syncs keys belonging to organizations (it
    * filters by checking whether the scopeId is a valid organizationId in
    * Postgres). Usage keys scoped to individual users (no org) are not
-   * persisted — they are ephemeral and only enforced via Redis.
+   * persisted  -  they are ephemeral and only enforced via Redis.
    *
    * @returns Number of UsageRecord rows upserted.
    */
   async syncToDatabase(): Promise<number> {
     logger.info({ type: 'usage_sync_start' });
 
-    // Scan all usage keys — Upstash supports KEYS with wildcards
+    // Enumerate usage keys via tracking set  -  O(M) where M = registered keys,
+    // no full keyspace scan. Keys registered by increment() via SADD on first write.
     let allKeys: string[];
     try {
-      allKeys = await redis.keys(`${USAGE_PREFIX}*`);
+      allKeys = await redis.smembers<string[]>(USAGE_INDEX_KEY);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       logger.error({ type: 'usage_sync_keys_error', error: msg });
@@ -342,7 +349,7 @@ class BillingModule {
 
   /**
    * Deletes the Redis usage key for a given scope + metric + period.
-   * Only for use in tests or admin reset flows — does NOT touch Postgres.
+   * Only for use in tests or admin reset flows  -  does NOT touch Postgres.
    */
   async resetRedisCounter(
     scopeId: string,

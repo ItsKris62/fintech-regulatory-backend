@@ -120,6 +120,7 @@ model Organization {
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   users                   User[]
+  policies                Policy[]
   complianceItems         ComplianceItem[]
   complianceSnapshots     ComplianceScoreSnapshot[]
   complianceEvents        ComplianceEvent[]
@@ -152,6 +153,7 @@ model Session {
 model Policy {
   id                     String       @id @default(cuid())
   userId                 String
+  organizationId         String?
   scenario               String
   regulatoryAreas        String[]
   urgency                String
@@ -163,37 +165,63 @@ model Policy {
   complianceChecklist    Json?
   implementationTimeline Json?
   appendices             Json?
+  content                String?      @db.Text
+  organizationType       String?
+  specificRequirements   String?
+  targetAudience         String?
+  generationMetadata     Json?
+  isLatestVersion        Boolean      @default(true)
+  parentId               String?
   status                 PolicyStatus @default(DRAFT)
   generationTime         Int?
   version                Int          @default(1)
   assignedTo             String?
   reviewers              String[]
+  deletedAt              DateTime?
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
   citations              Citation[]
   comments               Comment[]
   user                   User         @relation(fields: [userId], references: [id])
+  organization           Organization? @relation(fields: [organizationId], references: [id])
+  parent                 Policy?      @relation("PolicyVersions", fields: [parentId], references: [id])
+  versions               Policy[]     @relation("PolicyVersions")
 
   @@index([userId])
+  @@index([organizationId])
   @@index([status])
   @@index([createdAt])
+  @@index([deletedAt])
 }
 
 model Citation {
-  id          String         @id @default(cuid())
-  policyId    String
-  actName     String
-  section     String
-  subsection  String?
-  textSnippet String
-  confidence  String
-  verified    Boolean        @default(false)
-  documentId  String?
-  createdAt   DateTime       @default(now())
-  document    LegalDocument? @relation(fields: [documentId], references: [id])
-  policy      Policy         @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  id                String          @id @default(cuid())
+
+  // Polymorphic parent -- exactly one should be set
+  policyId          String?
+  policy            Policy?         @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  complianceQueryId String?
+  complianceQuery   ComplianceQuery? @relation("ComplianceQueryCitations", fields: [complianceQueryId], references: [id], onDelete: Cascade)
+
+  actName           String
+  section           String
+  subsection        String?
+  textSnippet       String          @db.Text
+  confidence        String
+  verified          Boolean         @default(false)
+
+  // Link to legal corpus when identifiable from RAG
+  documentId        String?
+  document          LegalDocument?  @relation(fields: [documentId], references: [id])
+
+  // Fallback for RAG-sourced citations with no DB record
+  rawSource         Json?
+
+  createdAt         DateTime        @default(now())
 
   @@index([policyId])
+  @@index([complianceQueryId])
   @@index([documentId])
 }
 
@@ -312,6 +340,7 @@ model ComplianceQuery {
   user             User     @relation(fields: [userId], references: [id])
   feedbacks        QueryFeedback[]
   saves            SavedResponse[]
+  citationRecords  Citation[]  @relation("ComplianceQueryCitations")
 
   @@index([userId])
   @@index([createdAt])
@@ -636,6 +665,7 @@ enum UserStatus {
 enum PolicyStatus {
   DRAFT
   PROCESSING
+  GENERATING
   COMPLETED
   FAILED
   ARCHIVED

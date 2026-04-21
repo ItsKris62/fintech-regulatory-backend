@@ -1,5 +1,5 @@
 /**
- * Compliance Checklist — Types, Zod Schemas, and Constants
+ * Compliance Checklist  -  Types, Zod Schemas, and Constants
  *
  * Covers the normalized ChecklistItem model (new path, post-March 2026).
  * Legacy JSON-blob checklists (checklistData / itemProgress) continue to
@@ -91,7 +91,7 @@ export type GetChecklistStatusInput = z.infer<typeof getChecklistStatusInputSche
 
 export interface ChecklistGenerateResult {
   checklistId: string;
-  /** Always GENERATING on initial response — frontend polls getChecklistStatus. */
+  /** Always GENERATING on initial response  -  frontend polls getChecklistStatus. */
   status: 'GENERATING';
 }
 
@@ -107,7 +107,7 @@ export interface ChecklistStatusResult {
   isNormalized:  boolean;
   productType:   string | null;
   businessStage: string | null;
-  /** Persisted generation metadata — available for FAILED state UI. */
+  /** Persisted generation metadata  -  available for FAILED state UI. */
   metadata: {
     errorMessage?:   string | null;
     retryCount?:     number;
@@ -161,7 +161,7 @@ export interface ChecklistCategoryDetail {
   items:          ChecklistItemDetail[];
   completedCount: number;
   totalCount:     number;
-  /** 0–100 percentage. */
+  /** 0-100 percentage. */
   progress:       number;
 }
 

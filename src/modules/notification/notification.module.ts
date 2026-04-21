@@ -3,9 +3,9 @@
  * In-app notifications, email alerts, preferences, and system announcements.
  *
  * Integrations:
- * - Prisma        — notification persistence
- * - Redis         — unread count cache & preferences cache
- * - MailerService — email delivery via Resend
+ * - Prisma         -  notification persistence
+ * - Redis          -  unread count cache & preferences cache
+ * - MailerService  -  email delivery via Resend
  */
 
 import { prisma } from '@/lib/prisma/client';
@@ -240,7 +240,7 @@ class NotificationModule {
       this.getUnreadCount(userId),
     ]);
 
-    // Lazy 90-day cleanup — throttled to once per 24h per user
+    // Lazy 90-day cleanup  -  throttled to once per 24h per user
     this.lazyCleanupOldNotifications(userId).catch(() => { /* non-blocking */ });
 
     return {
@@ -356,7 +356,7 @@ class NotificationModule {
     if (cached) return JSON.parse(cached) as NotificationPreferences;
 
     // Store prefs in User.metadata or a standalone key in Redis
-    // (No dedicated model — using Redis as the store of record)
+    // (No dedicated model  -  using Redis as the store of record)
     const persisted = await redis.get<string>(`notif:prefs:persisted:${userId}`);
     if (persisted) {
       const prefs = JSON.parse(persisted) as NotificationPreferences;
@@ -414,7 +414,7 @@ class NotificationModule {
     if (!user) throw new NotFoundError('User');
 
     logger.info({ type: 'email_notification_sent', userId, data: Object.keys(data) });
-    // Delegate to mailer — uses existing templates
+    // Delegate to mailer  -  uses existing templates
     // (Extend mailer.service.ts for custom templates as needed)
   }
 
@@ -504,7 +504,7 @@ class NotificationModule {
       orgName: inviteData.orgName,
     });
 
-    // Use mailer's generic send — the mailer doesn't have an invite template yet,
+    // Use mailer's generic send  -  the mailer doesn't have an invite template yet,
     // so we log the intent and the router layer can extend this.
     logger.info({
       type: 'org_invite_email_sent',
@@ -654,16 +654,16 @@ class NotificationModule {
   }
 
   async getCategoryPreferences(userId: string): Promise<NotificationCategoryPreferenceDTO[]> {
-    const existing = await (prisma as any).notificationCategoryPreference.findMany({
+    const existing = await prisma.notificationCategoryPreference.findMany({
       where: { userId },
-    }) as Array<{ id: string; userId: string; category: string; inAppEnabled: boolean; emailEnabled: boolean }>;
+    });
 
     const categories: NotificationCategoryName[] = ['SECURITY', 'COMPLIANCE', 'DOCUMENTS', 'ACCOUNT', 'SUPPORT', 'SYSTEM'];
     const existingCategories = new Set(existing.map((p) => p.category));
     const missing = categories.filter((c) => !existingCategories.has(c));
 
     if (missing.length > 0) {
-      await (prisma as any).notificationCategoryPreference.createMany({
+      await prisma.notificationCategoryPreference.createMany({
         data: missing.map((category) => ({
           userId,
           category,
@@ -673,9 +673,9 @@ class NotificationModule {
         skipDuplicates: true,
       });
 
-      const seeded = await (prisma as any).notificationCategoryPreference.findMany({
+      const seeded = await prisma.notificationCategoryPreference.findMany({
         where: { userId },
-      }) as Array<{ id: string; userId: string; category: string; inAppEnabled: boolean; emailEnabled: boolean }>;
+      });
 
       return seeded.map((p) => ({
         id: p.id,
@@ -705,7 +705,7 @@ class NotificationModule {
       throw new ForbiddenError('Security notifications cannot be disabled');
     }
 
-    const updated = await (prisma as any).notificationCategoryPreference.upsert({
+    const updated = await prisma.notificationCategoryPreference.upsert({
       where: { userId_category: { userId, category } },
       update: {
         ...(inAppEnabled !== undefined && { inAppEnabled }),
@@ -717,7 +717,7 @@ class NotificationModule {
         inAppEnabled: inAppEnabled ?? true,
         emailEnabled: emailEnabled ?? true,
       },
-    }) as { id: string; userId: string; category: string; inAppEnabled: boolean; emailEnabled: boolean };
+    });
 
     logger.info({ type: 'category_preference_updated', userId, category, inAppEnabled, emailEnabled });
 
@@ -754,7 +754,7 @@ class NotificationModule {
 
   /**
    * Map extended notification type to the Prisma NotificationType enum.
-   * All new types are native enum values — pass through directly.
+   * All new types are native enum values  -  pass through directly.
    */
   private mapToPrismaType(type: string): string {
     const PRISMA_NATIVE = new Set([
@@ -821,7 +821,7 @@ class NotificationModule {
     });
     if (!user) return;
 
-    // Generic email — compliance alerts use the dedicated method
+    // Generic email  -  compliance alerts use the dedicated method
     if (params.type === 'COMPLIANCE_ALERT') {
       await mailer.sendComplianceAlertEmail({
         email: user.email,

@@ -5,28 +5,28 @@ import { SubscriptionPlan } from '@prisma/client';
  * SubscriptionPlan enum strings) to the canonical `SubscriptionPlan` enum.
  *
  * Background: The `Organization` model has two subscription fields:
- *   - `subscriptionTier` (String, legacy) — written by the admin module and
+ *   - `subscriptionTier` (String, legacy)  -  written by the admin module and
  *     originally used arbitrary strings like "starter" / "professional".
  *     The admin module later started writing SubscriptionPlan enum values
  *     directly (e.g. "STARTUP"), so both formats appear in production.
- *   - `plan` (SubscriptionPlan, authoritative) — read by `withPlanContext` to
+ *   - `plan` (SubscriptionPlan, authoritative)  -  read by `withPlanContext` to
  *     gate features. Added as part of the Phase 6+ infrastructure migration.
  *
  * This mapping is the single source of truth for converting `subscriptionTier`
- * → `SubscriptionPlan`. It is used by:
+ * -> `SubscriptionPlan`. It is used by:
  *   - `admin.module.ts` (write path fix)
  *   - `src/scripts/backfill-org-plan.ts` (data migration)
  *
  * Tier string variants handled (case-insensitive via normalisation):
- *   "starter" | "regulator"            → REGULATOR
- *   "startup"                          → STARTUP
- *   "professional" | "business"        → BUSINESS
- *   "enterprise"                       → ENTERPRISE
- *   (SubscriptionPlan enum strings     → their matching enum value)
- *   (anything else                     → null — caller decides what to do)
+ *   "starter" | "regulator"            -> REGULATOR
+ *   "startup"                          -> STARTUP
+ *   "professional" | "business"        -> BUSINESS
+ *   "enterprise"                       -> ENTERPRISE
+ *   (SubscriptionPlan enum strings     -> their matching enum value)
+ *   (anything else                     -> null  -  caller decides what to do)
  */
 export function subscriptionTierToPlan(tier: string): SubscriptionPlan | null {
-  // Enum values written by the admin module (exact match first — fast path)
+  // Enum values written by the admin module (exact match first  -  fast path)
   if (tier in SubscriptionPlan) {
     return SubscriptionPlan[tier as keyof typeof SubscriptionPlan];
   }

@@ -19,7 +19,7 @@ const BINARY_ALLOWED_MIMES = new Set([
 const TEXT_MIME_TYPES = new Set([
   'text/plain',
   'text/markdown',
-  'application/msword', // .doc (old binary format — file-type detects this as application/msword)
+  'application/msword', // .doc (old binary format  -  file-type detects this as application/msword)
 ]);
 
 export interface FileValidationResult {
@@ -37,7 +37,7 @@ export interface FileValidationResult {
  * For text types (TXT, MD): validates that the buffer is valid UTF-8 with
  * no embedded null bytes (heuristic to detect binary files masquerading as text).
  *
- * @param buffer   File buffer (first 8 KB is sufficient — pass more if available)
+ * @param buffer   File buffer (first 8 KB is sufficient  -  pass more if available)
  * @param claimedFilename  Original filename as provided by the client
  * @param claimedMimeType  MIME type as declared by the client
  */
@@ -46,10 +46,10 @@ export async function validateFileMagicBytes(
   claimedFilename: string,
   claimedMimeType: string,
 ): Promise<FileValidationResult> {
-  // Sanitize the filename for logging — never log the full path
+  // Sanitize the filename for logging  -  never log the full path
   const safeFilename = path.basename(claimedFilename);
 
-  // ── Text-based types (no magic bytes) ──────────────────────────────────
+  // -- Text-based types (no magic bytes) ----------------------------------
   if (TEXT_MIME_TYPES.has(claimedMimeType)) {
     // Old .doc binary format IS detectable by file-type; let it fall through
     // to binary validation below. Only skip for true text types.
@@ -58,14 +58,14 @@ export async function validateFileMagicBytes(
     }
   }
 
-  // ── Binary types — validate via magic bytes ─────────────────────────────
+  // -- Binary types  -  validate via magic bytes -----------------------------
   // Dynamic import for ESM compatibility (file-type v17+ is ESM-only)
   const { fileTypeFromBuffer } = await import('file-type');
   const detected = await fileTypeFromBuffer(buffer);
   const detectedMime = detected?.mime ?? null;
 
   if (!detectedMime) {
-    // file-type couldn't identify the file — reject unknown binary content
+    // file-type couldn't identify the file  -  reject unknown binary content
     logger.warn({
       type: 'file_validation_unknown_type',
       safeFilename,

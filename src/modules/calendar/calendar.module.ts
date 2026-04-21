@@ -14,7 +14,7 @@ import type {
   UpcomingEventsParams,
 } from './calendar.types';
 
-// ─── Prisma select shared across all queries ──────────────────────────────────
+// --- Prisma select shared across all queries ----------------------------------
 
 const CALENDAR_EVENT_SELECT = {
   id:             true,
@@ -34,11 +34,11 @@ const CALENDAR_EVENT_SELECT = {
   updatedAt:      true,
 } as const;
 
-// ─── Reminder thresholds (days before due date) ────────────────────────────────
+// --- Reminder thresholds (days before due date) --------------------------------
 
 const REMINDER_THRESHOLDS = [7, 3, 1, 0] as const;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// --- Helpers ------------------------------------------------------------------
 
 function formatEventDate(date: Date): string {
   return date.toLocaleDateString('en-KE', { dateStyle: 'medium' });
@@ -52,7 +52,7 @@ function reminderCheckKey(organizationId: string): string {
 const REMINDER_THROTTLE_SECONDS = 900;
 
 class CalendarModule {
-  // ─── createEvent ───────────────────────────────────────────────────────────
+  // --- createEvent -----------------------------------------------------------
 
   async createEvent(params: CreateEventParams): Promise<CalendarEventRecord> {
     const {
@@ -65,7 +65,7 @@ class CalendarModule {
     const normalizedDate = new Date(dueDate);
     normalizedDate.setUTCHours(0, 0, 0, 0);
 
-    // ── Duplicate guard (Task 2) ─────────────────────────────────────────────
+    // -- Duplicate guard (Task 2) ---------------------------------------------
     // Use a same-day window in case legacy records predate the unique constraint.
     const dayStart = new Date(normalizedDate);
     const dayEnd   = new Date(normalizedDate);
@@ -93,7 +93,7 @@ class CalendarModule {
       });
     }
 
-    // ── Create ───────────────────────────────────────────────────────────────
+    // -- Create ---------------------------------------------------------------
     let event: CalendarEventRecord;
 
     try {
@@ -133,7 +133,7 @@ class CalendarModule {
       priority,
     });
 
-    // ── EVENT_CREATED notification (Task 6) — fire-and-forget ────────────────
+    // -- EVENT_CREATED notification (Task 6)  -  fire-and-forget ----------------
     void notificationModule.createNotification({
       userId:   createdById,
       type:     'EVENT_CREATED',
@@ -154,7 +154,7 @@ class CalendarModule {
     return event;
   }
 
-  // ─── listEvents ───────────────────────────────────────────────────────────
+  // --- listEvents -----------------------------------------------------------
 
   async listEvents(params: ListEventsParams): Promise<CalendarEventRecord[]> {
     const { organizationId, month, year, status, priority } = params;
@@ -185,7 +185,7 @@ class CalendarModule {
     return events;
   }
 
-  // ─── getEvent ─────────────────────────────────────────────────────────────
+  // --- getEvent -------------------------------------------------------------
 
   async getEvent(params: GetEventParams): Promise<CalendarEventRecord> {
     const { id, organizationId } = params;
@@ -202,7 +202,7 @@ class CalendarModule {
     return event;
   }
 
-  // ─── updateEvent ──────────────────────────────────────────────────────────
+  // --- updateEvent ----------------------------------------------------------
 
   async updateEvent(params: UpdateEventParams): Promise<CalendarEventRecord> {
     const { id, organizationId, dueDate, status, ...rest } = params;
@@ -243,7 +243,7 @@ class CalendarModule {
     return event;
   }
 
-  // ─── deleteEvent ──────────────────────────────────────────────────────────
+  // --- deleteEvent ----------------------------------------------------------
 
   async deleteEvent(params: DeleteEventParams): Promise<{ id: string }> {
     const { id, organizationId } = params;
@@ -264,7 +264,7 @@ class CalendarModule {
     return { id };
   }
 
-  // ─── getUpcomingDeadlines ─────────────────────────────────────────────────
+  // --- getUpcomingDeadlines -------------------------------------------------
 
   async getUpcomingDeadlines(params: UpcomingEventsParams): Promise<CalendarEventRecord[]> {
     const { organizationId, daysAhead } = params;
@@ -286,7 +286,7 @@ class CalendarModule {
     return events;
   }
 
-  // ─── evaluateAndGenerateReminders (Task 5) ────────────────────────────────
+  // --- evaluateAndGenerateReminders (Task 5) --------------------------------
   //
   // Lazy evaluation: called fire-and-forget from the upcoming query router.
   // Checks Redis to avoid running more than once every 15 minutes per org.
@@ -294,7 +294,7 @@ class CalendarModule {
   // at each configured threshold (7d, 3d, 1d, 0d).
 
   async evaluateAndGenerateReminders(organizationId: string): Promise<void> {
-    // ── Throttle check ───────────────────────────────────────────────────────
+    // -- Throttle check -------------------------------------------------------
     const throttleKey = reminderCheckKey(organizationId);
     const alreadyRan  = await redis.get<string>(throttleKey);
     if (alreadyRan) return;
@@ -302,7 +302,7 @@ class CalendarModule {
     // Set the throttle key immediately to prevent concurrent evaluations
     await redis.set(throttleKey, '1', { ex: REMINDER_THROTTLE_SECONDS });
 
-    // ── Fetch events due within the next 7 days ───────────────────────────────
+    // -- Fetch events due within the next 7 days -------------------------------
     const now      = new Date();
     const horizon  = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
@@ -351,7 +351,7 @@ class CalendarModule {
 
         const title = threshold === 0
           ? `Due Today: ${event.title}`
-          : `Upcoming: ${event.title} — ${threshold} day${threshold > 1 ? 's' : ''} remaining`;
+          : `Upcoming: ${event.title}  -  ${threshold} day${threshold > 1 ? 's' : ''} remaining`;
 
         await notificationModule.createNotification({
           userId:   event.createdById,

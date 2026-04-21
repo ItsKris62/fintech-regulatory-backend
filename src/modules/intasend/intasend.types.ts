@@ -10,9 +10,9 @@
 // ---------------------------------------------------------------------------
 
 export interface STKPushInput {
-  /** M-Pesa phone number — must already be normalised to 254XXXXXXXXX */
+  /** M-Pesa phone number  -  must already be normalised to 254XXXXXXXXX */
   phoneNumber: string;
-  /** Amount in KES (whole number — NOT cents) */
+  /** Amount in KES (whole number  -  NOT cents) */
   amount: number;
   /** Short reference shown to the customer on the STK prompt */
   accountReference: string;
@@ -21,9 +21,9 @@ export interface STKPushInput {
 }
 
 export interface STKPushResponse {
-  /** IntaSend invoice ID — used to poll for status */
+  /** IntaSend invoice ID  -  used to poll for status */
   invoiceId: string;
-  /** Initial state — always 'PENDING' immediately after initiation */
+  /** Initial state  -  always 'PENDING' immediately after initiation */
   state: IntaSendPaymentState;
   /** Raw response from IntaSend (stored in Payment.metadata) */
   raw: Record<string, unknown>;

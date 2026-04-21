@@ -208,7 +208,7 @@ export const vaultRouter = router({
     }),
 
   /**
-   * Change verification status (PENDING → VERIFIED / EXPIRED).
+   * Change verification status (PENDING -> VERIFIED / EXPIRED).
    * Admin and Regulator roles only.
    */
   updateStatus: protectedProcedure

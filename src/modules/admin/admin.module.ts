@@ -363,7 +363,7 @@ class AdminModule {
     if (!user) throw new NotFoundError('User');
     if (user.role === 'ADMIN') throw new ForbiddenError('Cannot delete an admin user');
 
-    // Soft delete — anonymize after 30 days
+    // Soft delete  -  anonymize after 30 days
     await prisma.user.update({
       where: { id: userId },
       data: { status: 'SUSPENDED', email: `deleted_${userId}@sheriabot.internal` },
@@ -405,7 +405,7 @@ class AdminModule {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundError('User');
 
-    // Invalidate all sessions — user must log in and reset password
+    // Invalidate all sessions  -  user must log in and reset password
     await prisma.session.deleteMany({ where: { userId } });
 
     await this.writeAuditLog(adminId, 'admin_force_password_reset', 'User', userId, {});
@@ -620,7 +620,7 @@ class AdminModule {
     const org = await prisma.organization.findUnique({ where: { id: orgId } });
     if (!org) throw new NotFoundError('Organization');
 
-    // Soft delete — suspend all members
+    // Soft delete  -  suspend all members
     await this.suspendOrganization(adminId, orgId, reason);
     await this.writeAuditLog(adminId, 'admin_delete_org', 'Organization', orgId, { reason });
 
@@ -647,7 +647,7 @@ class AdminModule {
     await prisma.organization.update({
       where: { id: orgId },
       data: {
-        subscriptionTier: plan,        // legacy field — keep in sync
+        subscriptionTier: plan,        // legacy field  -  keep in sync
         plan:             prismaplan,  // authoritative field read by withPlanContext
         subscriptionStatus: SubscriptionStatus.ACTIVE,
       },
@@ -1076,7 +1076,7 @@ class AdminModule {
     const cached = await redis.get<string>(frameworksKey());
     if (cached) return JSON.parse(cached) as RegulatoryFramework[];
 
-    // Frameworks stored in Redis (lightweight — no dedicated DB table needed)
+    // Frameworks stored in Redis (lightweight  -  no dedicated DB table needed)
     return [];
   }
 
@@ -1143,12 +1143,12 @@ class AdminModule {
   // ==========================================================================
 
   async getPendingInvitations(): Promise<PendingInvitation[]> {
-    // Invitations are stored in Redis by the OrganizationModule
-    // This returns all pending invite keys
-    const keys = await redis.keys('org:invite:*');
+    // Invitations indexed in a tracking set by OrganizationModule on each invite creation.
+    // Key format: org:invitation:{token} (matches ORGANIZATION_CONSTANTS.REDIS_KEYS.INVITATION).
+    const inviteKeys = await redis.smembers<string[]>('sheriabot:idx:invitations');
     const invites: PendingInvitation[] = [];
 
-    for (const key of keys.slice(0, 100)) {
+    for (const key of inviteKeys.slice(0, 100)) {
       const raw = await redis.get<string>(key);
       if (!raw) continue;
       try {
@@ -1171,11 +1171,13 @@ class AdminModule {
 
   async resendInvitation(adminId: string, invitationId: string): Promise<void> {
     logger.info({ type: 'admin_resend_invitation', adminId, invitationId });
-    // The OrganizationModule handles resend — proxy call here if needed
+    // The OrganizationModule handles resend  -  proxy call here if needed
   }
 
   async revokeInvitation(adminId: string, invitationId: string): Promise<void> {
-    await redis.del(`org:invite:${invitationId}`);
+    const inviteKey = `org:invitation:${invitationId}`;
+    await redis.del(inviteKey);
+    await redis.srem('sheriabot:idx:invitations', inviteKey);
     await this.writeAuditLog(adminId, 'admin_revoke_invitation', 'Invitation', invitationId, {});
   }
 
@@ -1280,7 +1282,7 @@ class AdminModule {
     await prisma.organization.update({
       where: { id: orgId },
       data: {
-        subscriptionTier: plan,        // legacy field — keep in sync
+        subscriptionTier: plan,        // legacy field  -  keep in sync
         plan:             prismaplan,  // authoritative field read by withPlanContext
         subscriptionStatus: SubscriptionStatus.ACTIVE,
       },
@@ -1867,12 +1869,12 @@ class AdminModule {
   }
 
   // ==========================================================================
-  // SECURITY — SESSION LISTING & SIGN-OUT
+  // SECURITY  -  SESSION LISTING & SIGN-OUT
   // ==========================================================================
 
   /**
    * Returns all currently-active (non-expired) sessions for a user.
-   * Read-only — individual session revocation is not exposed; use
+   * Read-only  -  individual session revocation is not exposed; use
    * signOutUserEverywhere to invalidate all tokens at once.
    */
   async listUserActiveSessions(userId: string): Promise<SessionSummary[]> {
@@ -1894,13 +1896,13 @@ class AdminModule {
 
   /**
    * Signs a user out of ALL devices by:
-   *   1. Writing a user-level token revocation sentinel in Redis — every
+   *   1. Writing a user-level token revocation sentinel in Redis  -  every
    *      in-flight JWT issued before this timestamp will be rejected on its
    *      next request (covers the full 1-hour Supabase token lifetime + margin).
    *   2. Deleting all Session rows for the user so the session list is empty.
    *   3. Writing an audit log entry.
    *
-   * This does NOT revoke a single session — it revokes every token the user
+   * This does NOT revoke a single session  -  it revokes every token the user
    * currently holds.  Callers should make this semantics clear in the UI.
    */
   async signOutUserEverywhere(adminId: string, userId: string): Promise<void> {
@@ -1908,7 +1910,7 @@ class AdminModule {
     if (!user) throw new NotFoundError('User');
 
     // Revoke all live JWTs by setting the user-level revocation timestamp.
-    // TTL = 7200s (2 h) — safely outlives the 1-hour Supabase access-token lifetime.
+    // TTL = 7200s (2 h)  -  safely outlives the 1-hour Supabase access-token lifetime.
     await revokeAllUserTokens(userId, 'admin_revoke');
 
     // Remove all DB session rows so the admin UI session list reflects the change.
@@ -1925,7 +1927,7 @@ class AdminModule {
   // AUDIT LOG EXPORT
   // ==========================================================================
 
-  /** Maximum rows fetched for each export format (hardcoded — not configurable). */
+  /** Maximum rows fetched for each export format (hardcoded  -  not configurable). */
   private static readonly AUDIT_LOG_CSV_MAX_ROWS  = 10_000;
   private static readonly AUDIT_LOG_DOCX_MAX_ROWS =  2_000;
   /** Presigned URL TTL in seconds (60 minutes). */
@@ -2025,7 +2027,100 @@ class AdminModule {
     return { url, expiresAt };
   }
 
-  // ── CSV builder ─────────────────────────────────────────────────────────────
+  async exportAnalyticsCsv(dateFrom: Date, dateTo: Date): Promise<{ url: string; expiresAt: Date }> {
+    const [revenue, aiUsage, subBreakdown] = await Promise.all([
+      this.getRevenueMetrics(dateFrom, dateTo),
+      this.getAIUsageMetrics(dateFrom, dateTo),
+      this.getSubscriptionBreakdown(),
+    ]);
+
+    const PLAN_DISPLAY: Record<string, string> = {
+      REGULATOR: 'Regulator',
+      STARTUP:   'Startup',
+      BUSINESS:  'Business',
+      ENTERPRISE: 'Enterprise',
+    };
+
+    const formatStatus = (s: string) =>
+      s.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+
+    const esc = (v: string | number): string => {
+      const s = String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"`
+        : s;
+    };
+
+    const rows: string[] = ['Section,Label,Value'];
+
+    Object.entries(subBreakdown.byPlan).forEach(([plan, count]) => {
+      rows.push([esc('Plan breakdown'), esc(PLAN_DISPLAY[plan] ?? plan), count].join(','));
+    });
+    Object.entries(subBreakdown.byStatus).forEach(([status, count]) => {
+      rows.push([esc('Status breakdown'), esc(formatStatus(status)), count].join(','));
+    });
+    rows.push([esc('Totals'), esc('All organizations'), subBreakdown.total].join(','));
+
+    rows.push([esc('Revenue'), esc('Total all-time (KES)'),        revenue.totalRevenue].join(','));
+    rows.push([esc('Revenue'), esc('This month (KES)'),            revenue.currentMonthRevenue].join(','));
+    rows.push([esc('Revenue'), esc('Last month (KES)'),            revenue.lastMonthRevenue].join(','));
+    rows.push([esc('Revenue'), esc('Stripe volume (KES)'),         revenue.byProvider.STRIPE].join(','));
+    rows.push([esc('Revenue'), esc('M-Pesa volume (KES)'),         revenue.byProvider.MPESA].join(','));
+    rows.push([esc('Revenue'), esc('Payment success rate (%)'),    revenue.successRate].join(','));
+
+    rows.push([esc('AI usage'), esc('Queries in range'),           aiUsage.totalQueries].join(','));
+    rows.push([esc('AI usage'), esc('Policies completed'),         aiUsage.totalPolicies].join(','));
+    rows.push([esc('AI usage'), esc('Checklists generated'),       aiUsage.totalChecklists].join(','));
+    rows.push([esc('AI usage'), esc('Gap analyses'),               aiUsage.totalGapAnalyses].join(','));
+
+    const buffer = Buffer.from(rows.join('\r\n'), 'utf-8');
+    const key    = `exports/analytics/${nanoid(12)}.csv`;
+    const ttl    = 300; // 5 minutes
+
+    const s3 = new S3Client({
+      region:   'auto',
+      endpoint: `https://${appConfig.storage.accountId}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId:     appConfig.storage.accessKeyId,
+        secretAccessKey: appConfig.storage.secretAccessKey,
+      },
+    });
+
+    const bucket = appConfig.storage.bucketName;
+
+    await s3.send(new PutObjectCommand({
+      Bucket:      bucket,
+      Key:         key,
+      Body:        buffer,
+      ContentType: 'text/csv',
+      Metadata:    { 'generated-by': 'sheriabot-admin', format: 'csv' },
+    }));
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const url = await getSignedUrl(
+      s3,
+      new GetObjectCommand({
+        Bucket:                     bucket,
+        Key:                        key,
+        ResponseContentType:        'text/csv',
+        ResponseContentDisposition: `attachment; filename="sheriabot-analytics-${dateStr}.csv"`,
+      }),
+      { expiresIn: ttl },
+    );
+
+    const expiresAt = new Date(Date.now() + ttl * 1_000);
+
+    logger.info({
+      type:     'admin_analytics_export_generated',
+      rowCount: rows.length - 1,
+      key,
+      expiresAt,
+    });
+
+    return { url, expiresAt };
+  }
+
+  // -- CSV builder -------------------------------------------------------------
 
   private buildAuditLogCsv(logs: AuditLogEntry[]): Buffer {
     const esc = (v: string | null | undefined): string => {
@@ -2050,7 +2145,7 @@ class AdminModule {
     return Buffer.from([header, ...lines].join('\r\n'), 'utf-8');
   }
 
-  // ── DOCX builder ────────────────────────────────────────────────────────────
+  // -- DOCX builder ------------------------------------------------------------
 
   private async buildAuditLogDocx(logs: AuditLogEntry[]): Promise<Buffer> {
     /** A4 content width in DXA (11906 - 2*1440). */
@@ -2122,7 +2217,7 @@ class AdminModule {
           new Paragraph({
             alignment: AlignmentType.LEFT,
             children: [
-              new TextRun({ text: 'SheriaBot — Audit Log Export', bold: true, size: 28, color: '1A2B4A' }),
+              new TextRun({ text: 'SheriaBot  -  Audit Log Export', bold: true, size: 28, color: '1A2B4A' }),
             ],
             spacing: { after: 120 },
           }),

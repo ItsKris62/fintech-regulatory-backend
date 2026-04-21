@@ -68,7 +68,7 @@ export const adminRouter = router({
           } as any,
         }),
         ctx.prisma.organization.count(),
-        // Policy and ComplianceQuery don't support soft delete — they use status fields instead
+        // Policy and ComplianceQuery don't support soft delete  -  they use status fields instead
         ctx.prisma.policy.count(),
         ctx.prisma.policy.count({ where: { status: 'COMPLETED' } }),
         ctx.prisma.complianceQuery.count(),
@@ -283,7 +283,7 @@ export const adminRouter = router({
           },
         });
 
-        // F5.8 — evict cached user profile so role/status changes take effect immediately
+        // F5.8  -  evict cached user profile so role/status changes take effect immediately
         if (user.supabaseAuthId) {
           await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
         }
@@ -469,7 +469,7 @@ export const adminRouter = router({
           data: { deletedAt: new Date() } as any,
         });
 
-        // F5.8 — evict cached user profile so deletion takes effect immediately
+        // F5.8  -  evict cached user profile so deletion takes effect immediately
         if (targetUser?.supabaseAuthId) {
           await redis.del(`user:session:${targetUser.supabaseAuthId}`).catch(() => {});
         }
@@ -517,7 +517,7 @@ export const adminRouter = router({
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot suspend your own account' });
         }
 
-        // F5.8 — capture supabaseAuthId for cache eviction
+        // F5.8  -  capture supabaseAuthId for cache eviction
         const suspendTarget = await ctx.prisma.user.findUnique({
           where: { id: input.userId },
           select: { supabaseAuthId: true },
@@ -1115,7 +1115,7 @@ export const adminRouter = router({
     }
   }),
 
-  // ─── INVITATION MANAGEMENT ────────────────────────────────────────────────
+  // --- INVITATION MANAGEMENT ------------------------------------------------
 
   /**
    * Create an invitation for a user
@@ -1235,7 +1235,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── USER APPROVAL (REGULATORS) ───────────────────────────────────────────
+  // --- USER APPROVAL (REGULATORS) -------------------------------------------
 
   /**
    * List users pending admin approval
@@ -1296,7 +1296,7 @@ export const adminRouter = router({
           data: { accountStatus: 'active' } as any,
         });
 
-        // F5.8 — evict cached user profile so approval takes effect immediately
+        // F5.8  -  evict cached user profile so approval takes effect immediately
         if (user.supabaseAuthId) {
           await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
         }
@@ -1385,7 +1385,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── ORGANIZATION VERIFICATION ────────────────────────────────────────────
+  // --- ORGANIZATION VERIFICATION --------------------------------------------
 
   /**
    * List organizations pending verification
@@ -1549,7 +1549,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── USER CREATION (ADMIN-INITIATED) ─────────────────────────────────────
+  // --- USER CREATION (ADMIN-INITIATED) -------------------------------------
 
   createUser: adminProcedure
     .input(
@@ -1573,7 +1573,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── FORCE PASSWORD RESET ─────────────────────────────────────────────────
+  // --- FORCE PASSWORD RESET -------------------------------------------------
 
   forcePasswordReset: adminProcedure
     .input(z.object({ userId: z.string() }))
@@ -1588,7 +1588,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── UPDATE USER ROLE ─────────────────────────────────────────────────────
+  // --- UPDATE USER ROLE -----------------------------------------------------
 
   updateUserRole: adminProcedure
     .input(z.object({
@@ -1606,7 +1606,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── IMPERSONATION ────────────────────────────────────────────────────────
+  // --- IMPERSONATION --------------------------------------------------------
 
   impersonateUser: adminProcedure
     .input(z.object({ userId: z.string() }))
@@ -1621,7 +1621,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── ORGANIZATION UPDATE ──────────────────────────────────────────────────
+  // --- ORGANIZATION UPDATE --------------------------------------------------
 
   updateOrganization: adminProcedure
     .input(
@@ -1668,7 +1668,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── ANALYTICS ────────────────────────────────────────────────────────────
+  // --- ANALYTICS ------------------------------------------------------------
 
   getUserGrowth: adminProcedure
     .input(
@@ -1786,7 +1786,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── LOGIN HISTORY ────────────────────────────────────────────────────────
+  // --- LOGIN HISTORY --------------------------------------------------------
 
   getLoginHistory: adminProcedure
     .input(
@@ -1814,7 +1814,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── CONTENT MANAGEMENT ───────────────────────────────────────────────────
+  // --- CONTENT MANAGEMENT ---------------------------------------------------
 
   listContent: adminProcedure
     .input(
@@ -1867,7 +1867,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── CREATE CONTENT ────────────────────────────────────────────────────────
+  // --- CREATE CONTENT --------------------------------------------------------
 
   createContent: adminProcedure
     .input(z.object({
@@ -1887,7 +1887,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── SUBSCRIPTION OVERVIEW ────────────────────────────────────────────────
+  // --- SUBSCRIPTION OVERVIEW ------------------------------------------------
 
   getSubscriptionOverview: adminProcedure.query(async ({ ctx }) => {
     try {
@@ -1922,7 +1922,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── RECENT PAYMENTS (ALL ORGS, ADMIN-ONLY) ──────────────────────────────
+  // --- RECENT PAYMENTS (ALL ORGS, ADMIN-ONLY) ------------------------------
 
   getRecentPayments: adminProcedure
     .input(z.object({ limit: z.number().int().min(1).max(100).default(20) }))
@@ -1936,7 +1936,7 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── ORG PAYMENT HISTORY ─────────────────────────────────────────────────
+  // --- ORG PAYMENT HISTORY -------------------------------------------------
 
   getOrgPaymentHistory: adminProcedure
     .input(
@@ -1956,11 +1956,11 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── SECURITY — SESSION LISTING & SIGN-OUT ───────────────────────────────
+  // --- SECURITY  -  SESSION LISTING & SIGN-OUT -------------------------------
 
   /**
    * List all currently-active (non-expired) sessions for a given user.
-   * Read-only — individual session revocation is not supported.
+   * Read-only  -  individual session revocation is not supported.
    * Use signOutUserEverywhere to invalidate all tokens at once.
    *
    * @admin
@@ -1986,7 +1986,7 @@ export const adminRouter = router({
    * (covers the full 1-hour Supabase access-token lifetime plus a 1-hour
    * safety margin).  All Session DB rows for the user are also deleted.
    *
-   * This is NOT a per-session revoke — it revokes every token the user holds.
+   * This is NOT a per-session revoke  -  it revokes every token the user holds.
    *
    * @admin
    */
@@ -2003,7 +2003,42 @@ export const adminRouter = router({
       }
     }),
 
-  // ─── AUDIT LOG EXPORT ─────────────────────────────────────────────────────
+  // --- ANALYTICS CSV EXPORT -------------------------------------------------
+
+  /**
+   * Generate a server-side analytics summary export and return a 5-minute
+   * presigned download URL.
+   *
+   * Mirrors the same Section/Label/Value CSV the admin analytics page used to
+   * build client-side. The file is stored at
+   * `exports/analytics/<id>.csv` in the private R2 bucket.
+   *
+   * @admin
+   */
+  exportAnalyticsCsv: adminProcedure
+    .input(
+      z.object({
+        dateFrom: z.string().datetime().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const dateTo   = new Date();
+        const dateFrom = input.dateFrom
+          ? new Date(input.dateFrom)
+          : new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+
+        const result = await adminModule.exportAnalyticsCsv(dateFrom, dateTo);
+        logger.info({ type: 'admin_analytics_csv_export', adminId: ctx.user!.id });
+        return result;
+      } catch (error: unknown) {
+        if (error instanceof TRPCError) throw error;
+        const message = error instanceof Error ? error.message : 'Failed to export analytics';
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message, cause: error });
+      }
+    }),
+
+  // --- AUDIT LOG EXPORT -----------------------------------------------------
 
   /**
    * Generate a server-side audit log export and return a 60-minute presigned

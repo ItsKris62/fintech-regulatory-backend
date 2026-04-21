@@ -4,9 +4,9 @@
  * Background
  * ----------
  * The Organization model has two subscription-related fields:
- *   - subscriptionTier (String, legacy) — written by the admin module and,
+ *   - subscriptionTier (String, legacy)  -  written by the admin module and,
  *     historically, by any billing code that predates the enum migration.
- *   - plan (SubscriptionPlan enum, authoritative) — read by withPlanContext
+ *   - plan (SubscriptionPlan enum, authoritative)  -  read by withPlanContext
  *     to gate features. Defaults to REGULATOR.
  *
  * Any org whose subscriptionTier indicates a paid tier but whose plan column
@@ -15,7 +15,7 @@
  *
  * Usage
  * -----
- *   # Dry run (default — safe to run at any time):
+ *   # Dry run (default  -  safe to run at any time):
  *   npx tsx src/scripts/backfill-org-plan.ts
  *
  *   # Targeted dry run for a single org:
@@ -35,14 +35,14 @@ import { logger } from '@/utils/logger';
 import { subscriptionTierToPlan } from '@/utils/plan-mapping';
 import { planCtxCacheKey } from '@/modules/trial';
 
-// ── CLI flag parsing ──────────────────────────────────────────────────────────
+// -- CLI flag parsing ----------------------------------------------------------
 
 const args   = process.argv.slice(2);
 const DRY_RUN = !args.includes('--execute');
 const singleIdx = args.indexOf('--single');
 const singleOrgId: string | null = singleIdx !== -1 ? (args[singleIdx + 1] ?? null) : null;
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+// -- Main ---------------------------------------------------------------------
 
 async function main(): Promise<void> {
   logger.info({
@@ -52,18 +52,18 @@ async function main(): Promise<void> {
   });
 
   if (DRY_RUN) {
-    console.log('\n⚠️  DRY RUN — no database writes will occur.');
+    console.log('\n⚠️  DRY RUN  -  no database writes will occur.');
     console.log('    Pass --execute to apply changes.\n');
   } else {
-    console.log('\n🚀 EXECUTE MODE — database will be updated.\n');
+    console.log('\n🚀 EXECUTE MODE  -  database will be updated.\n');
   }
 
-  // ── Fetch candidate orgs ───────────────────────────────────────────────────
+  // -- Fetch candidate orgs ---------------------------------------------------
   //
   // Scope: orgs whose plan is still REGULATOR but whose subscriptionTier
   // indicates a paid tier.  We intentionally exclude orgs where
   // subscriptionTier is 'starter', 'REGULATOR', or any value that correctly
-  // maps to REGULATOR — those orgs are already accurate.
+  // maps to REGULATOR  -  those orgs are already accurate.
 
   const where = singleOrgId
     ? { id: singleOrgId }
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
     orderBy: { createdAt: 'asc' },
   });
 
-  // ── Classify orgs ─────────────────────────────────────────────────────────
+  // -- Classify orgs ---------------------------------------------------------
 
   type Row = {
     id:               string;
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
   const unrecognised = rows.filter((r) => r.mappedPlan === null);
   const alreadyCorrect = rows.filter((r) => !r.willUpdate && r.mappedPlan !== null);
 
-  // ── Print summary ──────────────────────────────────────────────────────────
+  // -- Print summary ----------------------------------------------------------
 
   console.log(`Total orgs scanned:    ${rows.length}`);
   console.log(`Will be updated:       ${toUpdate.length}`);
@@ -129,14 +129,14 @@ async function main(): Promise<void> {
     console.log(
       `    ${r.id}  name="${r.name}"  ` +
       `tier="${r.subscriptionTier}"  ` +
-      `plan: ${r.plan} → ${r.mappedPlan!}`
+      `plan: ${r.plan} -> ${r.mappedPlan!}`
     );
   }
 
-  // ── Apply updates (when --execute is passed) ───────────────────────────────
+  // -- Apply updates (when --execute is passed) -------------------------------
 
   if (DRY_RUN) {
-    console.log('\n✋ Dry run complete — no changes made. Pass --execute to apply.\n');
+    console.log('\n✋ Dry run complete  -  no changes made. Pass --execute to apply.\n');
     return;
   }
 
@@ -179,7 +179,7 @@ async function main(): Promise<void> {
         source:    'backfill',
       });
 
-      console.log(`    ✅ ${row.id}  ${row.plan} → ${row.mappedPlan}`);
+      console.log(`    ✅ ${row.id}  ${row.plan} -> ${row.mappedPlan}`);
       successCount++;
     } catch (err) {
       logger.error({ type: 'plan_backfill_error', orgId: row.id, err: String(err) });
@@ -188,7 +188,7 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`\n✅ Backfill complete — updated: ${successCount}, failed: ${failCount}\n`);
+  console.log(`\n✅ Backfill complete  -  updated: ${successCount}, failed: ${failCount}\n`);
 }
 
 main()

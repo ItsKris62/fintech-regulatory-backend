@@ -74,11 +74,11 @@ import {
 
 const { REDIS_KEYS, MAX_QUERIES_PER_HOUR, MAX_QUICK_CHECKS_PER_HOUR, QUERY_CACHE_TTL } = COMPLIANCE_CONSTANTS;
 
-// ─── Gap Analysis Async Helpers ───────────────────────────────────────────────
+// --- Gap Analysis Async Helpers -----------------------------------------------
 
 /**
  * Update status + progress on a GapAnalysis record.
- * Never throws — errors are logged and swallowed so callers stay non-fatal.
+ * Never throws  -  errors are logged and swallowed so callers stay non-fatal.
  */
 async function updateAnalysisStatus(
   analysisId: string,
@@ -153,7 +153,7 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
   let currentProgress = 5;
 
   try {
-    // ── EXTRACTING (progress: 10) ─────────────────────────────────────────
+    // -- EXTRACTING (progress: 10) -----------------------------------------
     await updateAnalysisStatus(analysisId, { status: 'EXTRACTING', progress: 10 });
     currentProgress = 10;
 
@@ -175,7 +175,7 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
       throw new Error('Could not extract meaningful text from the document. Please ensure it is not encrypted or image-only.');
     }
 
-    // ── RAG RETRIEVAL (progress: 15 \u2192 30) ──────────────────────────────────
+    // -- RAG RETRIEVAL (progress: 15 \u2192 30) ----------------------------------
     await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 15 });
     currentProgress = 15;
 
@@ -232,13 +232,13 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
     await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 30 });
     currentProgress = 30;
 
-    // ── SANITIZE ──────────────────────────────────────────────────────────
+    // -- SANITIZE ----------------------------------------------------------
     const { sanitized: safePolicyText, wasModified: injectionDetected } = sanitizePolicyText(policyText);
     if (injectionDetected) {
       logger.warn({ type: 'gap_analysis_prompt_injection_detected', userId, analysisId, fileName });
     }
 
-    // ── AI ANALYSIS (progress: 30 \u2192 85) ────────────────────────────────────
+    // -- AI ANALYSIS (progress: 30 \u2192 85) ------------------------------------
     const SINGLE_PASS_THRESHOLD = analysisDepth === 'deep' ? 15000 : 8000;
     const useMultiChunk = analysisDepth !== 'quick' && safePolicyText.length > SINGLE_PASS_THRESHOLD;
 
@@ -293,7 +293,7 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
       incrementTrialUsage(trialUserId, 'totalTokensUsed', gapInputTokens + gapOutputTokens).catch(() => {});
     }
 
-    // ── COMPLETING (progress: 90) ────────────────────────────────────────
+    // -- COMPLETING (progress: 90) ----------------------------------------
     await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 90 });
     currentProgress = 90;
 
@@ -325,7 +325,7 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
       await redis.del(`cache:gap-analysis:list:${userId}`);
     } catch { /* non-fatal */ }
 
-    // ── POST-COMPLETION: notifications + audit log ────────────────────────
+    // -- POST-COMPLETION: notifications + audit log ------------------------
     notificationModule.createCategorizedNotification({
       userId,
       type: 'GAP_ANALYSIS_COMPLETED',
@@ -1500,13 +1500,13 @@ Follow-up Question: ${followUp}
         data: {
           userId,
           organizationId: params.organizationId ?? null,
-          title: `${params.productType} — ${params.businessStage}`,
+          title: `${params.productType}  -  ${params.businessStage}`,
           productType: params.productType,
           businessStage: params.businessStage,
           targetSegments: params.targetSegments,
           servicesOffered: params.servicesOffered,
           additionalConcerns: params.additionalConcerns ?? null,
-          items: [], // Legacy field — kept for schema compat
+          items: [], // Legacy field  -  kept for schema compat
           itemProgress: {},
           progress: 0,
           status: 'GENERATING',
@@ -1543,7 +1543,7 @@ Follow-up Question: ${followUp}
           });
           ragContext = deduplicated
             .map((r, i) =>
-              `[REGULATORY CONTEXT ${i + 1} — ${r.documentTitle || 'Kenyan Regulation'}]\n${r.chunkText}`
+              `[REGULATORY CONTEXT ${i + 1}  -  ${r.documentTitle || 'Kenyan Regulation'}]\n${r.chunkText}`
             )
             .join('\n\n---\n\n');
           logger.info({
@@ -1560,7 +1560,7 @@ Follow-up Question: ${followUp}
           checklistId: record.id,
           error: (ragErr as Error).message,
         });
-        // Continue without RAG context — AI uses its training knowledge
+        // Continue without RAG context  -  AI uses its training knowledge
       }
 
       // 3. Generate checklist with Claude AI
@@ -1595,8 +1595,8 @@ Follow-up Question: ${followUp}
       // 5. Update DB record to COMPLETED with full checklist data
       const checklistTitle =
         generatedChecklist.metadata.productType
-          ? `${generatedChecklist.metadata.productType} — ${generatedChecklist.metadata.businessStage}`
-          : `${params.productType} — ${params.businessStage}`;
+          ? `${generatedChecklist.metadata.productType}  -  ${generatedChecklist.metadata.businessStage}`
+          : `${params.productType}  -  ${params.businessStage}`;
 
       const updated = await prisma.checklist.update({
         where: { id: record.id },
@@ -1861,7 +1861,7 @@ Follow-up Question: ${followUp}
       if (user?.role !== 'ADMIN') throw new Error('Access denied');
     }
 
-    // Soft delete — deletedAt added in March 2026 schema migration; cast until prisma generate runs
+    // Soft delete  -  deletedAt added in March 2026 schema migration; cast until prisma generate runs
     await (prisma.checklist.update as any)({
       where: { id: checklistId },
       data: { deletedAt: new Date() },
@@ -1876,7 +1876,7 @@ Follow-up Question: ${followUp}
 
 
   /**
-   * Run a gap analysis — Part A (synchronous, within the HTTP request).
+   * Run a gap analysis  -  Part A (synchronous, within the HTTP request).
    *
    * Validates inputs, creates the DB record, uploads the file to R2, then
    * fires the background pipeline (Part B) as a non-blocking Promise and
@@ -1908,7 +1908,7 @@ Follow-up Question: ${followUp}
       analysisDepth: params.analysisDepth,
     });
 
-    // Validate file size (base64 → actual size)
+    // Validate file size (base64 -> actual size)
     const estimatedBytes = Math.round((params.fileContent.length * 3) / 4);
     if (estimatedBytes > 10 * 1024 * 1024) {
       throw new Error(`File too large. Maximum size is 10MB (estimated: ${(estimatedBytes / 1024 / 1024).toFixed(1)}MB)`);
@@ -1921,7 +1921,7 @@ Follow-up Question: ${followUp}
       throw new Error(`Unsupported file type .${ext}. Allowed: ${allowedTypes.join(', ')}`);
     }
 
-    // Trigger stale job recovery lazily (non-blocking — does not delay this request)
+    // Trigger stale job recovery lazily (non-blocking  -  does not delay this request)
     void recoverStaleJobs().catch((err: unknown) => {
       logger.error({ type: 'gap_analysis_stale_job_recovery_failed', error: (err as Error).message });
     });
@@ -1973,7 +1973,7 @@ Follow-up Question: ${followUp}
         link: `/startup/gap-analysis/${record.id}`,
       }).catch(() => { /* non-blocking */ });
 
-      // Fire background pipeline — do NOT await
+      // Fire background pipeline  -  do NOT await
       void executeGapAnalysisPipeline({
         analysisId: record.id,
         userId,
@@ -1987,7 +1987,7 @@ Follow-up Question: ${followUp}
         ipAddress: params.ipAddress,
         userAgent: params.userAgent,
       }).catch((err: unknown) => {
-        // Safety net — executeGapAnalysisPipeline has its own try/catch, so this
+        // Safety net  -  executeGapAnalysisPipeline has its own try/catch, so this
         // should never fire. Log it as a critical error if it does.
         logger.error({ type: 'gap_analysis_pipeline_unhandled_error', analysisId: record.id, error: (err as Error).message });
       });
@@ -1996,7 +1996,7 @@ Follow-up Question: ${followUp}
 
       return { id: record.id, status: 'QUEUED', progress: 5 };
     } catch (error: unknown) {
-      // R2 upload failed — mark as FAILED immediately (no pipeline to clean up)
+      // R2 upload failed  -  mark as FAILED immediately (no pipeline to clean up)
       await updateAnalysisStatus(record.id, {
         status: 'FAILED',
         progress: 0,
@@ -2024,7 +2024,7 @@ Follow-up Question: ${followUp}
     createdAt: Date;
     updatedAt: Date;
   }[]> {
-    // Lazy stale job recovery — non-blocking; cleans up any stuck analyses
+    // Lazy stale job recovery  -  non-blocking; cleans up any stuck analyses
     void recoverStaleJobs().catch((err: unknown) => {
       logger.error({ type: 'gap_analysis_stale_job_recovery_failed', error: (err as Error).message });
     });
@@ -2034,7 +2034,7 @@ Follow-up Question: ${followUp}
     try {
       const cached = await redis.get<string>(listCacheKey);
       if (cached) return JSON.parse(cached);
-    } catch { /* non-fatal — fall through to DB */ }
+    } catch { /* non-fatal  -  fall through to DB */ }
 
     const analyses = await prisma.gapAnalysis.findMany({
       where: { userId, deletedAt: null },
@@ -2054,7 +2054,7 @@ Follow-up Question: ${followUp}
       },
     });
 
-    // Populate cache — 5s TTL if any analysis is in-progress, 60s if all terminal
+    // Populate cache  -  5s TTL if any analysis is in-progress, 60s if all terminal
     const hasInProgress = analyses.some(
       (a) => !['COMPLETED', 'FAILED'].includes(a.status),
     );
@@ -2102,7 +2102,7 @@ Follow-up Question: ${followUp}
       if (user?.role !== UserRole.ADMIN) throw new ForbiddenError('Access denied');
     }
 
-    // Audit log — fire-and-forget; must never block the primary operation.
+    // Audit log  -  fire-and-forget; must never block the primary operation.
     prisma.auditLog.create({
       data: {
         userId,
@@ -2123,10 +2123,10 @@ Follow-up Question: ${followUp}
       try {
         const cached = await redis.get<string>(resultCacheKey);
         if (cached) return JSON.parse(cached);
-      } catch { /* non-fatal — fall through to DB result */ }
+      } catch { /* non-fatal  -  fall through to DB result */ }
     }
 
-    // Fetch user name + org name in parallel (non-critical — null on failure)
+    // Fetch user name + org name in parallel (non-critical  -  null on failure)
     const [ownerUser, organization] = await Promise.all([
       prisma.user.findUnique({ where: { id: analysis.userId }, select: { fullName: true } }),
       analysis.organizationId
@@ -2141,7 +2141,7 @@ Follow-up Question: ${followUp}
       organizationName: organization?.name ?? null,
     };
 
-    // Populate cache for completed results — 7-day TTL
+    // Populate cache for completed results  -  7-day TTL
     if (analysis.status === 'COMPLETED') {
       try {
         await redis.set(resultCacheKey, JSON.stringify(result), { ex: 7 * 24 * 3600 });
@@ -2195,7 +2195,7 @@ Follow-up Question: ${followUp}
       }
     }
 
-    // Soft delete — set deletedAt instead of destroying the row
+    // Soft delete  -  set deletedAt instead of destroying the row
     await prisma.gapAnalysis.update({
       where: { id: analysisId },
       data: { deletedAt: new Date() },
@@ -2235,7 +2235,7 @@ Follow-up Question: ${followUp}
     title: string;
     description: string;
   }> = [
-    // Data Protection — Kenya Data Protection Act 2019
+    // Data Protection  -  Kenya Data Protection Act 2019
     { category: 'DATA_PROTECTION', title: 'Data Protection Officer (DPO) registered', description: 'A Data Protection Officer has been appointed and registered with the Office of the Data Protection Commissioner.' },
     { category: 'DATA_PROTECTION', title: 'Privacy policy published', description: 'A comprehensive privacy policy is publicly available on the company website or accessible to customers.' },
     { category: 'DATA_PROTECTION', title: 'Data processing agreements in place', description: 'Written data processing agreements exist with all third-party vendors and processors handling personal data.' },
@@ -2244,7 +2244,7 @@ Follow-up Question: ${followUp}
     { category: 'DATA_PROTECTION', title: 'Cross-border data transfer safeguards', description: 'Adequate safeguards are in place for any transfer of personal data outside Kenya.' },
     { category: 'DATA_PROTECTION', title: 'Data Protection Impact Assessments (DPIA) completed', description: 'DPIAs have been conducted for all high-risk data processing activities.' },
 
-    // AML/KYC — Proceeds of Crime and Anti-Money Laundering Act
+    // AML/KYC  -  Proceeds of Crime and Anti-Money Laundering Act
     { category: 'AML_KYC', title: 'KYC procedures documented and implemented', description: 'Formal Know Your Customer procedures are documented, approved, and actively implemented across all onboarding flows.' },
     { category: 'AML_KYC', title: 'Customer Due Diligence (CDD) process in place', description: 'A structured Customer Due Diligence process is operational for all new and existing customers.' },
     { category: 'AML_KYC', title: 'Enhanced Due Diligence for high-risk customers', description: 'Enhanced Due Diligence procedures are applied to politically exposed persons (PEPs) and other high-risk customers.' },
@@ -2254,7 +2254,7 @@ Follow-up Question: ${followUp}
     { category: 'AML_KYC', title: 'Transaction monitoring system in place', description: 'An automated or manual transaction monitoring system is operational to detect unusual or suspicious activity.' },
     { category: 'AML_KYC', title: 'Record-keeping policy (7-year minimum)', description: 'A record-keeping policy compliant with the 7-year minimum retention requirement under Kenyan AML law is implemented.' },
 
-    // Consumer Protection — CBK Consumer Protection Guidelines
+    // Consumer Protection  -  CBK Consumer Protection Guidelines
     { category: 'CONSUMER_PROTECTION', title: 'Transparent pricing and fee disclosure', description: 'All fees, charges, interest rates, and penalties are clearly disclosed to customers before and during service use.' },
     { category: 'CONSUMER_PROTECTION', title: 'Complaints handling mechanism in place', description: 'A formal complaints handling mechanism with defined escalation paths and response SLAs is operational.' },
     { category: 'CONSUMER_PROTECTION', title: 'Fair debt collection practices documented', description: 'Debt collection policies comply with CBK guidelines prohibiting abusive, unfair, or deceptive practices.' },
@@ -2262,7 +2262,7 @@ Follow-up Question: ${followUp}
     { category: 'CONSUMER_PROTECTION', title: 'Customer data used only for stated purposes', description: 'A policy exists ensuring customer data is not used for any purpose beyond what was disclosed at the time of collection.' },
     { category: 'CONSUMER_PROTECTION', title: 'Accessible customer support channels', description: 'Multiple accessible customer support channels (phone, email, chat) are available with published operating hours.' },
 
-    // CBK Licensing — CBK Act / National Payment System Act
+    // CBK Licensing  -  CBK Act / National Payment System Act
     { category: 'CBK_LICENSING', title: 'Primary CBK license obtained', description: 'The organization holds the appropriate CBK license (Payment Service Provider, Mobile Money, Digital Credit Provider, etc.).' },
     { category: 'CBK_LICENSING', title: 'License is current and not expired', description: 'The CBK license has been renewed and is valid with no lapsed expiry date.' },
     { category: 'CBK_LICENSING', title: 'Annual returns filed with CBK', description: 'Annual regulatory returns have been submitted to the CBK within the required deadlines.' },
@@ -2270,7 +2270,7 @@ Follow-up Question: ${followUp}
     { category: 'CBK_LICENSING', title: 'Regulatory reports submitted on time', description: 'All required periodic reports (monthly, quarterly) have been submitted to the CBK on schedule.' },
     { category: 'CBK_LICENSING', title: 'Authorized signatories registered with CBK', description: 'All authorized signatories and key management personnel are registered with the CBK as required.' },
 
-    // Cybersecurity — CBK Cybersecurity Guidelines + Computer Misuse and Cybercrimes Act
+    // Cybersecurity  -  CBK Cybersecurity Guidelines + Computer Misuse and Cybercrimes Act
     { category: 'CYBERSECURITY', title: 'Information security policy documented', description: 'A comprehensive information security policy has been formally documented, approved by management, and communicated to all staff.' },
     { category: 'CYBERSECURITY', title: 'Incident response plan in place', description: 'A formal cybersecurity incident response plan exists with defined roles, escalation paths, and communication procedures.' },
     { category: 'CYBERSECURITY', title: 'Regular penetration testing conducted', description: 'Penetration testing or vulnerability assessments are conducted at least annually by qualified internal or external parties.' },
@@ -2282,7 +2282,7 @@ Follow-up Question: ${followUp}
   ];
 
   /**
-   * Seed default checklist items for an organization (idempotent — skips if items already exist)
+   * Seed default checklist items for an organization (idempotent  -  skips if items already exist)
    */
   async seedDefaultChecklist(orgId: string): Promise<void> {
     const existingCount = await prisma.complianceItem.count({
@@ -2311,7 +2311,7 @@ Follow-up Question: ${followUp}
   }
 
   /**
-   * Calculate score for a single compliance category (0–100)
+   * Calculate score for a single compliance category (0-100)
    */
   async calculateCategoryScore(
     orgId: string,

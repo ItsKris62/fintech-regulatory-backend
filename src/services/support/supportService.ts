@@ -13,7 +13,7 @@ import { reactMailer } from '@/lib/email/react-mailer.service';
 import { appConfig } from '@/config/app.config';
 import { generateTicketNumber } from './generateTicketNumber';
 
-// ── Input Types ───────────────────────────────────────────────────────────────
+// -- Input Types ---------------------------------------------------------------
 
 export interface CreateTicketInput {
   subject: string;
@@ -37,7 +37,7 @@ export interface AdminListTicketsFilters {
   limit?: number;
 }
 
-// ── User Operations ───────────────────────────────────────────────────────────
+// -- User Operations -----------------------------------------------------------
 
 export async function createTicket(
   prisma: any,
@@ -199,7 +199,7 @@ export async function addUserComment(
   return comment;
 }
 
-// ── Admin Operations ──────────────────────────────────────────────────────────
+// -- Admin Operations ----------------------------------------------------------
 
 export async function getAdminTickets(
   prisma: any,

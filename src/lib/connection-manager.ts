@@ -27,7 +27,7 @@ class ConnectionManager {
 
     const status: ConnectionStatus = { database: false, redis: false, overall: 'down' };
 
-    // Database — critical, must succeed
+    // Database  -  critical, must succeed
     try {
       await connectDatabase(5);
       status.database = true;
@@ -35,19 +35,19 @@ class ConnectionManager {
     } catch (err) {
       logger.error(
         { type: 'connection_manager', service: 'database', error: (err as Error).message },
-        'Database connection failed — aborting startup'
+        'Database connection failed  -  aborting startup'
       );
       throw err;
     }
 
-    // Upstash Redis — important but not blocking (HTTP ping)
+    // Upstash Redis  -  important but not blocking (HTTP ping)
     try {
       await connectRedis();
       status.redis = true;
     } catch (err) {
       logger.warn(
         { type: 'connection_manager', service: 'redis', error: (err as Error).message },
-        'Upstash Redis ping failed — running in degraded mode'
+        'Upstash Redis ping failed  -  running in degraded mode'
       );
     }
 
@@ -56,7 +56,7 @@ class ConnectionManager {
 
     logger.info(
       { type: 'connection_manager', status },
-      `All connections established — status: ${status.overall}`
+      `All connections established  -  status: ${status.overall}`
     );
 
     return status;
@@ -69,7 +69,7 @@ class ConnectionManager {
   async disconnectAll(): Promise<void> {
     logger.info({ type: 'connection_manager' }, 'Disconnecting all services...');
 
-    // disconnectRedis is a no-op for Upstash (HTTP — no persistent connection)
+    // disconnectRedis is a no-op for Upstash (HTTP  -  no persistent connection)
     const results = await Promise.allSettled([
       disconnectDatabase(),
       disconnectRedis(),

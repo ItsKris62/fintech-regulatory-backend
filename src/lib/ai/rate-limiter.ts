@@ -5,8 +5,8 @@ import { logger } from '@/utils/logger';
  * In-process rate limiter for Anthropic API calls.
  *
  * Enforces two independent constraints:
- *   1. Requests per minute  — sliding window over the last 60 s
- *   2. Max concurrent       — active in-flight requests at any instant
+ *   1. Requests per minute   -  sliding window over the last 60 s
+ *   2. Max concurrent        -  active in-flight requests at any instant
  *
  * acquire() blocks until a slot is available, then returns.
  * release() must be called in a finally block after every acquire().
@@ -60,7 +60,7 @@ export class AIRateLimiter {
       });
     }
 
-    // Slot available — claim it
+    // Slot available  -  claim it
     this.activeRequests++;
     this.requestTimestamps.push(Date.now());
   }

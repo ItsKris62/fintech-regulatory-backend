@@ -31,9 +31,9 @@ export interface AvatarUpdateResult {
  * Derives a 1-2 character display string from a user's full name.
  *
  * Rules:
- * - Two words or more  → first letter of word 1 + first letter of word 2
- * - Single word ≥ 2    → first two characters
- * - Single char / null → "U"
+ * - Two words or more  -> first letter of word 1 + first letter of word 2
+ * - Single word ≥ 2    -> first two characters
+ * - Single char / null -> "U"
  *
  * Always returns uppercase.
  */
@@ -57,7 +57,7 @@ export function getInitials(fullName: string | null | undefined): string {
 export const avatarService = {
   /**
    * Generates a presigned PUT URL so the browser can upload directly to R2.
-   * Does NOT touch the database — the URL is valid for 5 minutes.
+   * Does NOT touch the database  -  the URL is valid for 5 minutes.
    * Call `confirmUpload` after the browser PUT succeeds.
    */
   async getUploadUrl(
@@ -83,7 +83,7 @@ export const avatarService = {
     if (!key || !key.startsWith(`avatars/${userId}/`)) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
-        message: 'Invalid avatar URL — must belong to your account.',
+        message: 'Invalid avatar URL  -  must belong to your account.',
       });
     }
 
@@ -101,7 +101,7 @@ export const avatarService = {
 
   /**
    * Deletes the user's current avatar from R2 and clears the DB field.
-   * Safe to call when no avatar is set — returns early without error.
+   * Safe to call when no avatar is set  -  returns early without error.
    */
   async deleteAvatar(userId: string): Promise<AvatarUpdateResult> {
     const user = await prisma.user.findUnique({
@@ -110,7 +110,7 @@ export const avatarService = {
     });
 
     if (!user?.avatar) {
-      // Nothing to delete — idempotent no-op
+      // Nothing to delete  -  idempotent no-op
       return { avatar: null };
     }
 

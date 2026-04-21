@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// ─── Enums (kept as const arrays so frontend can import them too) ─────────────
+// --- Enums (kept as const arrays so frontend can import them too) -------------
 
 export const EVENT_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
 export const EVENT_STATUSES   = ['UPCOMING', 'IN_PROGRESS', 'COMPLETED', 'OVERDUE'] as const;
@@ -12,12 +12,12 @@ export type EventStatus     = typeof EVENT_STATUSES[number];
 export type EventCategory   = typeof EVENT_CATEGORIES[number];
 export type EventRecurrence = typeof EVENT_RECURRENCES[number];
 
-// ─── Create ───────────────────────────────────────────────────────────────────
+// --- Create -------------------------------------------------------------------
 
 export const createComplianceEventSchema = z.object({
   title:       z.string().min(1, 'Title is required').max(200),
   description: z.string().max(2000).optional(),
-  dueDate:     z.string().datetime({ message: 'Invalid date format — use ISO 8601' }),
+  dueDate:     z.string().datetime({ message: 'Invalid date format  -  use ISO 8601' }),
   priority:    z.enum(EVENT_PRIORITIES).default('MEDIUM'),
   category:    z.enum(EVENT_CATEGORIES).default('CUSTOM'),
   regulation:  z.string().max(200).optional(),
@@ -27,7 +27,7 @@ export const createComplianceEventSchema = z.object({
 
 export type CreateComplianceEventInput = z.infer<typeof createComplianceEventSchema>;
 
-// ─── Update ───────────────────────────────────────────────────────────────────
+// --- Update -------------------------------------------------------------------
 
 export const updateComplianceEventSchema = z.object({
   id:          z.string().cuid(),
@@ -44,7 +44,7 @@ export const updateComplianceEventSchema = z.object({
 
 export type UpdateComplianceEventInput = z.infer<typeof updateComplianceEventSchema>;
 
-// ─── List / filter ────────────────────────────────────────────────────────────
+// --- List / filter ------------------------------------------------------------
 
 export const listComplianceEventsSchema = z.object({
   month:    z.number().int().min(1).max(12).optional(),
@@ -55,19 +55,19 @@ export const listComplianceEventsSchema = z.object({
 
 export type ListComplianceEventsInput = z.infer<typeof listComplianceEventsSchema>;
 
-// ─── Single event ─────────────────────────────────────────────────────────────
+// --- Single event -------------------------------------------------------------
 
 export const getComplianceEventSchema = z.object({
   id: z.string().cuid(),
 });
 
-// ─── Delete ───────────────────────────────────────────────────────────────────
+// --- Delete -------------------------------------------------------------------
 
 export const deleteComplianceEventSchema = z.object({
   id: z.string().cuid(),
 });
 
-// ─── Upcoming deadlines ───────────────────────────────────────────────────────
+// --- Upcoming deadlines -------------------------------------------------------
 
 export const upcomingEventsSchema = z.object({
   daysAhead: z.number().int().min(1).max(365).optional().default(30),

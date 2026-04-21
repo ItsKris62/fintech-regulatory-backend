@@ -29,7 +29,7 @@ import { logger } from '@/utils/logger';
 
 /**
  * Local string-union matching the `RegulatoryDocumentCategory` Prisma enum.
- * After running `pnpm prisma generate` the generated type will be compatible —
+ * After running `pnpm prisma generate` the generated type will be compatible  - 
  * this definition is only here to avoid importing from `@prisma/client` before
  * the first migration runs.
  */
@@ -59,7 +59,7 @@ interface RegistryEntry extends Omit<DocumentIngestionInput, 'filePath' | 'categ
 }
 
 const DOCUMENT_REGISTRY: RegistryEntry[] = [
-  // ── Kenya: Data Protection & Privacy ─────────────────────────────────────
+  // -- Kenya: Data Protection & Privacy -------------------------------------
 
   {
     // ✅ File present
@@ -123,7 +123,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
   },
   {
     // ✅ File present
-    fileName: 'kenya/ODPC-–-Guidance-Note-on-Processing-by-MSMEs.pdf',
+    fileName: 'kenya/ODPC---Guidance-Note-on-Processing-by-MSMEs.pdf',
     title: 'ODPC Guidance Note on Data Processing by MSMEs',
     source: 'Office of Data Protection Commissioner',
     category: 'DATA_PROTECTION' as DocumentCategory,
@@ -131,7 +131,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'guideline',
   },
 
-  // ── Kenya: Cybersecurity & ICT ────────────────────────────────────────────
+  // -- Kenya: Cybersecurity & ICT --------------------------------------------
 
   {
     // ✅ File present
@@ -185,7 +185,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2025',
   },
 
-  // ── Kenya: Payment Systems ────────────────────────────────────────────────
+  // -- Kenya: Payment Systems ------------------------------------------------
 
   {
     // ✅ File present
@@ -207,7 +207,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2011',
   },
 
-  // ── Kenya: Fintech & Banking Regulation ───────────────────────────────────
+  // -- Kenya: Fintech & Banking Regulation -----------------------------------
 
   {
     // ✅ File present
@@ -274,13 +274,13 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
   {
     // ✅ File present
     fileName: 'kenya/Kenya-National-Financial-Inclusion-Strategy-2025-2028.pdf',
-    title: 'Kenya National Financial Inclusion Strategy 2025–2028',
+    title: 'Kenya National Financial Inclusion Strategy 2025-2028',
     source: 'National Treasury of Kenya',
     category: 'FINTECH_REGULATION' as DocumentCategory,
     jurisdiction: 'Kenya',
     documentType: 'framework',
     effectiveDate: new Date('2025-01-01'),
-    version: '2025–2028',
+    version: '2025-2028',
   },
   {
     // ✅ File present
@@ -312,7 +312,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'act',
   },
 
-  // ── Kenya: Tax & Digital Commerce ─────────────────────────────────────────
+  // -- Kenya: Tax & Digital Commerce -----------------------------------------
 
   {
     // ✅ File present
@@ -335,7 +335,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'regulation',
   },
 
-  // ── Kenya: Cybersecurity (Additional) ────────────────────────────────────
+  // -- Kenya: Cybersecurity (Additional) ------------------------------------
 
   {
     // ✅ File present
@@ -360,7 +360,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2025',
   },
   {
-    // ✅ File present (alternate filename — deduplicated by SHA-256 if identical)
+    // ✅ File present (alternate filename  -  deduplicated by SHA-256 if identical)
     fileName: 'kenya/Computer-Misuse-and-Cybercrimes-Amendment-Act-2025.pdf',
     title: 'Computer Misuse and Cybercrimes (Amendment) Act, 2025 (alternate copy)',
     source: 'Parliament of Kenya',
@@ -393,7 +393,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2024',
   },
 
-  // ── Kenya: AML/CFT ────────────────────────────────────────────────────────
+  // -- Kenya: AML/CFT --------------------------------------------------------
 
   {
     // ✅ File present
@@ -416,7 +416,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'regulation',
   },
 
-  // ── International Standards ───────────────────────────────────────────────
+  // -- International Standards -----------------------------------------------
 
   {
     // ✅ File present
@@ -432,7 +432,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
   {
     // ✅ File present
     fileName: 'international/NIST CSF 2.0 Implementation Examples.pdf',
-    title: 'NIST Cybersecurity Framework 2.0 — Implementation Examples',
+    title: 'NIST Cybersecurity Framework 2.0  -  Implementation Examples',
     source: 'NIST',
     category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
     jurisdiction: 'International',
@@ -443,7 +443,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
   {
     // ✅ File present
     fileName: 'international/ISO_IEC-270012022-ed.3.pdf',
-    title: 'ISO/IEC 27001:2022 — Information Security Management Systems',
+    title: 'ISO/IEC 27001:2022  -  Information Security Management Systems',
     source: 'ISO/IEC',
     category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
     jurisdiction: 'International',
@@ -454,7 +454,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
   {
     // ✅ File present
     fileName: 'international/ISO_IEC_27000_2018(en).pdf',
-    title: 'ISO/IEC 27000:2018 — Information Security Management Systems Overview and Vocabulary',
+    title: 'ISO/IEC 27000:2018  -  Information Security Management Systems Overview and Vocabulary',
     source: 'ISO/IEC',
     category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
     jurisdiction: 'International',
@@ -463,12 +463,12 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2018 (5th edition)',
   },
 
-  // ── International: Payment Card Industry ─────────────────────────────────
+  // -- International: Payment Card Industry ---------------------------------
 
   {
     // ✅ File present
     fileName: 'international/PCI-DSS-v4-0-SAQ-A.pdf',
-    title: 'PCI DSS v4.0 — Self-Assessment Questionnaire A (SAQ A)',
+    title: 'PCI DSS v4.0  -  Self-Assessment Questionnaire A (SAQ A)',
     source: 'PCI Security Standards Council',
     category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
     jurisdiction: 'International',
@@ -479,7 +479,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
   {
     // ✅ File present
     fileName: 'international/General Data Protection Regulation.pdf',
-    title: 'General Data Protection Regulation (GDPR) — Regulation (EU) 2016/679',
+    title: 'General Data Protection Regulation (GDPR)  -  Regulation (EU) 2016/679',
     source: 'European Union',
     category: 'DATA_PROTECTION' as DocumentCategory,
     jurisdiction: 'EU',
@@ -499,7 +499,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2018',
   },
 
-  // ── Kenya: Cloud & Digital Infrastructure ────────────────────────────────
+  // -- Kenya: Cloud & Digital Infrastructure --------------------------------
 
   {
     // ✅ File present
@@ -513,12 +513,12 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2024',
   },
 
-  // ── International: AI Governance ─────────────────────────────────────────
+  // -- International: AI Governance -----------------------------------------
 
   {
     // ✅ File present
     fileName: 'international/Artificial Intelligence Act EU.pdf',
-    title: 'Artificial Intelligence Act (EU AI Act) — Regulation (EU) 2024/1689',
+    title: 'Artificial Intelligence Act (EU AI Act)  -  Regulation (EU) 2024/1689',
     source: 'European Union',
     category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
     jurisdiction: 'EU',
@@ -538,12 +538,12 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '1.0',
   },
 
-  // ── International: Privacy & Data Management ──────────────────────────────
+  // -- International: Privacy & Data Management ------------------------------
 
   {
     // ✅ File present
     fileName: 'international/Privacy Information Management with ISO IEC 27701.pdf',
-    title: 'ISO/IEC 27701:2019 — Privacy Information Management System (PIMS)',
+    title: 'ISO/IEC 27701:2019  -  Privacy Information Management System (PIMS)',
     source: 'ISO/IEC',
     category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
     jurisdiction: 'International',
@@ -552,12 +552,12 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2019',
   },
 
-  // ── International: Security Assurance & Auditing ──────────────────────────
+  // -- International: Security Assurance & Auditing --------------------------
 
   {
     // ✅ File present
     fileName: 'international/033144-1A-soc2-system-organization-controls-reporting-whitepaper-v6-secured.pdf',
-    title: 'SOC 2 — System and Organisation Controls Reporting (AICPA Whitepaper v6)',
+    title: 'SOC 2  -  System and Organisation Controls Reporting (AICPA Whitepaper v6)',
     source: 'AICPA',
     category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
     jurisdiction: 'International',
@@ -567,7 +567,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
   {
     // ✅ File present
     fileName: 'international/pcissc_overview.pdf',
-    title: 'PCI Security Standards Council — Overview of Payment Security Standards',
+    title: 'PCI Security Standards Council  -  Overview of Payment Security Standards',
     source: 'PCI Security Standards Council',
     category: 'INTERNATIONAL_STANDARD' as DocumentCategory,
     jurisdiction: 'International',
@@ -584,7 +584,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: 'v1.0',
   },
 
-  // ── International: Web Accessibility ─────────────────────────────────────
+  // -- International: Web Accessibility -------------------------------------
 
   {
     // ✅ File present
@@ -627,7 +627,7 @@ function resolvePath(fileName: string): string {
 let shuttingDown = false;
 
 process.on('SIGINT', () => {
-  console.log('\n⚠️  Interrupted — finishing current document, then stopping...');
+  console.log('\n⚠️  Interrupted  -  finishing current document, then stopping...');
   shuttingDown = true;
 });
 
@@ -640,7 +640,7 @@ process.on('SIGTERM', () => {
 // ============================================================================
 
 async function main(): Promise<void> {
-  console.log('\n🚀 SheriaBot — Regulatory Document Ingestion Pipeline\n');
+  console.log('\n🚀 SheriaBot  -  Regulatory Document Ingestion Pipeline\n');
   console.log(`📁 Documents folder: ${DOCS_ROOT}`);
   console.log(`📋 Registry entries: ${DOCUMENT_REGISTRY.length}\n`);
 
@@ -652,7 +652,7 @@ async function main(): Promise<void> {
 
   for (const entry of DOCUMENT_REGISTRY) {
     if (shuttingDown) {
-      console.log('\n⚠️  Shutdown requested — stopping ingestion.');
+      console.log('\n⚠️  Shutdown requested  -  stopping ingestion.');
       break;
     }
 
@@ -661,7 +661,7 @@ async function main(): Promise<void> {
     // Skip files that haven't been placed in the documents/ folder yet
     if (!fs.existsSync(filePath)) {
       console.log(
-        `⏭️  Skipping ${entry.title} — file not found: ${entry.fileName}`
+        `⏭️  Skipping ${entry.title}  -  file not found: ${entry.fileName}`
       );
       totalSkipped++;
       continue;
@@ -677,7 +677,7 @@ async function main(): Promise<void> {
       filePath,
       title: entry.title,
       source: entry.source,
-      // Cast is safe — DocumentCategory values match RegulatoryDocumentCategory exactly
+      // Cast is safe  -  DocumentCategory values match RegulatoryDocumentCategory exactly
       category: entry.category as DocumentIngestionInput['category'],
       jurisdiction: entry.jurisdiction,
       documentType: entry.documentType,
@@ -720,7 +720,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── Summary ────────────────────────────────────────────────────────────────
+  // -- Summary ----------------------------------------------------------------
 
   const divider = '═'.repeat(60);
   console.log(`\n${divider}`);

@@ -1,5 +1,5 @@
 /**
- * Notification Module — Public API
+ * Notification Module  -  Public API
  */
 
 export { notificationModule, NotificationModule } from './notification.module';

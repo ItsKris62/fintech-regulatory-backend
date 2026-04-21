@@ -7,7 +7,7 @@
 import { z } from 'zod';
 import { logger } from '@/utils/logger';
 
-// ─── Input Types ────────────────────────────────────────────────────────────
+// --- Input Types ------------------------------------------------------------
 
 export interface ChecklistGenerationParams {
   productType: string;
@@ -19,10 +19,10 @@ export interface ChecklistGenerationParams {
   ragSourcesUsed?: number; // Number of RAG chunks retrieved (for metadata)
 }
 
-// ─── Zod Schemas (strict validation of Claude API output) ────────────────────
+// --- Zod Schemas (strict validation of Claude API output) --------------------
 // These are the single source of truth for the AI response shape.
 // parseChecklistOutput() must pass raw Claude output through these schemas
-// before any DB write — malformed AI responses must never reach Prisma.
+// before any DB write  -  malformed AI responses must never reach Prisma.
 
 export const ChecklistItemSchema = z.object({
   /** AI-generated label (e.g. "LIC-001"). Persisted as itemCode on ChecklistItem. */
@@ -60,13 +60,13 @@ export const GeneratedChecklistSchema = z.object({
   }),
 });
 
-// ─── Inferred Output Types (derived from Zod schemas) ────────────────────────
+// --- Inferred Output Types (derived from Zod schemas) ------------------------
 
 export type ChecklistItem     = z.infer<typeof ChecklistItemSchema>;
 export type ChecklistCategory = z.infer<typeof ChecklistCategorySchema>;
 export type GeneratedChecklist = z.infer<typeof GeneratedChecklistSchema>;
 
-// ─── Prompt Builders ─────────────────────────────────────────────────────────
+// --- Prompt Builders ---------------------------------------------------------
 
 /**
  * System prompt establishing the AI persona and output contract.
@@ -79,7 +79,7 @@ KENYAN LEGISLATION:
 - National Payment System Act 2011 (NPSA) and CBK Payment Service Provider (PSP) Regulations
 - Proceeds of Crime and Anti-Money Laundering Act (POCAMLA) and AML/CFT regulations
 - Digital Credit Providers Regulations 2022 (Gazette Notice No. 3416)
-- CBK Act (Cap 491) — licensing, supervision, and prudential requirements
+- CBK Act (Cap 491)  -  licensing, supervision, and prudential requirements
 - Computer Misuse and Cybercrimes Act 2018
 - Consumer Protection Act 2012 and CBK Consumer Protection Guidelines
 - Capital Markets Act (Cap 485A) and CMA Investment-Based Crowdfunding Regulations 2022
@@ -102,25 +102,25 @@ INTERNATIONAL STANDARDS (apply where relevant):
 ISO 27001 (information security), PCI-DSS (payment card data), FATF Recommendations (AML/CFT),
 Basel III (capital adequacy for banking-adjacent products)
 
-OUTPUT RULES — FOLLOW EXACTLY:
+OUTPUT RULES  -  FOLLOW EXACTLY:
 1. Respond ONLY with valid JSON. No markdown fences, no preamble, no trailing text. Start with { and end with }.
 2. Every checklist item MUST cite a specific Kenyan law, regulation, or guideline with the section number. Do not cite generic "best practice" without a legal anchor.
 3. Penalties MUST include specific amounts in Kenya Shillings (KES) where defined in the legislation. Where imprisonment applies, state both the fine and the custodial sentence.
-4. Action items must be specific and actionable — describe exactly what to do. Bad: "Ensure compliance with AML laws". Good: "Register with the Financial Reporting Centre (FRC) as a reporting institution by submitting Form FRC/001 via the FRC portal at frc.go.ke, accompanied by your certificate of incorporation, KRA PIN, and a compliance officer appointment letter."
+4. Action items must be specific and actionable  -  describe exactly what to do. Bad: "Ensure compliance with AML laws". Good: "Register with the Financial Reporting Centre (FRC) as a reporting institution by submitting Form FRC/001 via the FRC portal at frc.go.ke, accompanied by your certificate of incorporation, KRA PIN, and a compliance officer appointment letter."
 5. Deadlines must be specific and tied to a regulatory event: "Before commencing operations", "Within 30 days of onboarding the first customer", "Annually by 31 March", "Within 60 days of a material change to your systems."
 6. Do not hallucinate laws or section numbers. If uncertain about a specific section, cite the parent law and regulation name without inventing a section number.
-7. Generate a MINIMUM of 25 checklist items across at least 5 categories. Quality over brevity — regulators and legal teams will rely on this output.
+7. Generate a MINIMUM of 25 checklist items across at least 5 categories. Quality over brevity  -  regulators and legal teams will rely on this output.
 8. Priority must be defensible:
-   - CRITICAL = licence/registration blocker or explicit legal prohibition — operations cannot lawfully start without this
+   - CRITICAL = licence/registration blocker or explicit legal prohibition  -  operations cannot lawfully start without this
    - HIGH = required within 3 months of commencing operations or faces regulatory enforcement
    - MEDIUM = required within 6 months; non-compliance risks regulatory notice
    - LOW = best practice, annual obligation, or compliance horizon beyond 12 months
 9. Priority distribution: at least 4 CRITICAL items, at least 6 HIGH items; remainder MEDIUM/LOW.
-10. Each item MAY include an optional "guidance" field (1–2 sentences max) explaining WHY this requirement is specifically relevant to the stated business profile. Omit entirely for generic items where the relevance is self-evident.
+10. Each item MAY include an optional "guidance" field (1-2 sentences max) explaining WHY this requirement is specifically relevant to the stated business profile. Omit entirely for generic items where the relevance is self-evident.
 
-ANTI-TRUNCATION PROTOCOL — FOLLOW IF APPROACHING TOKEN LIMIT:
+ANTI-TRUNCATION PROTOCOL  -  FOLLOW IF APPROACHING TOKEN LIMIT:
 If you sense you are near your response limit before completing all categories:
-  a) Finish the current item's last field value completely — never stop mid-string.
+  a) Finish the current item's last field value completely  -  never stop mid-string.
   b) Close the current item object: }
   c) Close the items array: ]
   d) Close the current category object: }
@@ -136,7 +136,7 @@ NEVER stop mid-string, mid-array, or mid-object. Always close every open bracket
  */
 export function generateChecklistUserPrompt(params: ChecklistGenerationParams): string {
   const ragSection = params.ragContext
-    ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from a database of actual Kenyan regulatory documents. Use these to ground your checklist items in real law — cite the source document and section where applicable:\n\n${params.ragContext}\n`
+    ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from a database of actual Kenyan regulatory documents. Use these to ground your checklist items in real law  -  cite the source document and section where applicable:\n\n${params.ragContext}\n`
     : `\n\n## NOTE: Regulatory database context unavailable. Rely on your training knowledge of current Kenyan financial services regulations.\n`;
 
   return `Generate a comprehensive, professional compliance checklist for the following Kenyan fintech business. This checklist will be used by the company's legal and compliance team and must meet the quality bar of a senior compliance consultant's output.
@@ -152,19 +152,19 @@ ${ragSection}
 ## REQUIRED CHECKLIST CATEGORIES
 Generate items for ALL applicable categories. Only skip a category if it is genuinely inapplicable to this specific business (note why in the category description). Cover all of these:
 
-1. **Licensing & Registration** — CBK licence/authorisation, sector registrations, FRC registration, incorporation
-2. **Data Protection & Privacy** — DPA 2019, ODPC registration, consent framework, data subject rights, cross-border transfer restrictions
-3. **AML / KYC / CFT** — POCAMLA obligations, CDD/EDD procedures, PEP screening, transaction monitoring, STR/CTR filing with FRC
-4. **Consumer Protection** — Fair dealing, disclosure requirements, cooling-off periods, complaints handling (CBK Consumer Protection Guidelines)
-5. **Capital & Prudential Requirements** — Minimum capital thresholds, liquidity requirements, reserve fund obligations
-6. **Technology & Cybersecurity** — CBK Cybersecurity Guidance Note 2023, incident response plan, penetration testing, ISO 27001
-7. **Reporting & Record Keeping** — Regulatory returns to CBK/CMA/IRA, transaction records, retention periods (POCAMLA: 7 years)
-8. **Corporate Governance** — Board composition, fit-and-proper criteria for directors/senior management, ownership disclosure
-9. **Outsourcing & Third-Party Risk** — CBK outsourcing policy, vendor due diligence, contractual requirements for subprocessors
-10. **Business Continuity & Disaster Recovery** — BCP documentation, RPO/RTO targets, annual BCP testing
-11. **Complaints Handling & Dispute Resolution** — Internal complaints procedure, CBK escalation pathway, turnaround time obligations
-12. **Tax Compliance** — Digital Services Tax (1.5% of gross transaction value for non-residents), VAT registration, withholding tax, KRA PIN registration
-13. **Foreign Exchange & Remittance** — (INCLUDE ONLY if FX, remittance, or cross-border services are offered) CBK forex dealer authorisation, SWIFT membership, cross-border reporting
+1. **Licensing & Registration**  -  CBK licence/authorisation, sector registrations, FRC registration, incorporation
+2. **Data Protection & Privacy**  -  DPA 2019, ODPC registration, consent framework, data subject rights, cross-border transfer restrictions
+3. **AML / KYC / CFT**  -  POCAMLA obligations, CDD/EDD procedures, PEP screening, transaction monitoring, STR/CTR filing with FRC
+4. **Consumer Protection**  -  Fair dealing, disclosure requirements, cooling-off periods, complaints handling (CBK Consumer Protection Guidelines)
+5. **Capital & Prudential Requirements**  -  Minimum capital thresholds, liquidity requirements, reserve fund obligations
+6. **Technology & Cybersecurity**  -  CBK Cybersecurity Guidance Note 2023, incident response plan, penetration testing, ISO 27001
+7. **Reporting & Record Keeping**  -  Regulatory returns to CBK/CMA/IRA, transaction records, retention periods (POCAMLA: 7 years)
+8. **Corporate Governance**  -  Board composition, fit-and-proper criteria for directors/senior management, ownership disclosure
+9. **Outsourcing & Third-Party Risk**  -  CBK outsourcing policy, vendor due diligence, contractual requirements for subprocessors
+10. **Business Continuity & Disaster Recovery**  -  BCP documentation, RPO/RTO targets, annual BCP testing
+11. **Complaints Handling & Dispute Resolution**  -  Internal complaints procedure, CBK escalation pathway, turnaround time obligations
+12. **Tax Compliance**  -  Digital Services Tax (1.5% of gross transaction value for non-residents), VAT registration, withholding tax, KRA PIN registration
+13. **Foreign Exchange & Remittance**  -  (INCLUDE ONLY if FX, remittance, or cross-border services are offered) CBK forex dealer authorisation, SWIFT membership, cross-border reporting
 
 ## REQUIRED JSON STRUCTURE
 Return exactly this structure. Do not add any fields not shown here. Do not omit required fields.
@@ -182,7 +182,7 @@ Return exactly this structure. Do not add any fields not shown here. Do not omit
           "regulatoryBasis": "National Payment System Act 2011, Section 12; CBK Payment Service Provider Regulations 2014, Regulation 4",
           "priority": "CRITICAL",
           "description": "All entities providing payment services (including mobile money, merchant payments, payment aggregation) must obtain PSP authorisation from the Central Bank of Kenya before commencing operations. Unauthorised operation is a criminal offence.",
-          "guidance": "As a payment gateway targeting SME merchants, PSP authorisation is your single biggest regulatory blocker. CBK processing times average 90-120 days — begin this application before any commercial launch activity.",
+          "guidance": "As a payment gateway targeting SME merchants, PSP authorisation is your single biggest regulatory blocker. CBK processing times average 90-120 days  -  begin this application before any commercial launch activity.",
           "actionItems": [
             "Download and complete CBK PSP application form from www.centralbank.go.ke/national-payments-system",
             "Prepare mandatory annexures: certificate of incorporation, memorandum and articles of association, audited financial statements (last 2 years or projections for new entities), IT system security documentation, AML/CFT policy, business continuity plan",
@@ -191,7 +191,7 @@ Return exactly this structure. Do not add any fields not shown here. Do not omit
             "Respond promptly to any CBK requests for additional information during the review period (typically 60-90 days)"
           ],
           "deadline": "Before commencing any payment service operations",
-          "penalty": "Fine not exceeding KES 10,000,000 and/or imprisonment not exceeding 5 years — National Payment System Act 2011, Section 36"
+          "penalty": "Fine not exceeding KES 10,000,000 and/or imprisonment not exceeding 5 years  -  National Payment System Act 2011, Section 36"
         }
       ]
     }
@@ -208,18 +208,18 @@ Return exactly this structure. Do not add any fields not shown here. Do not omit
   }
 }
 
-## QUALITY REQUIREMENTS — NON-NEGOTIABLE
+## QUALITY REQUIREMENTS  -  NON-NEGOTIABLE
 - **Minimum 25 items total** across at least 5 categories. Aim for 30-40 for complex products.
 - **Minimum 3 items per included category.** No stub categories with 1-2 items.
 - **Every item MUST have:**
   - \`regulatoryBasis\`: specific act name + section number (not just "various regulations")
   - \`description\`: 2-3 sentences explaining the obligation and its regulatory context
-  - \`actionItems\`: 3-5 concrete, executable steps — name specific forms, portals, fees, or documents
+  - \`actionItems\`: 3-5 concrete, executable steps  -  name specific forms, portals, fees, or documents
   - \`deadline\`: tied to a specific regulatory event or calendar date
   - \`penalty\`: actual penalty from Kenyan law in KES; include imprisonment if applicable
-- **Priority must be defensible** — CRITICAL means operations are illegal without it; HIGH means enforcement risk within 3 months
+- **Priority must be defensible**  -  CRITICAL means operations are illegal without it; HIGH means enforcement risk within 3 months
 - **Priority distribution:** At least 4 CRITICAL, at least 6 HIGH items across the checklist
-- **Guidance field:** Add only where this specific business profile (product type, stage, segments) creates a materially different compliance picture — not for generic items every fintech must do
+- **Guidance field:** Add only where this specific business profile (product type, stage, segments) creates a materially different compliance picture  -  not for generic items every fintech must do
 - **Accuracy over brevity:** Do not invent section numbers. If you know the law but not the exact section, write "Section [confirm with legal counsel]" rather than fabricating a reference
 - **Estimating \`estimatedCompletionDays\`:** Pre-launch / regulatory sandbox stage: 150-180 days (licensing queues); operational < 1 year: 90-120 days; established: 60-90 days
 
@@ -228,7 +228,7 @@ After generating all categories and items, count them accurately and populate:
 - \`metadata.criticalItems\` = exact count of items with priority "CRITICAL"
 - \`metadata.highItems\` = exact count of items with priority "HIGH"
 
-PRE-SUBMISSION SELF-CHECK — complete this before responding:
+PRE-SUBMISSION SELF-CHECK  -  complete this before responding:
 1. Does your response start with \`{\` and end with \`}\`? If not, something is wrong.
 2. Is every \`[\` matched by a \`]\`? Is every \`{\` matched by a \`}\`?
 3. Is every string value closed with a \`"\`? No trailing commas before \`}\` or \`]\`?
@@ -243,8 +243,8 @@ Return ONLY valid JSON. Start with { and end with }. No other text before or aft
  *
  * Pipeline:
  *  1. Strip markdown code fences (Claude sometimes adds them despite instructions).
- *  2. JSON.parse() — throw if not valid JSON.
- *  3. GeneratedChecklistSchema.parse() — throw ZodError with field-level detail
+ *  2. JSON.parse()  -  throw if not valid JSON.
+ *  3. GeneratedChecklistSchema.parse()  -  throw ZodError with field-level detail
  *     if the shape is wrong.  This is the P0 guard against corrupt DB writes.
  *  4. Recompute metadata counts from actual item data (override AI-reported counts).
  *
@@ -262,7 +262,7 @@ export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
       .trim();
   }
 
-  // JSON parse — attempt a fallback extraction if the model added leading text
+  // JSON parse  -  attempt a fallback extraction if the model added leading text
   let rawParsed: unknown;
   try {
     rawParsed = JSON.parse(content);
@@ -293,7 +293,7 @@ export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
     }
   }
 
-  // Strict Zod validation — throws ZodError with field paths on schema mismatch
+  // Strict Zod validation  -  throws ZodError with field paths on schema mismatch
   const result = GeneratedChecklistSchema.safeParse(rawParsed);
   if (!result.success) {
     const issues = result.error.issues
@@ -304,7 +304,7 @@ export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
 
   const parsed = result.data;
 
-  // Recompute metadata counts from actual items — never trust the AI's self-reported counts.
+  // Recompute metadata counts from actual items  -  never trust the AI's self-reported counts.
   let totalItems    = 0;
   let criticalItems = 0;
   let highItems     = 0;
@@ -324,7 +324,7 @@ export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
 
   // Enforce minimum item count AFTER recomputing so the check reflects
   // actual items, not the AI's self-reported count.
-  const MIN_ITEMS = 20; // Soft floor — Zod enforces 5 categories; this catches thin responses
+  const MIN_ITEMS = 20; // Soft floor  -  Zod enforces 5 categories; this catches thin responses
   if (totalItems < MIN_ITEMS) {
     logger.warn({
       type:        'checklist_parse_too_few_items',
@@ -341,14 +341,14 @@ export function parseChecklistOutput(rawContent: string): GeneratedChecklist {
   return parsed;
 }
 
-// ─── Three-Tier Generation Infrastructure ────────────────────────────────────
+// --- Three-Tier Generation Infrastructure ------------------------------------
 //
 // These exports are used by the tier-based generation pipeline in
-// checklist.service.ts.  They are entirely additive — the legacy
+// checklist.service.ts.  They are entirely additive  -  the legacy
 // parseChecklistOutput() and generateChecklist*Prompt() functions above
 // remain untouched for backward compatibility with complianceModule.
 
-// ── Passage types ─────────────────────────────────────────────────────────────
+// -- Passage types -------------------------------------------------------------
 
 /**
  * Minimal passage shape expected by the tier prompt builders.
@@ -360,7 +360,7 @@ export interface RagPassage {
   documentTitle: string;
 }
 
-// ── Token-budget RAG trimmer ───────────────────────────────────────────────────
+// -- Token-budget RAG trimmer ---------------------------------------------------
 
 /**
  * Trim a list of RAG passages to fit within a rough token budget.
@@ -386,18 +386,18 @@ export function trimRagPassages(
   return trimmed;
 }
 
-// ── Internal context builder ───────────────────────────────────────────────────
+// -- Internal context builder ---------------------------------------------------
 
 function buildRagContextString(passages: RagPassage[]): string {
   return passages
     .map(
       (r, i) =>
-        `[REGULATORY CONTEXT ${i + 1} — ${r.documentTitle || 'Kenyan Regulation'}]\n${r.chunkText}`
+        `[REGULATORY CONTEXT ${i + 1}  -  ${r.documentTitle || 'Kenyan Regulation'}]\n${r.chunkText}`
     )
     .join('\n\n---\n\n');
 }
 
-// ── Tier-specific Zod schemas ─────────────────────────────────────────────────
+// -- Tier-specific Zod schemas -------------------------------------------------
 //
 // Each tier relaxes both the minimum category count and the minimum item count.
 // Partial validation (category-by-category) is handled in parseWithTierSchema()
@@ -420,7 +420,7 @@ export const Tier2ResponseSchema = z.object({
   { message: 'Tier 2 requires at least 10 items total' }
 );
 
-// Tier 3 metadata is fully optional — we synthesize any missing fields from
+// Tier 3 metadata is fully optional  -  we synthesize any missing fields from
 // the validated categories and the original generation input.
 export const Tier3ResponseSchema = z.object({
   categories: z.array(ChecklistCategorySchema).min(2, 'Tier 3 requires at least 2 categories'),
@@ -439,33 +439,33 @@ export const Tier3ResponseSchema = z.object({
   { message: 'Tier 3 requires at least 5 items total' }
 );
 
-// ── Tier-specific system prompts ───────────────────────────────────────────────
+// -- Tier-specific system prompts -----------------------------------------------
 
 function generateTier2SystemPrompt(): string {
   return `You are SheriaBot, a senior regulatory compliance advisor for Kenya's fintech sector. You specialize in:
-- Data Protection Act 2019 (DPA) — ODPC registration, consent frameworks, data subject rights
-- National Payment System Act 2011 (NPSA) — CBK PSP authorisation and payment regulations
-- POCAMLA — AML/CFT obligations, FRC registration, CDD/EDD, STR/CTR filing
-- Digital Credit Providers Regulations 2022 — licensing for digital lenders
-- CBK Act (Cap 491) — prudential requirements, capital thresholds
-- Computer Misuse and Cybercrimes Act 2018 — cybersecurity obligations
-- Consumer Protection Act 2012 — fair dealing, disclosure, complaints handling
+- Data Protection Act 2019 (DPA)  -  ODPC registration, consent frameworks, data subject rights
+- National Payment System Act 2011 (NPSA)  -  CBK PSP authorisation and payment regulations
+- POCAMLA  -  AML/CFT obligations, FRC registration, CDD/EDD, STR/CTR filing
+- Digital Credit Providers Regulations 2022  -  licensing for digital lenders
+- CBK Act (Cap 491)  -  prudential requirements, capital thresholds
+- Computer Misuse and Cybercrimes Act 2018  -  cybersecurity obligations
+- Consumer Protection Act 2012  -  fair dealing, disclosure, complaints handling
 - Capital Markets Act (Cap 485A) and CMA Crowdfunding Regulations 2022
 - CBK Guidance Note on Cybersecurity (March 2023)
 
 REGULATORS: Central Bank of Kenya (CBK), ODPC, Financial Reporting Centre (FRC), CMA, IRA, KRA, SASRA
 
-OUTPUT RULES — FOLLOW EXACTLY:
+OUTPUT RULES  -  FOLLOW EXACTLY:
 1. Respond ONLY with valid JSON. No markdown fences, no preamble. Start with { and end with }.
 2. Every item MUST cite a specific Kenyan law with the section number.
 3. Penalties MUST include specific KES amounts where defined in legislation.
-4. Action items must be specific and actionable — name forms, portals, fees, and documents.
+4. Action items must be specific and actionable  -  name forms, portals, fees, and documents.
 5. Deadlines must be tied to a regulatory event, not vague.
 6. Generate 15-20 focused checklist items across 3-5 categories. Prioritise the most critical requirements.
-7. Keep response concise — descriptions under 200 characters, action items under 150 characters each.
+7. Keep response concise  -  descriptions under 200 characters, action items under 150 characters each.
 8. Priority distribution: at least 3 CRITICAL, at least 4 HIGH items.
 
-ANTI-TRUNCATION PROTOCOL — FOLLOW IF APPROACHING TOKEN LIMIT:
+ANTI-TRUNCATION PROTOCOL  -  FOLLOW IF APPROACHING TOKEN LIMIT:
 If you are near your response limit before finishing all categories:
   a) Finish the current item completely (close all strings and the item object: }).
   b) Close the current items array: ]
@@ -481,29 +481,29 @@ function generateTier3SystemPrompt(): string {
 
 Focus exclusively on these three areas:
 1. CBK licensing and registration requirements (National Payment System Act 2011, CBK Act Cap 491, Digital Credit Providers Regulations 2022)
-2. Data Protection Act 2019 — ODPC registration, consent, data subject rights
-3. AML/CFT obligations — POCAMLA, FRC registration, CDD/EDD, STR/CTR filing
+2. Data Protection Act 2019  -  ODPC registration, consent, data subject rights
+3. AML/CFT obligations  -  POCAMLA, FRC registration, CDD/EDD, STR/CTR filing
 
-OUTPUT RULES — FOLLOW EXACTLY:
+OUTPUT RULES  -  FOLLOW EXACTLY:
 1. Respond ONLY with valid JSON. No markdown fences, no preamble. Start with { and end with }.
 2. Cite only laws and section numbers you are confident are accurate. Write "Section [verify]" rather than inventing numbers.
 3. Generate 10-15 checklist items across 2-4 categories. Brevity over completeness.
 4. Keep all string values under 300 characters.
-5. Metadata fields are optional — omit any you are unsure about.
+5. Metadata fields are optional  -  omit any you are unsure about.
 
-ANTI-TRUNCATION PROTOCOL — FOLLOW IF APPROACHING TOKEN LIMIT:
+ANTI-TRUNCATION PROTOCOL  -  FOLLOW IF APPROACHING TOKEN LIMIT:
 If you are running out of space: finish the current item, close items array ], close category }, close categories array ], emit metadata {}, close root }.
 NEVER stop mid-string. A small valid JSON beats a large broken one.`;
 }
 
-// ── Tier-specific user prompts ─────────────────────────────────────────────────
+// -- Tier-specific user prompts -------------------------------------------------
 
 function generateTier2UserPrompt(params: ChecklistGenerationParams): string {
   const ragSection = params.ragContext
     ? `\n\n## RETRIEVED REGULATORY CONTEXT (use to cite specific laws)\n${params.ragContext}\n`
     : `\n\n## NOTE: No document context available. Use your training knowledge.\n`;
 
-  return `Generate a focused compliance checklist for this Kenyan fintech business. Generate 15-20 items across 3-5 categories — prioritise the most critical regulatory requirements.
+  return `Generate a focused compliance checklist for this Kenyan fintech business. Generate 15-20 items across 3-5 categories  -  prioritise the most critical regulatory requirements.
 
 ## BUSINESS PROFILE
 - **Product / Service Type:** ${params.productType}
@@ -529,7 +529,7 @@ ${ragSection}
           "description": "All payment service providers must obtain CBK authorisation before commencing operations.",
           "actionItems": ["Download CBK PSP application form", "Submit to CBK Director, National Payments"],
           "deadline": "Before commencing operations",
-          "penalty": "Fine not exceeding KES 10,000,000 — National Payment System Act 2011, Section 36"
+          "penalty": "Fine not exceeding KES 10,000,000  -  National Payment System Act 2011, Section 36"
         }
       ]
     }
@@ -576,7 +576,7 @@ ${params.additionalConcerns ? `- **Specific Concerns:** ${params.additionalConce
           "description": "Obtain the appropriate CBK licence for your payment service type before commencing operations.",
           "actionItems": ["Identify applicable CBK licence category", "Submit application to CBK"],
           "deadline": "Before commencing operations",
-          "penalty": "Criminal liability — refer to applicable Act"
+          "penalty": "Criminal liability  -  refer to applicable Act"
         }
       ]
     }
@@ -598,7 +598,7 @@ PRE-SUBMISSION SELF-CHECK: Does your response start with \`{\` and end with \`}\
 Return ONLY valid JSON. Start with { and end with }. No other text.`;
 }
 
-// ── Tier prompt builders (public API for checklist.service.ts) ─────────────────
+// -- Tier prompt builders (public API for checklist.service.ts) -----------------
 
 export function buildTier1Prompt(
   input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>,
@@ -649,7 +649,7 @@ export function buildTier3Prompt(
   };
 }
 
-// ── Unified metadata synthesiser ───────────────────────────────────────────────
+// -- Unified metadata synthesiser -----------------------------------------------
 
 function synthesizeMetadata(
   rawMetadata: Record<string, unknown> | null | undefined,
@@ -681,7 +681,7 @@ function synthesizeMetadata(
   };
 }
 
-// ── JSON extraction helper ─────────────────────────────────────────────────────
+// -- JSON extraction helper -----------------------------------------------------
 
 /**
  * Extract a parseable JSON object from raw AI output.
@@ -698,7 +698,7 @@ function synthesizeMetadata(
 function extractJsonObject(rawContent: string, checklistId?: string): unknown {
   let content = rawContent.trim();
 
-  // Step 1 — strip markdown code fences
+  // Step 1  -  strip markdown code fences
   if (content.startsWith('```')) {
     content = content
       .replace(/^```(?:json)?\s*/i, '')
@@ -706,12 +706,12 @@ function extractJsonObject(rawContent: string, checklistId?: string): unknown {
       .trim();
   }
 
-  // Step 2 — direct parse
+  // Step 2  -  direct parse
   try {
     return JSON.parse(content);
   } catch { /* fall through */ }
 
-  // Step 3 — extract outermost {...} block
+  // Step 3  -  extract outermost {...} block
   const jsonMatch = content.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
     throw new Error('AI response contains no JSON object');
@@ -721,7 +721,7 @@ function extractJsonObject(rawContent: string, checklistId?: string): unknown {
     return JSON.parse(jsonMatch[0]);
   } catch { /* fall through to repair */ }
 
-  // Step 4 — brace/bracket balancing for truncated responses
+  // Step 4  -  brace/bracket balancing for truncated responses
   let braces = 0;
   let brackets = 0;
   for (const char of jsonMatch[0]) {
@@ -757,7 +757,7 @@ function extractJsonObject(rawContent: string, checklistId?: string): unknown {
   }
 }
 
-// ── Partial category recovery ──────────────────────────────────────────────────
+// -- Partial category recovery --------------------------------------------------
 
 /**
  * Attempt to recover valid categories from an object that failed full-schema
@@ -820,20 +820,20 @@ function attemptPartialCategoryRecovery(
   );
 }
 
-// ── Main tier parse function ───────────────────────────────────────────────────
+// -- Main tier parse function ---------------------------------------------------
 
 /**
  * Parse and validate raw AI output for a given generation tier.
  *
  * Pipeline:
- *  1. extractJsonObject() — strip fences, JSON.parse, repair truncation
+ *  1. extractJsonObject()  -  strip fences, JSON.parse, repair truncation
  *  2. Attempt full tier Zod schema validation (strictest pass)
  *  3. If full validation fails, attempt per-category Zod recovery
- *  4. synthesizeMetadata() — recompute counts from validated data; fill defaults
+ *  4. synthesizeMetadata()  -  recompute counts from validated data; fill defaults
  *  5. Return a complete GeneratedChecklist
  *
  * Throws on unrecoverable failure so callers can escalate to the next tier.
- * No unvalidated data reaches the database — every category in the result has
+ * No unvalidated data reaches the database  -  every category in the result has
  * passed ChecklistCategorySchema.safeParse().
  */
 export function parseWithTierSchema(
@@ -847,7 +847,7 @@ export function parseWithTierSchema(
 ): GeneratedChecklist {
   const { checklistId, input, ragSourcesUsed = 0 } = logCtx;
 
-  // Step 1 — get a parseable object
+  // Step 1  -  get a parseable object
   const rawParsed = extractJsonObject(rawContent, checklistId);
 
   if (!rawParsed || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
@@ -856,7 +856,7 @@ export function parseWithTierSchema(
 
   const rawData = rawParsed as Record<string, unknown>;
 
-  // Step 2 — try full tier schema
+  // Step 2  -  try full tier schema
   const tierSchema =
     tier === 1 ? Tier1ResponseSchema :
     tier === 2 ? Tier2ResponseSchema :
@@ -869,7 +869,7 @@ export function parseWithTierSchema(
   if (fullResult.success) {
     validCategories = fullResult.data.categories;
   } else {
-    // Step 3 — per-category recovery (throws if insufficient)
+    // Step 3  -  per-category recovery (throws if insufficient)
     logger.warn({
       type:        'checklist_tier_full_schema_failed',
       checklistId,
@@ -879,7 +879,7 @@ export function parseWithTierSchema(
     validCategories = attemptPartialCategoryRecovery(rawData, tier, checklistId);
   }
 
-  // Step 4 — synthesize complete metadata (always recomputes counts)
+  // Step 4  -  synthesize complete metadata (always recomputes counts)
   const metadata = synthesizeMetadata(
     rawData.metadata as Record<string, unknown> | null | undefined,
     validCategories,

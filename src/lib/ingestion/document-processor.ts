@@ -273,13 +273,13 @@ async function processDocument(
       const chunkTextBytes = Buffer.byteLength(chunk.text, 'utf8')
       const safeChunkText =
         chunkTextBytes > MAX_CHUNK_TEXT_BYTES
-          ? chunk.text.slice(0, MAX_CHUNK_TEXT_BYTES) + '…'
+          ? chunk.text.slice(0, MAX_CHUNK_TEXT_BYTES) + '...'
           : chunk.text
 
       const rawSection = chunk.section ?? undefined
       const safeSection =
         rawSection && Buffer.byteLength(rawSection, 'utf8') > MAX_SECTION_BYTES
-          ? rawSection.slice(0, MAX_SECTION_BYTES) + '…'
+          ? rawSection.slice(0, MAX_SECTION_BYTES) + '...'
           : rawSection
 
       return {
@@ -335,7 +335,7 @@ export class DocumentIngestionService {
   async ingestDocument(input: DocumentIngestionInput): Promise<IngestionResult> {
     assertFileReadable(input.filePath)
 
-    // MEMORY SAFE READ (stream → buffer)
+    // MEMORY SAFE READ (stream -> buffer)
     const bufChunks: Buffer[] = []
     const stream = fs.createReadStream(input.filePath)
 
@@ -349,7 +349,7 @@ export class DocumentIngestionService {
 
     const checksum = computeChecksum(buffer)
 
-    // Checksum deduplication — skip if already indexed
+    // Checksum deduplication  -  skip if already indexed
     const existing = await (prisma as any).regulatoryDocument.findFirst({
       where: { checksum, status: { not: 'FAILED' } },
     })
@@ -361,7 +361,7 @@ export class DocumentIngestionService {
         totalCharacters: existing.totalCharacters ?? 0,
         storageKey: existing.storageKey,
         skipped: true,
-        reason: `Duplicate — already indexed as "${existing.title}"`,
+        reason: `Duplicate  -  already indexed as "${existing.title}"`,
       }
     }
 

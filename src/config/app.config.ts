@@ -45,14 +45,14 @@ const envSchema = z.object({
   PINECONE_ENVIRONMENT: z.string().default('us-east-1-aws'),
   PINECONE_INDEX_NAME: z.string().default('sheriabot-legal-corpus'),
 
-  // Cloudflare R2 — private bucket
+  // Cloudflare R2  -  private bucket
   R2_ACCOUNT_ID: z.string().min(1, 'R2 account ID is required'),
   R2_ACCESS_KEY_ID: z.string().min(1, 'R2 access key ID is required'),
   R2_SECRET_ACCESS_KEY: z.string().min(1, 'R2 secret access key is required'),
   R2_BUCKET_NAME: z.string().default('sheriabot-documents'),
   R2_PUBLIC_URL: z.string().url(),
 
-  // Cloudflare R2 — public bucket (avatars, logos, branding)
+  // Cloudflare R2  -  public bucket (avatars, logos, branding)
   R2_PUBLIC_ACCESS_KEY_ID: z.string().min(1, 'R2 public bucket access key is required'),
   R2_PUBLIC_SECRET_ACCESS_KEY: z.string().min(1, 'R2 public bucket secret key is required'),
   R2_PUBLIC_BUCKET_NAME: z.string().min(1, 'R2 public bucket name is required'),
@@ -67,7 +67,7 @@ const envSchema = z.object({
   STRIPE_PUBLISHABLE_KEY: z.string().min(1, 'Stripe publishable key is required'),
   STRIPE_WEBHOOK_SECRET: z.string().min(1, 'Stripe webhook secret is required'),
 
-  // IntaSend (M-Pesa) — optional; required only when M-Pesa payment method is used
+  // IntaSend (M-Pesa)  -  optional; required only when M-Pesa payment method is used
   INTASEND_PUBLISHABLE_KEY: z.string().optional().default(''),
   INTASEND_SECRET_KEY: z.string().optional().default(''),
   INTASEND_IS_TEST: z.string().optional().default('true'),
@@ -106,7 +106,7 @@ export const appConfig = {
   // Server
   port: env.PORT,
   appUrl: env.APP_URL,
-  // The canonical (first) frontend URL — used in email links and redirects.
+  // The canonical (first) frontend URL  -  used in email links and redirects.
   // When FRONTEND_URL is comma-separated for multi-origin CORS, this is the primary domain.
   frontendUrl: env.FRONTEND_URL.split(',')[0].trim(),
 
@@ -151,7 +151,7 @@ export const appConfig = {
     indexName: env.PINECONE_INDEX_NAME,
   },
 
-  // Storage — private bucket (RAG documents, vault files)
+  // Storage  -  private bucket (RAG documents, vault files)
   storage: {
     accountId: env.R2_ACCOUNT_ID,
     accessKeyId: env.R2_ACCESS_KEY_ID,
@@ -160,7 +160,7 @@ export const appConfig = {
     publicUrl: env.R2_PUBLIC_URL,
   },
 
-  // Public storage — public bucket (avatars, logos, branding assets)
+  // Public storage  -  public bucket (avatars, logos, branding assets)
   publicStorage: {
     accessKeyId: env.R2_PUBLIC_ACCESS_KEY_ID,
     secretAccessKey: env.R2_PUBLIC_SECRET_ACCESS_KEY,

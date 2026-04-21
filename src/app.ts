@@ -14,7 +14,6 @@ import { registerSecurityMiddleware } from './middleware/security.middleware';
 import { stripeWebhookService } from './lib/stripe/webhook.service';
 import { intaSendWebhookService } from './lib/intasend/webhook.service';
 import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
-import { registerChecklistProgressRoute } from './routes/checklist-progress.route';
 
 /**
  * Zod schema for IntaSend webhook payloads.
@@ -49,11 +48,14 @@ export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false, // Structured logging handled by Pino via src/utils/logger
     maxParamLength: 5000,
-    bodyLimit: 31457280, // 30 MB — covers 20 MB base64 gap analysis uploads
-    trustProxy: true, // Required behind Railway's reverse proxy
+    bodyLimit: 31457280, // 30 MB  -  covers 20 MB base64 gap analysis uploads
+    // Render's reverse proxy is trusted  -  accepts X-Forwarded-For.
+    // Override with TRUST_PROXY env var if deploying behind a different proxy.
+    // See: https://fastify.dev/docs/latest/Reference/Server/#trustproxy
+    trustProxy: process.env.TRUST_PROXY ?? true,
   });
 
-  // ── CORS — must be registered before Helmet so security headers don't ──
+  // -- CORS  -  must be registered before Helmet so security headers don't --
   // conflict with CORS preflight handling.
   // Support comma-separated FRONTEND_URL for multiple origins
   // (e.g. production + Vercel preview deployments)
@@ -67,7 +69,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       // Allow requests with no origin (server-to-server, Postman, curl)
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      // No wildcard regex — every allowed origin must be listed explicitly in
+      // No wildcard regex  -  every allowed origin must be listed explicitly in
       // FRONTEND_URL (comma-separated). Add Vercel preview URLs there as needed.
       cb(new Error(`CORS: origin '${origin}' not allowed`), false);
     },
@@ -76,14 +78,14 @@ export async function buildApp(): Promise<FastifyInstance> {
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
-  // ── Security headers (production-hardened Helmet) ─────────────────────
+  // -- Security headers (production-hardened Helmet) ---------------------
   // Registered after CORS so CORS headers are already set when Helmet runs.
   await app.register(securityPlugin);
 
-  // ── Runtime security middleware ───────────────────────────────────────
+  // -- Runtime security middleware ---------------------------------------
   registerSecurityMiddleware(app);
 
-  // ── Stripe Webhook — raw body required for signature verification ────────
+  // -- Stripe Webhook  -  raw body required for signature verification --------
   // Registered in an encapsulated plugin so the Buffer content-type parser is
   // scoped only to this route and does NOT override the global JSON parser.
   await app.register(async (webhookApp) => {
@@ -111,7 +113,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : 'Webhook processing error';
 
-          // Signature mismatch → return 400 so Stripe retries with correct secret
+          // Signature mismatch -> return 400 so Stripe retries with correct secret
           if (err instanceof Error && err.message.includes('No signatures found')) {
             logger.warn({ type: 'stripe_webhook_invalid_signature', error: message });
             return reply.status(400).send({ error: 'Invalid webhook signature' });
@@ -124,7 +126,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     );
   });
 
-  // ── IntaSend Webhook — JSON body, re-verified via IntaSend status API ───────
+  // -- IntaSend Webhook  -  JSON body, re-verified via IntaSend status API -------
   // IntaSend sends standard JSON (no raw Buffer needed).
   // Security:
   //  1. Payload shape is validated via intaSendWebhookSchema before processing.
@@ -155,10 +157,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
   );
 
-  // ── Checklist SSE progress stream ────────────────────────────────────────
-  await registerChecklistProgressRoute(app);
-
-  // ── tRPC – all procedures exposed under /trpc ────────────────────────────
+  // -- tRPC - all procedures exposed under /trpc ----------------------------
   await app.register(fastifyTRPCPlugin, {
     prefix: '/trpc',
     trpcOptions: {
@@ -179,7 +178,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
   });
 
-  // ── Lightweight health check (no DB calls) ────────────────────────────
+  // -- Lightweight health check (no DB calls) ----------------------------
   app.get('/health', async () => {
     const mem = process.memoryUsage();
 
@@ -197,9 +196,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     };
   });
 
-  // ── Detailed health check (admin-only) ───────────────────────────────────
+  // -- Detailed health check (admin-only) -----------------------------------
   app.get('/health/detailed', async (request, reply) => {
-    // ── Auth gate: valid Supabase JWT with role === 'ADMIN' required ─────────
+    // -- Auth gate: valid Supabase JWT with role === 'ADMIN' required ---------
     const authHeader = request.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       return reply.status(401).send({ error: 'Unauthorized' });
@@ -228,7 +227,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       });
       return reply.status(401).send({ error: 'Unauthorized' });
     }
-    // ── End auth gate ────────────────────────────────────────────────────────
+    // -- End auth gate --------------------------------------------------------
 
     const checks: Record<string, { status: string; latencyMs?: number; message?: string }> = {};
     let overallStatus: 'ok' | 'degraded' | 'down' = 'ok';
@@ -243,7 +242,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       overallStatus = 'degraded';
     }
 
-    // Upstash Redis (HTTP ping — info() not supported by REST API)
+    // Upstash Redis (HTTP ping  -  info() not supported by REST API)
     try {
       const t = Date.now();
       await redis.ping();
@@ -253,10 +252,10 @@ export async function buildApp(): Promise<FastifyInstance> {
       overallStatus = 'degraded';
     }
 
-    // Storage (R2) — passive check
+    // Storage (R2)  -  passive check
     checks.storage = { status: 'healthy' };
 
-    // Pinecone / Vector DB — passive check
+    // Pinecone / Vector DB  -  passive check
     checks.vectordb = { status: 'healthy' };
 
     if (checks.database?.status === 'down' && checks.redis?.status === 'down') {
@@ -284,7 +283,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     });
   });
 
-  // ── Root endpoint ────────────────────────────────────────────────────────
+  // -- Root endpoint --------------------------------------------------------
   app.get('/', async () => ({
     name: 'SheriaBot API',
     version: '1.0.0',
@@ -292,7 +291,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     endpoints: { health: '/health', healthDetailed: '/health/detailed', trpc: '/trpc' },
   }));
 
-  // ── Catch-all error handler ──────────────────────────────────────────────
+  // -- Catch-all error handler ----------------------------------------------
   app.setErrorHandler<Error>((error, request, reply) => {
     const statusCode = (error as any).statusCode || 500;
 

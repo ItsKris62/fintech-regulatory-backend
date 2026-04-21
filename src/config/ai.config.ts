@@ -25,7 +25,7 @@ export const aiConfig = {
     // Policy generation (Sonnet 4.6 for balance of speed/quality)
     policyGeneration: 'claude-sonnet-4-6',
 
-    // Checklist generation (Sonnet 4.6 — quality legal citations)
+    // Checklist generation (Sonnet 4.6  -  quality legal citations)
     checklistGeneration: 'claude-sonnet-4-6',
 
     // Compliance queries (Haiku 4.5 for speed and cost efficiency)
@@ -54,7 +54,7 @@ export const aiConfig = {
     // Maximum tokens for policy generation
     policyMaxTokens: 4000,
 
-    // Maximum tokens for checklist generation — 8192 ensures a full 30+ item checklist
+    // Maximum tokens for checklist generation  -  8192 ensures a full 30+ item checklist
     // never gets truncated mid-JSON (old 3000 limit caused position-12411 parse failures)
     checklistMaxTokens: 8192,
 
@@ -81,15 +81,15 @@ export const aiConfig = {
     // Policy generation timeout (can take longer)
     policyGeneration: 120000, // 120 seconds
 
-    // Checklist generation timeout — 200s for 8192-token responses + RAG overhead at Sonnet throughput
+    // Checklist generation timeout  -  200s for 8192-token responses + RAG overhead at Sonnet throughput
     checklistGeneration: 200000, // 200 seconds (legacy / non-tier path)
 
     // Three-tier checklist generation timeouts.
     // Tier 1 is generous because 8192 max_tokens at Sonnet 4.6 throughput (~30 t/s) can reach 270s.
     // Tier 2 and 3 have lower token budgets so shorter timeouts are appropriate.
-    checklistTier1: 240000, // 240 seconds (4 min) — Tier 1: full prompt, 8192 tokens
-    checklistTier2: 200000, // 200 seconds — Tier 2: simplified prompt, 6144 tokens
-    checklistTier3: 150000, // 150 seconds — Tier 3: minimal prompt, 4096 tokens
+    checklistTier1: 240000, // 240 seconds (4 min)  -  Tier 1: full prompt, 8192 tokens
+    checklistTier2: 200000, // 200 seconds  -  Tier 2: simplified prompt, 6144 tokens
+    checklistTier3: 150000, // 150 seconds  -  Tier 3: minimal prompt, 4096 tokens
 
     // Compliance query timeout
     complianceQuery: 45000, // 45 seconds
@@ -115,7 +115,7 @@ export const aiConfig = {
     backoffMultiplier: 2,
 
     // Retry on these HTTP status codes
-    // 529 = Anthropic overloaded — added alongside 408/429 as a common transient failure
+    // 529 = Anthropic overloaded  -  added alongside 408/429 as a common transient failure
     retryableStatuses: [408, 429, 500, 502, 503, 504, 529],
 
     // Retry on these error types

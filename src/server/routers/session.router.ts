@@ -13,7 +13,7 @@ import { router, protectedProcedure } from '../trpc/trpc';
 
 export const sessionRouter = router({
   /**
-   * Heartbeat — authenticated no-op.
+   * Heartbeat  -  authenticated no-op.
    *
    * Reaching this procedure means the request passed through isAuthenticated,
    * which already updates last_seen in context.ts for every authenticated

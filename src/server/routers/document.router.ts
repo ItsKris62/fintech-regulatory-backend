@@ -60,7 +60,7 @@ export const documentRouter = router({
         // confirmUpload will create the DB record with this same ID.
         const documentId = randomUUID();
 
-        // UUID-named file — never expose the original filename in the R2 key.
+        // UUID-named file  -  never expose the original filename in the R2 key.
         const ext = path.extname(input.filename).toLowerCase().slice(0, 10); // e.g. ".pdf"
         const uuidFilename = `${randomUUID()}${ext}`;
 
@@ -120,12 +120,12 @@ export const documentRouter = router({
   confirmUpload: protectedProcedure
     .input(confirmUploadSchema)
     .mutation(async ({ input, ctx }) => {
-      // Strip any path components from the original filename before storing —
-      // prevents path traversal in metadata (e.g. "../../etc/passwd.pdf" → "passwd.pdf").
+      // Strip any path components from the original filename before storing  - 
+      // prevents path traversal in metadata (e.g. "../../etc/passwd.pdf" -> "passwd.pdf").
       const safeOriginalFilename = path.basename(input.filename);
 
       try {
-        // ── Magic-byte validation ─────────────────────────────────────────
+        // -- Magic-byte validation -----------------------------------------
         // Download the first 8 KB of the file (already in R2) and validate
         // the actual content type against our allowlist. If validation fails,
         // delete the file from R2 immediately and reject the request.
@@ -174,7 +174,7 @@ export const documentRouter = router({
           });
         }
 
-        // ── Create document record ────────────────────────────────────────
+        // -- Create document record ----------------------------------------
         const createData: Record<string, unknown> = {
           actName: safeOriginalFilename,
           originalFilename: safeOriginalFilename,
@@ -252,7 +252,7 @@ export const documentRouter = router({
         // overwriting each other's OR clauses (bug fix).
         const andConditions: object[] = [];
 
-        // Filter by organization unless admin — always scoped to DB, never in JS
+        // Filter by organization unless admin  -  always scoped to DB, never in JS
         if (ctx.user.role !== 'ADMIN') {
           andConditions.push({
             OR: [
@@ -439,7 +439,7 @@ export const documentRouter = router({
           }
         }
 
-        // Get presigned download URL — pass original filename so the
+        // Get presigned download URL  -  pass original filename so the
         // Content-Disposition header shows the human-readable name, not the UUID.
         const downloadUrl = await ctx.storageService.getDownloadUrl(
           document.fileUrl,
@@ -516,7 +516,7 @@ export const documentRouter = router({
           });
         }
 
-        // Remove vectors from Pinecone (derived data — safe to clear on soft delete)
+        // Remove vectors from Pinecone (derived data  -  safe to clear on soft delete)
         try {
           await deleteByFilter({ documentId: input.id });
           logger.info({
@@ -531,7 +531,7 @@ export const documentRouter = router({
             documentId: input.id,
             error: ragError.message,
           });
-          // Continue — soft delete proceeds even if vector removal fails
+          // Continue  -  soft delete proceeds even if vector removal fails
         }
 
         // Soft delete: set deletedAt timestamp only. The R2 object is intentionally
@@ -576,7 +576,7 @@ export const documentRouter = router({
    * Restore a soft-deleted document
    *
    * Sets deletedAt back to null. Only the document owner or an admin can restore.
-   * Note: Pinecone vectors are not restored automatically — if the document needs
+   * Note: Pinecone vectors are not restored automatically  -  if the document needs
    * to be searchable again, trigger a re-ingest via the `reingest` procedure.
    *
    * @protected
@@ -753,7 +753,7 @@ export const documentRouter = router({
           documentId: input.documentId,
         });
 
-        // Run re-ingestion in background — do not await so the response is fast
+        // Run re-ingestion in background  -  do not await so the response is fast
         void (documentIngestionService as any)
           .reingestDocument(input.documentId, document.fileUrl)
           .then(() => {

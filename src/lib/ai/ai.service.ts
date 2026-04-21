@@ -594,7 +594,7 @@ export class AIService {
     };
 
     // On truncation or parse failure: use parseWithTierSchema (Tier 1 strictness) which
-    // applies per-category Zod validation — no unvalidated data reaches the database.
+    // applies per-category Zod validation  -  no unvalidated data reaches the database.
     let checklist: GeneratedChecklist;
     let inputTokens  = result.inputTokens;
     let outputTokens = result.outputTokens;
@@ -634,7 +634,7 @@ export class AIService {
         });
       }
 
-      // Relax to Tier 2 validation on the retry — fewer items acceptable
+      // Relax to Tier 2 validation on the retry  -  fewer items acceptable
       checklist = parseWithTierSchema(retryResult.content, 2, logCtx);
     }
 
@@ -769,14 +769,14 @@ export class AIService {
     });
 
     const systemPrompt = generateGapAnalysisSystemPrompt();
-    // Chunks only need to identify gaps — keep token budget lean
+    // Chunks only need to identify gaps  -  keep token budget lean
     const chunkMaxTokens = 3000;
     const allRawGaps: RawChunkGapItem[] = [];
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let totalCost = 0;
 
-    // ── Phase 1: sequential per-chunk analysis ────────────────────────────────
+    // -- Phase 1: sequential per-chunk analysis --------------------------------
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       logger.info({
@@ -803,7 +803,7 @@ export class AIService {
         totalCost += chunkResult.cost;
         chunkGaps = parseChunkAnalysisOutput(chunkResult.content, i);
       } catch (chunkErr: unknown) {
-        // A single failed chunk does not abort the whole analysis — log and skip
+        // A single failed chunk does not abort the whole analysis  -  log and skip
         logger.error({
           type: 'gap_analysis_chunk_error',
           chunk: i + 1,
@@ -823,7 +823,7 @@ export class AIService {
       });
     }
 
-    // ── Phase 2: merge / consolidate all raw gaps ─────────────────────────────
+    // -- Phase 2: merge / consolidate all raw gaps -----------------------------
     const mergePrompt = generateMergeUserPrompt(allRawGaps, {
       ...baseParams,
       chunkCount: totalChunks,
@@ -907,16 +907,16 @@ export class AIService {
    *
    * Accepts pre-built prompts + tier-specific configuration.
    * Streams the AI response and emits progress callbacks.
-   * Returns raw content + token counts — parsing and validation are the
+   * Returns raw content + token counts  -  parsing and validation are the
    * caller's (checklist.service.ts runTier) responsibility.
    *
-   * Does NOT retry on failure — the tier system in checklist.service.ts
+   * Does NOT retry on failure  -  the tier system in checklist.service.ts
    * provides recovery by escalating to the next tier when this throws.
    *
    * Progress milestones:
-   *   started  — request sent to Anthropic
-   *   progress — each new JSON category detected in the stream
-   *   parsing  — full response received, ready to validate
+   *   started   -  request sent to Anthropic
+   *   progress  -  each new JSON category detected in the stream
+   *   parsing   -  full response received, ready to validate
    */
   async executeChecklistStream(
     params: {
@@ -936,7 +936,7 @@ export class AIService {
       overrideTimeoutMs: params.overrideTimeoutMs,
     });
 
-    onProgress({ type: 'started', message: 'Connecting to AI — generating your compliance checklist...' });
+    onProgress({ type: 'started', message: 'Connecting to AI  -  generating your compliance checklist...' });
 
     let accumulatedContent = '';
     let categoriesDetected = 0;
@@ -952,7 +952,7 @@ export class AIService {
           accumulatedContent += chunk;
 
           // Count opening category objects by detecting "name": keys.
-          // This is a low-cost heuristic for streaming progress — one match
+          // This is a low-cost heuristic for streaming progress  -  one match
           // per category.
           const newCount = (accumulatedContent.match(/"name"\s*:/g) ?? []).length;
           if (newCount > categoriesDetected) {
@@ -977,7 +977,7 @@ export class AIService {
         maxTokens:   params.maxTokens,
         durationMs:  Date.now() - startTime,
       });
-      // Do NOT throw here — the tier system calls parseWithTierSchema on the
+      // Do NOT throw here  -  the tier system calls parseWithTierSchema on the
       // returned content, which handles truncated JSON via brace-balancing +
       // per-category Zod recovery.
     }

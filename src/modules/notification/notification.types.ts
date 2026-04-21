@@ -7,7 +7,7 @@
 // ============================================================================
 
 export type ExtendedNotificationType =
-  // ── Existing ──────────────────────────────────────────────────────────────
+  // -- Existing --------------------------------------------------------------
   | 'COMPLIANCE_ALERT'
   | 'POLICY_UPDATE'
   | 'DOCUMENT_PROCESSED'
@@ -24,27 +24,27 @@ export type ExtendedNotificationType =
   | 'TICKET_CREATED'
   | 'TICKET_STATUS_UPDATE'
   | 'TICKET_RESPONSE'
-  // ── Security ──────────────────────────────────────────────────────────────
+  // -- Security --------------------------------------------------------------
   | 'PASSWORD_CHANGED'
   | 'PASSWORD_CHANGE_FAILED'
   | 'LOGIN_NEW_DEVICE'
-  // ── Compliance ────────────────────────────────────────────────────────────
+  // -- Compliance ------------------------------------------------------------
   | 'CHECKLIST_GENERATED'
   | 'CHECKLIST_COMPLETED'
   | 'GAP_ANALYSIS_STARTED'
   | 'GAP_ANALYSIS_COMPLETED'
-  // ── Document vault ────────────────────────────────────────────────────────
+  // -- Document vault --------------------------------------------------------
   | 'DOCUMENT_UPLOADED'
   | 'DOCUMENT_DELETED'
-  // ── Account ───────────────────────────────────────────────────────────────
+  // -- Account ---------------------------------------------------------------
   | 'PROFILE_UPDATED'
   | 'ORGANIZATION_UPDATED'
   | 'SUBSCRIPTION_CHANGED'
   | 'SUBSCRIPTION_EXPIRING'
-  // ── Support ───────────────────────────────────────────────────────────────
+  // -- Support ---------------------------------------------------------------
   | 'SUPPORT_TICKET_CREATED'
   | 'SUPPORT_TICKET_UPDATED'
-  // ── Calendar events ───────────────────────────────────────────────────────
+  // -- Calendar events -------------------------------------------------------
   | 'EVENT_CREATED'
   | 'EVENT_REMINDER';
 

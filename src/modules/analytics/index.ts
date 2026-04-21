@@ -1,5 +1,5 @@
 /**
- * Analytics Module — Public API
+ * Analytics Module  -  Public API
  */
 
 export { analyticsModule, AnalyticsModule } from './analytics.module';

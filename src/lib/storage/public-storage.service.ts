@@ -22,7 +22,7 @@ const CONTENT_TYPE_TO_EXT: Record<AvatarContentType, string> = {
 /** Presigned PUT URL expiry: 5 minutes */
 const AVATAR_UPLOAD_EXPIRY_SECONDS = 300;
 
-/** Max avatar file size: 5 MB — kept for backward compat; canonical value is AVATAR_UPLOAD_LIMITS.maxFileSizeMB */
+/** Max avatar file size: 5 MB  -  kept for backward compat; canonical value is AVATAR_UPLOAD_LIMITS.maxFileSizeMB */
 export const AVATAR_MAX_FILE_SIZE = 5 * 1024 * 1024;
 
 /* -------------------------------------------------------------------------- */
@@ -46,7 +46,7 @@ export type AvatarUploadInput = z.infer<typeof avatarUploadSchema>;
 
 /**
  * Returns a new S3Client configured for the R2 public bucket.
- * A new instance is created per call — lightweight since R2 is stateless HTTP.
+ * A new instance is created per call  -  lightweight since R2 is stateless HTTP.
  */
 function getPublicR2Client(): S3Client {
   return new S3Client({
@@ -92,9 +92,9 @@ export function extractKeyFromAvatarUrl(avatarUrl: string): string | null {
  * Generates a presigned PUT URL so the browser can upload an avatar
  * directly to R2 without routing through the backend.
  *
- * @returns uploadUrl  — PUT directly to this URL with the file body
- * @returns publicUrl  — Permanent public URL once the upload completes
- * @returns key        — R2 object key (store alongside publicUrl if needed)
+ * @returns uploadUrl   -  PUT directly to this URL with the file body
+ * @returns publicUrl   -  Permanent public URL once the upload completes
+ * @returns key         -  R2 object key (store alongside publicUrl if needed)
  */
 export async function generateAvatarUploadUrl(
   userId: string,

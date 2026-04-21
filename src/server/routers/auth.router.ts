@@ -37,15 +37,15 @@ import {
   getAuthErrorMessage,
 } from '@/shared/errors/auth-error-messages';
 
-// ── helpers ───────────────────────────────────────────────────────────────
+// -- helpers ---------------------------------------------------------------
 
 function generateVerificationToken(): string {
   return randomBytes(32).toString('hex');
 }
 
 /**
- * Mask an email for structured logging — never log full addresses.
- * e.g. "kamau@equity.co.ke" → "k***@equity.co.ke"
+ * Mask an email for structured logging  -  never log full addresses.
+ * e.g. "kamau@equity.co.ke" -> "k***@equity.co.ke"
  */
 function maskEmail(email: string): string {
   const [local, domain] = email.split('@');
@@ -54,7 +54,7 @@ function maskEmail(email: string): string {
 }
 
 /**
- * Hash an IP address for logging — never log raw IPs in plaintext.
+ * Hash an IP address for logging  -  never log raw IPs in plaintext.
  */
 function hashIp(ip: string | undefined): string {
   if (!ip) return 'unknown';
@@ -72,7 +72,7 @@ function parseDeviceLabel(userAgent: string | undefined): string {
 }
 
 /**
- * Enforce a rate limit result — throws TRPCError(TOO_MANY_REQUESTS) when
+ * Enforce a rate limit result  -  throws TRPCError(TOO_MANY_REQUESTS) when
  * the limit is exceeded so the router's existing catch blocks handle it cleanly.
  */
 function enforceRateLimit(
@@ -85,11 +85,11 @@ function enforceRateLimit(
   }
 }
 
-// ── router ────────────────────────────────────────────────────────────────
+// -- router ----------------------------------------------------------------
 
 export const authRouter = router({
   /**
-   * Register — creates a Supabase auth user AND a Prisma user profile.
+   * Register  -  creates a Supabase auth user AND a Prisma user profile.
    * If Prisma creation fails, the Supabase user is deleted as a compensating
    * transaction so no orphaned auth records are left behind.
    */
@@ -105,7 +105,7 @@ export const authRouter = router({
 
         logger.info({ type: 'auth_register_attempt', email: maskEmail(input.email), role: input.role });
 
-        // ── Password policy enforcement (before any DB lookups) ──────────
+        // -- Password policy enforcement (before any DB lookups) ----------
         const pwValidation = validatePassword(input.password, input.email);
         if (!pwValidation.isValid) {
           if (!pwValidation.rules.notCommon) {
@@ -157,7 +157,7 @@ export const authRouter = router({
           : input.role;
 
         // Create Supabase auth user AND generate a native OTP verification link.
-        // admin.generateLink does NOT send any email — it returns the link so we
+        // admin.generateLink does NOT send any email  -  it returns the link so we
         // can embed it in our own custom React Email template.
         // The link is: https://<project>.supabase.co/auth/v1/verify?token=xxx&type=signup&redirect_to=<callback>
         const appCallbackUrl = process.env.APP_CALLBACK_URL || 'https://sheriabot.com/auth/callback';
@@ -184,7 +184,7 @@ export const authRouter = router({
           });
         }
 
-        // F3.2b — if Prisma creation fails, delete the Supabase user so there
+        // F3.2b  -  if Prisma creation fails, delete the Supabase user so there
         // are no orphaned auth records that block re-registration.
         let user: any;
         try {
@@ -226,7 +226,7 @@ export const authRouter = router({
           );
         }
 
-        // F3.1 — Create and link Organization if companyName was provided and user has no org yet.
+        // F3.1  -  Create and link Organization if companyName was provided and user has no org yet.
         // Awaited so that user.organizationId is set before the response and first session cache.
         if (input.companyName && !user.organizationId) {
           try {
@@ -274,7 +274,7 @@ export const authRouter = router({
     }),
 
   /**
-   * Login — proxies credentials to Supabase and returns Supabase session tokens.
+   * Login  -  proxies credentials to Supabase and returns Supabase session tokens.
    * Enforces email verification and account status before granting access.
    * The frontend must store and send the access_token as Bearer on all requests.
    */
@@ -284,7 +284,7 @@ export const authRouter = router({
       const startTime = Date.now();
 
       try {
-        // Rate limiting — count by hashed IP in addition to email for layered defence
+        // Rate limiting  -  count by hashed IP in addition to email for layered defence
         const rlResult = await authRateLimiter.login(input.email);
         if (!rlResult.allowed) {
           logger.warn({
@@ -478,7 +478,7 @@ export const authRouter = router({
     }),
 
   /**
-   * Logout — deletes DB session and invalidates the Upstash Redis user cache.
+   * Logout  -  deletes DB session and invalidates the Upstash Redis user cache.
    */
   logout: protectedProcedure.mutation(async ({ ctx }) => {
     try {
@@ -560,20 +560,20 @@ export const authRouter = router({
   }),
 
   /**
-   * Request password reset — F4.2 (complete rewrite).
+   * Request password reset  -  F4.2 (complete rewrite).
    *
    * Uses a fully custom Prisma token flow instead of the Supabase-native
    * resetPasswordForEmail(), which sends tokens in a format incompatible with
    * the /reset-password?token= frontend pattern.
    *
-   * Flow: generate token → store in Prisma → send via React Email template.
+   * Flow: generate token -> store in Prisma -> send via React Email template.
    * Always returns success to prevent email enumeration.
    */
   requestPasswordReset: publicProcedure
     .input(resetPasswordRequestSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        // F5.6 — rate limiting on password reset (was missing entirely)
+        // F5.6  -  rate limiting on password reset (was missing entirely)
         const rlResult = await authRateLimiter.resetPassword(input.email);
         enforceRateLimit(rlResult, 'Too many password reset requests. Please try again later.');
 
@@ -582,7 +582,7 @@ export const authRouter = router({
           select: { id: true, email: true, fullName: true, supabaseAuthId: true },
         });
 
-        // Always return success — never reveal whether an account exists
+        // Always return success  -  never reveal whether an account exists
         if (!user) {
           logger.info({ type: 'auth_password_reset_email_not_found', email: input.email });
           return {
@@ -627,9 +627,9 @@ export const authRouter = router({
 
   /**
    * Reset password with Prisma DB token.
-   * F4.5a — error-checks supabaseAdmin.auth.admin.updateUserById().
-   * F4.5b — revokes all Supabase sessions for the user after reset.
-   * F4.6  — sends a post-reset confirmation email.
+   * F4.5a  -  error-checks supabaseAdmin.auth.admin.updateUserById().
+   * F4.5b  -  revokes all Supabase sessions for the user after reset.
+   * F4.6   -  sends a post-reset confirmation email.
    */
   resetPassword: publicProcedure
     .input(resetPasswordSchema)
@@ -663,7 +663,7 @@ export const authRouter = router({
         if ((user as any).supabaseAuthId) {
           const supabaseAuthId = (user as any).supabaseAuthId as string;
 
-          // F4.5a — check the return value; if Supabase update fails log it but
+          // F4.5a  -  check the return value; if Supabase update fails log it but
           // don't silently swallow the error as it leaves credentials out of sync
           const { error: supabaseUpdateError } = await supabaseAdmin.auth.admin.updateUserById(
             supabaseAuthId,
@@ -681,7 +681,7 @@ export const authRouter = router({
             });
           }
 
-          // F4.5b — revoke all active Supabase sessions so the old password
+          // F4.5b  -  revoke all active Supabase sessions so the old password
           // can no longer be used on any logged-in device
           await supabaseAdmin.auth.admin.signOut(supabaseAuthId).catch((signOutErr: any) => {
             logger.warn({
@@ -703,7 +703,7 @@ export const authRouter = router({
           ]).catch(() => {});
         }
 
-        // F4.6 — notify the user that their password was changed
+        // F4.6  -  notify the user that their password was changed
         reactMailer.sendPasswordChangedEmail(user.email, {
           userName: user.fullName || user.email,
           loginUrl: `${appConfig.frontendUrl}/login`,
@@ -737,7 +737,7 @@ export const authRouter = router({
 
         const newAccountStatus = user.role === 'REGULATOR' ? 'pending_approval' : 'active';
 
-        // Confirm email in Supabase FIRST — if this fails the whole mutation fails,
+        // Confirm email in Supabase FIRST  -  if this fails the whole mutation fails,
         // keeping Prisma consistent (not marked verified when Supabase isn't).
         if ((user as any).supabaseAuthId) {
           const { error: supabaseError } = await supabaseAdmin.auth.admin.updateUserById(
@@ -792,7 +792,7 @@ export const authRouter = router({
     }),
 
   /**
-   * Resend email verification — F3.6 (converted from protectedProcedure to publicProcedure).
+   * Resend email verification  -  F3.6 (converted from protectedProcedure to publicProcedure).
    *
    * Previously required an authenticated session, which created a UX deadlock
    * once login enforces emailVerified. Now takes an email address and looks up
@@ -818,7 +818,7 @@ export const authRouter = router({
           select: { id: true, email: true, fullName: true, emailVerified: true },
         });
 
-        // Always return success — don't reveal whether the email is registered
+        // Always return success  -  don't reveal whether the email is registered
         if (!user) {
           return { success: true, message: 'If an account exists with this email, a verification link has been sent.' };
         }
@@ -866,7 +866,7 @@ export const authRouter = router({
    * access_token to identify the user and sync Prisma emailVerified.
    *
    * Flow:
-   *  1. User clicks Supabase link in email → Supabase verifies → redirects to
+   *  1. User clicks Supabase link in email -> Supabase verifies -> redirects to
    *     https://sheriabot.com/auth/callback#access_token=xxx&...
    *  2. Frontend /auth/callback page reads the session via supabase.auth.getSession()
    *  3. Frontend calls this procedure with the access_token
@@ -895,7 +895,7 @@ export const authRouter = router({
           throw new TRPCError({ code: 'NOT_FOUND', message: 'User account not found' });
         }
 
-        // 3. Idempotent — return early if already verified
+        // 3. Idempotent  -  return early if already verified
         if (user.emailVerified) {
           return {
             success: true,
@@ -941,7 +941,7 @@ export const authRouter = router({
     }),
 
   /**
-   * refreshToken — deprecated endpoint.
+   * refreshToken  -  deprecated endpoint.
    * Supabase handles token refresh on the frontend automatically.
    * Call supabase.auth.refreshSession() from your Supabase client instead.
    */

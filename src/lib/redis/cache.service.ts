@@ -16,10 +16,10 @@ export class CacheService {
     const startTime = Date.now();
 
     try {
-      // @upstash/redis auto-parses JSON responses — the returned value is
+      // @upstash/redis auto-parses JSON responses  -  the returned value is
       // already a deserialized object, NOT a raw string.  Using get<T>
       // directly avoids the double-deserialization that caused
-      // JSON.parse(object) → "[object Object]" is not valid JSON.
+      // JSON.parse(object) -> "[object Object]" is not valid JSON.
       const cached = await redis.get<T>(key);
 
       if (cached === null || cached === undefined) {
@@ -91,14 +91,15 @@ export class CacheService {
   }
 
   /**
-   * Invalidate cache by pattern
-   * Deletes all keys matching the pattern
-   * @param pattern Key pattern (e.g., "user:*")
+   * Invalidate cache by pattern.
+   * WARNING: Uses redis.keys() which is O(N) over the full keyspace.
+   * Only safe for test scripts against small key sets  -  do not call in
+   * production request paths. Use deleteTrackedSet() from redis/client.ts instead.
    */
   async invalidatePattern(pattern: string): Promise<number> {
     try {
       const keys = await redis.keys(pattern);
-      
+
       if (keys.length === 0) {
         return 0;
       }

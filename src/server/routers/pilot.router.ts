@@ -5,8 +5,8 @@
  * All procedures require ADMIN role (via adminProcedure).
  *
  * Procedures:
- *   pilot.getStats       — aggregate stats (totals, cohorts)
- *   pilot.listTesters    — per-tester rows with engagement metrics
+ *   pilot.getStats        -  aggregate stats (totals, cohorts)
+ *   pilot.listTesters     -  per-tester rows with engagement metrics
  */
 
 import { router, adminProcedure } from '../trpc/trpc';

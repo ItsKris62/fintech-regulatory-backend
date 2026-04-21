@@ -3,8 +3,8 @@
  * Tracks platform usage, generates compliance reports, and powers dashboards.
  *
  * Integrations:
- * - Prisma — aggregation queries (policies, queries, documents, audit logs)
- * - Redis  — dashboard caching + report job store
+ * - Prisma  -  aggregation queries (policies, queries, documents, audit logs)
+ * - Redis   -  dashboard caching + report job store
  */
 
 import { prisma } from '@/lib/prisma/client';
@@ -65,7 +65,7 @@ const { CACHE_TTL } = ANALYTICS_CONSTANTS;
 
 class AnalyticsModule {
   // ==========================================================================
-  // EVENT TRACKING (lightweight — writes to AuditLog)
+  // EVENT TRACKING (lightweight  -  writes to AuditLog)
   // ==========================================================================
 
   async trackEvent(params: TrackEventParams): Promise<void> {
@@ -826,7 +826,7 @@ class AnalyticsModule {
   }
 
   async getAPIUsageMetrics(_dateRange?: DateRange): Promise<APIUsageMetrics> {
-    // Placeholder — in production wire into request logging middleware
+    // Placeholder  -  in production wire into request logging middleware
     return {
       totalRequests: 0,
       successRate: 99.9,
@@ -1007,7 +1007,7 @@ class AnalyticsModule {
       createdAt: new Date(),
     };
 
-    // Persist schedule in Redis (30-day TTL — re-set on each run)
+    // Persist schedule in Redis (30-day TTL  -  re-set on each run)
     await redis.set(`analytics:schedule:${scheduleId}`, JSON.stringify(schedule), { ex: 30 * 24 * 3600 });
 
     logger.info({ type: 'report_scheduled', scheduleId, orgId: params.orgId });

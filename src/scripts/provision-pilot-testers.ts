@@ -37,7 +37,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PILOT_TESTERS } from './pilot-testers.config';
 import type { PilotTester } from './pilot-testers.config';
 
-// ── Clients (created directly to avoid dragging in the full app config) ───────
+// -- Clients (created directly to avoid dragging in the full app config) -------
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma  = new PrismaClient({ adapter } as never);
@@ -48,12 +48,12 @@ const supabaseAdmin = createClient(
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
 
-// ── CLI flags ─────────────────────────────────────────────────────────────────
+// -- CLI flags -----------------------------------------------------------------
 
 const args    = process.argv.slice(2);
 const DRY_RUN = !args.includes('--execute');
 
-// ── Result tracking ───────────────────────────────────────────────────────────
+// -- Result tracking -----------------------------------------------------------
 
 interface TesterResult {
   email:   string;
@@ -61,7 +61,7 @@ interface TesterResult {
   reason?: string;
 }
 
-// ── Core provisioning logic ───────────────────────────────────────────────────
+// -- Core provisioning logic ---------------------------------------------------
 
 async function provisionTester(tester: PilotTester, dryRun: boolean): Promise<TesterResult> {
   const { email, name, organization, cohort } = tester;
@@ -73,7 +73,7 @@ async function provisionTester(tester: PilotTester, dryRun: boolean): Promise<Te
   });
 
   if (existing) {
-    console.log(`  ⏭️  ${email} — already exists (userId: ${existing.id})`);
+    console.log(`  ⏭️  ${email}  -  already exists (userId: ${existing.id})`);
     return { email, status: 'skipped', reason: 'User record already exists in DB' };
   }
 
@@ -93,7 +93,7 @@ async function provisionTester(tester: PilotTester, dryRun: boolean): Promise<Te
 
   if (inviteError || !inviteData?.user?.id) {
     const reason = inviteError?.message ?? 'Supabase invite returned no user ID';
-    console.error(`  ❌ ${email} — Supabase invite failed: ${reason}`);
+    console.error(`  ❌ ${email}  -  Supabase invite failed: ${reason}`);
     return { email, status: 'failed', reason };
   }
 
@@ -118,7 +118,7 @@ async function provisionTester(tester: PilotTester, dryRun: boolean): Promise<Te
     });
   } catch (orgErr: unknown) {
     const reason = orgErr instanceof Error ? orgErr.message : String(orgErr);
-    console.error(`  ❌ ${email} — Organization create failed: ${reason}`);
+    console.error(`  ❌ ${email}  -  Organization create failed: ${reason}`);
     return { email, status: 'failed', reason: `Org create: ${reason}` };
   }
 
@@ -147,20 +147,20 @@ async function provisionTester(tester: PilotTester, dryRun: boolean): Promise<Te
       select: { id: true },
     });
 
-    console.log(`  ✅ ${email} — provisioned (userId: ${user.id}, orgId: ${org.id}, expires: ${pilotExpiresAt.toISOString().slice(0, 10)})`);
+    console.log(`  ✅ ${email}  -  provisioned (userId: ${user.id}, orgId: ${org.id}, expires: ${pilotExpiresAt.toISOString().slice(0, 10)})`);
     return { email, status: 'created' };
   } catch (userErr: unknown) {
     const reason = userErr instanceof Error ? userErr.message : String(userErr);
-    console.error(`  ❌ ${email} — User create failed: ${reason}`);
+    console.error(`  ❌ ${email}  -  User create failed: ${reason}`);
     return { email, status: 'failed', reason: `User create: ${reason}` };
   }
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// -- Main ----------------------------------------------------------------------
 
 async function main(): Promise<void> {
   console.log('\n========================================================');
-  console.log('  SheriaBot — Pilot Tester Provisioning');
+  console.log('  SheriaBot  -  Pilot Tester Provisioning');
   console.log('========================================================\n');
 
   if (PILOT_TESTERS.length === 0) {
@@ -170,10 +170,10 @@ async function main(): Promise<void> {
   }
 
   if (DRY_RUN) {
-    console.log('  MODE: DRY RUN — no Supabase invites or DB writes will occur.');
+    console.log('  MODE: DRY RUN  -  no Supabase invites or DB writes will occur.');
     console.log('  Pass --execute to apply changes.\n');
   } else {
-    console.log('  MODE: EXECUTE — Supabase invites and DB writes WILL occur.\n');
+    console.log('  MODE: EXECUTE  -  Supabase invites and DB writes WILL occur.\n');
   }
 
   // Group by cohort for the summary header
@@ -190,7 +190,7 @@ async function main(): Promise<void> {
     results.push(result);
   }
 
-  // ── Summary table ──────────────────────────────────────────────────────────
+  // -- Summary table ----------------------------------------------------------
   const created = results.filter((r) => r.status === 'created').length;
   const skipped = results.filter((r) => r.status === 'skipped').length;
   const failed  = results.filter((r) => r.status === 'failed').length;

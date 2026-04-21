@@ -543,8 +543,8 @@ export class StorageService {
    * Skips file-type validation since the buffer is generated server-side.
    * @param fileBuffer  DOCX buffer
    * @param filename    Desired filename (e.g. SheriaBot_Checklist_Acme_2026-03-20.docx)
-   * @param checklistId Checklist record ID — used as the R2 path segment
-   * @param userId      Uploader user ID — stored as metadata
+   * @param checklistId Checklist record ID  -  used as the R2 path segment
+   * @param userId      Uploader user ID  -  stored as metadata
    */
   async uploadChecklistExport(
     fileBuffer: Buffer,
@@ -589,8 +589,8 @@ export class StorageService {
    * Skips file-type validation since the buffer is generated server-side.
    * @param fileBuffer DOCX buffer
    * @param filename   Desired filename (e.g. SheriaBot_Gap_Analysis_Acme_2026-03-20.docx)
-   * @param analysisId GapAnalysis record ID — used as the R2 path segment
-   * @param userId     Uploader user ID — stored as metadata
+   * @param analysisId GapAnalysis record ID  -  used as the R2 path segment
+   * @param userId     Uploader user ID  -  stored as metadata
    */
   async uploadGapAnalysisExport(
     fileBuffer: Buffer,

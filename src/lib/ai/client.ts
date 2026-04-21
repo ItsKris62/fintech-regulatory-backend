@@ -76,7 +76,7 @@ async function trackCost(cost: number): Promise<void> {
     await redis.incrbyfloat(key, cost);
     await redis.expire(key, 86400 * 7); // Keep for 7 days
 
-    // Warn at 80 % and log at 100 % — the hard block happens in checkCostLimit()
+    // Warn at 80 % and log at 100 %  -  the hard block happens in checkCostLimit()
     // before the request is sent, so we only log here (the cost is already spent).
     const totalCost = parseFloat(await redis.get<string>(key) || '0');
     const limit = await getSystemConfigNumber('aiDailyCostLimit', aiConfig.costs.dailyLimit);
@@ -185,7 +185,7 @@ async function getCachedCompletion(
   cacheKey: string
 ): Promise<AICompletionResult | null> {
   try {
-    // @upstash/redis auto-parses JSON — get<T> returns T directly, no JSON.parse needed
+    // @upstash/redis auto-parses JSON  -  get<T> returns T directly, no JSON.parse needed
     const cached = await redis.get<AICompletionResult>(cacheKey);
 
     if (cached) {
@@ -206,7 +206,7 @@ async function getCachedCompletion(
       cacheKey,
       error: error instanceof Error ? error.message : String(error),
     });
-    return null; // Fail open — proceed without cache
+    return null; // Fail open  -  proceed without cache
   }
 }
 
@@ -222,7 +222,7 @@ async function cacheCompletion(
   ttl: number
 ): Promise<void> {
   try {
-    // Upstash uses set(..., { ex: ttl }) — setex is not supported; auto-serializes the object
+    // Upstash uses set(..., { ex: ttl })  -  setex is not supported; auto-serializes the object
     await redis.set(cacheKey, result, { ex: ttl });
 
     logger.info({
@@ -236,7 +236,7 @@ async function cacheCompletion(
       cacheKey,
       error: error instanceof Error ? error.message : String(error),
     });
-    // Fail open — cache is an optimisation, not critical path
+    // Fail open  -  cache is an optimisation, not critical path
   }
 }
 
@@ -475,7 +475,7 @@ export async function stream(
     const resetChunkTimeout = () => {
       if (chunkTimeoutId !== null) clearTimeout(chunkTimeoutId);
       chunkTimeoutId = setTimeout(() => {
-        abortReason = `AI stream hung — no data received for ${chunkTimeoutMs}ms`;
+        abortReason = `AI stream hung  -  no data received for ${chunkTimeoutMs}ms`;
         controller.abort();
       }, chunkTimeoutMs);
     };
