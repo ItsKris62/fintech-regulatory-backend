@@ -19,6 +19,9 @@ import { usageRouter } from '../routers/usage.router';
 import { trialRouter } from '../routers/trial.router';
 import { sessionRouter } from '../routers/session.router';
 import { pilotRouter } from '../routers/pilot.router';
+import { checklistRouter } from '../routers/checklist.router';
+import { complianceDashboardRouter } from '../routers/compliance-dashboard.router';
+import { gapAnalysisRouter } from '../routers/gap-analysis.router';
 
 /**
  * Root Application Router
@@ -64,6 +67,9 @@ export const appRouter = router({
   trial: trialRouter,
   session: sessionRouter,
   pilot: pilotRouter,
+  checklist: checklistRouter,
+  complianceDashboard: complianceDashboardRouter,
+  gapAnalysis: gapAnalysisRouter,
 });
 
 /**
