@@ -230,6 +230,19 @@ export const checklistRouter = router({
         }
       }
 
+      // B7.3 (TD-009): Redis dedup lock — prevents double-submit from starting two
+      // Claude AI pipelines simultaneously. Lock is keyed on userId+productType+stage
+      // so different checklist types are not blocked by each other. TTL = 60s
+      // (covers the full async pipeline initiation time). nx=true = only set if absent.
+      const checklistLockKey = `lock:checklist:${ctx.user!.id}:${input.productType}:${input.businessStage}`;
+      const lockAcquired = await redis.set(checklistLockKey, '1', { ex: 60, nx: true });
+      if (!lockAcquired) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'A checklist generation is already in progress. Please wait for it to complete.',
+        });
+      }
+
       try {
         logger.info({
           type: 'checklist_generate_async_start',
@@ -248,9 +261,15 @@ export const checklistRouter = router({
 
         await ctx.incrementUsage?.();
 
+        // Release lock after the pipeline is queued (not after it completes —
+        // the pipeline runs in the background after this response is sent).
+        await redis.del(checklistLockKey);
+
         logger.info({ type: 'checklist_generate_async_accepted', userId: ctx.user!.id, checklistId: result.checklistId });
         return result;
       } catch (error: unknown) {
+        // Always release the lock on error so the user can retry immediately.
+        await redis.del(checklistLockKey).catch(() => {});
         const msg = error instanceof Error ? error.message : 'Failed to initiate checklist generation';
         logger.error({ type: 'checklist_generate_async_error', userId: ctx.user!.id, error: msg });
         if (error instanceof TRPCError) throw error;

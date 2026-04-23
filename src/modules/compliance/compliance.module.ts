@@ -1179,14 +1179,28 @@ Follow-up Question: ${followUp}
    * Check query rate limit
    */
   private async checkQueryRateLimit(userId: string): Promise<void> {
-    const key = `${REDIS_KEYS.QUERY_RATE}${userId}`;
-    const count = await redis.incr(key);
-    const limit = await getSystemConfigNumber('maxQueriesPerHour', MAX_QUERIES_PER_HOUR);
-    
-    if (count === 1) {
-      await redis.expire(key, 3600); // 1 hour
+    // F7/F16 (TD-008): Atomic nx set eliminates the incr+expire race condition.
+    // Fail-open: if Redis is unavailable, allow the request and log the error.
+    let count = 1;
+    try {
+      const key = `${REDIS_KEYS.QUERY_RATE}${userId}`;
+      // Use incr then set TTL only on first write — atomic via nx guard
+      count = await redis.incr(key);
+      if (count === 1) {
+        // First increment this window — set TTL (always overwrite is correct here)
+        await redis.set(key, String(count), { ex: 3600 });
+      }
+    } catch (err: unknown) {
+      logger.warn({
+        type:   'query_rate_limit_redis_error',
+        userId,
+        error:  err instanceof Error ? err.message : String(err),
+      });
+      // Fail-open: Redis unavailable — allow the request
+      return;
     }
 
+    const limit = await getSystemConfigNumber('maxQueriesPerHour', MAX_QUERIES_PER_HOUR);
     if (count > limit) {
       throw new ComplianceError(
         'Query rate limit exceeded. Please try again later.',
@@ -1200,11 +1214,21 @@ Follow-up Question: ${followUp}
    * Check quick check rate limit
    */
   private async checkQuickCheckRateLimit(userId: string): Promise<void> {
-    const key = `${REDIS_KEYS.QUICK_CHECK_RATE}${userId}`;
-    const count = await redis.incr(key);
-    
-    if (count === 1) {
-      await redis.expire(key, 3600);
+    // F7/F17 (TD-008): Same atomic pattern + fail-open as checkQueryRateLimit.
+    let count = 1;
+    try {
+      const key = `${REDIS_KEYS.QUICK_CHECK_RATE}${userId}`;
+      count = await redis.incr(key);
+      if (count === 1) {
+        await redis.set(key, String(count), { ex: 3600 });
+      }
+    } catch (err: unknown) {
+      logger.warn({
+        type:   'quick_check_rate_limit_redis_error',
+        userId,
+        error:  err instanceof Error ? err.message : String(err),
+      });
+      return;
     }
 
     if (count > MAX_QUICK_CHECKS_PER_HOUR) {

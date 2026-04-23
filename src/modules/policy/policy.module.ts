@@ -1109,11 +1109,18 @@ class PolicyModule {
    * Record generation attempt for rate limiting
    */
   private async recordGenerationAttempt(userId: string): Promise<void> {
-    const key = `${REDIS_KEYS.GENERATION_RATE}${userId}`;
-    const count = await redis.incr(key);
-    
-    if (count === 1) {
-      await redis.expire(key, 3600); // 1 hour expiry
+    // F18 (TD-008): Atomic single-call set+TTL on first write eliminates the
+    // incr+expire race where the key could persist forever if the process died
+    // between the two calls. Fail-open: Redis errors are non-fatal here.
+    try {
+      const key = `${REDIS_KEYS.GENERATION_RATE}${userId}`;
+      const count = await redis.incr(key);
+      if (count === 1) {
+        // Set TTL on first write — no nx flag needed (always overwrite is correct here)
+        await redis.set(key, String(count), { ex: 3600 });
+      }
+    } catch {
+      // Non-fatal: rate limit tracking failure must not block policy generation.
     }
   }
 

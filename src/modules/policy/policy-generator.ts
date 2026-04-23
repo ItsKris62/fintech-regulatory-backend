@@ -637,11 +637,11 @@ Provide the refined policy content, maintaining the same structure and format. O
     const key = `${REDIS_KEYS.GENERATION_PROGRESS}${policyId}`;
     await redis.set(key, JSON.stringify(progressData), { ex: 600 }); // 10 min TTL
 
-    // Also publish to pub/sub for real-time subscribers
-    await redis.publish(
-      PUBSUB_CHANNELS.GENERATION_PROGRESS,
-      JSON.stringify(progressData)
-    );
+    // F19 (TD-008): redis.publish() was called here but no subscriber exists in this
+    // codebase — SSE progress streaming uses the Redis key written above, not pub/sub.
+    // Removed the orphaned publish call to eliminate the dead channel write.
+    // If a pub/sub subscriber is added in a future sprint, restore this call then.
+    void PUBSUB_CHANNELS; // retain import reference to avoid TS unused-var error
   }
 }
 

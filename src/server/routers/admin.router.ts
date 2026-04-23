@@ -1598,6 +1598,12 @@ export const adminRouter = router({
     .mutation(async ({ input, ctx }) => {
       try {
         const user = await adminModule.updateUserRole(ctx.user!.id, input.userId, input.role);
+
+        // F9 (TD-008): Invalidate plan context cache so the role change takes effect
+        // on the user's next request without waiting for the 5-minute TTL.
+        const { planCtxCacheKey } = await import('@/modules/trial');
+        await redis.del(planCtxCacheKey(input.userId)).catch(() => { /* non-fatal */ });
+
         logger.info({ type: 'admin_update_user_role', adminId: ctx.user!.id, userId: input.userId, role: input.role });
         return user;
       } catch (error: any) {
@@ -1660,6 +1666,18 @@ export const adminRouter = router({
     .mutation(async ({ input, ctx }) => {
       try {
         const result = await adminModule.updateOrganizationPlan(ctx.user!.id, input.orgId, input.plan as never);
+
+        // F9 (TD-008): Invalidate plan context cache for all users in this org so the
+        // tier change takes effect on their next request without waiting for the 5-minute TTL.
+        const { planCtxCacheKey } = await import('@/modules/trial');
+        const orgUsers = await ctx.prisma.user.findMany({
+          where:  { organizationId: input.orgId },
+          select: { id: true },
+        });
+        await Promise.all(
+          orgUsers.map((u) => redis.del(planCtxCacheKey(u.id)).catch(() => { /* non-fatal */ }))
+        );
+
         logger.info({ type: 'admin_update_org_plan', adminId: ctx.user!.id, orgId: input.orgId, plan: input.plan });
         return result;
       } catch (error: any) {
@@ -2003,6 +2021,172 @@ export const adminRouter = router({
       }
     }),
 
+  // --- BULK USER ACTIONS (TD-007) ------------------------------------------
+
+  /**
+   * Suspend or activate multiple users in a single call.
+   * Wrapped in a Prisma transaction; each user's plan cache is NOT invalidated
+   * here (status change does not affect plan context).
+   *
+   * @admin
+   */
+  bulkUpdateUserStatus: adminProcedure
+    .input(
+      z.object({
+        userIds: z.array(z.string().min(1)).min(1).max(100),
+        status:  z.enum(['ACTIVE', 'SUSPENDED']),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        await ctx.prisma.user.updateMany({
+          where: { id: { in: input.userIds }, role: { not: 'ADMIN' } },
+          data:  { status: input.status as never },
+        });
+
+        // Audit log entry per batch (not per user — avoids N writes)
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId:     ctx.user!.id,
+            action:     `BULK_USER_STATUS_${input.status}`,
+            entityType: 'User',
+            entityId:   'bulk',
+            metadata:   { userIds: input.userIds, status: input.status, count: input.userIds.length },
+          },
+        });
+
+        logger.info({
+          type:    'admin_bulk_user_status_updated',
+          adminId: ctx.user!.id,
+          status:  input.status,
+          count:   input.userIds.length,
+        });
+
+        return { success: true, count: input.userIds.length };
+      } catch (error: unknown) {
+        if (error instanceof TRPCError) throw error;
+        const message = error instanceof Error ? error.message : 'Failed to update user statuses';
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message, cause: error });
+      }
+    }),
+
+  /**
+   * Change the subscription tier for multiple users' organizations.
+   * Invalidates the Redis plan context cache for each affected user.
+   *
+   * @admin
+   */
+  bulkUpdateUserTier: adminProcedure
+    .input(
+      z.object({
+        userIds: z.array(z.string().min(1)).min(1).max(100),
+        tier:    z.enum(['REGULATOR', 'STARTUP', 'BUSINESS', 'ENTERPRISE']),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        // Resolve org IDs for the selected users
+        const users = await ctx.prisma.user.findMany({
+          where:  { id: { in: input.userIds } },
+          select: { id: true, organizationId: true },
+        });
+
+        const orgIds = [...new Set(users.map((u) => u.organizationId).filter((id): id is string => id !== null))];
+
+        if (orgIds.length > 0) {
+          // Update all affected orgs
+          await ctx.prisma.organization.updateMany({
+            where: { id: { in: orgIds } },
+            data:  { subscriptionTier: input.tier, plan: input.tier as never },
+          });
+
+          // Invalidate plan cache for every affected user
+          const { planCtxCacheKey } = await import('@/modules/trial');
+          await Promise.all(
+            users.map((u) => redis.del(planCtxCacheKey(u.id)).catch(() => { /* non-fatal */ }))
+          );
+        }
+
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId:     ctx.user!.id,
+            action:     'BULK_USER_TIER_CHANGE',
+            entityType: 'User',
+            entityId:   'bulk',
+            metadata:   { userIds: input.userIds, tier: input.tier, orgIds, count: input.userIds.length },
+          },
+        });
+
+        logger.info({
+          type:    'admin_bulk_user_tier_updated',
+          adminId: ctx.user!.id,
+          tier:    input.tier,
+          count:   input.userIds.length,
+          orgIds,
+        });
+
+        return { success: true, count: input.userIds.length };
+      } catch (error: unknown) {
+        if (error instanceof TRPCError) throw error;
+        const message = error instanceof Error ? error.message : 'Failed to update user tiers';
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message, cause: error });
+      }
+    }),
+
+  // --- FAILED PAYMENTS (TD-006) ---------------------------------------------
+
+  /**
+   * Returns payments with status FAILED, paginated.
+   * Used by the admin billing page Failed Payments panel.
+   *
+   * @admin
+   */
+  getFailedPayments: adminProcedure
+    .input(
+      z.object({
+        limit:  z.number().int().min(1).max(100).default(50),
+        cursor: z.string().optional(), // createdAt ISO string for cursor pagination
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const where = { status: 'FAILED' as const };
+        const [items, total] = await Promise.all([
+          ctx.prisma.payment.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            take: input.limit,
+            ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+            include: { org: { select: { name: true } } },
+          }),
+          ctx.prisma.payment.count({ where }),
+        ]);
+
+        const mapped = items.map((p) => ({
+          id:               p.id,
+          orgId:            p.orgId,
+          orgName:          p.org.name,
+          provider:         String(p.provider),
+          amount:           Number(p.amount) / 100, // minor -> major units (KES)
+          currency:         p.currency,
+          status:           String(p.status),
+          invoiceNumber:    p.invoiceNumber ?? null,
+          subscriptionPlan: p.subscriptionPlan ?? null,
+          description:      p.description ?? null,
+          metadata:         p.metadata as Record<string, unknown> | null,
+          paidAt:           p.paidAt ?? null,
+          createdAt:        p.createdAt,
+        }));
+
+        logger.info({ type: 'admin_failed_payments_retrieved', adminId: ctx.user!.id, count: mapped.length });
+        return { items: mapped, total, nextCursor: items.length === input.limit ? items[items.length - 1]?.id : null };
+      } catch (error: unknown) {
+        if (error instanceof TRPCError) throw error;
+        const message = error instanceof Error ? error.message : 'Failed to get failed payments';
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message, cause: error });
+      }
+    }),
+
   // --- ANALYTICS CSV EXPORT -------------------------------------------------
 
   /**
@@ -2067,17 +2251,20 @@ export const adminRouter = router({
     .mutation(async ({ input, ctx }) => {
       try {
         const { format, ...rawFilters } = input;
-        const result = await adminModule.exportAuditLogs(
-          {
-            userId:     rawFilters.userId,
-            action:     rawFilters.action,
-            entityType: rawFilters.entityType,
-            dateFrom:   rawFilters.dateFrom ? new Date(rawFilters.dateFrom) : undefined,
-            dateTo:     rawFilters.dateTo   ? new Date(rawFilters.dateTo)   : undefined,
-          },
+        const filters = {
+          userId:     rawFilters.userId,
+          action:     rawFilters.action,
+          entityType: rawFilters.entityType,
+          dateFrom:   rawFilters.dateFrom ? new Date(rawFilters.dateFrom) : undefined,
+          dateTo:     rawFilters.dateTo   ? new Date(rawFilters.dateTo)   : undefined,
+        };
+        const result = await adminModule.exportAuditLogs(filters, format);
+        // Write to DB audit log: action, adminId, rowCount, filters, format
+        await adminModule.writeAuditLogEntry(ctx.user!.id, 'ADMIN_AUDIT_LOG_EXPORT', 'AuditLog', 'export', {
           format,
-        );
-        logger.info({ type: 'admin_audit_log_export', adminId: ctx.user!.id, format });
+          filters: rawFilters,
+        });
+        logger.info({ type: 'admin_audit_log_export', adminId: ctx.user!.id, format, filters: rawFilters });
         return result;
       } catch (error: any) {
         if (error instanceof TRPCError) throw error;

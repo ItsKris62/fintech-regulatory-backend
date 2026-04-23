@@ -1207,8 +1207,18 @@ class AuthModule {
     // Keep only last N passwords
     history = history.slice(0, AUTH_CONSTANTS.PASSWORD_HISTORY_COUNT);
     
-    // Store indefinitely (or until explicitly cleaned up)
-    await redis.set(key, JSON.stringify(history));
+    // F1 (TD-008): 365-day TTL — password history must not persist forever in Redis.
+    // F15 (TD-008): Wrapped in try/catch — a Redis failure must NOT block the password change.
+    try {
+      await redis.set(key, JSON.stringify(history), { ex: 60 * 60 * 24 * 365 });
+    } catch (err: unknown) {
+      logger.warn({
+        type:   'password_history_write_failed',
+        userId,
+        error:  err instanceof Error ? err.message : String(err),
+      });
+      // Non-fatal: password change proceeds even if history write fails.
+    }
   }
 }
 

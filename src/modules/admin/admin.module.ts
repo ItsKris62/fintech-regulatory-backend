@@ -1928,10 +1928,11 @@ class AdminModule {
   // ==========================================================================
 
   /** Maximum rows fetched for each export format (hardcoded  -  not configurable). */
-  private static readonly AUDIT_LOG_CSV_MAX_ROWS  = 10_000;
+  private static readonly AUDIT_LOG_CSV_MAX_ROWS  = 50_000;
   private static readonly AUDIT_LOG_DOCX_MAX_ROWS =  2_000;
-  /** Presigned URL TTL in seconds (60 minutes). */
-  private static readonly AUDIT_LOG_EXPORT_URL_TTL = 3_600;
+
+  /** 15-minute presigned URL TTL for audit log exports (TD-005). */
+  private static readonly AUDIT_LOG_EXPORT_URL_TTL = 900;
 
   /**
    * Generates a server-side audit log export, uploads it to R2, and returns
@@ -2280,6 +2281,21 @@ class AdminModule {
     } catch (err) {
       logger.warn({ type: 'org_stats_cache_invalidation_failed', err: String(err) });
     }
+  }
+
+  /**
+   * Public facade for the private writeAuditLog helper.
+   * Use this from routers that need to record an audit entry without going
+   * through a full service method (e.g., the export procedures).
+   */
+  async writeAuditLogEntry(
+    adminId: string,
+    action: string,
+    entityType: string,
+    entityId: string,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    return this.writeAuditLog(adminId, action, entityType, entityId, metadata);
   }
 
   private async writeAuditLog(

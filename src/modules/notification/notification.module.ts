@@ -305,8 +305,9 @@ class NotificationModule {
       data: { read: true, readAt: new Date() },
     });
 
-    await redis.set(unreadCountKey(userId), '0');
-    await redis.expire(unreadCountKey(userId), CACHE_TTL.UNREAD_COUNT);
+    // F8 (TD-008): Atomic single-call set+TTL — eliminates the two-step race where
+    // the key could persist forever if the process died between set and expire.
+    await redis.set(unreadCountKey(userId), '0', { ex: CACHE_TTL.UNREAD_COUNT });
 
     logger.info({ type: 'all_notifications_marked_read', userId, count: result.count });
     return result.count;
