@@ -65,6 +65,8 @@ model User {
   postPilotTier            String    @default("REGULATOR") // tier to revert to after pilot expires
   pilotConvertedAt         DateTime?               // set when pilot converts to a paid plan
   pilotEvents              PilotEvent[]
+  publishedAlerts          RegulatoryAlert[]
+  alertNotifications       AlertNotification[]
 
   // Account deletion fields (GDPR compliant scheduled deletion)
   deletionScheduledAt      DateTime?
@@ -128,6 +130,8 @@ model Organization {
   usageRecords            UsageRecord[]
   usagePeriods            UsagePeriod[]
   payments                Payment[]
+  alertSubscription       AlertSubscription?
+  alertNotifications      AlertNotification[]
 
   @@index([name])
   @@index([verificationStatus])
@@ -1205,4 +1209,69 @@ model PilotEvent {
 
   @@index([userId])
   @@index([createdAt])
+}
+
+// ============================================================================
+// Regulatory Alerts System
+// ============================================================================
+
+model RegulatoryAlert {
+  id             String    @id @default(cuid())
+  title          String
+  summary        String
+  body           String
+  sourceUrl      String?
+  regulatoryBody String
+  category       String
+  severity       String    @default("MEDIUM")
+  effectiveDate  DateTime?
+  publishedAt    DateTime  @default(now())
+  expiresAt      DateTime?
+  isActive       Boolean   @default(true)
+  publishedById  String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  publishedBy   User                @relation(fields: [publishedById], references: [id])
+  notifications AlertNotification[]
+
+  @@index([regulatoryBody])
+  @@index([severity])
+  @@index([isActive, publishedAt(sort: Desc)])
+}
+
+model AlertSubscription {
+  id                String   @id @default(cuid())
+  organizationId    String   @unique
+  regulatoryBodies  String[]
+  categories        String[]
+  severityThreshold String   @default("LOW")
+  emailEnabled      Boolean  @default(true)
+  inAppEnabled      Boolean  @default(true)
+  emailFrequency    String   @default("REALTIME")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model AlertNotification {
+  id             String    @id @default(cuid())
+  alertId        String
+  userId         String
+  organizationId String
+  channel        String
+  status         String    @default("PENDING")
+  readAt         DateTime?
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  alert        RegulatoryAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([alertId, userId, channel])
+  @@index([userId, status])
+  @@index([userId, channel])
+  @@index([organizationId])
 }

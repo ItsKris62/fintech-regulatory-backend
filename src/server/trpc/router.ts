@@ -22,6 +22,7 @@ import { pilotRouter } from '../routers/pilot.router';
 import { checklistRouter } from '../routers/checklist.router';
 import { complianceDashboardRouter } from '../routers/compliance-dashboard.router';
 import { gapAnalysisRouter } from '../routers/gap-analysis.router';
+import { alertRouter } from '../routers/alert.router';
 
 /**
  * Root Application Router
@@ -70,6 +71,7 @@ export const appRouter = router({
   checklist: checklistRouter,
   complianceDashboard: complianceDashboardRouter,
   gapAnalysis: gapAnalysisRouter,
+  alert: alertRouter,
 });
 
 /**

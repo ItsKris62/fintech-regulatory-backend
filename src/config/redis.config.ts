@@ -96,6 +96,7 @@ export const redisConfig = {
     checklistProgress: 'checklist:progress:',
     systemEvents: 'system:events',
     userEvents: 'user:events:',
+    alertUser: 'alerts:user:',
   },
 
   /**
@@ -306,6 +307,15 @@ export function getPolicyProgressChannel(policyId: string): string {
  */
 export function getChecklistProgressChannel(checklistId: string): string {
   return `${redisConfig.channels.checklistProgress}${checklistId}`;
+}
+
+/**
+ * Build alert SSE channel for a user
+ * @param userId User ID
+ * @returns Pub/Sub channel name
+ */
+export function getAlertChannel(userId: string): string {
+  return `${redisConfig.channels.alertUser}${userId}`;
 }
 
 /**

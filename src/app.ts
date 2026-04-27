@@ -14,6 +14,7 @@ import { registerSecurityMiddleware } from './middleware/security.middleware';
 import { stripeWebhookService } from './lib/stripe/webhook.service';
 import { intaSendWebhookService } from './lib/intasend/webhook.service';
 import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
+import { alertPubSub } from './lib/redis/pubsub';
 
 /**
  * Zod schema for IntaSend webhook payloads.
@@ -290,6 +291,82 @@ export async function buildApp(): Promise<FastifyInstance> {
     description: 'AI-Powered Regulatory Compliance Platform for Kenya',
     endpoints: { health: '/health', healthDetailed: '/health/detailed', trpc: '/trpc' },
   }));
+
+  // -- Regulatory Alerts SSE stream -----------------------------------------
+  // EventSource does not support custom request headers, so the Supabase JWT
+  // is accepted as a ?token= query parameter for this route only.
+  app.get<{ Querystring: { token?: string } }>(
+    '/api/alerts/stream',
+    async (request, reply) => {
+      const token = request.query.token;
+
+      if (!token) {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+
+      let userId: string;
+      try {
+        const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
+        if (authError || !authData?.user?.id) {
+          return reply.status(401).send({ error: 'Unauthorized' });
+        }
+
+        const dbUser = await prisma.user.findUnique({
+          where: { supabaseAuthId: authData.user.id },
+          select: { id: true },
+        });
+
+        if (!dbUser) {
+          return reply.status(401).send({ error: 'Unauthorized' });
+        }
+
+        userId = dbUser.id;
+      } catch (err: unknown) {
+        logger.warn({
+          type: 'alert_sse_auth_error',
+          error: err instanceof Error ? err.message : String(err),
+          ip: request.ip,
+        });
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+
+      // Hand the socket to raw Node — Fastify must not finalize the response.
+      reply.hijack();
+
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      // Confirm connection to the client.
+      reply.raw.write('data: {"type":"CONNECTED"}\n\n');
+
+      // Subscribe to this user's alert channel.
+      const unsubscribe = await alertPubSub.subscribe(userId, (event) => {
+        if (!reply.raw.destroyed) {
+          reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
+      });
+
+      // Keep-alive comment every 30 s prevents proxy / load-balancer timeouts.
+      const keepAliveInterval = setInterval(() => {
+        if (!reply.raw.destroyed) {
+          reply.raw.write(': ping\n\n');
+        }
+      }, 30000);
+
+      // Cleanup — must call unsubscribe() to avoid leaking EventEmitter listeners.
+      request.raw.on('close', () => {
+        clearInterval(keepAliveInterval);
+        unsubscribe();
+        logger.info({ type: 'alert_sse_disconnected', userId });
+      });
+
+      logger.info({ type: 'alert_sse_connected', userId });
+    },
+  );
 
   // -- Catch-all error handler ----------------------------------------------
   app.setErrorHandler<Error>((error, request, reply) => {

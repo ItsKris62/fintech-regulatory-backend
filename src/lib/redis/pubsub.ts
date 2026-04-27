@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { getNotificationChannel, getPolicyProgressChannel, getChecklistProgressChannel, redisConfig } from '@/config/redis.config';
+import { getNotificationChannel, getPolicyProgressChannel, getChecklistProgressChannel, getAlertChannel, redisConfig } from '@/config/redis.config';
 import { logger } from '@/utils/logger';
 
 /**
@@ -125,6 +125,29 @@ export const checklistProgressPubSub = {
   },
   subscribe: async (checklistId: string, handler: EventHandler<ChecklistProgressEvent>) => {
     return pubsub.subscribe(getChecklistProgressChannel(checklistId), handler);
+  },
+};
+
+export type AlertSSEEvent = {
+  type: 'NEW_ALERT';
+  alertId: string;
+  title: string;
+  severity: string;
+  regulatoryBody: string;
+  publishedAt: string;
+  timestamp: number;
+};
+
+export const alertPubSub = {
+  publish: async (userId: string, event: Omit<AlertSSEEvent, 'timestamp'>) => {
+    const channel = getAlertChannel(userId);
+    await pubsub.publish<AlertSSEEvent>(channel, { ...event, timestamp: Date.now() });
+  },
+  subscribe: async (userId: string, handler: EventHandler<AlertSSEEvent>) => {
+    return pubsub.subscribe(getAlertChannel(userId), handler);
+  },
+  unsubscribe: async (userId: string, handler: EventHandler<AlertSSEEvent>) => {
+    return pubsub.unsubscribe(getAlertChannel(userId), handler);
   },
 };
 

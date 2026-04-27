@@ -55,6 +55,9 @@ export type { PolicyDocumentReadyEmailProps } from './templates/compliance/Polic
 export { DocumentIngestionCompleteEmail, DocumentIngestionCompleteEmailSubject } from './templates/compliance/DocumentIngestionCompleteEmail';
 export type { DocumentIngestionCompleteEmailProps } from './templates/compliance/DocumentIngestionCompleteEmail';
 
+export { RegulatoryAlertEmail, getRegulatoryAlertEmailSubject } from './templates/compliance/RegulatoryAlertEmail';
+export type { RegulatoryAlertEmailProps } from './templates/compliance/RegulatoryAlertEmail';
+
 // Account templates
 export { InvitationEmail, InvitationEmailSubject } from './templates/account/InvitationEmail';
 export type { InvitationEmailProps } from './templates/account/InvitationEmail';

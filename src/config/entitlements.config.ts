@@ -23,6 +23,15 @@ export interface StorageEntitlement {
 
 export type ApiAccessEntitlement = false | QuotaEntitlement;
 
+export interface AlertEntitlement {
+  /** -1 = unlimited history; n = days of history accessible */
+  historyDays: number;
+  /** null = no email alerts for this tier */
+  emailFrequency: 'REALTIME' | 'DAILY' | 'WEEKLY' | null;
+  customFilters: boolean;
+  aiSummary: boolean;
+}
+
 // ============================================================================
 // Per-plan entitlement shape
 // ============================================================================
@@ -40,6 +49,9 @@ export interface PlanEntitlementConfig {
   teamCollaboration: boolean;
   regulatoryDashboard: boolean;
   regulatoryAlerts: boolean;
+
+  /** Rich alert entitlements — history window, email frequency, filters */
+  alerts?: AlertEntitlement;
 
   /** Compliance Calendar -- create/manage org-scoped deadline events */
   complianceCalendar: boolean;
@@ -83,6 +95,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     false,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
+    alerts:                { historyDays: -1, emailFrequency: 'REALTIME', customFilters: true, aiSummary: true },
     complianceCalendar:    false,
     documentRepository:    { limitMB: 0 }, // no document repo
     maxSeats:              1,
@@ -106,6 +119,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     false,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
+    alerts:                { historyDays: 90, emailFrequency: 'WEEKLY', customFilters: false, aiSummary: false },
     complianceCalendar:    true,
     documentRepository:    { limitMB: 1024 }, // 1 GB
     maxSeats:              1,
@@ -129,6 +143,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     true,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
+    alerts:                { historyDays: 365, emailFrequency: 'DAILY', customFilters: true, aiSummary: true },
     complianceCalendar:    true,
     documentRepository:    { limitMB: 10240 }, // 10 GB
     maxSeats:              5,
@@ -152,6 +167,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     true,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
+    alerts:                { historyDays: -1, emailFrequency: 'REALTIME', customFilters: true, aiSummary: true },
     complianceCalendar:    true,
     documentRepository:    { limitMB: -1 }, // unlimited
     maxSeats:              -1,              // unlimited
@@ -183,6 +199,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     false,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
+    alerts:                { historyDays: 7, emailFrequency: null, customFilters: false, aiSummary: false },
     complianceCalendar:    true,
     documentRepository:    { limitMB: 1024 }, // same as STARTUP -- 1 GB
     maxSeats:              1,

@@ -55,6 +55,8 @@ import {
   PolicyDocumentReadyEmailSubject,
   DocumentIngestionCompleteEmail,
   DocumentIngestionCompleteEmailSubject,
+  RegulatoryAlertEmail,
+  getRegulatoryAlertEmailSubject,
   InvitationEmail,
   InvitationEmailSubject,
   AccountApprovedEmail,
@@ -106,6 +108,7 @@ import type {
   ComplianceQueryReadyEmailProps,
   PolicyDocumentReadyEmailProps,
   DocumentIngestionCompleteEmailProps,
+  RegulatoryAlertEmailProps,
   InvitationEmailProps,
   AccountApprovedEmailProps,
   AccountRejectedEmailProps,
@@ -359,6 +362,18 @@ class ReactMailerService {
       element: React.createElement(PolicyDocumentReadyEmail, props),
       tags: [{ name: 'category', value: 'compliance' }, { name: 'type', value: 'policy_ready' }],
       logType: 'policy_document_ready_email',
+    });
+  }
+
+  // -- REGULATORY ALERT EMAILS (governed by AlertSubscription preferences) --
+
+  async sendRegulatoryAlertEmail(to: string, props: RegulatoryAlertEmailProps): Promise<void> {
+    await sendReactEmail({
+      to,
+      subject: getRegulatoryAlertEmailSubject(props.severity, props.regulatoryBody, props.alertTitle),
+      element: React.createElement(RegulatoryAlertEmail, props),
+      tags: [{ name: 'category', value: 'compliance' }, { name: 'type', value: 'regulatory_alert' }],
+      logType: 'regulatory_alert_email',
     });
   }
 
