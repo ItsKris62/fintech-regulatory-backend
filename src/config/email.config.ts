@@ -118,7 +118,7 @@ export const emailConfig = {
     primaryColor: '#10B981', // Tailwind Green 500 (regulatory/compliance theme)
     companyName: 'SheriaBot',
     companyAddress: 'Nairobi, Kenya',
-    supportEmail: 'support@sheriabot.co.ke',
+    supportEmail: process.env.EMAIL_SUPPORT_ADDRESS || 'support@sheriabot.com',
     websiteUrl: appConfig.frontendUrl,
   },
 

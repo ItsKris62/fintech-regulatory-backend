@@ -71,6 +71,15 @@ const envSchema = z.object({
   INTASEND_PUBLISHABLE_KEY: z.string().optional().default(''),
   INTASEND_SECRET_KEY: z.string().optional().default(''),
   INTASEND_IS_TEST: z.string().optional().default('true'),
+
+  // Marketing & Outreach Module
+  RESEND_MARKETING_FROM_EMAIL: z.string().email().default('marketing@sheriabot.com'),
+  RESEND_MARKETING_FROM_NAME: z.string().min(1).default('SheriaBot'),
+  RESEND_WEBHOOK_SECRET: z.string().min(32, 'RESEND_WEBHOOK_SECRET must be at least 32 chars'),
+  MARKETING_TOKEN_HMAC_SECRET: z.string().min(64, 'MARKETING_TOKEN_HMAC_SECRET must be at least 64 chars'),
+  APP_PUBLIC_URL: z.string().url(),
+  ADMIN_NOTIFICATION_EMAIL: z.string().email().default('hello@sheriabot.com'),
+  PILOT_INVITATION_EXPIRY_DAYS: z.coerce.number().int().min(1).max(90).default(14),
 });
 
 /**
@@ -188,6 +197,17 @@ export const appConfig = {
     publishableKey: env.INTASEND_PUBLISHABLE_KEY,
     secretKey: env.INTASEND_SECRET_KEY,
     isTest: env.INTASEND_IS_TEST === 'true',
+  },
+
+  // Marketing & Outreach Module
+  marketing: {
+    fromEmail: env.RESEND_MARKETING_FROM_EMAIL,
+    fromName: env.RESEND_MARKETING_FROM_NAME,
+    webhookSecret: env.RESEND_WEBHOOK_SECRET,
+    tokenHmacSecret: env.MARKETING_TOKEN_HMAC_SECRET,
+    appPublicUrl: env.APP_PUBLIC_URL,
+    adminNotificationEmail: env.ADMIN_NOTIFICATION_EMAIL,
+    pilotInvitationExpiryDays: env.PILOT_INVITATION_EXPIRY_DAYS,
   },
 } as const;
 

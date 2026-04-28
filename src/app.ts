@@ -13,6 +13,7 @@ import securityPlugin from './plugins/security.plugin';
 import { registerSecurityMiddleware } from './middleware/security.middleware';
 import { stripeWebhookService } from './lib/stripe/webhook.service';
 import { intaSendWebhookService } from './lib/intasend/webhook.service';
+import { resendWebhookService } from './lib/resend/webhook.service';
 import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
 import { alertPubSub } from './lib/redis/pubsub';
 
@@ -157,6 +158,69 @@ export async function buildApp(): Promise<FastifyInstance> {
       }
     },
   );
+
+  // -- Resend Webhook  -  raw body required for Svix signature verification ----
+  // Encapsulated plugin so the Buffer parser is scoped only to this route and
+  // does NOT override the global JSON parser used by tRPC and other routes.
+  await app.register(async (webhookApp) => {
+    webhookApp.addContentTypeParser(
+      'application/json',
+      { parseAs: 'buffer' },
+      (_req, body, done) => done(null, body),
+    );
+
+    webhookApp.post<{ Body: Buffer }>(
+      '/webhooks/resend',
+      async (request, reply) => {
+        const svixId        = request.headers['svix-id'] as string | undefined;
+        const svixTimestamp = request.headers['svix-timestamp'] as string | undefined;
+        const svixSignature = request.headers['svix-signature'] as string | undefined;
+
+        if (!svixId || !svixTimestamp || !svixSignature) {
+          logger.warn({ type: 'resend_webhook_missing_headers', ip: request.ip });
+          return reply.status(400).send({ error: 'missing_headers' });
+        }
+
+        // Phase A: synchronous verification (must complete before 200 is sent)
+        const verification = resendWebhookService.verifyAndParse(
+          request.body,
+          svixId,
+          svixTimestamp,
+          svixSignature,
+        );
+
+        if (!verification.valid) {
+          logger.warn({
+            type:   'resend_webhook_rejected',
+            reason: verification.reason,
+            ip:     request.ip,
+          });
+          return reply.status(400).send({ error: verification.reason });
+        }
+
+        // Respond 200 immediately — Resend must not time out waiting for DB writes
+        void reply.status(200).send({ received: true });
+
+        // Phase B: fire-and-forget; errors caught and logged, never rethrown
+        resendWebhookService
+          .processEventBackground(
+            verification.payload,
+            verification.eventType,
+            verification.messageId,
+          )
+          .catch((err) => {
+            logger.error(
+              {
+                err,
+                messageId: verification.messageId,
+                eventType: verification.eventType,
+              },
+              'Resend webhook background processing failed',
+            );
+          });
+      },
+    );
+  });
 
   // -- tRPC - all procedures exposed under /trpc ----------------------------
   await app.register(fastifyTRPCPlugin, {

@@ -8,8 +8,9 @@
  */
 
 import { SubscriptionPlan as PrismaSubscriptionPlan, SubscriptionStatus } from '@prisma/client';
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { r2PrivateClient, r2PrivateBucket } from '@/lib/storage/r2-private-client';
 import {
   AlignmentType,
   BorderStyle,
@@ -30,7 +31,6 @@ import { NotFoundError, ForbiddenError, BadRequestError } from '@/utils/error';
 import { subscriptionTierToPlan } from '@/utils/plan-mapping';
 import { planCtxCacheKey } from '@/modules/trial';
 import { revokeAllUserTokens } from '@/utils/token-revocation';
-import { appConfig } from '@/config/app.config';
 import { nanoid } from 'nanoid';
 import { supabaseAdmin } from '@/lib/supabase';
 import {
@@ -1984,19 +1984,8 @@ class AdminModule {
     const ext = format;
     const key = `exports/audit-logs/${nanoid(12)}.${ext}`;
 
-    const s3 = new S3Client({
-      region: 'auto',
-      endpoint: `https://${appConfig.storage.accountId}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId:     appConfig.storage.accessKeyId,
-        secretAccessKey: appConfig.storage.secretAccessKey,
-      },
-    });
-
-    const bucket = appConfig.storage.bucketName;
-
-    await s3.send(new PutObjectCommand({
-      Bucket:      bucket,
+    await r2PrivateClient.send(new PutObjectCommand({
+      Bucket:      r2PrivateBucket,
       Key:         key,
       Body:        buffer,
       ContentType: contentType,
@@ -2005,9 +1994,9 @@ class AdminModule {
 
     const ttl = AdminModule.AUDIT_LOG_EXPORT_URL_TTL;
     const url = await getSignedUrl(
-      s3,
+      r2PrivateClient,
       new GetObjectCommand({
-        Bucket:                      bucket,
+        Bucket:                      r2PrivateBucket,
         Key:                         key,
         ResponseContentType:         contentType,
         ResponseContentDisposition:  `attachment; filename="audit-logs.${ext}"`,
@@ -2078,19 +2067,8 @@ class AdminModule {
     const key    = `exports/analytics/${nanoid(12)}.csv`;
     const ttl    = 300; // 5 minutes
 
-    const s3 = new S3Client({
-      region:   'auto',
-      endpoint: `https://${appConfig.storage.accountId}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId:     appConfig.storage.accessKeyId,
-        secretAccessKey: appConfig.storage.secretAccessKey,
-      },
-    });
-
-    const bucket = appConfig.storage.bucketName;
-
-    await s3.send(new PutObjectCommand({
-      Bucket:      bucket,
+    await r2PrivateClient.send(new PutObjectCommand({
+      Bucket:      r2PrivateBucket,
       Key:         key,
       Body:        buffer,
       ContentType: 'text/csv',
@@ -2099,9 +2077,9 @@ class AdminModule {
 
     const dateStr = new Date().toISOString().slice(0, 10);
     const url = await getSignedUrl(
-      s3,
+      r2PrivateClient,
       new GetObjectCommand({
-        Bucket:                     bucket,
+        Bucket:                     r2PrivateBucket,
         Key:                        key,
         ResponseContentType:        'text/csv',
         ResponseContentDisposition: `attachment; filename="sheriabot-analytics-${dateStr}.csv"`,

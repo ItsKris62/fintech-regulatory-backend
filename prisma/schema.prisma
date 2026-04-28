@@ -73,6 +73,19 @@ model User {
   deletionReason           String?
   deletionFeedback         String?
 
+  // =====================================================
+  // Marketing & Outreach module relations (Phase B1)
+  // =====================================================
+  companiesCreated              Company[]                @relation("CompanyCreatedBy")
+  contactsCreated               Contact[]                @relation("ContactCreatedBy")
+  contactListsCreated           ContactList[]            @relation("ContactListCreatedBy")
+  contactListMembershipsAdded   ContactListMembership[]  @relation("ContactListMembershipAddedBy")
+  marketingCampaignsCreated     MarketingCampaign[]      @relation("MarketingCampaignCreatedBy")
+  suppressionsAdded             SuppressionList[]        @relation("SuppressionAddedBy")
+  pilotInvitationsCreated       PilotInvitation[]        @relation("PilotInvitationCreatedBy")
+  pilotApplicationsReviewed     PilotApplication[]       @relation("PilotApplicationReviewedBy")
+  pilotApplicationProvisioned   PilotApplication?        @relation("PilotApplicationProvisionedUser")
+
   @@index([email])
   @@index([supabaseAuthId])
   @@index([organizationId])
@@ -1274,4 +1287,343 @@ model AlertNotification {
   @@index([userId, status])
   @@index([userId, channel])
   @@index([organizationId])
+}
+
+// =============================================================================
+// MARKETING & OUTREACH MODULE (Phase B1)
+// =============================================================================
+
+model Company {
+  id            String    @id @default(cuid())
+  name          String
+  domain        String?   @unique
+  industry      String?
+  regulatorMix  String[]  @default([])
+  notes         String?
+  createdById   String
+  createdBy     User      @relation("CompanyCreatedBy", fields: [createdById], references: [id])
+  contacts      Contact[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  @@index([name])
+  @@index([createdById])
+  @@index([deletedAt])
+}
+
+model Contact {
+  id                String                  @id @default(cuid())
+  companyId         String?
+  company           Company?                @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  email             String                  @unique
+  firstName         String?
+  lastName          String?
+  role              String?
+  phone             String?
+  primaryRegulator  String?
+  tags              String[]                @default([])
+  notes             String?
+  consentStatus     ContactConsentStatus    @default(PENDING)
+  consentSource     String?
+  consentTimestamp  DateTime?
+  suppressedAt      DateTime?
+  suppressedReason  SuppressionReason?
+  lastEmailedAt     DateTime?
+  lastEmailOpenedAt DateTime?
+  createdById       String
+  createdBy         User                    @relation("ContactCreatedBy", fields: [createdById], references: [id])
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  deletedAt         DateTime?
+
+  consentRecords    ConsentRecord[]
+  listMemberships   ContactListMembership[]
+  campaignSends     CampaignSend[]
+  pilotInvitations  PilotInvitation[]
+
+  @@index([email])
+  @@index([companyId])
+  @@index([consentStatus])
+  @@index([suppressedAt])
+  @@index([createdById])
+  @@index([deletedAt])
+}
+
+model ContactList {
+  id              String                  @id @default(cuid())
+  name            String                  @unique
+  description     String?
+  isDynamic       Boolean                 @default(false)
+  filterCriteria  Json?
+  createdById     String
+  createdBy       User                    @relation("ContactListCreatedBy", fields: [createdById], references: [id])
+  memberships     ContactListMembership[]
+  campaigns       MarketingCampaign[]
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+  deletedAt       DateTime?
+
+  @@index([createdById])
+  @@index([deletedAt])
+}
+
+model ContactListMembership {
+  listId     String
+  list       ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contactId  String
+  contact    Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  addedAt    DateTime    @default(now())
+  addedById  String
+  addedBy    User        @relation("ContactListMembershipAddedBy", fields: [addedById], references: [id])
+
+  @@id([listId, contactId])
+  @@index([contactId])
+}
+
+model MarketingCampaign {
+  id                  String                  @id @default(cuid())
+  name                String
+  subject             String
+  templateKey         MarketingTemplateKey
+  templateVariables   Json                    @default("{}")
+  status              MarketingCampaignStatus @default(DRAFT)
+  scheduledFor        DateTime?
+  listId              String?
+  list                ContactList?            @relation(fields: [listId], references: [id], onDelete: SetNull)
+  segmentFilter       Json?
+  createdById         String
+  createdBy           User                    @relation("MarketingCampaignCreatedBy", fields: [createdById], references: [id])
+  sentAt              DateTime?
+  totalRecipients     Int                     @default(0)
+  totalSent           Int                     @default(0)
+  totalDelivered      Int                     @default(0)
+  totalOpened         Int                     @default(0)
+  totalClicked        Int                     @default(0)
+  totalBounced        Int                     @default(0)
+  totalUnsubscribed   Int                     @default(0)
+  totalComplained     Int                     @default(0)
+  totalSuppressedSkip Int                     @default(0)
+  totalNoConsentSkip  Int                     @default(0)
+  totalFailed         Int                     @default(0)
+  errorMessage        String?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  sends               CampaignSend[]
+
+  @@index([status])
+  @@index([createdById])
+  @@index([scheduledFor])
+  @@index([sentAt])
+}
+
+model CampaignSend {
+  id             String              @id @default(cuid())
+  campaignId     String
+  campaign       MarketingCampaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId      String
+  contact        Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  status         CampaignSendStatus  @default(PENDING)
+  messageId      String?
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  openedAt       DateTime?
+  firstClickedAt DateTime?
+  bouncedAt      DateTime?
+  unsubscribedAt DateTime?
+  complainedAt   DateTime?
+  errorMessage   String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  events         EmailEvent[]
+
+  @@unique([campaignId, contactId])
+  @@index([messageId])
+  @@index([status])
+  @@index([sentAt])
+}
+
+model SuppressionList {
+  id        String            @id @default(cuid())
+  email     String            @unique
+  reason    SuppressionReason
+  metadata  Json?
+  addedById String?
+  addedBy   User?             @relation("SuppressionAddedBy", fields: [addedById], references: [id])
+  addedAt   DateTime          @default(now())
+
+  @@index([reason])
+  @@index([addedAt])
+}
+
+model PilotInvitation {
+  id            String                @id @default(cuid())
+  contactId     String
+  contact       Contact               @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tokenHash     String                @unique
+  expiresAt     DateTime
+  status        PilotInvitationStatus @default(PENDING)
+  viewedAt      DateTime?
+  appliedAt     DateTime?
+  applicationId String?               @unique
+  application   PilotApplication?     @relation("PilotInvitationApplication", fields: [applicationId], references: [id], onDelete: SetNull)
+  createdById   String
+  createdBy     User                  @relation("PilotInvitationCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  reverseApplication PilotApplication? @relation("PilotApplicationInvitation")
+
+  @@index([contactId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+model PilotApplication {
+  id                     String                 @id @default(cuid())
+  invitationId           String?                @unique
+  invitation             PilotInvitation?       @relation("PilotApplicationInvitation", fields: [invitationId], references: [id], onDelete: SetNull)
+  companyName            String
+  contactName            String
+  email                  String
+  phone                  String?
+  companySize            String
+  currentComplianceTools String[]               @default([])
+  primaryRegulators      String[]               @default([])
+  motivation             String
+  status                 PilotApplicationStatus @default(SUBMITTED)
+  reviewedById           String?
+  reviewedBy             User?                  @relation("PilotApplicationReviewedBy", fields: [reviewedById], references: [id])
+  reviewedAt             DateTime?
+  reviewNotes            String?
+  provisionedUserId      String?                @unique
+  provisionedUser        User?                  @relation("PilotApplicationProvisionedUser", fields: [provisionedUserId], references: [id])
+  submittedAt            DateTime               @default(now())
+  ipAddress              String?
+  userAgent              String?
+
+  reverseInvitation      PilotInvitation?       @relation("PilotInvitationApplication")
+
+  @@index([status])
+  @@index([email])
+  @@index([reviewedById])
+  @@index([submittedAt])
+}
+
+model EmailEvent {
+  id         String         @id @default(cuid())
+  sendId     String?
+  send       CampaignSend?  @relation(fields: [sendId], references: [id], onDelete: SetNull)
+  messageId  String?
+  eventType  EmailEventType
+  eventData  Json           @default("{}")
+  occurredAt DateTime       @default(now())
+
+  @@index([sendId])
+  @@index([messageId])
+  @@index([eventType])
+  @@index([occurredAt])
+}
+
+model ConsentRecord {
+  id         String        @id @default(cuid())
+  contactId  String
+  contact    Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  action     ConsentAction
+  source     String
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+  occurredAt DateTime      @default(now())
+
+  @@index([contactId])
+  @@index([action])
+  @@index([occurredAt])
+}
+
+// =============================================================================
+// MARKETING ENUMS
+// =============================================================================
+
+enum ContactConsentStatus {
+  PENDING
+  GRANTED
+  REVOKED
+}
+
+enum SuppressionReason {
+  UNSUBSCRIBED
+  BOUNCED
+  COMPLAINED
+  MANUAL
+}
+
+enum MarketingCampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  PARTIALLY_SENT
+  FAILED
+  CANCELLED
+}
+
+enum CampaignSendStatus {
+  PENDING
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  COMPLAINED
+  UNSUBSCRIBED
+  SUPPRESSED_SKIPPED
+  NO_CONSENT_SKIPPED
+  FAILED
+}
+
+enum MarketingTemplateKey {
+  PILOT_INVITATION
+  REGULATOR_ACCESS_PROGRAM
+  PRODUCT_LAUNCH
+  COMPLIANCE_UPDATE
+  WEBINAR_INVITE
+  RESOURCE_DOWNLOAD
+  GENERIC_MARKETING
+}
+
+enum PilotInvitationStatus {
+  PENDING
+  VIEWED
+  APPLIED
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum PilotApplicationStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum EmailEventType {
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  COMPLAINED
+  DELAYED
+  FAILED
+}
+
+enum ConsentAction {
+  GRANTED
+  REVOKED
+  UPDATED
+  IMPORTED_LEGITIMATE_INTEREST
 }
