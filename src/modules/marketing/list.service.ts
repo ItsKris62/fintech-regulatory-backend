@@ -16,13 +16,22 @@
  *   MARKETING_LIST_CONTACTS_ADDED | MARKETING_LIST_CONTACTS_REMOVED
  */
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
-import { NotFoundError } from '@/utils/error';
+import { BadRequestError, NotFoundError } from '@/utils/error';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * Contact with company included — used by the send pipeline for personalization.
+ */
+export type ContactWithCompany = Prisma.ContactGetPayload<{ include: { company: true } }>;
+
+/** Hard cap on sendable contacts per list resolution. */
+const RESOLVE_CONTACTS_CAP = 5000;
 
 export interface CreateListParams {
   name:        string;
@@ -237,6 +246,95 @@ export async function removeContacts(
 
   logger.info({ type: 'marketing_list_contacts_removed', listId, count: result.count });
   return result.count;
+}
+
+/**
+ * Resolve all sendable contacts for a list.
+ *
+ * B1 spec gap retrofit (Phase B2 TG1):
+ *   - Filters: consentStatus !== REVOKED, suppressedAt: null, deletedAt: null
+ *   - Includes company for downstream template personalization
+ *   - Hard cap: 5000 contacts. Throws BadRequestError if exceeded.
+ *   - Static lists: resolved via ContactListMembership
+ *   - Dynamic lists: resolved via stored filterCriteria JSONB
+ *
+ * Does NOT modify getListMembers — that remains for paginated UI use.
+ */
+export async function resolveContacts(listId: string): Promise<ContactWithCompany[]> {
+  // Fetch the list to determine type and get name for error messages
+  const list = await prisma.contactList.findUnique({
+    where: { id: listId },
+    select: { id: true, name: true, isDynamic: true, filterCriteria: true, deletedAt: true },
+  });
+
+  if (!list || list.deletedAt) {
+    throw new NotFoundError('Contact list not found');
+  }
+
+  // Base contact filter — always applied regardless of list type
+  const baseContactWhere: Prisma.ContactWhereInput = {
+    deletedAt:     null,
+    suppressedAt:  null,
+    consentStatus: { not: 'REVOKED' },
+    // If the contact has a company, that company must not be soft-deleted
+    OR: [
+      { companyId: null },
+      { company: { deletedAt: null } },
+    ],
+  };
+
+  if (list.isDynamic) {
+    // Dynamic list: merge stored filterCriteria into the base where clause
+    const storedFilter = (list.filterCriteria ?? {}) as Prisma.ContactWhereInput;
+
+    const dynamicWhere: Prisma.ContactWhereInput = {
+      AND: [baseContactWhere, storedFilter],
+    };
+
+    // Count first to enforce cap without loading all rows
+    const count = await prisma.contact.count({ where: dynamicWhere });
+
+    if (count > RESOLVE_CONTACTS_CAP) {
+      throw new BadRequestError(
+        `List '${list.name}' resolves to more than ${RESOLVE_CONTACTS_CAP} contacts. Segment further or use a smaller list.`,
+      );
+    }
+
+    return prisma.contact.findMany({
+      where:   dynamicWhere,
+      include: { company: true },
+    });
+  } else {
+    // Static list: resolve via ContactListMembership
+
+    // Count first to enforce cap
+    const count = await prisma.contactListMembership.count({
+      where: {
+        listId,
+        contact: baseContactWhere,
+      },
+    });
+
+    if (count > RESOLVE_CONTACTS_CAP) {
+      throw new BadRequestError(
+        `List '${list.name}' resolves to more than ${RESOLVE_CONTACTS_CAP} contacts. Segment further or use a smaller list.`,
+      );
+    }
+
+    const memberships = await prisma.contactListMembership.findMany({
+      where: {
+        listId,
+        contact: baseContactWhere,
+      },
+      include: {
+        contact: {
+          include: { company: true },
+        },
+      },
+    });
+
+    return memberships.map((m) => m.contact);
+  }
 }
 
 /**

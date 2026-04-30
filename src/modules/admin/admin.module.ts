@@ -55,6 +55,7 @@ import {
   orgStatsKey,
   systemConfigUpdateSchema,
 } from './admin.utils';
+import { createUserWithOrganization } from '@/server/services/userProvisioning.service';
 import {
   ADMIN_CONSTANTS,
   DEFAULT_SYSTEM_CONFIG,
@@ -1318,7 +1319,7 @@ class AdminModule {
   // USER CREATION (ADMIN-INITIATED)
   // ==========================================================================
 
-  async createUser(adminId: string, input: CreateUserInput): Promise<AdminUserDetail> {
+  async createUser(adminId: string, input: CreateUserInput, requestId: string): Promise<AdminUserDetail> {
     // Check for existing user
     const existing = await prisma.user.findUnique({ where: { email: input.email.toLowerCase() } });
     if (existing) throw new BadRequestError('A user with this email already exists');
@@ -1336,24 +1337,17 @@ class AdminModule {
 
     const supabaseAuthId = authData.user.id;
 
-    // Create in Prisma
-    const user = await prisma.user.create({
-      data: {
-        supabaseAuthId,
-        email: input.email.toLowerCase(),
-        fullName: input.fullName,
-        role: input.role as never,
-        emailVerified: true,
-        accountStatus: 'active',
-        status: 'ACTIVE',
-        organizationId: input.organizationId ?? null,
-      },
-      include: { organization: { select: { name: true, subscriptionTier: true, plan: true } } },
-    });
-
-    await this.writeAuditLog(adminId, 'admin_create_user', 'User', user.id, {
-      email: user.email,
-      role: user.role,
+    const { user } = await createUserWithOrganization({
+      email: input.email,
+      fullName: input.fullName,
+      role: input.role,
+      subscriptionTier: input.subscriptionTier,
+      isPilot: input.isPilot ?? false,
+      organizationId: input.organizationId,
+      organizationName: input.organizationName,
+      supabaseAuthId,
+      adminId,
+      requestId,
     });
 
     logger.info({ type: 'admin_user_created', adminId, userId: user.id, role: user.role });

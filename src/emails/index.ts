@@ -108,3 +108,27 @@ export type { PilotExpiredEmailProps } from './templates/pilot/PilotExpiredEmail
 
 // Render utilities
 export { renderEmailToHtml, renderEmailToText } from './render';
+
+// =====================================================
+// Marketing templates (Phase B2)
+// =====================================================
+export { default as PilotInvitationEmail } from './templates/marketing/PilotInvitationEmail';
+export type { PilotInvitationEmailProps } from './templates/marketing/PilotInvitationEmail';
+
+export { default as RegulatorAccessProgramEmail } from './templates/marketing/RegulatorAccessProgramEmail';
+export type { RegulatorAccessProgramEmailProps } from './templates/marketing/RegulatorAccessProgramEmail';
+
+export { default as ProductLaunchEmail } from './templates/marketing/ProductLaunchEmail';
+export type { ProductLaunchEmailProps } from './templates/marketing/ProductLaunchEmail';
+
+export { default as ComplianceUpdateEmail } from './templates/marketing/ComplianceUpdateEmail';
+export type { ComplianceUpdateEmailProps } from './templates/marketing/ComplianceUpdateEmail';
+
+export { default as WebinarInviteEmail } from './templates/marketing/WebinarInviteEmail';
+export type { WebinarInviteEmailProps } from './templates/marketing/WebinarInviteEmail';
+
+export { default as ResourceDownloadEmail } from './templates/marketing/ResourceDownloadEmail';
+export type { ResourceDownloadEmailProps } from './templates/marketing/ResourceDownloadEmail';
+
+export { default as GenericMarketingEmail } from './templates/marketing/GenericMarketingEmail';
+export type { GenericMarketingEmailProps } from './templates/marketing/GenericMarketingEmail';

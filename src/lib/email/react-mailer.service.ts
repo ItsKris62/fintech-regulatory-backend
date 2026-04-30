@@ -12,9 +12,11 @@
 
 import * as React from 'react';
 import { sendEmail } from './client';
+import type { EmailResult } from './client';
 import { renderEmailToHtml, renderEmailToText } from '@/emails/render';
 import { logger } from '@/utils/logger';
 import { prisma } from '@/lib/prisma/client';
+import { appConfig } from '@/config/app.config';
 
 // --- Template Imports --------------------------------------------------------
 
@@ -151,12 +153,13 @@ async function shouldSendNotification(
     if (!prefs) return true; // Default to enabled if no preferences set
 
     return (prefs as Record<string, boolean>)[notificationType] ?? true;
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     logger.warn({
       type: 'notification_preference_check_failed',
       userId,
       notificationType,
-      error: error.message,
+      error: errorMessage,
     });
     return true; // Fail open
   }
@@ -192,12 +195,13 @@ async function sendReactEmail(opts: {
         error: result.error,
       });
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Email failures must never crash the application
+    const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error({
       type: `${opts.logType}_error`,
       to: opts.to,
-      error: error.message,
+      error: errorMessage,
     });
   }
 }
@@ -602,6 +606,103 @@ class ReactMailerService {
       tags: [{ name: 'category', value: 'pilot' }, { name: 'type', value: 'pilot_expired' }],
       logType: 'pilot_expired_email',
     });
+  }
+
+  // -- MARKETING EMAILS (Phase B2) --
+
+  /**
+   * Send a marketing email to a single contact.
+   *
+   * This method is the sole entry point for all bulk/marketing sends.
+   * It does NOT throw — all errors are caught and returned as EmailResult.
+   * The caller (send pipeline) is responsible for audit logging and status persistence.
+   *
+   * RFC 8058 compliance:
+   *   - List-Unsubscribe header with tokenized URL + mailto variant
+   *   - List-Unsubscribe-Post: List-Unsubscribe=One-Click
+   *
+   * PII policy:
+   *   - Recipient email is NEVER logged at info level
+   *   - contactId is used as the identifier in all log entries
+   */
+  public async sendMarketingEmail(opts: {
+    to: string;
+    subject: string;
+    element: React.ReactElement;
+    campaignId: string;
+    contactId: string;
+    unsubscribeUrl: string;
+    unsubscribeMailto?: string;
+    additionalTags?: Array<{ name: string; value: string }>;
+  }): Promise<EmailResult> {
+    try {
+      const [html, text] = await Promise.all([
+        renderEmailToHtml(opts.element),
+        renderEmailToText(opts.element),
+      ]);
+
+      // Build RFC 8058 List-Unsubscribe headers
+      const mailtoUnsub = opts.unsubscribeMailto ?? 'mailto:unsubscribe@sheriabot.com';
+      const headers: Record<string, string> = {
+        'List-Unsubscribe': `<${opts.unsubscribeUrl}>, <${mailtoUnsub}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      };
+
+      // Build Resend tags
+      const tags: Array<{ name: string; value: string }> = [
+        { name: 'campaignId', value: opts.campaignId },
+        { name: 'contactId',  value: opts.contactId },
+        { name: 'env',        value: process.env.NODE_ENV ?? 'unknown' },
+        ...(opts.additionalTags ?? []),
+      ];
+
+      const from = `${appConfig.marketing.fromName} <${appConfig.marketing.fromEmail}>`;
+
+      const result = await sendEmail({
+        from,
+        to: opts.to,
+        subject: opts.subject,
+        html,
+        text,
+        headers,
+        tags,
+      });
+
+      if (result.success) {
+        logger.info({
+          type:       'marketing_email_sent',
+          campaignId: opts.campaignId,
+          contactId:  opts.contactId,
+          messageId:  result.messageId,
+          // NOTE: recipient email intentionally omitted from info-level log (PII)
+        });
+      } else {
+        logger.error({
+          type:       'marketing_email_failed',
+          campaignId: opts.campaignId,
+          contactId:  opts.contactId,
+          error:      result.error,
+          // NOTE: recipient email intentionally omitted (PII)
+        });
+      }
+
+      return result;
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      logger.error({
+        type:       'marketing_email_error',
+        campaignId: opts.campaignId,
+        contactId:  opts.contactId,
+        error:      errorMessage,
+        // NOTE: recipient email intentionally omitted (PII)
+      });
+
+      return {
+        success: false,
+        error:   errorMessage,
+      };
+    }
   }
 }
 

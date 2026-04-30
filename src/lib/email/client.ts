@@ -23,6 +23,10 @@ export interface EmailOptions {
     name: string;
     value: string;
   }>;
+  /** Override the default From address. Used for marketing sends. */
+  from?: string;
+  /** Custom email headers (e.g., List-Unsubscribe for RFC 8058 compliance). */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -162,7 +166,7 @@ async function logEmailSend(
  * Send email using Resend
  * @param options Email options
  * @returns Email result
- * 
+ *
  * @example
  * const result = await sendEmail({
  *   to: 'user@example.com',
@@ -177,7 +181,7 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
   try {
     // Validate recipient
     const recipients = Array.isArray(options.to) ? options.to : [options.to];
-    
+
     if (recipients.length === 0) {
       throw new Error('No recipients specified');
     }
@@ -209,7 +213,7 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
 
     // Send email via Resend
     const response = await resend.emails.send({
-      from: getSenderAddress(),
+      from: options.from ?? getSenderAddress(),
       to: options.to,
       subject: options.subject,
       html: options.html,
@@ -219,6 +223,9 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
       bcc: options.bcc,
       attachments: options.attachments,
       tags: options.tags,
+      ...(options.headers && Object.keys(options.headers).length > 0
+        ? { headers: options.headers }
+        : {}),
     });
 
     const duration = Date.now() - startTime;
@@ -238,23 +245,24 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
       success: true,
       messageId: response.data?.id,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     const duration = Date.now() - startTime;
+    const errorMessage = error instanceof Error ? error.message : String(error);
 
     // Log failure
-    await logEmailSend(options.to, options.subject, false, undefined, error.message);
+    await logEmailSend(options.to, options.subject, false, undefined, errorMessage);
 
     logger.error({
       type: 'email_send_error',
       to: options.to,
       subject: options.subject,
-      error: error.message,
+      error: errorMessage,
       duration,
     });
 
     return {
       success: false,
-      error: error.message,
+      error: errorMessage,
     };
   }
 }
@@ -304,12 +312,13 @@ export async function queueEmail(
       subject: options.subject,
       priority,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error({
       type: 'email_queue_error',
       to: options.to,
       subject: options.subject,
-      error: error.message,
+      error: errorMessage,
     });
     throw error;
   }
@@ -337,7 +346,11 @@ export async function processEmailQueue(batchSize: number = 10): Promise<number>
 
     for (const entry of entries) {
       try {
-        const queuedEmail = JSON.parse(entry);
+        const queuedEmail = JSON.parse(entry) as {
+          options: EmailOptions;
+          priority: number;
+          attempts: number;
+        };
         const { options, attempts } = queuedEmail;
 
         // Try to send
@@ -375,10 +388,11 @@ export async function processEmailQueue(batchSize: number = 10): Promise<number>
             );
           }
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         logger.error({
           type: 'email_queue_process_error',
-          error: error.message,
+          error: errorMessage,
         });
       }
     }
@@ -390,10 +404,11 @@ export async function processEmailQueue(batchSize: number = 10): Promise<number>
     });
 
     return processed;
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error({
       type: 'email_queue_process_error',
-      error: error.message,
+      error: errorMessage,
     });
     return 0;
   }
@@ -424,10 +439,10 @@ export async function getEmailQueueStats(): Promise<{
  * Get recent email logs
  * @param limit Number of logs to retrieve (default: 10)
  */
-export async function getRecentEmailLogs(limit: number = 10): Promise<any[]> {
+export async function getRecentEmailLogs(limit: number = 10): Promise<unknown[]> {
   try {
     const logs = await redis.lrange('email:log', 0, limit - 1);
-    return logs.map(log => JSON.parse(log));
+    return logs.map(log => JSON.parse(log as string));
   } catch (error) {
     return [];
   }
@@ -441,10 +456,11 @@ export async function clearFailedEmails(): Promise<void> {
   try {
     await redis.del('email:queue:failed');
     logger.info('Failed email queue cleared');
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error({
       type: 'email_clear_failed_error',
-      error: error.message,
+      error: errorMessage,
     });
   }
 }

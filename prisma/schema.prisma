@@ -1424,15 +1424,17 @@ model CampaignSend {
   campaign       MarketingCampaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   contactId      String
   contact        Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  status         CampaignSendStatus  @default(PENDING)
-  messageId      String?
-  sentAt         DateTime?
+  status                CampaignSendStatus  @default(PENDING)
+  messageId             String?
+  unsubscribeTokenHash  String?             @unique
+  sentAt                DateTime?
   deliveredAt    DateTime?
   openedAt       DateTime?
   firstClickedAt DateTime?
   bouncedAt      DateTime?
   unsubscribedAt DateTime?
   complainedAt   DateTime?
+  suppressionReason  SuppressionReason?
   errorMessage   String?
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt

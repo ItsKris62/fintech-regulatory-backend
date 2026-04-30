@@ -540,7 +540,10 @@ export interface CreateUserInput {
   fullName: string;
   password: string;
   role: 'REGULATOR' | 'STARTUP' | 'ENTERPRISE' | 'ADMIN';
+  subscriptionTier?: 'REGULATOR' | 'STARTUP' | 'BUSINESS' | 'ENTERPRISE';
   organizationId?: string;
+  organizationName?: string;
+  isPilot?: boolean;
   sendWelcomeEmail?: boolean;
 }
 

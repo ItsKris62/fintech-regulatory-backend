@@ -3,6 +3,14 @@ import { Section, Hr, Text, Link } from '@react-email/components';
 import { EMAIL_THEME, APP_NAME, SUPPORT_EMAIL, CURRENT_YEAR, SHERIABOT_URL } from '../theme';
 
 export interface EmailSignatureProps {
+  /**
+   * @deprecated For transactional templates only. Marketing/bulk sends MUST use
+   * MarketingBaseLayout, which generates a token-signed unsubscribe URL. The
+   * email-based unsubscribe URL produced when this is true is insecure (anyone
+   * who knows the email can unsubscribe anyone) and is RFC 8058 non-compliant.
+   * Setting this to true on a marketing-context email may result in DPA 2019
+   * compliance failures.
+   */
   showUnsubscribe?: boolean;
   recipientEmail?: string;
 }

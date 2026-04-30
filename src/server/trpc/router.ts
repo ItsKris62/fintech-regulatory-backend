@@ -23,6 +23,7 @@ import { checklistRouter } from '../routers/checklist.router';
 import { complianceDashboardRouter } from '../routers/compliance-dashboard.router';
 import { gapAnalysisRouter } from '../routers/gap-analysis.router';
 import { alertRouter } from '../routers/alert.router';
+import { adminMarketingRouter } from '../routers/adminMarketing.router';
 
 /**
  * Root Application Router
@@ -72,6 +73,7 @@ export const appRouter = router({
   complianceDashboard: complianceDashboardRouter,
   gapAnalysis: gapAnalysisRouter,
   alert: alertRouter,
+  adminMarketing: adminMarketingRouter,
 });
 
 /**

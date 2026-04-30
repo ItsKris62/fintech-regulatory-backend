@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { router, adminProcedure } from '../trpc/trpc';
 import { logger } from '@/utils/logger';
@@ -6,7 +7,9 @@ import { redis } from '@/lib/redis/client';
 import { adminModule } from '@/modules/admin';
 import { appConfig } from '@/config/app.config';
 import { getStats as getChecklistStats } from '@/lib/metrics/checklist-metrics';
-import { BadRequestError } from '@/utils/error';
+import { BadRequestError, OrganizationNotFoundError } from '@/utils/error';
+import { isPrismaForeignKeyError, sanitizeErrorMessage } from '@/utils/error-sanitizer';
+import { optionalOrganizationIdSchema } from '@/server/services/userProvisioning.service';
 
 const billingPlanCatalogUpdateItemSchema = z.object({
   id: z.enum(['STARTUP', 'BUSINESS']),
@@ -33,6 +36,58 @@ const billingPlanCatalogUpdateItemSchema = z.object({
 
 const billingPlanCatalogUpdateSchema = z.object({
   plans: z.array(billingPlanCatalogUpdateItemSchema).min(1).max(2),
+});
+
+const createAdminUserSchema = z.object({
+  email: z.string().trim().email(),
+  fullName: z.string().trim().min(2).max(100),
+  password: z.string().min(8).max(100),
+  role: z.enum(['REGULATOR', 'STARTUP', 'ENTERPRISE', 'ADMIN']).default('STARTUP'),
+  subscriptionTier: z.enum(['REGULATOR', 'STARTUP', 'BUSINESS', 'ENTERPRISE']).optional(),
+  organizationId: optionalOrganizationIdSchema,
+  organizationName: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().trim().min(2).max(120).optional(),
+  ),
+  isPilot: z.boolean().default(false),
+  sendWelcomeEmail: z.boolean().default(false),
+}).superRefine((value, ctx) => {
+  if (value.isPilot && !value.organizationId && !value.organizationName) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['organizationName'],
+      message: 'Pilot users require an organization name or an existing organization.',
+    });
+  }
+});
+
+const adminOrganizationOptionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  plan: z.string(),
+  subscriptionTier: z.string(),
+});
+
+const adminOrganizationOptionsSchema = z.array(adminOrganizationOptionSchema);
+
+const adminUserDetailOutputSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  fullName: z.string(),
+  phone: z.string().nullable(),
+  role: z.string(),
+  status: z.string(),
+  emailVerified: z.boolean(),
+  organizationId: z.string().nullable(),
+  organizationName: z.string().nullable(),
+  organizationPlan: z.string().nullable(),
+  lastLoginAt: z.date().nullable(),
+  lastLoginIp: z.string().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+  sessionCount: z.number(),
+  policyCount: z.number(),
+  queryCount: z.number(),
 });
 
 /**
@@ -474,6 +529,15 @@ export const adminRouter = router({
           await redis.del(`user:session:${targetUser.supabaseAuthId}`).catch(() => {});
         }
 
+        // Write audit log
+        await adminModule.writeAuditLogEntry(
+          ctx.user!.id,
+          'admin_user_deleted',
+          'User',
+          input.userId,
+          {}
+        );
+
         logger.info({
           type: 'admin_user_deleted',
           adminUserId: ctx.user!.id,
@@ -644,6 +708,39 @@ export const adminRouter = router({
         });
       }
     }),
+
+  /**
+   * Lightweight organization options for admin user provisioning.
+   *
+   * @admin
+   */
+  listOrganizations: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const organizations = await ctx.prisma.organization.findMany({
+        orderBy: { name: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          plan: true,
+          subscriptionTier: true,
+        },
+      });
+
+      return adminOrganizationOptionsSchema.parse(organizations);
+    } catch (error: unknown) {
+      logger.error({
+        type: 'admin_list_organization_options_error',
+        adminId: ctx.user!.id,
+        error: sanitizeErrorMessage(error, 'Failed to list organizations'),
+      });
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to list organizations',
+        cause: error,
+      });
+    }
+  }),
 
   /**
    * Get organization stats summary (admin only)
@@ -1167,6 +1264,15 @@ export const adminRouter = router({
           logger.warn({ type: 'admin_invitation_email_failed', error: emailErr.message });
         }
 
+        // Write audit log
+        await adminModule.writeAuditLogEntry(
+          ctx.user!.id,
+          'admin_create_invitation',
+          'Invitation',
+          invitation.id,
+          { email: input.email, role: input.role, organizationId: input.organizationId }
+        );
+
         logger.info({
           type: 'admin_invitation_created',
           adminId: ctx.user!.id,
@@ -1552,24 +1658,46 @@ export const adminRouter = router({
   // --- USER CREATION (ADMIN-INITIATED) -------------------------------------
 
   createUser: adminProcedure
-    .input(
-      z.object({
-        email: z.string().email(),
-        fullName: z.string().min(2).max(100),
-        password: z.string().min(8).max(100),
-        role: z.enum(['REGULATOR', 'STARTUP', 'ENTERPRISE', 'ADMIN']),
-        organizationId: z.string().optional(),
-        sendWelcomeEmail: z.boolean().default(false),
-      })
-    )
+    .input(createAdminUserSchema)
     .mutation(async ({ input, ctx }) => {
+      const requestId = ctx.req.id ? String(ctx.req.id) : randomUUID();
+
       try {
-        const user = await adminModule.createUser(ctx.user!.id, input);
-        logger.info({ type: 'admin_create_user', adminId: ctx.user!.id, email: input.email });
-        return user;
-      } catch (error: any) {
+        const user = await adminModule.createUser(ctx.user!.id, input, requestId);
+        logger.info({
+          type: 'admin_create_user',
+          requestId,
+          adminId: ctx.user!.id,
+          email: input.email,
+          userId: user.id,
+          organizationId: user.organizationId,
+          isPilot: input.isPilot,
+        });
+        return adminUserDetailOutputSchema.parse(user);
+      } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: error.message ?? 'Failed to create user', cause: error });
+
+        if (error instanceof OrganizationNotFoundError || isPrismaForeignKeyError(error)) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'The selected organization could not be found.',
+            cause: error,
+          });
+        }
+
+        if (error instanceof BadRequestError) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: sanitizeErrorMessage(error, 'Invalid user provisioning request.'),
+            cause: error,
+          });
+        }
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: sanitizeErrorMessage(error, 'Failed to create user'),
+          cause: error,
+        });
       }
     }),
 
