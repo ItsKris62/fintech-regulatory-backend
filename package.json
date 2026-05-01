@@ -26,6 +26,7 @@
     "pilot:provision:execute": "tsx src/scripts/provision-pilot-testers.ts --execute",
     "pilot:cron": "tsx src/scripts/pilot-lifecycle-cron.ts",
     "softbounce:cron": "tsx src/scripts/soft-bounce-cron.ts",
+    "bulksend:cron": "tsx src/scripts/bulk-send-cron.ts",
     "seed:marketing:flags": "tsx src/scripts/seed-marketing-feature-flags.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts",

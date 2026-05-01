@@ -34,13 +34,14 @@ import { logger } from '@/utils/logger';
 import { BadRequestError, NotFoundError } from '@/utils/error';
 import { resolveContacts } from './list.service';
 import { sendService } from './send.service';
+import { sendQueueService } from './send-queue.service';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** B2 hard cap on sendable contacts per campaign. */
-const RECIPIENT_LIMIT = 25;
+/** Threshold above which sends are routed to the async queue. */
+const ASYNC_SEND_THRESHOLD = 25;
 
 /** Redis TTL for send-confirmation tokens (5 minutes). */
 const CONFIRM_TOKEN_TTL = 300;
@@ -266,6 +267,7 @@ export class CampaignService {
     recipientCount:           number;
     estimatedDurationSeconds: number;
     expiresAt:                Date;
+    isAsync:                  boolean;
   }> {
     const campaign = await this.requireCampaign(input.campaignId);
 
@@ -286,10 +288,8 @@ export class CampaignService {
     const contacts = await resolveContacts(campaign.listId);
     const recipientCount = contacts.length;
 
-    // Enforce 25-recipient cap
-    if (recipientCount > RECIPIENT_LIMIT) {
-      throw new RecipientLimitError(recipientCount, RECIPIENT_LIMIT);
-    }
+    // B3: No hard cap — async queue handles large lists
+    const isAsync = recipientCount > ASYNC_SEND_THRESHOLD;
 
     // Generate confirmation token
     const confirmationToken = crypto.randomBytes(16).toString('hex');
@@ -311,13 +311,15 @@ export class CampaignService {
       type:          'marketing_send_confirmation_requested',
       campaignId:    input.campaignId,
       recipientCount,
+      isAsync,
     });
 
     return {
       confirmationToken,
       recipientCount,
-      estimatedDurationSeconds: recipientCount * 2,
+      estimatedDurationSeconds: isAsync ? 0 : recipientCount * 2,
       expiresAt,
+      isAsync,
     };
   }
 
@@ -390,16 +392,6 @@ export class CampaignService {
 
     const contacts = await resolveContacts(campaign.listId);
 
-    // Re-enforce cap
-    if (contacts.length > RECIPIENT_LIMIT) {
-      // Roll back to DRAFT
-      await prisma.marketingCampaign.update({
-        where: { id: input.campaignId },
-        data:  { status: MarketingCampaignStatus.DRAFT, sentAt: null, totalRecipients: 0 },
-      });
-      throw new RecipientLimitError(contacts.length, RECIPIENT_LIMIT);
-    }
-
     // Verify count still matches what was confirmed
     if (contacts.length !== payload.recipientCount) {
       await prisma.marketingCampaign.update({
@@ -411,7 +403,33 @@ export class CampaignService {
       );
     }
 
-    // ── Sequential send loop ─────────────────────────────────────────────
+    // ── Route: async (>25) vs sync (≤25) ────────────────────────────────
+    if (contacts.length > ASYNC_SEND_THRESHOLD) {
+      // Async path: enqueue to Redis, return immediately
+      const contactIds = contacts.map((c) => c.id);
+      await sendQueueService.enqueue(input.campaignId, contactIds);
+
+      // Delete confirmation token
+      await redis.del(confirmTokenKey(input.campaignId));
+
+      await writeAuditLog(
+        input.executedById,
+        'MARKETING_CAMPAIGN_SENT',
+        'MarketingCampaign',
+        input.campaignId,
+        { mode: 'async', queued: contactIds.length },
+      );
+
+      return {
+        campaignId:  input.campaignId,
+        finalStatus: MarketingCampaignStatus.SENDING,
+        sent:        0,
+        skipped:     0,
+        failed:      0,
+      };
+    }
+
+    // ── Sequential send loop (≤25 contacts) ─────────────────────────────
     let sentCount    = 0;
     let skippedCount = 0;
     let failedCount  = 0;

@@ -18,8 +18,12 @@
  *     hard bounce → SuppressionList (BOUNCED) + Contact.suppressedAt/suppressedReason
  *                   consentStatus is NOT changed (bounce is operational, not consent withdrawal)
  *     soft bounce → EmailEvent only; no suppression, no contact update
- *   email.complained  → COMPLAINED → SuppressionList (COMPLAINED) + Contact.suppressedAt +
- *                                    suppressedReason + consentStatus = REVOKED
+ *   email.complained    → COMPLAINED → SuppressionList (COMPLAINED) + Contact.suppressedAt +
+ *                                      suppressedReason + consentStatus = REVOKED
+ *   email.unsubscribed  → UNSUBSCRIBED → SuppressionList (UNSUBSCRIBED) + campaign counter
+ *
+ * Campaign aggregate counters on MarketingCampaign are incremented for:
+ *   opened, clicked, bounced (hard), complained, unsubscribed
  *
  * Idempotency: Redis SET NX on `sheriabot:resend:evt:{messageId}:{eventType}` (30-day TTL).
  */
@@ -82,6 +86,7 @@ export type VerifyAndParseResult =
 interface CampaignSendRow {
   id: string;
   contactId: string;
+  campaignId: string;
   openedAt: Date | null;
   firstClickedAt: Date | null;
 }
@@ -101,6 +106,12 @@ const RESEND_TO_EVENT_TYPE: Record<string, EmailEventType> = {
   'email.bounced':    EmailEventType.BOUNCED,
   'email.complained': EmailEventType.COMPLAINED,
 };
+
+/**
+ * Resend event types that are not in EmailEventType but need special handling.
+ * email.unsubscribed is handled separately (suppression + campaign counter).
+ */
+const RESEND_UNSUBSCRIBED_TYPE = 'email.unsubscribed';
 
 // ---------------------------------------------------------------------------
 // Svix signature verification (manual — no svix npm package)
@@ -206,7 +217,10 @@ class ResendWebhookService {
     messageId: string | null,
   ): Promise<void> {
     try {
-      if (!eventType) {
+      // email.unsubscribed is not in EmailEventType but still needs processing
+      const isUnsubscribeEvent = payload.type === RESEND_UNSUBSCRIBED_TYPE;
+
+      if (!eventType && !isUnsubscribeEvent) {
         logger.debug({ type: 'resend_webhook_unhandled', resendType: payload.type });
         return;
       }
@@ -215,15 +229,33 @@ class ResendWebhookService {
         return;
       }
 
-      const alreadyProcessed = await this.markProcessed(messageId, eventType);
+      // For email.unsubscribed, use a synthetic idempotency key since eventType is null
+      const idempotencyType = eventType ?? (isUnsubscribeEvent ? 'UNSUBSCRIBED_RESEND' : null);
+      if (!idempotencyType) {
+        logger.debug({ type: 'resend_webhook_no_idempotency_key', resendType: payload.type });
+        return;
+      }
+
+      const alreadyProcessed = await this.markProcessed(messageId, idempotencyType);
       if (alreadyProcessed) {
-        logger.info({ type: 'resend_webhook_duplicate_skipped', messageId, eventType });
+        logger.info({ type: 'resend_webhook_duplicate_skipped', messageId, idempotencyType });
         return;
       }
 
       logger.info({ type: 'resend_webhook_received', resendType: payload.type, messageId });
 
-      await this.processEvent(payload, eventType, messageId);
+      if (isUnsubscribeEvent) {
+        // Handle unsubscribe directly — no EmailEvent row (no EmailEventType value)
+        const send = await prisma.campaignSend.findFirst({
+          where:  { messageId },
+          select: { id: true, contactId: true, campaignId: true, openedAt: true, firstClickedAt: true },
+        });
+        const recipientEmail = payload.data.to?.[0] ?? null;
+        await this.handleUnsubscribed(send, recipientEmail);
+        return;
+      }
+
+      await this.processEvent(payload, eventType!, messageId);
     } catch (err: unknown) {
       // Errors are logged but not rethrown — the .catch() in app.ts is a secondary safety net
       logger.error({
@@ -249,7 +281,7 @@ class ResendWebhookService {
 
     const send = await prisma.campaignSend.findFirst({
       where:  { messageId },
-      select: { id: true, contactId: true, openedAt: true, firstClickedAt: true },
+      select: { id: true, contactId: true, campaignId: true, openedAt: true, firstClickedAt: true },
     });
 
     await prisma.emailEvent.create({
@@ -261,6 +293,12 @@ class ResendWebhookService {
         ...(send ? { sendId: send.id } : {}),
       },
     });
+
+    // Handle email.unsubscribed (not in EmailEventType enum — handled separately)
+    if (payload.type === RESEND_UNSUBSCRIBED_TYPE) {
+      await this.handleUnsubscribed(send, recipientEmail);
+      return;
+    }
 
     switch (eventType) {
       case EmailEventType.SENT:
@@ -306,6 +344,8 @@ class ResendWebhookService {
 
   private async handleOpened(send: CampaignSendRow | null, occurredAt: Date): Promise<void> {
     if (!send) return;
+    // Only increment counter on first open
+    const isFirstOpen = !send.openedAt;
     await prisma.campaignSend.update({
       where: { id: send.id },
       data:  {
@@ -313,10 +353,15 @@ class ResendWebhookService {
         openedAt: send.openedAt ?? occurredAt, // preserve first-open time
       },
     });
+    if (isFirstOpen) {
+      await this.incrementCampaignCounter(send.campaignId, 'totalOpened');
+    }
   }
 
   private async handleClicked(send: CampaignSendRow | null, occurredAt: Date): Promise<void> {
     if (!send) return;
+    // Only increment counter on first click
+    const isFirstClick = !send.firstClickedAt;
     await prisma.campaignSend.update({
       where: { id: send.id },
       data:  {
@@ -324,6 +369,9 @@ class ResendWebhookService {
         firstClickedAt: send.firstClickedAt ?? occurredAt,
       },
     });
+    if (isFirstClick) {
+      await this.incrementCampaignCounter(send.campaignId, 'totalClicked');
+    }
   }
 
   private async handleBounced(
@@ -358,6 +406,10 @@ class ResendWebhookService {
       await this.markContactSuppressed(email, SuppressionReason.BOUNCED, send?.contactId);
     }
 
+    if (send) {
+      await this.incrementCampaignCounter(send.campaignId, 'totalBounced');
+    }
+
     logger.info({
       type:       'resend_hard_bounce_suppressed',
       email,
@@ -388,6 +440,10 @@ class ResendWebhookService {
       await this.markContactSuppressed(email, SuppressionReason.COMPLAINED, send?.contactId);
     }
 
+    if (send) {
+      await this.incrementCampaignCounter(send.campaignId, 'totalComplained');
+    }
+
     logger.info({
       type:       'resend_spam_complaint_suppressed',
       email,
@@ -404,16 +460,16 @@ class ResendWebhookService {
    * Returns true if already processed (duplicate), false if new.
    * Fails open on Redis error so events are never silently dropped.
    */
-  private async markProcessed(messageId: string, eventType: EmailEventType): Promise<boolean> {
+  private async markProcessed(messageId: string, eventTypeKey: string): Promise<boolean> {
     try {
-      const key    = `sheriabot:resend:evt:${messageId}:${eventType}`;
+      const key    = `sheriabot:resend:evt:${messageId}:${eventTypeKey}`;
       const result = await redis.set(key, '1', { ex: IDEMPOTENCY_TTL, nx: true });
       return result === null; // null = key existed = duplicate
     } catch (err: unknown) {
       logger.warn({
         type:      'resend_webhook_idempotency_failed',
         messageId,
-        eventType,
+        eventTypeKey,
         error:     err instanceof Error ? err.message : String(err),
       });
       return false; // Fail open — process rather than silently drop
@@ -480,6 +536,54 @@ class ResendWebhookService {
       where: { email, deletedAt: null },
       data:  updateData,
     });
+  }
+
+  /**
+   * Handle email.unsubscribed from Resend's native unsubscribe handling.
+   * Suppresses the contact and increments the campaign unsubscribed counter.
+   */
+  private async handleUnsubscribed(
+    send: CampaignSendRow | null,
+    recipientEmail: string | null,
+  ): Promise<void> {
+    const email = recipientEmail ?? (send ? await this.emailFromSend(send) : null);
+
+    if (email) {
+      await this.upsertSuppression(email, SuppressionReason.UNSUBSCRIBED);
+      await this.markContactSuppressed(email, SuppressionReason.UNSUBSCRIBED, send?.contactId);
+    }
+
+    if (send) {
+      await this.incrementCampaignCounter(send.campaignId, 'totalUnsubscribed');
+    }
+
+    logger.info({
+      type:  'resend_unsubscribed_suppressed',
+      email,
+    });
+  }
+
+  /**
+   * Increment a single aggregate counter on MarketingCampaign.
+   * Non-fatal — logs on failure but does not rethrow.
+   */
+  private async incrementCampaignCounter(
+    campaignId: string,
+    field: 'totalOpened' | 'totalClicked' | 'totalBounced' | 'totalComplained' | 'totalUnsubscribed',
+  ): Promise<void> {
+    try {
+      await prisma.marketingCampaign.update({
+        where: { id: campaignId },
+        data:  { [field]: { increment: 1 } },
+      });
+    } catch (err: unknown) {
+      logger.warn({
+        type:       'campaign_counter_increment_failed',
+        campaignId,
+        field,
+        error:      err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Resolve the recipient email from CampaignSend → Contact. */

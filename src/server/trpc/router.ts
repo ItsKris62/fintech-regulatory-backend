@@ -24,6 +24,7 @@ import { complianceDashboardRouter } from '../routers/compliance-dashboard.route
 import { gapAnalysisRouter } from '../routers/gap-analysis.router';
 import { alertRouter } from '../routers/alert.router';
 import { adminMarketingRouter } from '../routers/adminMarketing.router';
+import { publicMarketingRouter } from '../routers/publicMarketing.router';
 
 /**
  * Root Application Router
@@ -73,7 +74,8 @@ export const appRouter = router({
   complianceDashboard: complianceDashboardRouter,
   gapAnalysis: gapAnalysisRouter,
   alert: alertRouter,
-  adminMarketing: adminMarketingRouter,
+  adminMarketing:   adminMarketingRouter,
+  publicMarketing:  publicMarketingRouter,
 });
 
 /**

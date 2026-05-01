@@ -1411,6 +1411,7 @@ model MarketingCampaign {
   updatedAt           DateTime                @updatedAt
 
   sends               CampaignSend[]
+  sendJobs            CampaignSendJob[]
 
   @@index([status])
   @@index([createdById])
@@ -1621,6 +1622,39 @@ enum EmailEventType {
   COMPLAINED
   DELAYED
   FAILED
+}
+
+// =============================================================================
+// ASYNC BULK SEND INFRASTRUCTURE (Phase B3)
+// =============================================================================
+
+model CampaignSendJob {
+  id            String                @id @default(cuid())
+  campaignId    String
+  campaign      MarketingCampaign     @relation(fields: [campaignId], references: [id])
+  status        CampaignSendJobStatus @default(QUEUED)
+  totalContacts Int                   @default(0)
+  processed     Int                   @default(0)
+  succeeded     Int                   @default(0)
+  failed        Int                   @default(0)
+  skipped       Int                   @default(0)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  errorMessage  String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([campaignId])
+  @@index([status])
+}
+
+enum CampaignSendJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  PARTIALLY_COMPLETED
+  FAILED
+  CANCELLED
 }
 
 enum ConsentAction {
