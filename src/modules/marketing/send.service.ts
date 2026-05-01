@@ -209,9 +209,11 @@ export class SendService {
 
       // ── Step 4: Generate unsubscribe token + URL ─────────────────────────
       const { publicToken, tokenHash } = generateSignedToken();
-      const baseUnsubUrl = `${appConfig.marketing.appPublicUrl}/unsubscribe/${publicToken}`;
-      const utmEnabled   = await isUtmTrackingEnabled();
-      const unsubscribeUrl = maybeAppendUtm(baseUnsubUrl, campaignName, utmEnabled);
+      const baseUnsubUrl     = `${appConfig.marketing.appPublicUrl}/unsubscribe/${publicToken}`;
+      const baseOneClickUrl  = `${appConfig.marketing.appPublicUrl}/api/unsubscribe/${publicToken}`;
+      const utmEnabled       = await isUtmTrackingEnabled();
+      const unsubscribeUrl   = maybeAppendUtm(baseUnsubUrl, campaignName, utmEnabled);
+      const oneClickUnsubUrl = maybeAppendUtm(baseOneClickUrl, campaignName, utmEnabled);
 
       // ── Step 5: Render template ──────────────────────────────────────────
       const registryEntry = TEMPLATE_REGISTRY[templateKey];
@@ -266,7 +268,7 @@ export class SendService {
         element:        emailElement,
         campaignId,
         contactId,
-        unsubscribeUrl,
+        unsubscribeUrl: oneClickUnsubUrl,
         additionalTags: [{ name: 'templateKey', value: templateKey.toLowerCase() }],
       });
 
