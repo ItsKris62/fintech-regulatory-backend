@@ -14,7 +14,7 @@ declare global {
 /**
  * Models that support soft delete via deletedAt column
  */
-const SOFT_DELETE_MODELS = ['User', 'Organization', 'Policy', 'LegalDocument'] as const;
+const SOFT_DELETE_MODELS = ['User', 'Policy', 'LegalDocument'] as const;
 type SoftDeleteModel = (typeof SOFT_DELETE_MODELS)[number];
 
 export function isSoftDeleteModel(model?: string): model is SoftDeleteModel {
@@ -118,36 +118,6 @@ const base = new PrismaClient({
         },
         async deleteMany({ args, query: _query }) {
           return base.user.updateMany({
-            ...args,
-            data: { deletedAt: new Date() } as any,
-          });
-        },
-        async findMany({ args, query }) {
-          args.where = { ...args.where, deletedAt: (args.where as any)?.deletedAt ?? null } as any;
-          return query(args);
-        },
-        async findFirst({ args, query }) {
-          args.where = { ...args.where, deletedAt: (args.where as any)?.deletedAt ?? null } as any;
-          return query(args);
-        },
-        async findUnique({ args, query }) {
-          return query(args);
-        },
-        async count({ args, query }) {
-          args.where = { ...args.where, deletedAt: (args.where as any)?.deletedAt ?? null } as any;
-          return query(args);
-        },
-      },
-
-      organization: {
-        async delete({ args, query: _query }) {
-          return (base.organization as any).update({
-            ...args,
-            data: { deletedAt: new Date() } as any,
-          });
-        },
-        async deleteMany({ args, query: _query }) {
-          return base.organization.updateMany({
             ...args,
             data: { deletedAt: new Date() } as any,
           });
