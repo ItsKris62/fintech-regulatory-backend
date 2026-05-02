@@ -56,6 +56,8 @@ import {
   systemConfigUpdateSchema,
 } from './admin.utils';
 import { createUserWithOrganization } from '@/server/services/userProvisioning.service';
+import { reactMailer } from '@/lib/email/react-mailer.service';
+import { appConfig } from '@/config/app.config';
 import {
   ADMIN_CONSTANTS,
   DEFAULT_SYSTEM_CONFIG,
@@ -1351,6 +1353,61 @@ class AdminModule {
     });
 
     logger.info({ type: 'admin_user_created', adminId, userId: user.id, role: user.role });
+
+    // -- Send welcome email via Resend (fire-and-forget  -  never blocks user creation) --
+    if (input.sendWelcomeEmail) {
+      const dashboardUrl = appConfig.frontendUrl;
+      const isPilot = input.isPilot ?? false;
+
+      try {
+        if (isPilot) {
+          // Pilot users get the PilotWelcomeEmail with login instructions and feature highlights
+          const pilotExpiresAt = (user as any).pilotExpiresAt
+            ? (user as any).pilotExpiresAt.toISOString()
+            : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+
+          await reactMailer.sendPilotWelcomeEmail(input.email.toLowerCase(), {
+            userName: input.fullName,
+            organization: user.organization?.name ?? input.organizationName ?? '',
+            pilotExpiresAt,
+            dashboardUrl,
+          });
+
+          logger.info({
+            type: 'pilot_welcome_email_sent',
+            userId: user.id,
+            email: input.email,
+            requestId,
+          });
+        } else {
+          // Non-pilot users get the standard WelcomeEmail
+          await reactMailer.sendWelcomeEmail(input.email.toLowerCase(), {
+            userName: input.fullName,
+            role: input.role,
+            organizationName: user.organization?.name ?? input.organizationName,
+            dashboardUrl,
+          });
+
+          logger.info({
+            type: 'welcome_email_sent',
+            userId: user.id,
+            email: input.email,
+            requestId,
+          });
+        }
+      } catch (emailErr: unknown) {
+        // Email failures must never crash user creation  -  log and continue
+        const errorMessage = emailErr instanceof Error ? emailErr.message : String(emailErr);
+        logger.error({
+          type: 'admin_create_user_welcome_email_failed',
+          userId: user.id,
+          email: input.email,
+          isPilot,
+          error: errorMessage,
+          requestId,
+        });
+      }
+    }
 
     return toAdminUserDetail(user as unknown as Record<string, unknown>, {
       sessions: 0,
