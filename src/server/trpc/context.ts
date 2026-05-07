@@ -1,5 +1,6 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { createHash } from 'crypto';
+import type { OrganizationMember } from '@prisma/client';
 import type { EffectivePlan } from '@/types/plan.types';
 import type { TrialContextState } from '@/modules/trial/trial.types';
 import { supabaseAdmin } from '@/lib/supabase';
@@ -47,6 +48,8 @@ export interface Context {
    * the usage counter. Never incremented if the service call throws.
    */
   incrementUsage?: () => Promise<void>;
+  /** Populated by requireOrgMember middleware. Present only after that middleware runs. */
+  orgMember?: OrganizationMember;
 }
 
 /** How long to cache the Prisma user lookup in Upstash (matches Supabase default token TTL). */

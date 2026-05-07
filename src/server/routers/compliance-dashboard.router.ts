@@ -1,6 +1,8 @@
 import { TRPCError } from '@trpc/server';
+import { MemberRole } from '@prisma/client';
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
+import { requireOrgMember, requireMemberRole } from '../trpc/middleware';
 import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
 
@@ -8,35 +10,29 @@ export const complianceDashboardRouter = router({
   /**
    * Get full compliance dashboard data for the user's organization.
    * Auto-seeds default checklist items on first access.
-   *
-   * @protected
+   * Requires: authenticated + active OrganizationMember (any role).
    */
-  getComplianceDashboard: protectedProcedure.query(async ({ ctx }) => {
+  getComplianceDashboard: protectedProcedure
+    .use(requireOrgMember)
+    .query(async ({ ctx }) => {
     try {
-      const orgId = ctx.user!.organizationId;
-
-      if (!orgId) {
-        return {
-          overallScore: 0,
-          trend: 0,
-          categories: [],
-          lastUpdated: new Date().toISOString(),
-        };
-      }
-
+      // orgId is guaranteed non-null by requireOrgMember middleware
+      const orgId = ctx.user!.organizationId!;
       const data = await complianceModule.getComplianceDashboardData(orgId);
 
       logger.info({
-        type: 'compliance_dashboard_retrieved',
+        type: 'compliance_dashboard.retrieved',
         userId: ctx.user!.id,
         orgId,
         overallScore: data.overallScore,
+        trendLabel: data.trend.label,
       });
 
       return data;
     } catch (error: unknown) {
+      if (error instanceof TRPCError) throw error;
       const msg = error instanceof Error ? error.message : 'Failed to load compliance dashboard';
-      logger.error({ type: 'compliance_dashboard_error', userId: ctx.user!.id, error: msg });
+      logger.error({ type: 'compliance_dashboard.error', userId: ctx.user!.id, error: msg });
       throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to load compliance dashboard', cause: error });
     }
   }),
@@ -44,10 +40,12 @@ export const complianceDashboardRouter = router({
   /**
    * Mark a compliance dashboard item as completed or incomplete.
    * Operates on the ComplianceItem model (the seeded startup dashboard checklist).
-   *
-   * @protected
+   * Requires: authenticated + active OrganizationMember with at least MEMBER role
+   * (VIEWER cannot mutate).
    */
   updateDashboardItem: protectedProcedure
+    .use(requireOrgMember)
+    .use(requireMemberRole([MemberRole.MEMBER, MemberRole.ADMIN, MemberRole.OWNER]))
     .input(
       z.object({
         itemId: z.string().min(1),
@@ -90,10 +88,10 @@ export const complianceDashboardRouter = router({
 
   /**
    * Get all checklist items for a specific compliance category.
-   *
-   * @protected
+   * Requires: authenticated + active OrganizationMember (any role).
    */
   getChecklistByCategory: protectedProcedure
+    .use(requireOrgMember)
     .input(
       z.object({
         category: z.enum([

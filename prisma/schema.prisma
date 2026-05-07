@@ -3,88 +3,94 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  
+  provider = "postgresql"
 }
 
 model User {
-  id                       String                   @id @default(cuid())
-  supabaseAuthId           String?                  @unique
-  email                    String                   @unique
-  password                 String?   // nullable — Supabase is the authoritative credential store
-  fullName                 String
-  phone                    String?
-  avatar                   String?
-  role                     UserRole
-  status                   UserStatus               @default(PENDING_VERIFICATION)
-  accountStatus            String                   @default("pending") // "pending" | "active" | "suspended" | "rejected" | "pending_approval"
-  emailVerified            Boolean                  @default(false)
-  emailVerifiedAt          DateTime?
-  emailVerificationToken   String?                  @unique
-  emailVerificationExpiry  DateTime?
-  passwordResetToken       String?                  @unique
-  passwordResetExpiry      DateTime?
-  organizationId           String?
-  lastLoginAt              DateTime?
-  lastLoginIp              String?
-  createdAt                DateTime                 @default(now())
-  updatedAt                DateTime                 @updatedAt
-  deletedAt                DateTime?                // Soft delete timestamp — null means active
-  preferences              Json?
-  totpEnabled              Boolean                  @default(false)
-  totpSecret               String?
-  apiKeys                  ApiKey[]
-  auditLogs                AuditLog[]
-  checklists               Checklist[]
-  gapAnalyses              GapAnalysis[]
-  complianceQueries        ComplianceQuery[]
-  authoredDocuments        LegalDocument[]          @relation("DocumentAuthor")
-  publishedDocuments       LegalDocument[]          @relation("DocumentPublisher")
-  vaultDocuments           VaultDocument[]
-  notifications            Notification[]
-  notificationPreferences  NotificationPreference?
-  categoryPreferences      NotificationCategoryPreference[]
-  policies                 Policy[]
-  sessions                 Session[]
-  organization             Organization?            @relation(fields: [organizationId], references: [id])
-  queryFeedbacks           QueryFeedback[]
-  savedResponses           SavedResponse[]
-  supportTickets           SupportTicket[]
-  ticketComments           TicketComment[]
+  id                      String                           @id @default(cuid())
+  supabaseAuthId          String?                          @unique
+  email                   String                           @unique
+  password                String? // nullable — Supabase is the authoritative credential store
+  fullName                String
+  phone                   String?
+  avatar                  String?
+  role                    UserRole
+  status                  UserStatus                       @default(PENDING_VERIFICATION)
+  accountStatus           String                           @default("pending") // "pending" | "active" | "suspended" | "rejected" | "pending_approval"
+  emailVerified           Boolean                          @default(false)
+  emailVerifiedAt         DateTime?
+  emailVerificationToken  String?                          @unique
+  emailVerificationExpiry DateTime?
+  passwordResetToken      String?                          @unique
+  passwordResetExpiry     DateTime?
+  organizationId          String?
+  lastLoginAt             DateTime?
+  lastLoginIp             String?
+  createdAt               DateTime                         @default(now())
+  updatedAt               DateTime                         @updatedAt
+  deletedAt               DateTime? // Soft delete timestamp — null means active
+  preferences             Json?
+  totpEnabled             Boolean                          @default(false)
+  totpSecret              String?
+  apiKeys                 ApiKey[]
+  auditLogs               AuditLog[]
+  checklists              Checklist[]
+  gapAnalyses             GapAnalysis[]
+  complianceQueries       ComplianceQuery[]
+  authoredDocuments       LegalDocument[]                  @relation("DocumentAuthor")
+  publishedDocuments      LegalDocument[]                  @relation("DocumentPublisher")
+  vaultDocuments          VaultDocument[]
+  notifications           Notification[]
+  notificationPreferences NotificationPreference?
+  categoryPreferences     NotificationCategoryPreference[]
+  policies                Policy[]
+  sessions                Session[]
+  organization            Organization?                    @relation(fields: [organizationId], references: [id])
+  queryFeedbacks          QueryFeedback[]
+  savedResponses          SavedResponse[]
+  supportTickets          SupportTicket[]
+  ticketComments          TicketComment[]
 
   // Free trial fields (one-time, user-scoped -- not org-scoped)
-  freeTrialActivatedAt     DateTime?
-  freeTrialExpiresAt       DateTime?
-  freeTrialUsage           Json?       // TrialUsage: { complianceQueries, gapAnalyses, checklists, vaultUploads, totalTokensUsed }
+  freeTrialActivatedAt DateTime?
+  freeTrialExpiresAt   DateTime?
+  freeTrialUsage       Json? // TrialUsage: { complianceQueries, gapAnalyses, checklists, vaultUploads, totalTokensUsed }
 
   // Pilot testing fields (14-day closed beta -- additive, never touched for non-pilot users)
-  isPilot                  Boolean   @default(false)
-  pilotCohort              String?                 // e.g. "PILOT_COHORT_001"
-  pilotStartedAt           DateTime?
-  pilotExpiresAt           DateTime?
-  postPilotTier            String    @default("REGULATOR") // tier to revert to after pilot expires
-  pilotConvertedAt         DateTime?               // set when pilot converts to a paid plan
-  pilotEvents              PilotEvent[]
-  publishedAlerts          RegulatoryAlert[]
-  alertNotifications       AlertNotification[]
+  isPilot            Boolean             @default(false)
+  pilotCohort        String? // e.g. "PILOT_COHORT_001"
+  pilotStartedAt     DateTime?
+  pilotExpiresAt     DateTime?
+  postPilotTier      String              @default("REGULATOR") // tier to revert to after pilot expires
+  pilotConvertedAt   DateTime? // set when pilot converts to a paid plan
+  pilotEvents        PilotEvent[]
+  publishedAlerts    RegulatoryAlert[]
+  alertNotifications AlertNotification[]
 
   // Account deletion fields (GDPR compliant scheduled deletion)
-  deletionScheduledAt      DateTime?
-  deletionReason           String?
-  deletionFeedback         String?
+  deletionScheduledAt DateTime?
+  deletionReason      String?
+  deletionFeedback    String?
 
   // =====================================================
   // Marketing & Outreach module relations (Phase B1)
   // =====================================================
-  companiesCreated              Company[]                @relation("CompanyCreatedBy")
-  contactsCreated               Contact[]                @relation("ContactCreatedBy")
-  contactListsCreated           ContactList[]            @relation("ContactListCreatedBy")
-  contactListMembershipsAdded   ContactListMembership[]  @relation("ContactListMembershipAddedBy")
-  marketingCampaignsCreated     MarketingCampaign[]      @relation("MarketingCampaignCreatedBy")
-  suppressionsAdded             SuppressionList[]        @relation("SuppressionAddedBy")
-  pilotInvitationsCreated       PilotInvitation[]        @relation("PilotInvitationCreatedBy")
-  pilotApplicationsReviewed     PilotApplication[]       @relation("PilotApplicationReviewedBy")
-  pilotApplicationProvisioned   PilotApplication?        @relation("PilotApplicationProvisionedUser")
+  companiesCreated            Company[]               @relation("CompanyCreatedBy")
+  contactsCreated             Contact[]               @relation("ContactCreatedBy")
+  contactListsCreated         ContactList[]           @relation("ContactListCreatedBy")
+  contactListMembershipsAdded ContactListMembership[] @relation("ContactListMembershipAddedBy")
+  marketingCampaignsCreated   MarketingCampaign[]     @relation("MarketingCampaignCreatedBy")
+  suppressionsAdded           SuppressionList[]       @relation("SuppressionAddedBy")
+  pilotInvitationsCreated     PilotInvitation[]       @relation("PilotInvitationCreatedBy")
+  pilotApplicationsReviewed   PilotApplication[]      @relation("PilotApplicationReviewedBy")
+  pilotApplicationProvisioned PilotApplication?       @relation("PilotApplicationProvisionedUser")
+
+  // Enterprise AI Policy Generator
+  generatedPolicies GeneratedPolicy[]
+
+  // Organization membership (multi-member orgs)
+  organizationMemberships OrganizationMember[] @relation("OrganizationMemberUser")
+  sentInvitations         OrganizationMember[] @relation("OrganizationMemberInviter")
 
   @@index([email])
   @@index([supabaseAuthId])
@@ -96,44 +102,44 @@ model User {
 }
 
 model Organization {
-  id                 String           @id @default(cuid())
-  name               String
-  type               String
-  organizationType   String           @default("startup") // "regulator" | "startup" | "enterprise"
-  registrationNumber String?
-  cbkLicenseNumber   String?
-  website            String?
-  industry           String?
-  size               String?
-  subscriptionTier   String           @default("starter")
-  subscriptionStatus SubscriptionStatus @default(ACTIVE)
-  trialEndsAt        DateTime?
-  gracePeriodEndsAt  DateTime?          // set on cancellation; org keeps plan until this passes
-  cancelledAt        DateTime?          // when the user initiated cancellation
-  subscriptionEndsAt DateTime?
-  verificationStatus String           @default("pending") // "pending" | "verified" | "rejected"
-  verifiedAt         DateTime?
-  verifiedBy         String?
+  id                      String                    @id @default(cuid())
+  name                    String
+  type                    String
+  organizationType        String                    @default("startup") // "regulator" | "startup" | "enterprise"
+  registrationNumber      String?
+  cbkLicenseNumber        String?
+  website                 String?
+  industry                String?
+  size                    String?
+  subscriptionTier        String                    @default("starter")
+  subscriptionStatus      SubscriptionStatus        @default(ACTIVE)
+  trialEndsAt             DateTime?
+  gracePeriodEndsAt       DateTime? // set on cancellation; org keeps plan until this passes
+  cancelledAt             DateTime? // when the user initiated cancellation
+  subscriptionEndsAt      DateTime?
+  verificationStatus      String                    @default("pending") // "pending" | "verified" | "rejected"
+  verifiedAt              DateTime?
+  verifiedBy              String?
   // Plan entitlements (new — additive)
-  plan               SubscriptionPlan @default(REGULATOR)
-  planStartDate      DateTime?
-  planEndDate        DateTime?
-  maxSeats           Int              @default(1)
-  stripeCustomerId   String?          @unique
-  stripeSubId        String?          @unique
-  customLimits       Json?
+  plan                    SubscriptionPlan          @default(REGULATOR)
+  planStartDate           DateTime?
+  planEndDate             DateTime?
+  maxSeats                Int                       @default(1)
+  stripeCustomerId        String?                   @unique
+  stripeSubId             String?                   @unique
+  customLimits            Json?
   // M-Pesa / IntaSend payment fields
   preferredPaymentMethod  PaymentProvider? // STRIPE | MPESA; null = Stripe default
-  mpesaPhoneNumber        String?          // stored as 254XXXXXXXXX
-  mpesaNextPaymentDueDate DateTime?        // set on each successful M-Pesa payment; lazy-evaluated for renewal
+  mpesaPhoneNumber        String? // stored as 254XXXXXXXXX
+  mpesaNextPaymentDueDate DateTime? // set on each successful M-Pesa payment; lazy-evaluated for renewal
   // Contact Information — Primary contact for regulatory matters
-  address            String?
-  contactPerson      String?
-  contactPosition    String?
-  contactEmail       String?
-  contactPhone       String?
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
+  address                 String?
+  contactPerson           String?
+  contactPosition         String?
+  contactEmail            String?
+  contactPhone            String?
+  createdAt               DateTime                  @default(now())
+  updatedAt               DateTime                  @updatedAt
   users                   User[]
   policies                Policy[]
   complianceItems         ComplianceItem[]
@@ -145,6 +151,12 @@ model Organization {
   payments                Payment[]
   alertSubscription       AlertSubscription?
   alertNotifications      AlertNotification[]
+
+  // Enterprise AI Policy Generator
+  generatedPolicies GeneratedPolicy[]
+
+  // Organization membership (multi-member orgs)
+  members OrganizationMember[] @relation("OrganizationMembers")
 
   @@index([name])
   @@index([verificationStatus])
@@ -168,7 +180,7 @@ model Session {
 }
 
 model Policy {
-  id                     String       @id @default(cuid())
+  id                     String        @id @default(cuid())
   userId                 String
   organizationId         String?
   scenario               String
@@ -182,27 +194,27 @@ model Policy {
   complianceChecklist    Json?
   implementationTimeline Json?
   appendices             Json?
-  content                String?      @db.Text
+  content                String?       @db.Text
   organizationType       String?
   specificRequirements   String?
   targetAudience         String?
   generationMetadata     Json?
-  isLatestVersion        Boolean      @default(true)
+  isLatestVersion        Boolean       @default(true)
   parentId               String?
-  status                 PolicyStatus @default(DRAFT)
+  status                 PolicyStatus  @default(DRAFT)
   generationTime         Int?
-  version                Int          @default(1)
+  version                Int           @default(1)
   assignedTo             String?
   reviewers              String[]
   deletedAt              DateTime?
-  createdAt              DateTime     @default(now())
-  updatedAt              DateTime     @updatedAt
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
   citations              Citation[]
   comments               Comment[]
-  user                   User         @relation(fields: [userId], references: [id])
+  user                   User          @relation(fields: [userId], references: [id])
   organization           Organization? @relation(fields: [organizationId], references: [id])
-  parent                 Policy?      @relation("PolicyVersions", fields: [parentId], references: [id])
-  versions               Policy[]     @relation("PolicyVersions")
+  parent                 Policy?       @relation("PolicyVersions", fields: [parentId], references: [id])
+  versions               Policy[]      @relation("PolicyVersions")
 
   @@index([userId])
   @@index([organizationId])
@@ -212,30 +224,30 @@ model Policy {
 }
 
 model Citation {
-  id                String          @id @default(cuid())
+  id String @id @default(cuid())
 
   // Polymorphic parent -- exactly one should be set
-  policyId          String?
-  policy            Policy?         @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  policyId String?
+  policy   Policy? @relation(fields: [policyId], references: [id], onDelete: Cascade)
 
   complianceQueryId String?
   complianceQuery   ComplianceQuery? @relation("ComplianceQueryCitations", fields: [complianceQueryId], references: [id], onDelete: Cascade)
 
-  actName           String
-  section           String
-  subsection        String?
-  textSnippet       String          @db.Text
-  confidence        String
-  verified          Boolean         @default(false)
+  actName     String
+  section     String
+  subsection  String?
+  textSnippet String  @db.Text
+  confidence  String
+  verified    Boolean @default(false)
 
   // Link to legal corpus when identifiable from RAG
-  documentId        String?
-  document          LegalDocument?  @relation(fields: [documentId], references: [id])
+  documentId String?
+  document   LegalDocument? @relation(fields: [documentId], references: [id])
 
   // Fallback for RAG-sourced citations with no DB record
-  rawSource         Json?
+  rawSource Json?
 
-  createdAt         DateTime        @default(now())
+  createdAt DateTime @default(now())
 
   @@index([policyId])
   @@index([complianceQueryId])
@@ -335,7 +347,7 @@ model DocumentChunk {
 }
 
 model ComplianceQuery {
-  id               String   @id @default(cuid())
+  id               String          @id @default(cuid())
   userId           String
   organizationId   String?
   query            String
@@ -351,13 +363,13 @@ model ComplianceQuery {
   regulations      Json?
   requirements     Json?
   gaps             Json?
-  status           String   @default("processing")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  user             User     @relation(fields: [userId], references: [id])
+  status           String          @default("processing")
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  user             User            @relation(fields: [userId], references: [id])
   feedbacks        QueryFeedback[]
   saves            SavedResponse[]
-  citationRecords  Citation[]  @relation("ComplianceQueryCitations")
+  citationRecords  Citation[]      @relation("ComplianceQueryCitations")
 
   @@index([userId])
   @@index([createdAt])
@@ -409,10 +421,10 @@ model ChecklistItem {
   description         String
   guidance            String?
   regulatoryReference String
-  actionItems         Json      // String[] stored as JSON array
+  actionItems         Json // String[] stored as JSON array
   deadline            String?
   penalty             String?
-  priority            String    // CRITICAL | HIGH | MEDIUM | LOW
+  priority            String // CRITICAL | HIGH | MEDIUM | LOW
   status              String    @default("PENDING") // PENDING | IN_PROGRESS | COMPLETED | NOT_APPLICABLE
   notes               String?
   order               Int       @default(0)
@@ -452,6 +464,9 @@ model GapAnalysis {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
   user                 User      @relation(fields: [userId], references: [id])
+
+  // Enterprise AI Policy Generator
+  generatedPolicies GeneratedPolicy[]
 
   @@index([userId])
   @@index([status])
@@ -613,12 +628,12 @@ model LoginHistory {
 model Invitation {
   id             String    @id @default(cuid())
   email          String
-  role           String    // Target role: REGULATOR, STARTUP, ENTERPRISE
+  role           String // Target role: REGULATOR, STARTUP, ENTERPRISE
   token          String    @unique
   expiresAt      DateTime
   used           Boolean   @default(false)
   usedAt         DateTime?
-  invitedBy      String    // Admin user ID
+  invitedBy      String // Admin user ID
   organizationId String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -630,32 +645,32 @@ model Invitation {
 model EmailDomainWhitelist {
   id        String   @id @default(cuid())
   domain    String   @unique
-  orgType   String   // "regulator"
-  orgName   String   // "Central Bank of Kenya"
+  orgType   String // "regulator"
+  orgName   String // "Central Bank of Kenya"
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 }
 
 model NotificationPreference {
-  id                        String  @id @default(cuid())
-  userId                    String  @unique
-  user                      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // General Email Notifications
-  regulatoryUpdates         Boolean @default(true)
-  deadlineReminders         Boolean @default(true)
-  reportReady               Boolean @default(true)
-  supportResponses          Boolean @default(true)
+  regulatoryUpdates Boolean @default(true)
+  deadlineReminders Boolean @default(true)
+  reportReady       Boolean @default(true)
+  supportResponses  Boolean @default(true)
 
   // In-App Notifications
-  realTimeAlerts            Boolean @default(true)
+  realTimeAlerts Boolean @default(true)
 
   // Email Digest
-  emailDigestEnabled        Boolean @default(false)
-  digestFrequency           String  @default("weekly") // "daily" | "weekly" | "monthly"
+  emailDigestEnabled Boolean @default(false)
+  digestFrequency    String  @default("weekly") // "daily" | "weekly" | "monthly"
 
   // Billing notifications (toggleable)
-  paymentDueReminder        Boolean @default(true)
+  paymentDueReminder Boolean @default(true)
 
   // Compliance/system notifications (toggleable)
   complianceQueryReady      Boolean @default(true)
@@ -754,12 +769,12 @@ enum NotificationType {
 }
 
 enum NotificationCategory {
-  SECURITY    // Password changes, login alerts, and security events
-  COMPLIANCE  // Checklists, gap analysis, policy docs
-  DOCUMENTS   // Vault uploads, deletions, and vault activity
-  ACCOUNT     // Profile changes, organization updates, and subscription events
-  SUPPORT     // Support ticket creation and status updates
-  SYSTEM      // Platform announcements and maintenance notices
+  SECURITY // Password changes, login alerts, and security events
+  COMPLIANCE // Checklists, gap analysis, policy docs
+  DOCUMENTS // Vault uploads, deletions, and vault activity
+  ACCOUNT // Profile changes, organization updates, and subscription events
+  SUPPORT // Support ticket creation and status updates
+  SYSTEM // Platform announcements and maintenance notices
 }
 
 model NotificationCategoryPreference {
@@ -934,7 +949,7 @@ model QueryFeedback {
   id        String          @id @default(cuid())
   queryId   String
   userId    String
-  rating    String          // "up" | "down"
+  rating    String // "up" | "down"
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
   query     ComplianceQuery @relation(fields: [queryId], references: [id], onDelete: Cascade)
@@ -960,16 +975,16 @@ model SavedResponse {
 }
 
 model ComplianceScoreSnapshot {
-  id                    String   @id @default(cuid())
-  organizationId        String
-  overallScore          Float
-  dataProtectionScore   Float
-  amlKycScore           Float
+  id                      String       @id @default(cuid())
+  organizationId          String
+  overallScore            Float
+  dataProtectionScore     Float
+  amlKycScore             Float
   consumerProtectionScore Float
-  cbkLicensingScore     Float
-  cybersecurityScore    Float
-  calculatedAt          DateTime @default(now())
-  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  cbkLicensingScore       Float
+  cybersecurityScore      Float
+  calculatedAt            DateTime     @default(now())
+  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
   @@index([organizationId, calculatedAt])
@@ -1000,12 +1015,12 @@ enum VaultDocumentStatus {
 // ============================================================================
 
 enum SubscriptionStatus {
-  ACTIVE        // Subscription is current and paid
-  TRIALING      // Within the 14-day free trial window
-  PAST_DUE      // Payment failed; Stripe is retrying
-  CANCELLED     // Stripe subscription deleted; immediately enters GRACE_PERIOD
-  GRACE_PERIOD  // Cancelled but within the 7-day grace window; full access retained
-  EXPIRED       // Grace period elapsed; plan has been downgraded to REGULATOR
+  ACTIVE // Subscription is current and paid
+  TRIALING // Within the 14-day free trial window
+  PAST_DUE // Payment failed; Stripe is retrying
+  CANCELLED // Stripe subscription deleted; immediately enters GRACE_PERIOD
+  GRACE_PERIOD // Cancelled but within the 7-day grace window; full access retained
+  EXPIRED // Grace period elapsed; plan has been downgraded to REGULATOR
 }
 
 enum SubscriptionPlan {
@@ -1025,15 +1040,15 @@ enum BillingMetric {
 }
 
 model UsageRecord {
-  id             String          @id @default(cuid())
+  id             String        @id @default(cuid())
   organizationId String
-  organization   Organization    @relation(fields: [organizationId], references: [id])
+  organization   Organization  @relation(fields: [organizationId], references: [id])
   metric         BillingMetric
-  count          Int             @default(0)
+  count          Int           @default(0)
   periodStart    DateTime
   periodEnd      DateTime
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   @@unique([organizationId, metric, periodStart])
   @@index([organizationId, metric])
@@ -1046,14 +1061,14 @@ model UsageRecord {
 // ============================================================================
 
 model UsagePeriod {
-  id             String   @id @default(cuid())
+  id             String @id @default(cuid())
   organizationId String
 
   // Period boundaries stored as UTC equivalents of EAT calendar-month boundaries.
   // periodStart = 1st of month 00:00:00 EAT expressed in UTC.
   // periodEnd   = last day of month 23:59:59.999 EAT expressed in UTC.
-  periodStart    DateTime
-  periodEnd      DateTime
+  periodStart DateTime
+  periodEnd   DateTime
 
   // ---- Usage counters (synced lazily from Redis on each dashboard read) ----
   complianceQueries    Int   @default(0)
@@ -1071,8 +1086,8 @@ model UsagePeriod {
   checklistGenerationLimit Int
   apiCallLimit             Int
   documentStorageMbLimit   Float
-  gapAnalysisLimit         Int    // boolean features: -1 = enabled, 0 = disabled
-  policyGenerationLimit    Int    // boolean features: -1 = enabled, 0 = disabled
+  gapAnalysisLimit         Int // boolean features: -1 = enabled, 0 = disabled
+  policyGenerationLimit    Int // boolean features: -1 = enabled, 0 = disabled
 
   // ---- Audit ---------------------------------------------------------------
   syncedFromRedisAt DateTime? // Last time counters were synced from Redis
@@ -1109,15 +1124,15 @@ model Payment {
   subscriptionId        String?
   provider              PaymentProvider
   providerTransactionId String?
-  amount                Int             // smallest currency unit (e.g. KES cents)
+  amount                Int // smallest currency unit (e.g. KES cents)
   currency              String          @default("KES")
   status                PaymentStatus   @default(PENDING)
   description           String?
   paidAt                DateTime?
-  metadata              Json?           // provider-specific data (invoice URL, etc.)
+  metadata              Json? // provider-specific data (invoice URL, etc.)
   // Invoice fields (generated at payment creation time)
   invoiceNumber         String?         @unique // SB-{YYYY}-{00000}
-  subscriptionPlan      String?                 // plan name at time of payment (e.g. "STARTUP")
+  subscriptionPlan      String? // plan name at time of payment (e.g. "STARTUP")
   billingPeriodStart    DateTime?
   billingPeriodEnd      DateTime?
   createdAt             DateTime        @default(now())
@@ -1139,11 +1154,11 @@ model ComplianceEvent {
   title          String
   description    String?
   dueDate        DateTime
-  priority       String    @default("MEDIUM")   // LOW | MEDIUM | HIGH | CRITICAL
+  priority       String    @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
   status         String    @default("UPCOMING") // UPCOMING | IN_PROGRESS | COMPLETED | OVERDUE
-  category       String    @default("CUSTOM")   // CUSTOM | FILING | AUDIT | RENEWAL | REVIEW
+  category       String    @default("CUSTOM") // CUSTOM | FILING | AUDIT | RENEWAL | REVIEW
   regulation     String?
-  recurrence     String?   @default("NONE")     // NONE | MONTHLY | QUARTERLY | ANNUALLY
+  recurrence     String?   @default("NONE") // NONE | MONTHLY | QUARTERLY | ANNUALLY
   assigneeId     String?
   createdById    String
   completedAt    DateTime?
@@ -1153,10 +1168,10 @@ model ComplianceEvent {
   organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   notifications Notification[]
 
+  @@unique([organizationId, title, dueDate])
   @@index([organizationId])
   @@index([organizationId, dueDate])
   @@index([organizationId, status])
-  @@unique([organizationId, title, dueDate])
 }
 
 model VaultDocument {
@@ -1211,10 +1226,10 @@ model RegulatoryFramework {
 // ============================================================================
 
 model PilotEvent {
-  id        String   @id                   // cuid() generated in application layer
+  id        String   @id // cuid() generated in application layer
   userId    String
-  action    String                         // LOGIN | CHECKLIST_GENERATED | DOCUMENT_UPLOADED | etc.
-  feature   String                         // product area e.g. "compliance", "vault"
+  action    String // LOGIN | CHECKLIST_GENERATED | DOCUMENT_UPLOADED | etc.
+  feature   String // product area e.g. "compliance", "vault"
   metadata  Json?
   sessionId String?
   createdAt DateTime @default(now())
@@ -1294,18 +1309,18 @@ model AlertNotification {
 // =============================================================================
 
 model Company {
-  id            String    @id @default(cuid())
-  name          String
-  domain        String?   @unique
-  industry      String?
-  regulatorMix  String[]  @default([])
-  notes         String?
-  createdById   String
-  createdBy     User      @relation("CompanyCreatedBy", fields: [createdById], references: [id])
-  contacts      Contact[]
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  deletedAt     DateTime?
+  id           String    @id @default(cuid())
+  name         String
+  domain       String?   @unique
+  industry     String?
+  regulatorMix String[]  @default([])
+  notes        String?
+  createdById  String
+  createdBy    User      @relation("CompanyCreatedBy", fields: [createdById], references: [id])
+  contacts     Contact[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
 
   @@index([name])
   @@index([createdById])
@@ -1313,18 +1328,18 @@ model Company {
 }
 
 model Contact {
-  id                String                  @id @default(cuid())
+  id                String               @id @default(cuid())
   companyId         String?
-  company           Company?                @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  email             String                  @unique
+  company           Company?             @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  email             String               @unique
   firstName         String?
   lastName          String?
   role              String?
   phone             String?
   primaryRegulator  String?
-  tags              String[]                @default([])
+  tags              String[]             @default([])
   notes             String?
-  consentStatus     ContactConsentStatus    @default(PENDING)
+  consentStatus     ContactConsentStatus @default(PENDING)
   consentSource     String?
   consentTimestamp  DateTime?
   suppressedAt      DateTime?
@@ -1332,15 +1347,15 @@ model Contact {
   lastEmailedAt     DateTime?
   lastEmailOpenedAt DateTime?
   createdById       String
-  createdBy         User                    @relation("ContactCreatedBy", fields: [createdById], references: [id])
-  createdAt         DateTime                @default(now())
-  updatedAt         DateTime                @updatedAt
+  createdBy         User                 @relation("ContactCreatedBy", fields: [createdById], references: [id])
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
   deletedAt         DateTime?
 
-  consentRecords    ConsentRecord[]
-  listMemberships   ContactListMembership[]
-  campaignSends     CampaignSend[]
-  pilotInvitations  PilotInvitation[]
+  consentRecords   ConsentRecord[]
+  listMemberships  ContactListMembership[]
+  campaignSends    CampaignSend[]
+  pilotInvitations PilotInvitation[]
 
   @@index([email])
   @@index([companyId])
@@ -1351,31 +1366,31 @@ model Contact {
 }
 
 model ContactList {
-  id              String                  @id @default(cuid())
-  name            String                  @unique
-  description     String?
-  isDynamic       Boolean                 @default(false)
-  filterCriteria  Json?
-  createdById     String
-  createdBy       User                    @relation("ContactListCreatedBy", fields: [createdById], references: [id])
-  memberships     ContactListMembership[]
-  campaigns       MarketingCampaign[]
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
-  deletedAt       DateTime?
+  id             String                  @id @default(cuid())
+  name           String                  @unique
+  description    String?
+  isDynamic      Boolean                 @default(false)
+  filterCriteria Json?
+  createdById    String
+  createdBy      User                    @relation("ContactListCreatedBy", fields: [createdById], references: [id])
+  memberships    ContactListMembership[]
+  campaigns      MarketingCampaign[]
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  deletedAt      DateTime?
 
   @@index([createdById])
   @@index([deletedAt])
 }
 
 model ContactListMembership {
-  listId     String
-  list       ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
-  contactId  String
-  contact    Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  addedAt    DateTime    @default(now())
-  addedById  String
-  addedBy    User        @relation("ContactListMembershipAddedBy", fields: [addedById], references: [id])
+  listId    String
+  list      ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contactId String
+  contact   Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  addedAt   DateTime    @default(now())
+  addedById String
+  addedBy   User        @relation("ContactListMembershipAddedBy", fields: [addedById], references: [id])
 
   @@id([listId, contactId])
   @@index([contactId])
@@ -1410,8 +1425,8 @@ model MarketingCampaign {
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
 
-  sends               CampaignSend[]
-  sendJobs            CampaignSendJob[]
+  sends    CampaignSend[]
+  sendJobs CampaignSendJob[]
 
   @@index([status])
   @@index([createdById])
@@ -1420,27 +1435,27 @@ model MarketingCampaign {
 }
 
 model CampaignSend {
-  id             String              @id @default(cuid())
-  campaignId     String
-  campaign       MarketingCampaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  contactId      String
-  contact        Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  status                CampaignSendStatus  @default(PENDING)
-  messageId             String?
-  unsubscribeTokenHash  String?             @unique
-  sentAt                DateTime?
-  deliveredAt    DateTime?
-  openedAt       DateTime?
-  firstClickedAt DateTime?
-  bouncedAt      DateTime?
-  unsubscribedAt DateTime?
-  complainedAt   DateTime?
-  suppressionReason  SuppressionReason?
-  errorMessage   String?
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
+  id                   String             @id @default(cuid())
+  campaignId           String
+  campaign             MarketingCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId            String
+  contact              Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  status               CampaignSendStatus @default(PENDING)
+  messageId            String?
+  unsubscribeTokenHash String?            @unique
+  sentAt               DateTime?
+  deliveredAt          DateTime?
+  openedAt             DateTime?
+  firstClickedAt       DateTime?
+  bouncedAt            DateTime?
+  unsubscribedAt       DateTime?
+  complainedAt         DateTime?
+  suppressionReason    SuppressionReason?
+  errorMessage         String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
 
-  events         EmailEvent[]
+  events EmailEvent[]
 
   @@unique([campaignId, contactId])
   @@index([messageId])
@@ -1507,7 +1522,7 @@ model PilotApplication {
   ipAddress              String?
   userAgent              String?
 
-  reverseInvitation      PilotInvitation?       @relation("PilotInvitationApplication")
+  reverseInvitation PilotInvitation? @relation("PilotInvitationApplication")
 
   @@index([status])
   @@index([email])
@@ -1662,4 +1677,144 @@ enum ConsentAction {
   REVOKED
   UPDATED
   IMPORTED_LEGITIMATE_INTEREST
+}
+
+// =============================================================================
+// ENTERPRISE AI POLICY GENERATOR (Phase: Enterprise Policy Generator)
+// =============================================================================
+
+model GeneratedPolicy {
+  id             String @id @default(cuid())
+  userId         String
+  organizationId String
+
+  // Policy metadata
+  policyType       String // "DATA_PROTECTION" | "AML_CFT" | "IT_SECURITY" | "CONSUMER_PROTECTION" | "CYBERSECURITY" | "CUSTOM"
+  title            String
+  description      String?
+  targetAudience   String?
+  organizationType String?
+
+  // Source gap (nullable — can be created standalone or from a gap)
+  sourceGapAnalysisId String?
+  sourceGapId         String? // specific gap item ID within the analysis JSON
+
+  // Regulatory context
+  regulatoryFrameworks String[] // e.g. ["DPA 2019", "POCAMLA"]
+  jurisdiction         String   @default("Kenya")
+
+  // AI Pipeline state
+  status       GeneratedPolicyStatus @default(INITIALIZING)
+  progress     Int                   @default(0)
+  errorMessage String?
+
+  // Content — stored as structured JSON
+  tableOfContents  Json? // OutlineResult: { sections: [{id, title, description, estimatedWordCount, mandatoryClauses}] }
+  sections         Json? // PolicySection[]: [{id, title, content (TipTap JSON), citations, status, wordCount}]
+  executiveSummary String? @db.Text
+  reviewNotes      String? @db.Text
+
+  // Generation metadata
+  generationMetadata Json? // { totalTokensUsed, totalCostUsd, model, stages: {...} }
+  ragGrounded        Boolean @default(true)
+
+  // Versioning
+  version         Int     @default(1)
+  parentId        String?
+  isLatestVersion Boolean @default(true)
+
+  // Export tracking
+  lastExportedAt   DateTime?
+  lastExportFormat String? // "DOCX" | "PDF"
+
+  // Lifecycle
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  // Relations
+  user              User                      @relation(fields: [userId], references: [id])
+  organization      Organization              @relation(fields: [organizationId], references: [id])
+  sourceGapAnalysis GapAnalysis?              @relation(fields: [sourceGapAnalysisId], references: [id])
+  parent            GeneratedPolicy?          @relation("GeneratedPolicyVersions", fields: [parentId], references: [id])
+  versions          GeneratedPolicy[]         @relation("GeneratedPolicyVersions")
+  citations         GeneratedPolicyCitation[]
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([policyType])
+  @@index([sourceGapAnalysisId])
+  @@index([deletedAt])
+  @@index([createdAt])
+}
+
+model GeneratedPolicyCitation {
+  id                String   @id @default(cuid())
+  generatedPolicyId String
+  sectionId         String // references the section ID within the sections JSON
+  actName           String
+  section           String // e.g. "Section 26(1)(b)"
+  subsection        String?
+  textSnippet       String   @db.Text
+  confidence        String // "high" | "medium" | "low"
+  verified          Boolean  @default(false)
+  citationVerified  Boolean? // post-hoc corpus verification result
+  rawSource         Json? // RAG source metadata
+  createdAt         DateTime @default(now())
+
+  generatedPolicy GeneratedPolicy @relation(fields: [generatedPolicyId], references: [id], onDelete: Cascade)
+
+  @@index([generatedPolicyId])
+  @@index([sectionId])
+}
+
+enum GeneratedPolicyStatus {
+  INITIALIZING // Record created, pipeline not started
+  OUTLINING // Stage 1: Generating table of contents
+  DRAFTING // Stage 2: Writing sections (progress 10-80%)
+  REVIEWING // Stage 3: Final consistency/citation review
+  COMPLETED // All stages done — ready for user editing
+  FAILED // Pipeline error
+  ARCHIVED // User archived
+}
+
+// ============================================================================
+// Organization Membership — multi-member org support
+// ============================================================================
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum MemberStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  REMOVED
+}
+
+model OrganizationMember {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  role           MemberRole   @default(MEMBER)
+  invitedBy      String?
+  invitedAt      DateTime?
+  joinedAt       DateTime     @default(now())
+  status         MemberStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  user         User         @relation("OrganizationMemberUser", fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation("OrganizationMembers", fields: [organizationId], references: [id], onDelete: Cascade)
+  inviter      User?        @relation("OrganizationMemberInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId, status])
+  @@index([userId, status])
 }

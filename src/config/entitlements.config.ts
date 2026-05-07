@@ -113,7 +113,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     complianceQueries:     { limit: -1, period: 'month' }, // unlimited
     checklistGenerations:  { limit: 5,  period: 'month' },
     apiAccess:             false,
-    gapAnalysis:           { limit: 5,  period: 'month' }, // 5 analyses/month -- standard frameworks only
+    gapAnalysis:           { limit: 0,  period: 'month' }, // blocked -- upsell to Business tier
     policyGeneration:      false,
     customIntegrations:    false,
     teamCollaboration:     false,

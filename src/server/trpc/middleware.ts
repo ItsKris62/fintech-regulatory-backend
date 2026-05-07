@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
-import { BillingMetric, PaymentProvider, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
+import { BillingMetric, MemberRole, MemberStatus, PaymentProvider, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { middleware } from './init';
+import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { prisma } from '@/lib/prisma/client';
@@ -168,6 +169,109 @@ export const isOrganizationMember = middleware(async ({ ctx, input, next }) => {
 
   return next({ ctx });
 });
+
+// ============================================================================
+// Organization Member Role Middlewares
+// ============================================================================
+
+/**
+ * Verifies the authenticated user holds an active OrganizationMember row for
+ * their own organization (ctx.user.organizationId). Attaches the membership
+ * record to ctx.orgMember for downstream role checks.
+ *
+ * Use as: protectedProcedure.use(requireOrgMember)
+ * Must run AFTER isAuthenticated.
+ */
+export const requireOrgMember = middleware(async ({ ctx, next }) => {
+  const userId = ctx.user!.id;
+  const orgId = ctx.user!.organizationId;
+
+  if (!orgId) {
+    logger.warn({
+      type: 'compliance_dashboard.access_denied',
+      userId,
+      organizationId: null,
+      reason: 'no_organization',
+    });
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not belong to an organization.' });
+  }
+
+  const member = await prisma.organizationMember.findUnique({
+    where: { userId_organizationId: { userId, organizationId: orgId } },
+  });
+
+  if (!member) {
+    logger.warn({
+      type: 'compliance_dashboard.access_denied',
+      userId,
+      organizationId: orgId,
+      reason: 'no_membership',
+    });
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: sanitizeErrorMessage(new Error('You do not have access to this organization.')),
+    });
+  }
+
+  if (member.status !== MemberStatus.ACTIVE) {
+    logger.warn({
+      type: 'compliance_dashboard.access_denied',
+      userId,
+      organizationId: orgId,
+      reason: `member_status_${member.status.toLowerCase()}`,
+    });
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: sanitizeErrorMessage(new Error('Your membership in this organization is not active.')),
+    });
+  }
+
+  return next({ ctx: { ...ctx, orgMember: member } });
+});
+
+/**
+ * Factory that returns a middleware enforcing a minimum MemberRole level.
+ * Must run AFTER requireOrgMember (relies on ctx.orgMember being present).
+ *
+ * Role hierarchy (ascending access): VIEWER < MEMBER < ADMIN < OWNER
+ *
+ * Usage: .use(requireOrgMember).use(requireMemberRole([MemberRole.MEMBER, MemberRole.ADMIN, MemberRole.OWNER]))
+ */
+const ROLE_LEVEL: Record<MemberRole, number> = {
+  [MemberRole.VIEWER]: 0,
+  [MemberRole.MEMBER]: 1,
+  [MemberRole.ADMIN]:  2,
+  [MemberRole.OWNER]:  3,
+};
+
+export const requireMemberRole = (allowedRoles: MemberRole[]) =>
+  middleware(async ({ ctx, next }) => {
+    const orgMember = ctx.orgMember;
+
+    if (!orgMember) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Organization membership not resolved.' });
+    }
+
+    const minAllowedLevel = Math.min(...allowedRoles.map((r) => ROLE_LEVEL[r]));
+    const userLevel = ROLE_LEVEL[orgMember.role] ?? 0;
+
+    if (userLevel < minAllowedLevel) {
+      logger.warn({
+        type: 'compliance_dashboard.access_denied',
+        userId: ctx.user!.id,
+        organizationId: orgMember.organizationId,
+        reason: 'insufficient_role',
+        userRole: orgMember.role,
+        requiredMinLevel: minAllowedLevel,
+      });
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: sanitizeErrorMessage(new Error('Insufficient permissions for this action.')),
+      });
+    }
+
+    return next({ ctx });
+  });
 
 // ============================================================================
 // Plan-Aware Middleware

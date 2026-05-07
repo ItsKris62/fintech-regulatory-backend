@@ -97,7 +97,7 @@ export interface GapAnalysisTierLimits {
 export const GAP_ANALYSIS_UPLOAD_LIMITS: Record<EffectivePlan, GapAnalysisTierLimits> = {
   REGULATOR: { maxFileSizeMB: 0 },
   FREE_TRIAL: { maxFileSizeMB: 10 },
-  STARTUP:    { maxFileSizeMB: 10 },
+  STARTUP:    { maxFileSizeMB: 0 },
   BUSINESS:   { maxFileSizeMB: 20 },
   ENTERPRISE: { maxFileSizeMB: 20 },
 };

@@ -1,0 +1,433 @@
+import { TRPCError } from '@trpc/server';
+import { router, protectedProcedure } from '../trpc/trpc';
+import { BillingMetric } from '@prisma/client';
+import {
+  rateLimited,
+  withPlanContext,
+  requirePlanFeature,
+  checkUsageLimit,
+} from '../trpc/middleware';
+import { prisma } from '@/lib/prisma/client';
+import { logger } from '@/utils/logger';
+import {
+  createDraftSchema,
+  getPolicySchema,
+  listPoliciesSchema,
+  updateSectionContentSchema,
+  getStatusSchema,
+  deletePolicySchema,
+} from '../schemas/enterprise-policy.schema';
+
+// =============================================================================
+// Enterprise AI Policy Generator — tRPC Router
+// =============================================================================
+// Phase 1: Skeleton endpoints only. The actual LangChain/RAG generation
+// pipeline will be implemented in Phase 2.
+// =============================================================================
+
+export const enterprisePolicyRouter = router({
+  // ---------------------------------------------------------------------------
+  // CREATE DRAFT
+  // ---------------------------------------------------------------------------
+  /**
+   * Creates a new GeneratedPolicy record in INITIALIZING state.
+   *
+   * Middleware chain:
+   * 1. protectedProcedure  → ensures authenticated user
+   * 2. rateLimited         → max 3 policy generations per 15-min window
+   * 3. withPlanContext      → resolves ctx.plan to the effective subscription plan
+   * 4. requirePlanFeature   → ENTERPRISE-only gate (policyGeneration)
+   * 5. checkUsageLimit      → Redis monthly counter (deferred increment)
+   *
+   * @returns { policyId, status } — the frontend starts polling getStatus
+   */
+  createDraft: protectedProcedure
+    .use(rateLimited('enterprisePolicyGeneration', 3))
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
+    .use(checkUsageLimit(BillingMetric.POLICY_GENERATIONS, { deferIncrement: true }))
+    .input(createDraftSchema)
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user.id;
+      const organizationId = ctx.user.organizationId;
+
+      if (!organizationId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Enterprise policy generation requires an organization. Please ensure your account is linked to an organization.',
+        });
+      }
+
+      // If linking to a gap analysis, verify ownership
+      if (input.sourceGapAnalysisId) {
+        const gap = await prisma.gapAnalysis.findUnique({
+          where: { id: input.sourceGapAnalysisId },
+          select: { userId: true, organizationId: true },
+        });
+
+        if (!gap || (gap.userId !== userId && gap.organizationId !== organizationId)) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Source gap analysis not found or does not belong to your organization.',
+          });
+        }
+      }
+
+      // Create the GeneratedPolicy record in INITIALIZING state
+      const policy = await prisma.generatedPolicy.create({
+        data: {
+          userId,
+          organizationId,
+          policyType: input.policyType,
+          title: input.title,
+          description: input.description,
+          targetAudience: input.targetAudience,
+          organizationType: input.organizationType,
+          regulatoryFrameworks: input.regulatoryFrameworks,
+          jurisdiction: input.jurisdiction,
+          sourceGapAnalysisId: input.sourceGapAnalysisId,
+          sourceGapId: input.sourceGapId,
+          status: 'INITIALIZING',
+          progress: 0,
+        },
+        select: {
+          id: true,
+          status: true,
+          title: true,
+          policyType: true,
+          createdAt: true,
+        },
+      });
+
+      logger.info({
+        type: 'enterprise_policy_draft_created',
+        policyId: policy.id,
+        userId,
+        organizationId,
+        policyType: input.policyType,
+        hasSourceGap: !!input.sourceGapAnalysisId,
+      });
+
+      // TODO Phase 2: Fire async generation pipeline
+      // setImmediate(() => executePolicyPipeline(policy.id, input));
+
+      // Commit the deferred usage increment
+      if (ctx.incrementUsage) {
+        await ctx.incrementUsage();
+      }
+
+      return {
+        policyId: policy.id,
+        status: policy.status,
+        title: policy.title,
+        policyType: policy.policyType,
+        createdAt: policy.createdAt,
+      };
+    }),
+
+  // ---------------------------------------------------------------------------
+  // GET STATUS (Polling endpoint)
+  // ---------------------------------------------------------------------------
+  /**
+   * Returns the current pipeline status and progress percentage.
+   * Frontend polls this with refetchInterval: 2000 while !isComplete && !isFailed.
+   */
+  getStatus: protectedProcedure
+    .use(withPlanContext)
+    .input(getStatusSchema)
+    .query(async ({ input, ctx: _ctx }) => {
+      const policy = await prisma.generatedPolicy.findUnique({
+        where: { id: input.policyId },
+        select: {
+          id: true,
+          status: true,
+          progress: true,
+          title: true,
+          errorMessage: true,
+          updatedAt: true,
+        },
+      });
+
+      if (!policy) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Generated policy not found.',
+        });
+      }
+
+      const stageLabels: Record<string, string> = {
+        INITIALIZING: 'Initializing',
+        OUTLINING: 'Generating Table of Contents',
+        DRAFTING: 'Writing Policy Sections',
+        REVIEWING: 'Reviewing & Verifying Citations',
+        COMPLETED: 'Complete',
+        FAILED: 'Failed',
+        ARCHIVED: 'Archived',
+      };
+
+      return {
+        policyId: policy.id,
+        status: policy.status,
+        progress: policy.progress,
+        title: policy.title,
+        currentStage: stageLabels[policy.status] ?? policy.status,
+        isComplete: policy.status === 'COMPLETED',
+        isFailed: policy.status === 'FAILED',
+        errorMessage: policy.errorMessage,
+        updatedAt: policy.updatedAt,
+      };
+    }),
+
+  // ---------------------------------------------------------------------------
+  // GET POLICY (full detail)
+  // ---------------------------------------------------------------------------
+  /**
+   * Fetches a single generated policy with all content, sections,
+   * citations, and metadata. Used when the editor is loaded.
+   */
+  getPolicy: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
+    .input(getPolicySchema)
+    .query(async ({ input, ctx }) => {
+      const userId = ctx.user.id;
+      const organizationId = ctx.user.organizationId;
+
+      const policy = await prisma.generatedPolicy.findUnique({
+        where: { id: input.policyId },
+        include: {
+          citations: {
+            orderBy: { createdAt: 'asc' },
+          },
+          sourceGapAnalysis: {
+            select: {
+              id: true,
+              documentName: true,
+              regulatoryFrameworks: true,
+              overallScore: true,
+            },
+          },
+        },
+      });
+
+      if (!policy || policy.deletedAt) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Generated policy not found.',
+        });
+      }
+
+      // Verify ownership (user or org)
+      if (policy.userId !== userId && policy.organizationId !== organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have access to this policy.',
+        });
+      }
+
+      return policy;
+    }),
+
+  // ---------------------------------------------------------------------------
+  // LIST POLICIES
+  // ---------------------------------------------------------------------------
+  /**
+   * Returns a paginated list of generated policies for the current user's
+   * organization.
+   */
+  listPolicies: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
+    .input(listPoliciesSchema)
+    .query(async ({ input, ctx }) => {
+      const userId = ctx.user.id;
+      const organizationId = ctx.user.organizationId;
+
+      const where: any = {
+        deletedAt: null,
+        OR: [
+          { userId },
+          ...(organizationId ? [{ organizationId }] : []),
+        ],
+      };
+
+      if (input.status) {
+        where.status = input.status;
+      }
+      if (input.policyType) {
+        where.policyType = input.policyType;
+      }
+
+      const policies = await prisma.generatedPolicy.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: input.limit + 1, // fetch one extra for cursor pagination
+        ...(input.cursor
+          ? {
+              cursor: { id: input.cursor },
+              skip: 1,
+            }
+          : {}),
+        select: {
+          id: true,
+          policyType: true,
+          title: true,
+          description: true,
+          status: true,
+          progress: true,
+          regulatoryFrameworks: true,
+          jurisdiction: true,
+          version: true,
+          lastExportedAt: true,
+          lastExportFormat: true,
+          sourceGapAnalysisId: true,
+          createdAt: true,
+          updatedAt: true,
+          completedAt: true,
+        },
+      });
+
+      let nextCursor: string | undefined;
+      if (policies.length > input.limit) {
+        const nextItem = policies.pop()!;
+        nextCursor = nextItem.id;
+      }
+
+      return {
+        items: policies,
+        nextCursor,
+        totalEstimate: await prisma.generatedPolicy.count({ where }),
+      };
+    }),
+
+  // ---------------------------------------------------------------------------
+  // UPDATE SECTION CONTENT
+  // ---------------------------------------------------------------------------
+  /**
+   * Saves updated TipTap JSON content for a single policy section.
+   * Called by the editor on auto-save (3-second debounce) or manual save.
+   */
+  updateSectionContent: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
+    .input(updateSectionContentSchema)
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user.id;
+      const organizationId = ctx.user.organizationId;
+
+      const policy = await prisma.generatedPolicy.findUnique({
+        where: { id: input.policyId },
+        select: {
+          id: true,
+          userId: true,
+          organizationId: true,
+          sections: true,
+          status: true,
+        },
+      });
+
+      if (!policy || policy.userId !== userId && policy.organizationId !== organizationId) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Generated policy not found.',
+        });
+      }
+
+      if (policy.status !== 'COMPLETED') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Policy sections can only be edited after generation is complete.',
+        });
+      }
+
+      // Parse existing sections, find the target section, update it
+      const sections = (policy.sections as any[]) ?? [];
+      const sectionIndex = sections.findIndex((s: any) => s.id === input.sectionId);
+
+      if (sectionIndex === -1) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: `Section "${input.sectionId}" not found in this policy.`,
+        });
+      }
+
+      // Update the section content
+      sections[sectionIndex] = {
+        ...sections[sectionIndex],
+        content: input.content,
+        contentMarkdown: input.contentMarkdown ?? sections[sectionIndex].contentMarkdown,
+        status: 'edited',
+        editedAt: new Date().toISOString(),
+      };
+
+      await prisma.generatedPolicy.update({
+        where: { id: input.policyId },
+        data: {
+          sections: sections,
+        },
+      });
+
+      logger.info({
+        type: 'enterprise_policy_section_updated',
+        policyId: input.policyId,
+        sectionId: input.sectionId,
+        userId,
+      });
+
+      return {
+        success: true,
+        sectionId: input.sectionId,
+        updatedAt: new Date().toISOString(),
+      };
+    }),
+
+  // ---------------------------------------------------------------------------
+  // DELETE POLICY (soft delete)
+  // ---------------------------------------------------------------------------
+  /**
+   * Soft-deletes a generated policy by setting deletedAt.
+   */
+  deletePolicy: protectedProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
+    .input(deletePolicySchema)
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user.id;
+      const organizationId = ctx.user.organizationId;
+
+      const policy = await prisma.generatedPolicy.findUnique({
+        where: { id: input.policyId },
+        select: { id: true, userId: true, organizationId: true, deletedAt: true },
+      });
+
+      if (!policy || policy.deletedAt) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Generated policy not found.',
+        });
+      }
+
+      if (policy.userId !== userId && policy.organizationId !== organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission to delete this policy.',
+        });
+      }
+
+      await prisma.generatedPolicy.update({
+        where: { id: input.policyId },
+        data: {
+          deletedAt: new Date(),
+          status: 'ARCHIVED',
+        },
+      });
+
+      logger.info({
+        type: 'enterprise_policy_deleted',
+        policyId: input.policyId,
+        userId,
+      });
+
+      return { success: true };
+    }),
+});

@@ -40,6 +40,8 @@ export const GapItemSchema = z.object({
   responsibleRole: z.string().optional(),
   /** Regulatory deadline if the regulation specifies one. */
   regulatoryDeadline: z.string().optional(),
+  /** Post-hoc verification: true if regulatoryBasis was found in the legal corpus. */
+  citationVerified: z.boolean().optional(),
 });
 
 export const FrameworkResultSchema = z.object({
@@ -337,9 +339,17 @@ Your task is to conduct a rigorous gap analysis of the provided policy document(
 1. Identify specific gaps where the policy fails to meet regulatory requirements
 2. Cite the exact Kenyan law section that creates each obligation
 3. Rate severity accurately: CRITICAL = legal exposure/licence risk; HIGH = likely regulatory finding; MEDIUM = best-practice gap; LOW = minor improvement
-4. For each gap, populate evidenceRequired (artefacts needed to close the gap) and responsibleRole (accountable role/department)
+4. For each gap, you MUST populate ALL of these fields: evidenceRequired (artefacts needed to close the gap), responsibleRole (accountable role/department), and regulatoryDeadline (statutory timeline or "Ongoing obligation")
 5. Identify genuine strengths to give a balanced assessment
 6. Calculate a realistic compliance score (0-100) per framework and overall
+
+EXECUTIVE SUMMARY REQUIREMENTS:
+The executiveSummary field must be written at a level suitable for presentation to a Board of Directors or C-suite audience. It should:
+- Open with a single-sentence compliance posture statement (e.g., "The organisation's AML/KYC policy framework is partially compliant, scoring 52/100 against five Kenyan regulatory frameworks.")
+- Identify the top 2-3 material risks with their regulatory citations
+- Quantify the risk exposure (e.g., "3 CRITICAL gaps expose the organisation to potential licence suspension under CBK Prudential Guidelines")
+- Close with a clear strategic recommendation (e.g., "Immediate Board attention is required on DPA 2019 compliance, with a 90-day remediation sprint recommended")
+- Be 3-5 sentences total  -  concise but comprehensive
 
 CRITICAL OUTPUT RULES:
 1. Respond ONLY with valid JSON. No markdown fences, no preamble, no explanation outside JSON.
@@ -347,6 +357,7 @@ CRITICAL OUTPUT RULES:
 3. Do not fabricate gaps that do not exist based on the policy text provided.
 4. Be specific about WHAT is missing in the policy, not generic statements.
 5. Overall score must reflect actual gap severity  -  a policy with CRITICAL gaps cannot score above 50.
+6. Every gap MUST have a non-empty evidenceRequired array, a non-empty responsibleRole string, and a non-empty regulatoryDeadline string. Do not leave these fields empty or omit them.
 
 ADDITIONAL OUTPUT REQUIREMENTS:
 

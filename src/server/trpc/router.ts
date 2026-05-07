@@ -25,6 +25,7 @@ import { gapAnalysisRouter } from '../routers/gap-analysis.router';
 import { alertRouter } from '../routers/alert.router';
 import { adminMarketingRouter } from '../routers/adminMarketing.router';
 import { publicMarketingRouter } from '../routers/publicMarketing.router';
+import { enterprisePolicyRouter } from '../routers/enterprise-policy.router';
 
 /**
  * Root Application Router
@@ -48,6 +49,7 @@ import { publicMarketingRouter } from '../routers/publicMarketing.router';
  * - /trpc/support.*       - User support ticket submission and tracking
  * - /trpc/adminSupport.*  - Admin ticket management (ADMIN role only)
  * - /trpc/pilot.*         - Pilot Programme dashboard (ADMIN role only)
+ * - /trpc/enterprisePolicy.* - Enterprise AI Policy Generator (ENTERPRISE tier only)
  */
 export const appRouter = router({
   auth: authRouter,
@@ -76,6 +78,7 @@ export const appRouter = router({
   alert: alertRouter,
   adminMarketing:   adminMarketingRouter,
   publicMarketing:  publicMarketingRouter,
+  enterprisePolicy: enterprisePolicyRouter,
 });
 
 /**

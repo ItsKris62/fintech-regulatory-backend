@@ -22,7 +22,7 @@ import { storageService } from '@/lib/storage/storage.service';
 import { getSystemConfigNumber } from '@/lib/system-config';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError } from '@/utils/error';
-import { Prisma, UserRole } from '@prisma/client';
+import { MemberRole, MemberStatus, OrganizationMember, Prisma, UserRole } from '@prisma/client';
 import { notificationModule } from '@/modules/notification';
 import { incrementTrialUsage } from '@/modules/trial';
 import { complianceScorer } from './compliance-scorer';
@@ -124,6 +124,124 @@ async function recoverStaleJobs(maxAgeMinutes = 20): Promise<void> {
   }
 }
 
+/**
+ * Extract 3-5 key compliance-relevant keywords from a policy document.
+ * Uses simple term-frequency analysis with a regulatory domain dictionary.
+ * Runs synchronously and never throws.
+ */
+function extractPolicyKeywords(policyText: string): string[] {
+  const DOMAIN_TERMS: Record<string, string> = {
+    'data protection': 'data protection',
+    'personal data': 'personal data',
+    'privacy': 'privacy',
+    'dpo': 'data protection officer',
+    'consent': 'consent management',
+    'breach notification': 'data breach notification',
+    'kyc': 'KYC customer identification',
+    'know your customer': 'KYC',
+    'aml': 'anti-money laundering AML',
+    'anti-money laundering': 'AML compliance',
+    'suspicious transaction': 'suspicious transaction reporting',
+    'money laundering': 'money laundering prevention',
+    'due diligence': 'customer due diligence CDD',
+    'pep': 'politically exposed persons PEP',
+    'cybersecurity': 'cybersecurity information security',
+    'information security': 'information security policy',
+    'encryption': 'data encryption',
+    'penetration test': 'penetration testing vulnerability',
+    'incident response': 'cybersecurity incident response',
+    'consumer protection': 'consumer protection fair treatment',
+    'complaints': 'complaints handling mechanism',
+    'pricing': 'transparent pricing disclosure',
+    'mobile money': 'mobile money e-money',
+    'payment': 'payment services NPS',
+    'digital credit': 'digital credit providers',
+    'digital lending': 'digital lending regulation',
+    'capital adequacy': 'capital adequacy requirements',
+    'licensing': 'CBK licensing requirements',
+    'risk management': 'risk management framework',
+    'governance': 'corporate governance board oversight',
+    'audit': 'internal audit compliance',
+    'record keeping': 'record retention policy',
+    'cross-border': 'cross-border data transfer',
+  };
+
+  const lower = policyText.toLowerCase();
+  const matched: Array<{ term: string; keyword: string; count: number }> = [];
+
+  for (const [term, keyword] of Object.entries(DOMAIN_TERMS)) {
+    const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const matches = lower.match(regex);
+    if (matches && matches.length > 0) {
+      matched.push({ term, keyword, count: matches.length });
+    }
+  }
+
+  // Sort by frequency descending, take top 5 unique keywords
+  matched.sort((a, b) => b.count - a.count);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const m of matched) {
+    if (!seen.has(m.keyword) && result.length < 5) {
+      seen.add(m.keyword);
+      result.push(m.keyword);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Post-hoc citation verification: checks each gap's regulatoryBasis against
+ * the ChromaDB/Pinecone legal corpus using a fast semantic search.
+ * Runs all verification searches concurrently via Promise.all.
+ * On any search failure, defaults citationVerified to false (graceful degradation).
+ */
+async function verifyCitationsAgainstCorpus(gapResults: GapAnalysisResult): Promise<GapAnalysisResult> {
+  const allGaps: Array<{ frameworkIdx: number; gapIdx: number; citation: string }> = [];
+
+  for (let fi = 0; fi < gapResults.frameworks.length; fi++) {
+    for (let gi = 0; gi < gapResults.frameworks[fi].gaps.length; gi++) {
+      const gap = gapResults.frameworks[fi].gaps[gi];
+      allGaps.push({ frameworkIdx: fi, gapIdx: gi, citation: gap.regulatoryBasis });
+    }
+  }
+
+  if (allGaps.length === 0) return gapResults;
+
+  // Run all verification searches concurrently
+  const verificationResults = await Promise.all(
+    allGaps.map(async ({ citation }) => {
+      try {
+        const results = await ragService.search(citation, { topK: 3, minScore: 0.65 });
+        // Consider verified if at least one result is a strong match
+        return results.length > 0;
+      } catch {
+        // Graceful failure: if search fails or times out, default to unverified
+        return false;
+      }
+    })
+  );
+
+  // Apply verification results back to the gap objects
+  let verifiedCount = 0;
+  for (let i = 0; i < allGaps.length; i++) {
+    const { frameworkIdx, gapIdx } = allGaps[i];
+    const verified = verificationResults[i];
+    gapResults.frameworks[frameworkIdx].gaps[gapIdx].citationVerified = verified;
+    if (verified) verifiedCount++;
+  }
+
+  logger.info({
+    type: 'gap_analysis_citation_verification_complete',
+    totalCitations: allGaps.length,
+    verifiedCount,
+    unverifiedCount: allGaps.length - verifiedCount,
+  });
+
+  return gapResults;
+}
+
 interface GapAnalysisPipelineParams {
   analysisId: string;
   userId: string;
@@ -179,9 +297,13 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
     await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 15 });
     currentProgress = 15;
 
+    // Extract 3-5 key compliance themes from the policy text for targeted RAG queries
+    const policyKeywords = extractPolicyKeywords(policyText);
+    const keywordSuffix = policyKeywords.length > 0 ? ` ${policyKeywords.join(' ')}` : '';
+
     const ragPromises = regulatoryFrameworks.map((framework) =>
       ragService
-        .search(`${framework} compliance requirements Kenya fintech`, { topK: 8, minScore: 0.6 })
+        .search(`${framework} Kenya regulatory compliance obligations${keywordSuffix}`, { topK: 8, minScore: 0.6 })
         .catch((err: unknown) => {
           logger.warn({ type: 'gap_analysis_rag_framework_failed', userId, analysisId, framework, error: (err as Error).message });
           return [] as Awaited<ReturnType<typeof ragService.search>>;
@@ -291,6 +413,17 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
     // Track token usage for free trial users (fire-and-forget, non-fatal).
     if (trialUserId) {
       incrementTrialUsage(trialUserId, 'totalTokensUsed', gapInputTokens + gapOutputTokens).catch(() => {});
+    }
+
+    // -- CITATION VERIFICATION (progress: 88) --------------------------------
+    await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 88 });
+    currentProgress = 88;
+
+    try {
+      gapResults = await verifyCitationsAgainstCorpus(gapResults);
+    } catch (verifyErr: unknown) {
+      // Graceful degradation: if verification fails entirely, leave all citations unverified
+      logger.warn({ type: 'gap_analysis_citation_verification_failed', analysisId, error: (verifyErr as Error).message });
     }
 
     // -- COMPLETING (progress: 90) ----------------------------------------
@@ -1341,23 +1474,25 @@ Follow-up Question: ${followUp}
   }
 
   /**
-   * Verify user has access to organization
+   * Verify user holds an active OrganizationMember row for the given org.
+   * Returns the membership row so callers can inspect the role if needed.
    */
   private async verifyOrgAccess(
     userId: string,
     orgId: string,
-    requiredRole: 'MEMBER' | 'ADMIN' | 'OWNER' = 'MEMBER'
-  ): Promise<void> {
-    const member = await (prisma as any).organizationMember.findUnique({
-      where: {
-        userId_organizationId: {
-          userId,
-          organizationId: orgId,
-        },
-      },
+    requiredRole: MemberRole = MemberRole.MEMBER
+  ): Promise<OrganizationMember> {
+    const member = await prisma.organizationMember.findUnique({
+      where: { userId_organizationId: { userId, organizationId: orgId } },
     });
 
-    if (!member) {
+    if (!member || member.status !== MemberStatus.ACTIVE) {
+      logger.warn({
+        type: 'compliance_dashboard.access_denied',
+        userId,
+        organizationId: orgId,
+        reason: !member ? 'no_membership' : `member_status_${member.status.toLowerCase()}`,
+      });
       throw new ComplianceError(
         'You do not have access to this organization',
         'UNAUTHORIZED',
@@ -1365,17 +1500,30 @@ Follow-up Question: ${followUp}
       );
     }
 
-    const roleHierarchy = { VIEWER: 0, MEMBER: 1, ADMIN: 2, OWNER: 3 };
-    const requiredLevel = roleHierarchy[requiredRole] || 1;
-    const userLevel = roleHierarchy[member.role as keyof typeof roleHierarchy] || 0;
+    const ROLE_LEVEL: Record<MemberRole, number> = {
+      [MemberRole.VIEWER]: 0,
+      [MemberRole.MEMBER]: 1,
+      [MemberRole.ADMIN]:  2,
+      [MemberRole.OWNER]:  3,
+    };
 
-    if (userLevel < requiredLevel) {
+    if ((ROLE_LEVEL[member.role] ?? 0) < (ROLE_LEVEL[requiredRole] ?? 1)) {
+      logger.warn({
+        type: 'compliance_dashboard.access_denied',
+        userId,
+        organizationId: orgId,
+        reason: 'insufficient_role',
+        userRole: member.role,
+        requiredRole,
+      });
       throw new ComplianceError(
         'Insufficient permissions for this action',
         'UNAUTHORIZED',
         403
       );
     }
+
+    return member;
   }
 
   /**
@@ -2238,6 +2386,18 @@ Follow-up Question: ${followUp}
   // COMPLIANCE DASHBOARD (5-Category Scoring System)
   // ==========================================================================
 
+  /**
+   * Compliance Score cache.
+   * Key:   compliance:score:{orgId}
+   * Value: full DashboardResponse (JSON, auto-parsed by Upstash SDK)
+   * TTL:   300s (5 min — matches frontend React Query staleTime)
+   * Invalidated by:
+   *   - updateChecklistItem (item toggle)
+   *   - Snapshot creation (score change detected on dashboard read)
+   */
+  private static readonly SCORE_CACHE_KEY = (orgId: string) => `compliance:score:${orgId}`;
+  private static readonly SCORE_CACHE_TTL = 300;
+
   private static readonly DASHBOARD_WEIGHTS: Record<string, number> = {
     DATA_PROTECTION: 0.25,
     AML_KYC: 0.25,
@@ -2335,31 +2495,44 @@ Follow-up Question: ${followUp}
   }
 
   /**
-   * Calculate score for a single compliance category (0-100)
+   * Calculate score for a single compliance category.
+   * Returns scoreFloat (unrounded, 0–100) for use in the weighted sum, plus
+   * the integer display score and item counts. No rounding inside this function —
+   * the single Math.round lives in getComplianceDashboardData (fixes F-05).
    */
   async calculateCategoryScore(
     orgId: string,
     category: import('@prisma/client').ComplianceCategory
-  ): Promise<{ score: number; completedItems: number; totalItems: number }> {
+  ): Promise<{ scoreFloat: number; score: number; completedItems: number; totalItems: number }> {
     const items = await prisma.complianceItem.findMany({
       where: { organizationId: orgId, category },
       select: { isCompleted: true },
     });
 
-    if (items.length === 0) return { score: 0, completedItems: 0, totalItems: 0 };
+    if (items.length === 0) return { scoreFloat: 0, score: 0, completedItems: 0, totalItems: 0 };
 
     const completedItems = items.filter((i) => i.isCompleted).length;
-    const score = Math.round((completedItems / items.length) * 100);
+    const scoreFloat = (completedItems / items.length) * 100;
 
-    return { score, completedItems, totalItems: items.length };
+    return { scoreFloat, score: Math.round(scoreFloat), completedItems, totalItems: items.length };
   }
 
   /**
-   * Get full compliance dashboard data for an organization
+   * Get full compliance dashboard data for an organization.
+   * Fixes:
+   *   F-04 — trend semantics (pts vs 30d, not %, not calendar month)
+   *   F-05 — single rounding: floats used in weighted sum; round only at the end
+   *   F-06 — no fallback to latestSnapshot (masked progress for new orgs)
+   *   F-10 — lastUpdated reflects actual data freshness
    */
   async getComplianceDashboardData(orgId: string): Promise<{
     overallScore: number;
-    trend: number;
+    trend: {
+      points: number | null;
+      label: 'increase' | 'decrease' | 'no_change' | 'insufficient_history';
+      comparedAt: string | null;
+      windowDays: 30;
+    };
     categories: Array<{
       key: string;
       label: string;
@@ -2369,6 +2542,16 @@ Follow-up Question: ${followUp}
     }>;
     lastUpdated: string;
   }> {
+    const startedAt = Date.now();
+    const cacheKey = ComplianceModule.SCORE_CACHE_KEY(orgId);
+
+    // Cache read — return immediately on hit (TTL 5 min, matches frontend staleTime)
+    const cached = await redis.get<Awaited<ReturnType<typeof this.getComplianceDashboardData>>>(cacheKey);
+    if (cached) {
+      logger.info({ type: 'compliance_dashboard.cache_hit', orgId });
+      return cached;
+    }
+
     // Auto-seed checklist if not yet initialized
     await this.seedDefaultChecklist(orgId);
 
@@ -2381,22 +2564,25 @@ Follow-up Question: ${followUp}
         return {
           key,
           label: ComplianceModule.CATEGORY_LABELS[key] ?? key,
-          ...result,
+          scoreFloat: result.scoreFloat,
+          score: result.score,           // integer, for UI
+          completedItems: result.completedItems,
+          totalItems: result.totalItems,
         };
       })
     );
 
-    // Calculate weighted overall score
+    // Single Math.round — applied to the weighted float sum (fixes F-05 double-rounding)
     const overallScore = Math.round(
       categoryResults.reduce((sum, cat) => {
         const weight = ComplianceModule.DASHBOARD_WEIGHTS[cat.key] ?? 0;
-        return sum + cat.score * weight;
+        return sum + cat.scoreFloat * weight;
       }, 0)
     );
 
-    // Find snapshot from ~30 days ago for trend calculation
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    // Trend: compare against a snapshot from exactly 30 rolling days ago.
+    // No fallback to latestSnapshot — that masked progress for new orgs (fixes F-06).
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     const [latestSnapshot, oldSnapshot] = await Promise.all([
       prisma.complianceScoreSnapshot.findFirst({
@@ -2409,13 +2595,29 @@ Follow-up Question: ${followUp}
       }),
     ]);
 
-    const previousScore = oldSnapshot?.overallScore ?? latestSnapshot?.overallScore ?? null;
-    const trend = previousScore !== null ? overallScore - Math.round(previousScore) : 0;
+    const trendPoints: number | null = oldSnapshot
+      ? overallScore - Math.round(oldSnapshot.overallScore)
+      : null;
 
-    // Save a new snapshot whenever the score has changed
+    const trendLabel: 'increase' | 'decrease' | 'no_change' | 'insufficient_history' =
+      trendPoints === null ? 'insufficient_history'
+      : trendPoints > 0   ? 'increase'
+      : trendPoints < 0   ? 'decrease'
+      :                     'no_change';
+
+    // Snapshot creation: write only when score changed AND no snapshot exists in the
+    // last hour (prevents rapid-fire writes from toggle-heavy sessions).
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentSnapshot = await prisma.complianceScoreSnapshot.findFirst({
+      where: { organizationId: orgId, calculatedAt: { gte: oneHourAgo } },
+      orderBy: { calculatedAt: 'desc' },
+      select: { id: true },
+    });
+
     const scoreChanged = !latestSnapshot || Math.round(latestSnapshot.overallScore) !== overallScore;
-    if (scoreChanged) {
-      const byKey = Object.fromEntries(categoryResults.map((c) => [c.key, c.score]));
+    const shouldCreateSnapshot = scoreChanged && !recentSnapshot;
+    if (shouldCreateSnapshot) {
+      const byKey = Object.fromEntries(categoryResults.map((c) => [c.key, c.scoreFloat]));
       await prisma.complianceScoreSnapshot.create({
         data: {
           organizationId: orgId,
@@ -2427,16 +2629,68 @@ Follow-up Question: ${followUp}
           cybersecurityScore: byKey['CYBERSECURITY'] ?? 0,
         },
       });
+
+      // Invalidate cache so the next read reflects the new snapshot's calculatedAt
+      await redis.del(cacheKey);
+      logger.info({ type: 'compliance_dashboard.snapshot_created', orgId, overallScore });
+      logger.info({ type: 'compliance_dashboard.cache_invalidated', orgId, reason: 'snapshot_created' });
+    } else {
+      const skipReason = !scoreChanged ? 'score_unchanged' : 'within_1h_dedup_window';
+      logger.info({ type: 'compliance_dashboard.snapshot_skipped', orgId, overallScore, skipReason });
     }
 
-    logger.info({ type: 'compliance_dashboard_fetched', orgId, overallScore, trend });
+    // lastUpdated: actual data freshness — MAX(item.updatedAt, snapshot.calculatedAt, org.createdAt)
+    // (fixes F-10: was always returning request time)
+    const [lastItem, lastSnap, org] = await Promise.all([
+      prisma.complianceItem.findFirst({
+        where: { organizationId: orgId },
+        orderBy: { updatedAt: 'desc' },
+        select: { updatedAt: true },
+      }),
+      prisma.complianceScoreSnapshot.findFirst({
+        where: { organizationId: orgId },
+        orderBy: { calculatedAt: 'desc' },
+        select: { calculatedAt: true },
+      }),
+      prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { createdAt: true },
+      }),
+    ]);
 
-    return {
+    const candidates: Date[] = [org?.createdAt ?? new Date(0)];
+    if (lastItem) candidates.push(lastItem.updatedAt);
+    if (lastSnap) candidates.push(lastSnap.calculatedAt);
+    const lastUpdated = new Date(Math.max(...candidates.map((d) => d.getTime()))).toISOString();
+
+    const result = {
       overallScore,
-      trend,
-      categories: categoryResults,
-      lastUpdated: new Date().toISOString(),
+      trend: {
+        points: trendPoints,
+        label: trendLabel,
+        comparedAt: oldSnapshot?.calculatedAt.toISOString() ?? null,
+        windowDays: 30 as const,
+      },
+      categories: categoryResults.map(({ scoreFloat: _f, ...rest }) => rest),
+      lastUpdated,
     };
+
+    const durationMs = Date.now() - startedAt;
+    logger.info({
+      type: 'compliance_dashboard.score_computed',
+      orgId,
+      overallScore,
+      trendLabel,
+      trendPoints,
+      categoriesCount: result.categories.length,
+      durationMs,
+    });
+
+    // Cache the computed result (TTL 5 min)
+    await redis.set(cacheKey, result, { ex: ComplianceModule.SCORE_CACHE_TTL });
+    logger.info({ type: 'compliance_dashboard.cache_miss', orgId, durationMs });
+
+    return result;
   }
 
   /**
@@ -2467,8 +2721,9 @@ Follow-up Question: ${followUp}
       select: { id: true, isCompleted: true, completedAt: true },
     });
 
-    // Invalidate cached score so next dashboard fetch recalculates
-    await redis.del(`compliance:score:${orgId}`);
+    // Invalidate cached score so next dashboard fetch recalculates live values
+    await redis.del(ComplianceModule.SCORE_CACHE_KEY(orgId));
+    logger.info({ type: 'compliance_dashboard.cache_invalidated', orgId, reason: 'item_updated' });
 
     logger.info({ type: 'compliance_item_updated', userId, orgId, itemId, isCompleted });
 
@@ -2493,7 +2748,15 @@ Follow-up Question: ${followUp}
   }>> {
     await this.verifyOrgAccess(userId, orgId);
 
-    await this.seedDefaultChecklist(orgId);
+    // Seeding is the responsibility of getComplianceDashboardData (the primary
+    // entry point). Guard here only for the deep-link edge case where this
+    // procedure is called before the dashboard has ever loaded. One COUNT query
+    // in the common path (dashboard already loaded) instead of an unconditional
+    // seed call (fixes F-09).
+    const itemCount = await prisma.complianceItem.count({ where: { organizationId: orgId } });
+    if (itemCount === 0) {
+      await this.seedDefaultChecklist(orgId);
+    }
 
     return prisma.complianceItem.findMany({
       where: { organizationId: orgId, category },
