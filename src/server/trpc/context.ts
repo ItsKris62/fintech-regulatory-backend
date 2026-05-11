@@ -55,13 +55,30 @@ export interface Context {
 /** How long to cache the Prisma user lookup in Upstash (matches Supabase default token TTL). */
 const USER_CACHE_TTL_SECONDS = 3600;
 
+const SESSION_FINGERPRINT_MODES = ['off', 'monitor', 'enforce'] as const;
+type SessionFingerprintMode = (typeof SESSION_FINGERPRINT_MODES)[number];
+
+function parseSessionFingerprintMode(value: string | undefined): SessionFingerprintMode {
+  const resolved = value ?? 'monitor';
+  if ((SESSION_FINGERPRINT_MODES as readonly string[]).includes(resolved)) {
+    return resolved as SessionFingerprintMode;
+  }
+
+  throw new Error(
+    `Invalid SESSION_FINGERPRINT_MODE "${resolved}". Expected one of: ${SESSION_FINGERPRINT_MODES.join(', ')}.`,
+  );
+}
+
 /**
- * Session anomaly blocking - permanently enabled after the monitoring period concluded.
- * When true, a UA/IP fingerprint mismatch causes the session to be immediately revoked
- * (JTI added to Redis blocklist) and the request is rejected with HTTP 401.
- * Set to false only to revert to monitor-only mode during incident investigation.
+ * Session fingerprint runtime mode. Read once at module load so an invalid
+ * deployment value fails loudly during startup instead of drifting per request.
  */
-const BLOCK_SESSION_ANOMALIES = true;
+const SESSION_FINGERPRINT_MODE = parseSessionFingerprintMode(process.env.SESSION_FINGERPRINT_MODE);
+
+logger.info({
+  type: 'session_fingerprint_mode_loaded',
+  mode: SESSION_FINGERPRINT_MODE,
+});
 
 /**
  * Create tRPC context for each request.
@@ -213,11 +230,12 @@ export async function createContext({
           }
         }
 
-        // -- B5: Session fingerprint anomaly detection (blocking mode) ----
+        // -- B5: Session fingerprint anomaly detection --------------------
         // Compute the expected fingerprint and compare with what was stored
-        // at login. On mismatch, if BLOCK_SESSION_ANOMALIES is true, the JTI
-        // is added to the Redis blocklist and the request is rejected (user = null).
-        if (user && user.sessionId) {
+        // at login. Mode `off` skips this section entirely. Mode `monitor`
+        // records mismatches without revocation. Mode `enforce` adds the JTI
+        // to the Redis blocklist and rejects the request (user = null).
+        if (SESSION_FINGERPRINT_MODE !== 'off' && user && user.sessionId) {
           try {
             const storedFp = await redis.get<string>(`sheriabot:session_fingerprint:${user.sessionId}`);
             if (storedFp) {
@@ -225,49 +243,42 @@ export async function createContext({
               const currentUa = (req.headers['user-agent'] ?? '').substring(0, 500);
               const currentFp = createHash('sha256').update(`${currentIp}:${currentUa}`).digest('hex');
               if (currentFp !== storedFp) {
-                // Always log the anomaly regardless of blocking mode
+                const bearerToken = req.headers.authorization?.substring(7);
+                const jti = bearerToken ? extractJti(bearerToken) : null;
+                const exp = bearerToken ? extractExp(bearerToken) : null;
+                const anomalyType = SESSION_FINGERPRINT_MODE === 'enforce'
+                  ? 'session_anomaly_blocked'
+                  : 'session_anomaly_monitored';
+
                 logger.warn({
-                  type:            'session_anomaly_ua_mismatch',
-                  event:           BLOCK_SESSION_ANOMALIES ? 'session_anomaly_blocked' : 'session_anomaly_detected',
+                  type:            anomalyType,
+                  event:           anomalyType,
                   userId:          user.id,
                   sessionId:       user.sessionId,
-                  ip:              currentIp,
+                  jti,
                   // Do not log raw UAs in production; hashes are sufficient for correlation
                   storedFpPrefix:  storedFp.substring(0, 8),
                   currentFpPrefix: currentFp.substring(0, 8),
                   timestamp:       new Date().toISOString(),
-                  blocking:        BLOCK_SESSION_ANOMALIES,
+                  mode:            SESSION_FINGERPRINT_MODE,
                 });
 
-                if (BLOCK_SESSION_ANOMALIES) {
+                if (SESSION_FINGERPRINT_MODE === 'enforce') {
                   // Revoke the JTI so this token cannot be replayed on any subsequent request.
                   // TTL = remaining token lifetime (capped at 2 hours, same as revokeToken util).
-                  const bearerToken = req.headers.authorization?.substring(7);
-                  if (bearerToken) {
-                    const jti = extractJti(bearerToken);
-                    const exp = extractExp(bearerToken);
-                    if (jti) {
-                      const ttlSeconds = exp
-                        ? Math.min(Math.max(exp - Math.floor(Date.now() / 1000), 1), 7200)
-                        : 3600;
-                      await redis.set(revokedJtiKey(jti), 'session_anomaly', { ex: ttlSeconds })
-                        .catch((revErr: unknown) => {
-                          logger.error({
-                            type:  'session_anomaly_blocklist_write_failed',
-                            userId: user!.id,
-                            jti,
-                            error: revErr instanceof Error ? revErr.message : String(revErr),
-                          });
+                  if (jti) {
+                    const ttlSeconds = exp
+                      ? Math.min(Math.max(exp - Math.floor(Date.now() / 1000), 1), 7200)
+                      : 3600;
+                    await redis.set(revokedJtiKey(jti), 'session_anomaly', { ex: ttlSeconds })
+                      .catch((revErr: unknown) => {
+                        logger.error({
+                          type:  'session_anomaly_blocklist_write_failed',
+                          userId: user!.id,
+                          jti,
+                          error: revErr instanceof Error ? revErr.message : String(revErr),
                         });
-                      logger.warn({
-                        type:      'session_anomaly_blocked',
-                        event:     'session_anomaly_blocked',
-                        userId:    user.id,
-                        jti,
-                        ip:        currentIp,
-                        timestamp: new Date().toISOString(),
                       });
-                    }
                   }
                   // Evict the user session cache so the next request also sees null
                   await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
