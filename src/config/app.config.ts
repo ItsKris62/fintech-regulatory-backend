@@ -51,6 +51,10 @@ const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().min(1, 'R2 secret access key is required'),
   R2_BUCKET_NAME: z.string().default('sheriabot-documents'),
   R2_PUBLIC_URL: z.string().url(),
+  MALWARE_SCAN_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 
   // Cloudflare R2  -  public bucket (avatars, logos, branding)
   R2_PUBLIC_ACCESS_KEY_ID: z.string().min(1, 'R2 public bucket access key is required'),
@@ -111,6 +115,7 @@ export const appConfig = {
   isDevelopment: env.NODE_ENV === 'development',
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
+  malwareScanEnabled: env.MALWARE_SCAN_ENABLED,
 
   // Server
   port: env.PORT,

@@ -4,6 +4,7 @@ import { logger } from './utils/logger';
 import { connectionManager } from './lib/connection-manager';
 import { errorTracker } from './lib/error-tracker';
 import { warmCaches } from './lib/cache-warming';
+import { storageConfig } from './config/storage.config';
 import type { FastifyInstance } from 'fastify';
 
 // -- Process-level error traps ------------------------------------------------
@@ -82,6 +83,16 @@ const start = async () => {
     // 6. Bind to network
     const port = parseInt(process.env.PORT || '4000', 10);
     const host = process.env.HOST || '0.0.0.0';
+
+    logger.warn({
+      type: 'malware_scan_startup_state',
+      enabled: storageConfig.security.malwareScan,
+      scannerWired: false,
+      effectivePolicy: storageConfig.security.malwareScan
+        ? 'enabled_no_scanner_will_fail_uploads'
+        : 'disabled_uploads_will_skip_scanning',
+      note: 'Pilot phase: real scanner (ClamAV) scheduled for Sprint 2',
+    });
 
     await app.listen({ port, host });
 

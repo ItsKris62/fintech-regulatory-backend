@@ -210,7 +210,7 @@ export const storageConfig = {
     validateContent: true,
 
     // Scan for malware (if using external service)
-    malwareScan: appConfig.isProduction,
+    malwareScan: appConfig.malwareScanEnabled,
 
     // Encrypt at rest
     encryption: {
