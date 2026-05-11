@@ -369,7 +369,22 @@ export function createStorageService(deps?: {
       } catch (e: any) {
         span.recordException(e);
         span.setStatus({ code: SpanStatusCode.ERROR, message: e?.message });
-        logger.error({ type: 'r2_upload_error', key, error: e?.message });
+        logger.error({
+          type: 'r2_upload_error',
+          key,
+          error: e?.message,
+          errorMessage: e?.message,
+          errorName: e?.name,
+          errorCode: e?.Code ?? e?.code,
+          httpStatusCode: e?.$metadata?.httpStatusCode,
+          requestId: e?.$metadata?.requestId,
+          extendedRequestId: e?.$metadata?.extendedRequestId,
+          cfRayId: e?.$metadata?.cfId,
+          attempts: e?.$metadata?.attempts,
+          errorStackHead: typeof e?.stack === 'string' ? e.stack.slice(0, 500) : undefined,
+          bucket: bucketName(),
+          endpoint: storageConfig.s3Config.endpoint,
+        });
         throw new StorageServiceError(`Upload failed: ${e?.message}`);
       } finally {
         span.end();
