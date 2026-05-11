@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
+import { createAlertStreamToken } from '@/lib/alerts/stream-token';
 import { alertService } from '@/modules/alert';
 import {
   createAlertSchema,
@@ -11,6 +12,15 @@ import {
 } from '@/modules/alert';
 
 export const alertRouter = router({
+  // ---------------------------------------------------------------------------
+  // createStreamToken -- short-lived credential for EventSource
+  // ---------------------------------------------------------------------------
+
+  createStreamToken: protectedProcedure
+    .mutation(async ({ ctx }) => {
+      return createAlertStreamToken(ctx.user!.id);
+    }),
+
   // ---------------------------------------------------------------------------
   // create -- draft only; ADMIN or REGULATOR
   // ---------------------------------------------------------------------------

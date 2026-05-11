@@ -16,6 +16,7 @@ import { intaSendWebhookService } from './lib/intasend/webhook.service';
 import { resendWebhookService } from './lib/resend/webhook.service';
 import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
 import { alertPubSub } from './lib/redis/pubsub';
+import { consumeAlertStreamToken } from './lib/alerts/stream-token';
 
 /**
  * Zod schema for IntaSend webhook payloads.
@@ -357,8 +358,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   }));
 
   // -- Regulatory Alerts SSE stream -----------------------------------------
-  // EventSource does not support custom request headers, so the Supabase JWT
-  // is accepted as a ?token= query parameter for this route only.
+  // EventSource does not support custom request headers, so the browser first
+  // asks tRPC for a short-lived stream token and passes that here.
   app.get<{ Querystring: { token?: string } }>(
     '/api/alerts/stream',
     async (request, reply) => {
@@ -368,40 +369,39 @@ export async function buildApp(): Promise<FastifyInstance> {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      let userId: string;
-      try {
-        const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
-        if (authError || !authData?.user?.id) {
-          return reply.status(401).send({ error: 'Unauthorized' });
-        }
-
-        const dbUser = await prisma.user.findUnique({
-          where: { supabaseAuthId: authData.user.id },
-          select: { id: true },
-        });
-
-        if (!dbUser) {
-          return reply.status(401).send({ error: 'Unauthorized' });
-        }
-
-        userId = dbUser.id;
-      } catch (err: unknown) {
+      const userId = await consumeAlertStreamToken(token).catch((err: unknown) => {
         logger.warn({
-          type: 'alert_sse_auth_error',
+          type: 'alert_sse_token_error',
           error: err instanceof Error ? err.message : String(err),
           ip: request.ip,
         });
+        return null;
+      });
+
+      if (!userId) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
       // Hand the socket to raw Node — Fastify must not finalize the response.
       reply.hijack();
 
+      const requestOrigin = typeof request.headers.origin === 'string'
+        ? request.headers.origin
+        : undefined;
+      const corsHeaders = requestOrigin && allowedOrigins.includes(requestOrigin)
+        ? {
+            'Access-Control-Allow-Origin': requestOrigin,
+            'Access-Control-Allow-Credentials': 'true',
+            'Vary': 'Origin',
+          }
+        : {};
+
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no',
+        ...corsHeaders,
       });
 
       // Confirm connection to the client.
