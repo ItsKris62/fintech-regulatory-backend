@@ -10,7 +10,7 @@ model User {
   id                      String                           @id @default(cuid())
   supabaseAuthId          String?                          @unique
   email                   String                           @unique
-  password                String? // nullable — Supabase is the authoritative credential store
+  password                String? // nullable - Supabase is the authoritative credential store
   fullName                String
   phone                   String?
   avatar                  String?
@@ -28,7 +28,7 @@ model User {
   lastLoginIp             String?
   createdAt               DateTime                         @default(now())
   updatedAt               DateTime                         @updatedAt
-  deletedAt               DateTime? // Soft delete timestamp — null means active
+  deletedAt               DateTime? // Soft delete timestamp - null means active
   preferences             Json?
   totpEnabled             Boolean                          @default(false)
   totpSecret              String?
@@ -120,7 +120,7 @@ model Organization {
   verificationStatus      String                    @default("pending") // "pending" | "verified" | "rejected"
   verifiedAt              DateTime?
   verifiedBy              String?
-  // Plan entitlements (new — additive)
+  // Plan entitlements (new - additive)
   plan                    SubscriptionPlan          @default(REGULATOR)
   planStartDate           DateTime?
   planEndDate             DateTime?
@@ -132,7 +132,7 @@ model Organization {
   preferredPaymentMethod  PaymentProvider? // STRIPE | MPESA; null = Stripe default
   mpesaPhoneNumber        String? // stored as 254XXXXXXXXX
   mpesaNextPaymentDueDate DateTime? // set on each successful M-Pesa payment; lazy-evaluated for renewal
-  // Contact Information — Primary contact for regulatory matters
+  // Contact Information - Primary contact for regulatory matters
   address                 String?
   contactPerson           String?
   contactPosition         String?
@@ -725,7 +725,7 @@ enum ContentStatus {
 }
 
 enum NotificationType {
-  // ── Existing (all callers preserved) ──────────────────────────────────────
+  // Existing (all callers preserved)
   POLICY_READY
   COMMENT_ADDED
   REVIEW_REQUESTED
@@ -735,35 +735,35 @@ enum NotificationType {
   TICKET_STATUS_UPDATE
   TICKET_RESPONSE
 
-  // ── Security events ────────────────────────────────────────────────────────
+  // Security events
   PASSWORD_CHANGED
   PASSWORD_CHANGE_FAILED
   LOGIN_NEW_DEVICE
 
-  // ── Compliance events ──────────────────────────────────────────────────────
+  // Compliance events
   CHECKLIST_GENERATED
   CHECKLIST_COMPLETED
   GAP_ANALYSIS_STARTED
   GAP_ANALYSIS_COMPLETED
 
-  // ── Document vault ────────────────────────────────────────────────────────
+  // Document vault
   DOCUMENT_UPLOADED
   DOCUMENT_DELETED
 
-  // ── Account events ────────────────────────────────────────────────────────
+  // Account events
   PROFILE_UPDATED
   ORGANIZATION_UPDATED
   SUBSCRIPTION_CHANGED
   SUBSCRIPTION_EXPIRING
 
-  // ── Support tickets ───────────────────────────────────────────────────────
+  // Support tickets
   SUPPORT_TICKET_CREATED
   SUPPORT_TICKET_UPDATED
 
-  // ── System ────────────────────────────────────────────────────────────────
+  // System
   SYSTEM_ANNOUNCEMENT
 
-  // ── Calendar events ───────────────────────────────────────────────────────
+  // Calendar events
   EVENT_CREATED
   EVENT_REMINDER
 }
@@ -1010,6 +1010,25 @@ enum VaultDocumentStatus {
   EXPIRED
 }
 
+// Vault upload lifecycle state. This is distinct from VaultDocumentStatus,
+// which tracks business review status.
+//
+// Valid transitions enforced in the service layer:
+//   (no row) -> UPLOADED     - happy path on confirmUpload success
+//   (no row) -> FAILED       - confirmUpload verification failed
+//   UPLOADED -> VERIFIED     - contentHash computation succeeded
+//   UPLOADED -> FAILED       - contentHash mismatch on verify
+//   ANY      -> QUARANTINED  - admin or automated flag
+//   ANY      -> DELETED      - soft delete
+enum VaultDocumentUploadStatus {
+  PENDING
+  UPLOADED
+  VERIFIED
+  FAILED
+  QUARANTINED
+  DELETED
+}
+
 // ============================================================================
 // Plan Entitlements & Usage Metering
 // ============================================================================
@@ -1055,7 +1074,7 @@ model UsageRecord {
 }
 
 // ============================================================================
-// Usage Period — durable per-org monthly usage snapshots with plan limits
+// Usage Period - durable per-org monthly usage snapshots with plan limits
 // Source of truth for historical comparison; Redis counters are real-time truth.
 // Period boundaries are calendar months in EAT (UTC+3).
 // ============================================================================
@@ -1196,6 +1215,20 @@ model VaultDocument {
   notes          String?
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
+
+  // B3 additions (2026-05-12 - DPA/forensic hardening):
+  // - r2Bucket: explicit bucket name; supports future bucket migrations
+  // - contentHash: SHA-256 hex; populated by B4 confirm, used for tamper detection
+  // - encryptionKeyId: reserved for DPA sprint's envelope encryption (KMS)
+  // - uploadStatus: lifecycle state; orthogonal to business status
+  // - retentionExpiresAt: set by DPA sprint's RetentionPolicy resolver
+  // - deletedAt: soft delete; queries should filter WHERE deletedAt IS NULL
+  r2Bucket           String?
+  contentHash        String?
+  encryptionKeyId    String?
+  uploadStatus       VaultDocumentUploadStatus?
+  retentionExpiresAt DateTime?
+  deletedAt          DateTime?
 
   uploadedBy   User         @relation(fields: [uploadedById], references: [id])
   organization Organization @relation(fields: [organizationId], references: [id])
@@ -1695,7 +1728,7 @@ model GeneratedPolicy {
   targetAudience   String?
   organizationType String?
 
-  // Source gap (nullable — can be created standalone or from a gap)
+  // Source gap (nullable - can be created standalone or from a gap)
   sourceGapAnalysisId String?
   sourceGapId         String? // specific gap item ID within the analysis JSON
 
@@ -1708,7 +1741,7 @@ model GeneratedPolicy {
   progress     Int                   @default(0)
   errorMessage String?
 
-  // Content — stored as structured JSON
+  // Content - stored as structured JSON
   tableOfContents  Json? // OutlineResult: { sections: [{id, title, description, estimatedWordCount, mandatoryClauses}] }
   sections         Json? // PolicySection[]: [{id, title, content (TipTap JSON), citations, status, wordCount}]
   executiveSummary String? @db.Text
@@ -1775,13 +1808,13 @@ enum GeneratedPolicyStatus {
   OUTLINING // Stage 1: Generating table of contents
   DRAFTING // Stage 2: Writing sections (progress 10-80%)
   REVIEWING // Stage 3: Final consistency/citation review
-  COMPLETED // All stages done — ready for user editing
+  COMPLETED // All stages done - ready for user editing
   FAILED // Pipeline error
   ARCHIVED // User archived
 }
 
 // ============================================================================
-// Organization Membership — multi-member org support
+// Organization Membership - multi-member org support
 // ============================================================================
 
 enum MemberRole {

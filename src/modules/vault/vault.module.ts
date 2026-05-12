@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { storageService } from '@/lib/storage/storage.service';
-import { vaultStorageConfig } from '@/lib/storage/client';
+import { vaultS3Client, vaultStorageConfig } from '@/lib/storage/client';
+import { computeObjectContentHash } from '@/lib/storage/content-hash';
 import {
   ALLOWED_VAULT_MIME_TYPES,
   MIME_TO_EXTENSION,
@@ -16,6 +17,7 @@ import {
   PLAN_ENTITLEMENTS,
 } from '@/config/entitlements.config';
 import { logger } from '@/utils/logger';
+import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { notificationModule } from '@/modules/notification';
 import type { EffectivePlan } from '@/types/plan.types';
 import type {
@@ -422,7 +424,7 @@ async function checkVaultStorageQuota(
   // authoritative source of total storage used (Redis counter is for billing
   // dashboards only and resets monthly).
   const agg = await prisma.vaultDocument.aggregate({
-    where: { organizationId: orgId, isArchived: false },
+    where: { organizationId: orgId, isArchived: false, deletedAt: null },
     _sum: { fileSize: true },
   });
   const currentUsedBytes = agg._sum.fileSize ?? 0;
@@ -596,6 +598,34 @@ class VaultModule {
 
     const verified = await verifyVaultObjectBeforeConfirm(pendingUpload);
     const safeExtension = getSafeExtension(pendingUpload.declaredMimeType);
+    let contentHash: string;
+    let hashBytesRead: number;
+
+    try {
+      const hashResult = await computeObjectContentHash({
+        s3Client: vaultS3Client,
+        bucket: pendingUpload.bucket,
+        key: pendingUpload.storageKey,
+        expectedSize: pendingUpload.declaredSize,
+        context: {
+          organizationId: pendingUpload.organizationId,
+          documentId: pendingUpload.documentId,
+        },
+      });
+      contentHash = hashResult.hash;
+      hashBytesRead = hashResult.bytesRead;
+    } catch (error: unknown) {
+      logger.error({
+        type: 'vault.confirm.hash_failed',
+        organizationId: pendingUpload.organizationId,
+        documentId: pendingUpload.documentId,
+        error: sanitizeErrorMessage(error),
+      });
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Upload verification failed. Please try again.',
+      });
+    }
 
     const doc = await prisma.vaultDocument.create({
       data: {
@@ -613,6 +643,9 @@ class VaultModule {
         uploadedById: pendingUpload.uploaderId,
         organizationId: pendingUpload.organizationId,
         status: 'PENDING',
+        r2Bucket: pendingUpload.bucket,
+        contentHash,
+        uploadStatus: 'VERIFIED',
       },
       select: VAULT_DOCUMENT_SELECT,
     });
@@ -628,6 +661,8 @@ class VaultModule {
       key: pendingUpload.storageKey,
       verifiedSize: verified.verifiedSize,
       verifiedMime: verified.verifiedMime,
+      uploadStatus: 'VERIFIED',
+      hashBytesRead,
     });
 
     notificationModule.createCategorizedNotification({
@@ -657,6 +692,7 @@ class VaultModule {
     const where: Record<string, unknown> = {
       organizationId: orgId,
       isArchived: false,
+      deletedAt: null,
     };
 
     if (params.category) where.category = params.category;
@@ -704,8 +740,8 @@ class VaultModule {
   async getDocumentById(params: GetDocumentByIdParams): Promise<VaultDocumentListItem> {
     const orgId = requireOrganization(params.organizationId);
 
-    const doc = await prisma.vaultDocument.findUnique({
-      where: { id: params.documentId },
+    const doc = await prisma.vaultDocument.findFirst({
+      where: { id: params.documentId, deletedAt: null },
       select: VAULT_DOCUMENT_SELECT,
     });
 
@@ -726,13 +762,14 @@ class VaultModule {
   ): Promise<{ downloadUrl: string; filename: string; expiresAt: string }> {
     const orgId = requireOrganization(params.organizationId);
 
-    const doc = await prisma.vaultDocument.findUnique({
-      where: { id: params.documentId },
+    const doc = await prisma.vaultDocument.findFirst({
+      where: { id: params.documentId, deletedAt: null },
       select: {
         storageKey: true,
         fileName: true,
         name: true,
         isArchived: true,
+        r2Bucket: true,
         organizationId: true,
         uploadedById: true,
       },
@@ -747,8 +784,7 @@ class VaultModule {
     }
     await assertActiveOrganizationMembership(params.userId, doc.organizationId);
 
-    // TODO(B3): read VaultDocument.r2Bucket once the additive schema migration lands.
-    const bucket = vaultStorageConfig.bucket;
+    const bucket = doc.r2Bucket ?? vaultStorageConfig.bucket;
     const downloadExpirySeconds = 300;
 
     const downloadUrl = await storageService.getVaultDownloadUrl(
@@ -782,8 +818,8 @@ class VaultModule {
   async updateDocument(params: UpdateDocumentParams): Promise<VaultDocumentListItem> {
     const orgId = requireOrganization(params.organizationId);
 
-    const existing = await prisma.vaultDocument.findUnique({
-      where: { id: params.documentId },
+    const existing = await prisma.vaultDocument.findFirst({
+      where: { id: params.documentId, deletedAt: null },
       select: { organizationId: true, uploadedById: true, isArchived: true },
     });
 
@@ -832,8 +868,8 @@ class VaultModule {
       });
     }
 
-    const existing = await prisma.vaultDocument.findUnique({
-      where: { id: params.documentId },
+    const existing = await prisma.vaultDocument.findFirst({
+      where: { id: params.documentId, deletedAt: null },
       select: { organizationId: true, uploadedById: true, isArchived: true },
     });
 
@@ -874,8 +910,8 @@ class VaultModule {
   async deleteDocument(params: DeleteDocumentParams): Promise<{ success: boolean }> {
     const orgId = requireOrganization(params.organizationId);
 
-    const existing = await prisma.vaultDocument.findUnique({
-      where: { id: params.documentId },
+    const existing = await prisma.vaultDocument.findFirst({
+      where: { id: params.documentId, deletedAt: null },
       select: { organizationId: true, uploadedById: true, isArchived: true, storageKey: true },
     });
 
@@ -887,7 +923,7 @@ class VaultModule {
 
     await prisma.vaultDocument.update({
       where: { id: params.documentId },
-      data: { isArchived: true },
+      data: { isArchived: true, deletedAt: new Date(), uploadStatus: 'DELETED' },
     });
 
     logger.info({
@@ -915,7 +951,7 @@ class VaultModule {
   async getDocumentStats(params: GetDocumentStatsParams): Promise<VaultDocumentStats> {
     const orgId = requireOrganization(params.organizationId);
 
-    const baseWhere = { organizationId: orgId, isArchived: false };
+    const baseWhere = { organizationId: orgId, isArchived: false, deletedAt: null };
 
     const [totalCount, categoryGroups, statusGroups, expiringSoonCount] = await Promise.all([
       prisma.vaultDocument.count({ where: baseWhere }),
@@ -981,6 +1017,7 @@ class VaultModule {
   async checkExpiredDocuments(organizationId?: string): Promise<void> {
     const where: Record<string, unknown> = {
       isArchived: false,
+      deletedAt: null,
       status: { not: 'EXPIRED' },
       expiryDate: { lt: new Date() },
     };
@@ -1007,7 +1044,7 @@ class VaultModule {
   async getStorageUsedMB(organizationId: string): Promise<number> {
     if (!organizationId) return 0;
     const agg = await prisma.vaultDocument.aggregate({
-      where: { organizationId, isArchived: false },
+      where: { organizationId, isArchived: false, deletedAt: null },
       _sum: { fileSize: true },
     });
     return Math.round((agg._sum.fileSize ?? 0) / (1024 * 1024));
@@ -1046,8 +1083,8 @@ class VaultModule {
     // Enforce per-tier single-file limits and MIME type before doing any DB work
     assertTierUploadLimits(params.plan, params.fileType, params.fileSize);
 
-    const existing = await prisma.vaultDocument.findUnique({
-      where: { id: params.documentId },
+    const existing = await prisma.vaultDocument.findFirst({
+      where: { id: params.documentId, deletedAt: null },
       select: {
         organizationId: true,
         uploadedById: true,
@@ -1150,8 +1187,8 @@ class VaultModule {
   }): Promise<VaultDocumentListItem> {
     const orgId = requireOrganization(params.organizationId);
 
-    const existing = await prisma.vaultDocument.findUnique({
-      where: { id: params.documentId },
+    const existing = await prisma.vaultDocument.findFirst({
+      where: { id: params.documentId, deletedAt: null },
       select: {
         organizationId: true,
         uploadedById: true,
@@ -1188,6 +1225,34 @@ class VaultModule {
       declaredFilename: sanitizeDeclaredFilename(params.fileName),
     };
     const verified = await verifyVaultObjectBeforeConfirm(replacementPending);
+    let contentHash: string;
+    let hashBytesRead: number;
+
+    try {
+      const hashResult = await computeObjectContentHash({
+        s3Client: vaultS3Client,
+        bucket: replacementPending.bucket,
+        key: replacementPending.storageKey,
+        expectedSize: replacementPending.declaredSize,
+        context: {
+          organizationId: replacementPending.organizationId,
+          documentId: replacementPending.documentId,
+        },
+      });
+      contentHash = hashResult.hash;
+      hashBytesRead = hashResult.bytesRead;
+    } catch (error: unknown) {
+      logger.error({
+        type: 'vault.replace.hash_failed',
+        organizationId: replacementPending.organizationId,
+        documentId: replacementPending.documentId,
+        error: sanitizeErrorMessage(error),
+      });
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Replacement verification failed. Please try again.',
+      });
+    }
 
     const updated = await prisma.vaultDocument.update({
       where: { id: params.documentId },
@@ -1201,6 +1266,9 @@ class VaultModule {
         status: 'PENDING',
         verifiedAt: null,
         verifiedBy: null,
+        r2Bucket: replacementPending.bucket,
+        contentHash,
+        uploadStatus: 'VERIFIED',
       },
       select: VAULT_DOCUMENT_SELECT,
     });
@@ -1211,6 +1279,8 @@ class VaultModule {
       organizationId: orgId,
       documentId: params.documentId,
       newVersion: updated.version,
+      uploadStatus: 'VERIFIED',
+      hashBytesRead,
     });
 
     return updated as VaultDocumentListItem;
