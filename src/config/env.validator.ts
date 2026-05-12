@@ -82,6 +82,11 @@ const envSchema = z.object({
   // -- Admin Seed (optional, used by seed script) --------------------------
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_PASSWORD: z.string().min(12).optional(),
+
+  // -- Vault Reconciliation Cron --------------------------------------------
+  // When true (default), the nightly cron logs orphans but does not delete.
+  // Flip to false after reviewing 2 nights of dry-run logs.
+  VAULT_RECONCILIATION_DRY_RUN: z.coerce.boolean().default(true).optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
