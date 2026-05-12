@@ -1,12 +1,22 @@
 import { TRPCError } from '@trpc/server';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { z } from 'zod';
 import { prisma } from '@/lib/prisma/client';
+import { redis } from '@/lib/redis/client';
 import { storageService } from '@/lib/storage/storage.service';
-import { storageConfig } from '@/config/storage.config';
+import { vaultStorageConfig } from '@/lib/storage/client';
+import {
+  ALLOWED_VAULT_MIME_TYPES,
+  MIME_TO_EXTENSION,
+  VAULT_MIME_TYPES,
+  type VaultMimeType,
+} from '@/lib/storage/mime';
+import {
+  PLAN_ENTITLEMENTS,
+} from '@/config/entitlements.config';
 import { logger } from '@/utils/logger';
 import { notificationModule } from '@/modules/notification';
-import { VAULT_UPLOAD_LIMITS } from '@/config/upload-limits.config';
 import type { EffectivePlan } from '@/types/plan.types';
 import type {
   DocumentCategory,
@@ -34,6 +44,72 @@ const STATUS_CHANGE_ROLES: readonly string[] = ['ADMIN', 'REGULATOR'];
 
 /** Days before expiry considered "expiring soon" */
 const EXPIRING_SOON_DAYS = 30;
+
+const VAULT_UPLOAD_PREFIX = 'vault';
+const PENDING_UPLOAD_TTL_SECONDS = 600;
+const VAULT_TAG_SCHEMA = z.string().min(1).max(50).regex(/^[A-Za-z0-9_-]+$/);
+const CONTROL_CHARACTERS_REGEX = /[\x00-\x1F\x7F]/g;
+const DISALLOWED_DESCRIPTION_CHARACTERS_REGEX = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
+const SAFE_FILENAME_SCHEMA = z.string()
+  .min(1)
+  .max(255)
+  .refine((value) => !/[\\/]/.test(value), 'Filename must not include path separators.')
+  .refine((value) => !/[\0-\x1F\x7F]/.test(value), 'Filename must not include control characters.');
+
+const VAULT_DOCUMENT_NAME_SCHEMA = z.string()
+  .transform((value) => value.replace(CONTROL_CHARACTERS_REGEX, '').trim())
+  .refine((value) => value.length > 0)
+  .refine((value) => value.length <= 255);
+
+const VAULT_DESCRIPTION_SCHEMA = z.string()
+  .max(1000)
+  .refine((value) => !DISALLOWED_DESCRIPTION_CHARACTERS_REGEX.test(value));
+
+const ISO_DATE_TIME_SCHEMA = z.string()
+  .datetime({ offset: true })
+  .refine((value) => !Number.isNaN(Date.parse(value)));
+
+const FUTURE_ISO_DATE_TIME_SCHEMA = ISO_DATE_TIME_SCHEMA
+  .refine((value) => new Date(value).getTime() > Date.now());
+
+const vaultPresignInputSchema = z.object({
+  organizationId: z.string().min(1),
+  uploaderId: z.string().min(1),
+  documentId: z.string().min(1),
+  name: VAULT_DOCUMENT_NAME_SCHEMA,
+  description: VAULT_DESCRIPTION_SCHEMA.optional(),
+  expiryDate: FUTURE_ISO_DATE_TIME_SCHEMA.optional(),
+  declaredFilename: SAFE_FILENAME_SCHEMA,
+  declaredMimeType: z.enum(VAULT_MIME_TYPES),
+  declaredSize: z.number().int().positive(),
+  category: z.enum(['CORPORATE', 'COMPLIANCE', 'FINANCIAL', 'LICENSE', 'OPERATIONS', 'TAX', 'OTHER']),
+  tags: z.array(VAULT_TAG_SCHEMA).max(20),
+  tier: z.enum(['REGULATOR', 'STARTUP', 'BUSINESS', 'ENTERPRISE', 'FREE_TRIAL']),
+});
+
+const vaultReplacePresignInputSchema = vaultPresignInputSchema.omit({
+  name: true,
+  description: true,
+  expiryDate: true,
+});
+
+const pendingVaultUploadSchema = z.object({
+  organizationId: z.string().min(1),
+  uploaderId: z.string().min(1),
+  documentId: z.string().min(1),
+  storageKey: z.string().min(1),
+  bucket: z.string().min(1),
+  name: VAULT_DOCUMENT_NAME_SCHEMA,
+  description: VAULT_DESCRIPTION_SCHEMA.optional(),
+  expiryDate: ISO_DATE_TIME_SCHEMA.optional(),
+  declaredMimeType: z.enum(VAULT_MIME_TYPES),
+  declaredSize: z.number().int().positive(),
+  category: z.enum(['CORPORATE', 'COMPLIANCE', 'FINANCIAL', 'LICENSE', 'OPERATIONS', 'TAX', 'OTHER']),
+  tags: z.array(VAULT_TAG_SCHEMA).max(20),
+  declaredFilename: SAFE_FILENAME_SCHEMA,
+});
+
+type PendingVaultUpload = z.infer<typeof pendingVaultUploadSchema>;
 
 // --- Select shape shared by list and get queries ------------------------------
 
@@ -80,30 +156,244 @@ function requireOrganization(organizationId: string | undefined | null): string 
   return organizationId;
 }
 
+function getVaultPlanLimits(plan: EffectivePlan) {
+  const entitlements = PLAN_ENTITLEMENTS[plan];
+  const maxFileSizeMB = entitlements.vaultDocumentMaxBytes === -1
+    ? -1
+    : Math.floor(entitlements.vaultDocumentMaxBytes / (1024 * 1024));
+  const maxTotalStorageMB = entitlements.vaultTotalQuotaBytes === -1
+    ? -1
+    : Math.floor(entitlements.vaultTotalQuotaBytes / (1024 * 1024));
+
+  return {
+    maxFileSizeMB,
+    maxTotalStorageMB,
+    allowedMimeTypes: entitlements.vaultAllowedMimeTypes,
+  };
+}
+
+function sanitizeDeclaredFilename(filename: string): string {
+  const basename = path.basename(filename).replace(/[\0-\x1F\x7F]/g, '_').slice(0, 255);
+  return basename || 'document';
+}
+
+function encodeMetadataFilename(filename: string): string {
+  const safeFilename = sanitizeDeclaredFilename(filename);
+  return /^[\x20-\x7E]*$/.test(safeFilename)
+    ? safeFilename
+    : encodeURIComponent(safeFilename);
+}
+
+function normalizeMetadata(metadata: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(metadata ?? {}).map(([key, value]) => [key.toLowerCase(), value ?? '']),
+  );
+}
+
+function generateVaultDocumentId(): string {
+  return `c${Date.now().toString(36)}${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+}
+
+function getSafeExtension(mimeType: string): string {
+  if (!ALLOWED_VAULT_MIME_TYPES.has(mimeType)) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unsupported vault file type.' });
+  }
+
+  return MIME_TO_EXTENSION[mimeType as VaultMimeType];
+}
+
+function buildVaultStorageKey(orgId: string, documentId: string, declaredMimeType: string): string {
+  const safeExt = getSafeExtension(declaredMimeType);
+  const objectId = randomUUID();
+  return `${VAULT_UPLOAD_PREFIX}/organizationId/${orgId}/documentId/${documentId}/${objectId}.${safeExt}`;
+}
+
+function assertVaultStorageKey(params: {
+  organizationId: string;
+  documentId: string;
+  storageKey: string;
+}): void {
+  const expectedPrefix = `${VAULT_UPLOAD_PREFIX}/organizationId/${params.organizationId}/documentId/${params.documentId}/`;
+  if (!params.storageKey.startsWith(expectedPrefix) || params.storageKey.includes('..')) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Upload key does not match the server-issued vault location.',
+    });
+  }
+}
+
+function buildVaultObjectMetadata(args: {
+  uploaderId: string;
+  organizationId: string;
+  documentId: string;
+  category: DocumentCategory;
+  originalFilename: string;
+  declaredMimeType: string;
+  declaredSize: number;
+}): Record<string, string> {
+  return {
+    'uploader-id': args.uploaderId,
+    'org-id': args.organizationId,
+    'document-id': args.documentId,
+    category: args.category,
+    'original-filename': encodeMetadataFilename(args.originalFilename),
+    'declared-mime': args.declaredMimeType,
+    'declared-size': String(args.declaredSize),
+  };
+}
+
+function pendingUploadKey(documentId: string): string {
+  return `sheriabot:vault:pending:${documentId}`;
+}
+
+async function assertActiveOrganizationMembership(userId: string, organizationId: string): Promise<void> {
+  const membership = await prisma.organizationMember.findUnique({
+    where: { userId_organizationId: { userId, organizationId } },
+    select: { status: true },
+  });
+
+  if (membership?.status === 'ACTIVE') return;
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { organizationId: true },
+  });
+
+  if (user?.organizationId === organizationId) return;
+
+  throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this organization.' });
+}
+
+async function storePendingUpload(pendingUpload: PendingVaultUpload): Promise<void> {
+  // Pending upload schema v2 stores mutable form fields captured at presign.
+  await redis.set(
+    pendingUploadKey(pendingUpload.documentId),
+    JSON.stringify(pendingUpload),
+    { ex: PENDING_UPLOAD_TTL_SECONDS },
+  );
+}
+
+async function loadPendingUpload(documentId: string): Promise<PendingVaultUpload> {
+  const raw = await redis.get<string>(pendingUploadKey(documentId));
+  if (!raw) {
+    throw new TRPCError({
+      code: 'NOT_FOUND',
+      message: 'Upload request expired or was not found.',
+    });
+  }
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Upload request state is invalid.',
+    });
+  }
+  const parsed = pendingVaultUploadSchema.safeParse(parsedJson);
+  if (!parsed.success) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Upload request state is invalid.',
+    });
+  }
+
+  return parsed.data;
+}
+
+async function deletePendingUpload(documentId: string): Promise<void> {
+  try {
+    await redis.del(pendingUploadKey(documentId));
+  } catch (error: unknown) {
+    logger.warn({
+      type: 'vault.pending.delete_failed',
+      documentId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function verifyVaultObjectBeforeConfirm(pendingUpload: PendingVaultUpload): Promise<{
+  verifiedSize: number;
+  verifiedMime: string;
+}> {
+  const metadata = await storageService.getVaultFileInfo(pendingUpload.storageKey, pendingUpload.bucket);
+  if (!metadata) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Upload not received.',
+    });
+  }
+
+  if (metadata.size !== pendingUpload.declaredSize) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Uploaded file size does not match the signed upload request.',
+    });
+  }
+
+  if (metadata.contentType !== pendingUpload.declaredMimeType) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Uploaded file type does not match the signed upload request.',
+    });
+  }
+
+  const objectMetadata = normalizeMetadata(metadata.metadata);
+  const metadataComparisons: Array<{ key: string; expected: string }> = [
+    { key: 'uploader-id', expected: pendingUpload.uploaderId },
+    { key: 'org-id', expected: pendingUpload.organizationId },
+    { key: 'document-id', expected: pendingUpload.documentId },
+    { key: 'declared-size', expected: String(pendingUpload.declaredSize) },
+    { key: 'declared-mime', expected: pendingUpload.declaredMimeType },
+  ];
+  const mismatchedMetadata = metadataComparisons.find(
+    (comparison) => objectMetadata[comparison.key] !== comparison.expected,
+  );
+
+  if (mismatchedMetadata) {
+    logger.warn({
+      type: 'vault.confirm.metadata_mismatch',
+      documentId: pendingUpload.documentId,
+      key: mismatchedMetadata.key,
+    });
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Uploaded file metadata does not match the signed upload request.',
+    });
+  }
+
+  return {
+    verifiedSize: metadata.size,
+    verifiedMime: metadata.contentType,
+  };
+}
+
 // --- Helper: enforce per-tier upload limits -----------------------------------
 
 function assertTierUploadLimits(plan: EffectivePlan, fileType: string, fileSize: number): void {
-  const limits = VAULT_UPLOAD_LIMITS[plan];
+  const limits = PLAN_ENTITLEMENTS[plan];
 
-  if (limits.maxFileSizeMB === 0) {
+  if (limits.vaultDocumentMaxBytes === 0 || limits.vaultTotalQuotaBytes === 0) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'Document vault is not available on your current plan.',
     });
   }
 
-  if (!(limits.allowedMimeTypes as readonly string[]).includes(fileType)) {
+  if (!limits.vaultAllowedMimeTypes.includes(fileType)) {
     throw new TRPCError({
       code: 'BAD_REQUEST',
-      message: `File type "${fileType}" is not allowed on your current plan. Accepted: ${limits.allowedMimeTypes.join(', ')}.`,
+      message: `File type "${fileType}" is not allowed on your current plan. Accepted: ${limits.vaultAllowedMimeTypes.join(', ')}.`,
     });
   }
 
-  const maxFileSizeBytes = limits.maxFileSizeMB * 1024 * 1024;
-  if (fileSize > maxFileSizeBytes) {
+  if (limits.vaultDocumentMaxBytes !== -1 && fileSize > limits.vaultDocumentMaxBytes) {
+    const maxFileSizeMB = Math.floor(limits.vaultDocumentMaxBytes / (1024 * 1024));
     throw new TRPCError({
       code: 'BAD_REQUEST',
-      message: `File size ${(fileSize / 1024 / 1024).toFixed(1)} MB exceeds the ${limits.maxFileSizeMB} MB limit for your plan. Upgrade for larger uploads.`,
+      message: `File size ${(fileSize / 1024 / 1024).toFixed(1)} MB exceeds the ${maxFileSizeMB} MB limit for your plan. Upgrade for larger uploads.`,
     });
   }
 }
@@ -115,20 +405,18 @@ async function checkVaultStorageQuota(
   incomingFileSizeBytes: number,
   plan: EffectivePlan,
 ): Promise<void> {
-  const limits = VAULT_UPLOAD_LIMITS[plan];
+  const limits = PLAN_ENTITLEMENTS[plan];
 
   // Unlimited storage  -  no check needed
-  if (limits.maxTotalStorageMB === -1) return;
+  if (limits.vaultTotalQuotaBytes === -1) return;
 
   // Blocked tier  -  assertTierUploadLimits already handles this, but guard anyway
-  if (limits.maxTotalStorageMB === 0) {
+  if (limits.vaultTotalQuotaBytes === 0) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'Document vault is not available on your current plan.',
     });
   }
-
-  const maxTotalStorageBytes = limits.maxTotalStorageMB * 1024 * 1024;
 
   // Sum active (non-archived) vault documents for this org  -  this is the
   // authoritative source of total storage used (Redis counter is for billing
@@ -139,9 +427,9 @@ async function checkVaultStorageQuota(
   });
   const currentUsedBytes = agg._sum.fileSize ?? 0;
 
-  if (currentUsedBytes + incomingFileSizeBytes > maxTotalStorageBytes) {
+  if (currentUsedBytes + incomingFileSizeBytes > limits.vaultTotalQuotaBytes) {
     const usedMB = Math.round(currentUsedBytes / (1024 * 1024));
-    const limitMB = limits.maxTotalStorageMB;
+    const limitMB = Math.floor(limits.vaultTotalQuotaBytes / (1024 * 1024));
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: `Storage quota exceeded. Your plan allows ${limitMB} MB total. Currently using ${usedMB} MB. Upgrade your plan for more storage.`,
@@ -196,43 +484,93 @@ class VaultModule {
     params: GenerateUploadUrlParams,
   ): Promise<GenerateUploadUrlResult> {
     const orgId = requireOrganization(params.organizationId);
+    const documentId = generateVaultDocumentId();
+    const declaredFilename = sanitizeDeclaredFilename(params.declaredFilename);
+    const parsed = vaultPresignInputSchema.safeParse({
+      organizationId: orgId,
+      uploaderId: params.userId,
+      documentId,
+      name: params.name,
+      description: params.description,
+      expiryDate: params.expiryDate,
+      declaredFilename,
+      declaredMimeType: params.declaredMimeType,
+      declaredSize: params.declaredSize,
+      category: params.category,
+      tags: params.tags ?? [],
+      tier: params.plan,
+    });
+
+    if (!parsed.success) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Invalid vault upload request.',
+      });
+    }
+    const uploadRequest = parsed.data;
 
     // Enforce per-tier single-file limits first (cheap, synchronous)
-    assertTierUploadLimits(params.plan, params.fileType, params.fileSize);
+    assertTierUploadLimits(params.plan, params.declaredMimeType, params.declaredSize);
 
     // Enforce total storage quota (async DB aggregate)
-    await checkVaultStorageQuota(orgId, params.fileSize, params.plan);
+    await checkVaultStorageQuota(orgId, params.declaredSize, params.plan);
 
-    const documentId = randomUUID();
-    const ext = path.extname(params.filename).toLowerCase().slice(0, 15);
-    const uuidFilename = `${randomUUID()}${ext}`;
-    const storageKey = `vault/org_${orgId}/${documentId}/${uuidFilename}`;
+    const storageKey = buildVaultStorageKey(orgId, documentId, uploadRequest.declaredMimeType);
+    const bucket = vaultStorageConfig.bucket;
+    const metadata = buildVaultObjectMetadata({
+      uploaderId: params.userId,
+      organizationId: orgId,
+      documentId,
+      category: uploadRequest.category,
+      originalFilename: declaredFilename,
+      declaredMimeType: uploadRequest.declaredMimeType,
+      declaredSize: uploadRequest.declaredSize,
+    });
+    const uploadExpirySeconds = 300;
 
     // Pass fileSize so the presigned URL is bound to a specific Content-Length,
     // preventing the client from uploading a larger file than declared.
-    const { url } = await storageService.getUploadUrl(
-      params.filename,
-      params.fileType,
-      undefined,
+    const { url, requiredHeaders } = await storageService.getVaultUploadUrl({
+      key: storageKey,
+      contentType: uploadRequest.declaredMimeType,
+      contentLength: uploadRequest.declaredSize,
+      metadata,
+      expiresIn: uploadExpirySeconds,
+    });
+
+    await storePendingUpload({
+      organizationId: orgId,
+      uploaderId: params.userId,
+      documentId,
       storageKey,
-      params.fileSize,
-    );
+      bucket,
+      name: uploadRequest.name,
+      description: uploadRequest.description,
+      expiryDate: uploadRequest.expiryDate,
+      declaredMimeType: uploadRequest.declaredMimeType,
+      declaredSize: uploadRequest.declaredSize,
+      category: uploadRequest.category,
+      tags: uploadRequest.tags,
+      declaredFilename,
+    });
 
     logger.info({
-      type: 'vault_upload_url_generated',
-      userId: params.userId,
+      type: 'vault.presign.issued',
       organizationId: orgId,
+      uploaderId: params.userId,
       documentId,
-      fileSize: params.fileSize,
-      plan: params.plan,
+      bucket,
+      key: storageKey,
+      declaredSize: uploadRequest.declaredSize,
+      declaredMimeType: uploadRequest.declaredMimeType,
     });
 
     return {
       uploadUrl: url,
-      storageKey,
       documentId,
+      requiredHeaders,
       expiresAt: new Date(
-        Date.now() + storageConfig.presignedUrls.expiry.upload * 1000,
+        Date.now() + uploadExpirySeconds * 1000,
       ).toISOString(),
     };
   }
@@ -243,40 +581,61 @@ class VaultModule {
    */
   async createDocument(params: CreateDocumentParams): Promise<VaultDocumentListItem> {
     const orgId = requireOrganization(params.organizationId);
+    const pendingUpload = await loadPendingUpload(params.documentId);
+
+    if (params.userId !== pendingUpload.uploaderId || orgId !== pendingUpload.organizationId) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this upload.' });
+    }
+
+    await assertActiveOrganizationMembership(params.userId, pendingUpload.organizationId);
+    assertVaultStorageKey({
+      organizationId: pendingUpload.organizationId,
+      documentId: pendingUpload.documentId,
+      storageKey: pendingUpload.storageKey,
+    });
+
+    const verified = await verifyVaultObjectBeforeConfirm(pendingUpload);
+    const safeExtension = getSafeExtension(pendingUpload.declaredMimeType);
 
     const doc = await prisma.vaultDocument.create({
       data: {
-        id: params.documentId,
-        name: params.name,
-        description: params.description ?? null,
-        fileName: params.fileName,
-        fileType: params.fileType,
-        fileExtension: params.fileExtension,
-        fileSize: params.fileSize,
-        storageKey: params.storageKey,
-        category: params.category,
-        expiryDate: params.expiryDate ? new Date(params.expiryDate) : null,
-        tags: params.tags ?? [],
-        uploadedById: params.userId,
-        organizationId: orgId,
+        id: pendingUpload.documentId,
+        name: pendingUpload.name,
+        description: pendingUpload.description ?? null,
+        fileName: pendingUpload.declaredFilename,
+        fileType: pendingUpload.declaredMimeType,
+        fileExtension: `.${safeExtension}`,
+        fileSize: verified.verifiedSize,
+        storageKey: pendingUpload.storageKey,
+        category: pendingUpload.category,
+        expiryDate: pendingUpload.expiryDate ? new Date(pendingUpload.expiryDate) : null,
+        tags: pendingUpload.tags,
+        uploadedById: pendingUpload.uploaderId,
+        organizationId: pendingUpload.organizationId,
+        status: 'PENDING',
       },
       select: VAULT_DOCUMENT_SELECT,
     });
 
+    await deletePendingUpload(pendingUpload.documentId);
+
     logger.info({
-      type: 'vault_document_created',
-      userId: params.userId,
-      organizationId: orgId,
+      type: 'vault.upload.confirmed',
+      organizationId: pendingUpload.organizationId,
+      uploaderId: pendingUpload.uploaderId,
       documentId: doc.id,
-      category: doc.category,
+      bucket: pendingUpload.bucket,
+      key: pendingUpload.storageKey,
+      verifiedSize: verified.verifiedSize,
+      verifiedMime: verified.verifiedMime,
     });
 
     notificationModule.createCategorizedNotification({
-      userId: params.userId,
+      userId: pendingUpload.uploaderId,
       type: 'DOCUMENT_UPLOADED',
       category: 'DOCUMENTS',
       title: 'Document Uploaded',
-      message: `"${params.name}" has been added to your document vault.`,
+      message: `"${pendingUpload.name}" has been added to your document vault.`,
       link: `/startup/vault`,
     }).catch(() => { /* non-blocking */ });
 
@@ -383,27 +742,36 @@ class VaultModule {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Document not found.' });
     }
 
-    assertDocumentAccess(doc, params.userId, orgId, params.userRole);
+    if (doc.organizationId !== orgId) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this document.' });
+    }
+    await assertActiveOrganizationMembership(params.userId, doc.organizationId);
 
-    const downloadUrl = await storageService.getDownloadUrl(
+    // TODO(B3): read VaultDocument.r2Bucket once the additive schema migration lands.
+    const bucket = vaultStorageConfig.bucket;
+    const downloadExpirySeconds = 300;
+
+    const downloadUrl = await storageService.getVaultDownloadUrl(
       doc.storageKey,
-      storageConfig.presignedUrls.expiry.download,
-      params.inline ?? false,
+      downloadExpirySeconds,
       doc.fileName,
+      bucket,
     );
 
     logger.info({
-      type: 'vault_download_url_generated',
-      userId: params.userId,
-      organizationId: orgId,
+      type: 'vault.download.issued',
+      uploaderId: params.userId,
+      organizationId: doc.organizationId,
       documentId: params.documentId,
+      bucket,
+      key: doc.storageKey,
     });
 
     return {
       downloadUrl,
       filename: doc.name,
       expiresAt: new Date(
-        Date.now() + storageConfig.presignedUrls.expiry.download * 1000,
+        Date.now() + downloadExpirySeconds * 1000,
       ).toISOString(),
     };
   }
@@ -645,6 +1013,25 @@ class VaultModule {
     return Math.round((agg._sum.fileSize ?? 0) / (1024 * 1024));
   }
 
+  async getUploadLimits(
+    organizationId: string,
+    plan: EffectivePlan,
+  ): Promise<{
+    maxFileSizeMB: number;
+    maxTotalStorageMB: number;
+    allowedMimeTypes: readonly string[];
+    storageUsedMB: number;
+  }> {
+    const orgId = requireOrganization(organizationId);
+    const limits = getVaultPlanLimits(plan);
+    const storageUsedMB = await this.getStorageUsedMB(orgId);
+
+    return {
+      ...limits,
+      storageUsedMB,
+    };
+  }
+
   /**
    * Generate a new presigned upload URL for replacing an existing document.
    * Increments the version counter once confirmUpload is called.
@@ -653,7 +1040,7 @@ class VaultModule {
    */
   async replaceDocument(
     params: ReplaceDocumentParams,
-  ): Promise<GenerateUploadUrlResult & { currentVersion: number }> {
+  ): Promise<GenerateUploadUrlResult & { currentVersion: number; storageKey: string }> {
     const orgId = requireOrganization(params.organizationId);
 
     // Enforce per-tier single-file limits and MIME type before doing any DB work
@@ -668,6 +1055,8 @@ class VaultModule {
         version: true,
         storageKey: true,
         fileSize: true,
+        category: true,
+        tags: true,
       },
     });
 
@@ -684,18 +1073,46 @@ class VaultModule {
       await checkVaultStorageQuota(orgId, sizeDeltaBytes, params.plan);
     }
 
-    const ext = path.extname(params.filename).toLowerCase().slice(0, 15);
-    const uuidFilename = `${randomUUID()}${ext}`;
-    // Keep same documentId folder so it remains traceable
-    const storageKey = `vault/org_${orgId}/${params.documentId}/${uuidFilename}`;
+    const declaredFilename = sanitizeDeclaredFilename(params.filename);
+    const parsed = vaultReplacePresignInputSchema.safeParse({
+      organizationId: orgId,
+      uploaderId: params.userId,
+      documentId: params.documentId,
+      declaredFilename,
+      declaredMimeType: params.fileType,
+      declaredSize: params.fileSize,
+      category: existing.category,
+      tags: existing.tags,
+      tier: params.plan,
+    });
 
-    const { url } = await storageService.getUploadUrl(
-      params.filename,
-      params.fileType,
-      undefined,
-      storageKey,
-      params.fileSize,
-    );
+    if (!parsed.success) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Invalid vault replacement request.',
+      });
+    }
+
+    // Keep same documentId folder so it remains traceable
+    const storageKey = buildVaultStorageKey(orgId, params.documentId, params.fileType);
+    const uploadExpirySeconds = 300;
+    const metadata = buildVaultObjectMetadata({
+      uploaderId: params.userId,
+      organizationId: orgId,
+      documentId: params.documentId,
+      category: existing.category,
+      originalFilename: declaredFilename,
+      declaredMimeType: params.fileType,
+      declaredSize: params.fileSize,
+    });
+
+    const { url, requiredHeaders } = await storageService.getVaultUploadUrl({
+      key: storageKey,
+      contentType: params.fileType,
+      contentLength: params.fileSize,
+      metadata,
+      expiresIn: uploadExpirySeconds,
+    });
 
     logger.info({
       type: 'vault_replace_url_generated',
@@ -708,9 +1125,10 @@ class VaultModule {
       uploadUrl: url,
       storageKey,
       documentId: params.documentId,
+      requiredHeaders,
       currentVersion: existing.version as number,
       expiresAt: new Date(
-        Date.now() + storageConfig.presignedUrls.expiry.upload * 1000,
+        Date.now() + uploadExpirySeconds * 1000,
       ).toISOString(),
     };
   }
@@ -734,7 +1152,14 @@ class VaultModule {
 
     const existing = await prisma.vaultDocument.findUnique({
       where: { id: params.documentId },
-      select: { organizationId: true, uploadedById: true, isArchived: true, version: true },
+      select: {
+        organizationId: true,
+        uploadedById: true,
+        isArchived: true,
+        version: true,
+        category: true,
+        tags: true,
+      },
     });
 
     if (!existing || existing.isArchived) {
@@ -742,6 +1167,27 @@ class VaultModule {
     }
 
     assertOwnerOrAdmin(existing, params.userId, orgId, params.userRole);
+    assertVaultStorageKey({
+      organizationId: orgId,
+      documentId: params.documentId,
+      storageKey: params.storageKey,
+    });
+    const replacementPending: PendingVaultUpload = {
+      storageKey: params.storageKey,
+      organizationId: orgId,
+      uploaderId: params.userId,
+      documentId: params.documentId,
+      bucket: vaultStorageConfig.bucket,
+      name: params.fileName,
+      description: undefined,
+      expiryDate: undefined,
+      declaredMimeType: params.fileType as VaultMimeType,
+      declaredSize: params.fileSize,
+      category: existing.category,
+      tags: existing.tags,
+      declaredFilename: sanitizeDeclaredFilename(params.fileName),
+    };
+    const verified = await verifyVaultObjectBeforeConfirm(replacementPending);
 
     const updated = await prisma.vaultDocument.update({
       where: { id: params.documentId },
@@ -749,8 +1195,8 @@ class VaultModule {
         storageKey: params.storageKey,
         fileName: params.fileName,
         fileType: params.fileType,
-        fileExtension: params.fileExtension,
-        fileSize: params.fileSize,
+        fileExtension: `.${getSafeExtension(params.fileType)}`,
+        fileSize: verified.verifiedSize,
         version: { increment: 1 },
         status: 'PENDING',
         verifiedAt: null,

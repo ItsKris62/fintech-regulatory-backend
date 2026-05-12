@@ -1,5 +1,11 @@
 import path from 'node:path';
-import { createStorageService, FileMetadata } from './client';
+import {
+  createStorageService,
+  FileMetadata,
+  getVaultFileMetadata,
+  getVaultPresignedDownloadUrl,
+  getVaultPresignedUploadUrl,
+} from './client';
 import { storageConfig, isFileTypeAllowed, generateUniqueFilename, getMaxFileSize, getPublicUrl } from '@/config/storage.config';
 import { logger } from '@/utils/logger';
 import { StorageServiceError, ValidationError } from '@/utils/error';
@@ -479,6 +485,93 @@ export class StorageService {
         error: error.message,
       });
       throw error;
+    }
+  }
+
+  /**
+   * Get Vault-scoped presigned upload URL using the dedicated bucket client.
+   */
+  async getVaultUploadUrl(args: {
+    key: string;
+    contentType: string;
+    contentLength: number;
+    metadata: Record<string, string>;
+    expiresIn?: number;
+  }): Promise<{ url: string; key: string; requiredHeaders: Record<string, string> }> {
+    try {
+      const url = await getVaultPresignedUploadUrl(args.key, {
+        contentType: args.contentType,
+        contentLength: args.contentLength,
+        metadata: args.metadata,
+        expiresIn: args.expiresIn ?? storageConfig.presignedUrls.expiry.upload,
+      });
+
+      const metadataHeaders = Object.fromEntries(
+        Object.entries(args.metadata).map(([key, value]) => [`x-amz-meta-${key}`, value]),
+      );
+
+      return {
+        url,
+        key: args.key,
+        requiredHeaders: {
+          'Content-Type': args.contentType,
+          ...metadataHeaders,
+        },
+      };
+    } catch (error: unknown) {
+      logger.error({
+        type: 'vault_upload_url_error',
+        key: args.key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get Vault-scoped presigned download URL. Vault downloads default to attachment.
+   */
+  async getVaultDownloadUrl(
+    key: string,
+    expiresIn: number = storageConfig.presignedUrls.expiry.download,
+    originalFilename?: string,
+    bucket?: string,
+  ): Promise<string> {
+    try {
+      const metadata = await getVaultFileMetadata(key, bucket);
+      if (!metadata) {
+        throw new StorageServiceError(`File not found: ${key}`);
+      }
+
+      const rawName = originalFilename ?? path.basename(key);
+      const safeFilename = path.basename(rawName).replace(/"/g, '_');
+
+      return await getVaultPresignedDownloadUrl(key, {
+        expiresIn,
+        bucket,
+        contentDisposition: `attachment; filename="${safeFilename}"`,
+        contentType: metadata.contentType,
+      });
+    } catch (error: unknown) {
+      logger.error({
+        type: 'vault_download_url_error',
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  async getVaultFileInfo(key: string, bucket?: string): Promise<FileMetadata | null> {
+    try {
+      return await getVaultFileMetadata(key, bucket);
+    } catch (error: unknown) {
+      logger.error({
+        type: 'vault_file_info_error',
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
     }
   }
 

@@ -15,8 +15,8 @@ import {
 import { z } from 'zod';
 import { logger } from '@/utils/logger';
 import { incrementTrialUsage } from '@/modules/trial';
-import { VAULT_UPLOAD_LIMITS } from '@/config/upload-limits.config';
 import { SubscriptionPlan } from '@prisma/client';
+import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 
 /**
  * Vault Router
@@ -32,19 +32,12 @@ export const vaultRouter = router({
   getUploadLimits: protectedProcedure
     .use(withPlanContext)
     .query(async ({ ctx }) => {
-      const limits = VAULT_UPLOAD_LIMITS[ctx.plan];
-      const storageUsedMB = await vaultModule.getStorageUsedMB(ctx.user.organizationId ?? '');
-      return {
-        maxFileSizeMB: limits.maxFileSizeMB,
-        maxTotalStorageMB: limits.maxTotalStorageMB,
-        allowedMimeTypes: limits.allowedMimeTypes,
-        storageUsedMB,
-      };
+      return vaultModule.getUploadLimits(ctx.user.organizationId ?? '', ctx.plan);
     }),
 
   /**
    * Step 1: Get presigned PUT URL for direct client-to-R2 upload.
-   * Returns uploadUrl, storageKey, and documentId for use in confirmUpload.
+   * Returns uploadUrl, documentId, and requiredHeaders for the direct R2 PUT.
    */
   getUploadUrl: protectedProcedure
     .use(withPlanContext)
@@ -55,14 +48,19 @@ export const vaultRouter = router({
         return await vaultModule.generateUploadPresignedUrl({
           userId: ctx.user.id,
           organizationId: ctx.user.organizationId ?? '',
-          filename: input.filename,
-          fileType: input.fileType,
-          fileSize: input.fileSize,
+          name: input.name,
+          description: input.description,
+          expiryDate: input.expiryDate,
+          declaredFilename: input.declaredFilename,
+          declaredMimeType: input.declaredMimeType,
+          declaredSize: input.declaredSize,
+          category: input.category,
+          tags: input.tags,
           plan: ctx.plan ?? SubscriptionPlan.REGULATOR,
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_get_upload_url_error', userId: ctx.user.id, error: String(error) });
+        logger.error({ type: 'vault_get_upload_url_error', userId: ctx.user.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to generate upload URL.' });
       }
     }),
@@ -78,26 +76,17 @@ export const vaultRouter = router({
       try {
         const orgId = ctx.user.organizationId ?? '';
         const result = await vaultModule.createDocument({
-          documentId:     input.documentId,
-          storageKey:     input.storageKey,
-          name:           input.name,
-          description:    input.description,
-          fileName:       input.fileName,
-          fileType:       input.fileType,
-          fileExtension:  input.fileExtension,
-          fileSize:       input.fileSize,
-          category:       input.category,
-          expiryDate:     input.expiryDate ?? null,
-          tags:           input.tags,
+          documentId: input.documentId,
           userId:         ctx.user.id,
           organizationId: orgId,
+          userRole:       ctx.user.role,
         });
 
         // Non-blocking: increment document storage usage counter.
         // fileSize is in bytes; service converts to MB internally.
         // Failure is logged inside the service and never blocks the upload response.
         if (orgId) {
-          void usageTrackingService.incrementDocumentStorage(orgId, input.fileSize);
+          void usageTrackingService.incrementDocumentStorage(orgId, result.fileSize);
         }
 
         // Track vault upload count for free trial users (fire-and-forget, non-fatal).
@@ -108,7 +97,7 @@ export const vaultRouter = router({
         return result;
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_confirm_upload_error', userId: ctx.user.id, error: String(error) });
+        logger.error({ type: 'vault_confirm_upload_error', userId: ctx.user.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to save document record.' });
       }
     }),
@@ -134,7 +123,7 @@ export const vaultRouter = router({
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_list_error', userId: ctx.user.id, error: String(error) });
+        logger.error({ type: 'vault_list_error', userId: ctx.user.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to list documents.' });
       }
     }),
@@ -154,7 +143,7 @@ export const vaultRouter = router({
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_get_by_id_error', userId: ctx.user.id, documentId: input.id, error: String(error) });
+        logger.error({ type: 'vault_get_by_id_error', userId: ctx.user.id, documentId: input.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to fetch document.' });
       }
     }),
@@ -163,7 +152,7 @@ export const vaultRouter = router({
    * Generate a presigned GET URL for downloading or viewing a document.
    */
   getDownloadUrl: protectedProcedure
-    .input(z.object({ id: z.string().min(1), inline: z.boolean().optional() }))
+    .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       try {
         return await vaultModule.generateDownloadPresignedUrl({
@@ -171,11 +160,10 @@ export const vaultRouter = router({
           userId: ctx.user.id,
           organizationId: ctx.user.organizationId ?? '',
           userRole: ctx.user.role,
-          inline: input.inline,
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_get_download_url_error', userId: ctx.user.id, documentId: input.id, error: String(error) });
+        logger.error({ type: 'vault_get_download_url_error', userId: ctx.user.id, documentId: input.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to generate download URL.' });
       }
     }),
@@ -202,7 +190,7 @@ export const vaultRouter = router({
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_update_error', userId: ctx.user.id, documentId: input.id, error: String(error) });
+        logger.error({ type: 'vault_update_error', userId: ctx.user.id, documentId: input.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update document.' });
       }
     }),
@@ -224,7 +212,7 @@ export const vaultRouter = router({
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_update_status_error', userId: ctx.user.id, documentId: input.id, error: String(error) });
+        logger.error({ type: 'vault_update_status_error', userId: ctx.user.id, documentId: input.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update document status.' });
       }
     }),
@@ -244,7 +232,7 @@ export const vaultRouter = router({
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_delete_error', userId: ctx.user.id, documentId: input.id, error: String(error) });
+        logger.error({ type: 'vault_delete_error', userId: ctx.user.id, documentId: input.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to delete document.' });
       }
     }),
@@ -260,7 +248,7 @@ export const vaultRouter = router({
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_get_stats_error', userId: ctx.user.id, error: String(error) });
+        logger.error({ type: 'vault_get_stats_error', userId: ctx.user.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to load document stats.' });
       }
     }),
@@ -285,7 +273,7 @@ export const vaultRouter = router({
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_get_replace_url_error', userId: ctx.user.id, documentId: input.id, error: String(error) });
+        logger.error({ type: 'vault_get_replace_url_error', userId: ctx.user.id, documentId: input.id, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to generate replace URL.' });
       }
     }),
@@ -319,7 +307,7 @@ export const vaultRouter = router({
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
-        logger.error({ type: 'vault_confirm_replace_error', userId: ctx.user.id, documentId: input.documentId, error: String(error) });
+        logger.error({ type: 'vault_confirm_replace_error', userId: ctx.user.id, documentId: input.documentId, error: sanitizeErrorMessage(error) });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to confirm file replacement.' });
       }
     }),

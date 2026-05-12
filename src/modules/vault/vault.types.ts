@@ -59,34 +59,30 @@ export interface VaultDocumentStats {
 export interface GenerateUploadUrlParams {
   userId: string;
   organizationId: string;
-  filename: string;
-  fileType: string;
-  fileSize: number;
+  name: string;
+  description?: string;
+  expiryDate?: string;
+  declaredFilename: string;
+  declaredMimeType: string;
+  declaredSize: number;
+  category: DocumentCategory;
+  tags?: string[];
   /** The caller's effective plan  -  used to enforce per-tier file size and MIME limits. */
   plan: import('@/types/plan.types').EffectivePlan;
 }
 
 export interface GenerateUploadUrlResult {
   uploadUrl: string;
-  storageKey: string;
   documentId: string;
+  requiredHeaders: Record<string, string>;
   expiresAt: string;
 }
 
 export interface CreateDocumentParams {
   documentId: string;
-  storageKey: string;
-  name: string;
-  description?: string;
-  fileName: string;
-  fileType: string;
-  fileExtension: string;
-  fileSize: number;
-  category: DocumentCategory;
-  expiryDate?: string | null;
-  tags?: string[];
   userId: string;
   organizationId: string;
+  userRole: string;
 }
 
 export interface ListDocumentsParams {
@@ -114,7 +110,6 @@ export interface GenerateDownloadUrlParams {
   userId: string;
   organizationId: string;
   userRole: string;
-  inline?: boolean;
 }
 
 export interface UpdateDocumentParams {

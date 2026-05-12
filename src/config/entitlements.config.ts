@@ -1,4 +1,5 @@
 import { SubscriptionPlan } from '@prisma/client';
+import { VAULT_MIME_TYPES } from '@/lib/storage/mime';
 import type { EffectivePlan } from '@/types/plan.types';
 
 // ============================================================================
@@ -22,6 +23,35 @@ export interface StorageEntitlement {
 }
 
 export type ApiAccessEntitlement = false | QuotaEntitlement;
+
+export const VAULT_BASE_MIME_TYPES = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword',
+  'text/plain',
+] as const;
+
+export const VAULT_STARTUP_MIME_TYPES = [
+  ...VAULT_BASE_MIME_TYPES,
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-powerpoint',
+  'text/csv',
+] as const;
+
+export const VAULT_BUSINESS_MIME_TYPES = [
+  ...VAULT_STARTUP_MIME_TYPES,
+  'image/png',
+  'image/jpeg',
+] as const;
+
+export const VAULT_ENTERPRISE_MIME_TYPES = [
+  ...VAULT_BUSINESS_MIME_TYPES,
+  'image/webp',
+] as const;
+
+export const ALLOWED_VAULT_MIME_TYPE_VALUES = VAULT_MIME_TYPES;
 
 export interface AlertEntitlement {
   /** -1 = unlimited history; n = days of history accessible */
@@ -50,7 +80,7 @@ export interface PlanEntitlementConfig {
   regulatoryDashboard: boolean;
   regulatoryAlerts: boolean;
 
-  /** Rich alert entitlements — history window, email frequency, filters */
+  /** Rich alert entitlements  history window, email frequency, filters */
   alerts?: AlertEntitlement;
 
   /** Compliance Calendar -- create/manage org-scoped deadline events */
@@ -58,6 +88,12 @@ export interface PlanEntitlementConfig {
 
   // Tiered / numeric
   documentRepository: StorageEntitlement;
+  /** -1 = unlimited, 0 = feature disabled, n = max bytes for a single vault document */
+  vaultDocumentMaxBytes: number;
+  /** -1 = unlimited, 0 = feature disabled, n = max bytes for active org vault storage */
+  vaultTotalQuotaBytes: number;
+  /** Plan-specific MIME types permitted for vault uploads */
+  vaultAllowedMimeTypes: readonly string[];
   maxSeats: number; // -1 = unlimited
   supportTier: SupportTier;
   analytics: AnalyticsTier;
@@ -98,6 +134,9 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     alerts:                { historyDays: -1, emailFrequency: 'REALTIME', customFilters: true, aiSummary: true },
     complianceCalendar:    false,
     documentRepository:    { limitMB: 0 }, // no document repo
+    vaultDocumentMaxBytes:  0,
+    vaultTotalQuotaBytes:   0,
+    vaultAllowedMimeTypes:  [],
     maxSeats:              1,
     supportTier:           'community',
     analytics:             'none',
@@ -122,6 +161,9 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     alerts:                { historyDays: 90, emailFrequency: 'WEEKLY', customFilters: false, aiSummary: false },
     complianceCalendar:    true,
     documentRepository:    { limitMB: 1024 }, // 1 GB
+    vaultDocumentMaxBytes:  10 * 1024 * 1024,
+    vaultTotalQuotaBytes:   1024 * 1024 * 1024,
+    vaultAllowedMimeTypes:  VAULT_STARTUP_MIME_TYPES,
     maxSeats:              1,
     supportTier:           'email-48hr',
     analytics:             'basic',
@@ -146,6 +188,9 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     alerts:                { historyDays: 365, emailFrequency: 'DAILY', customFilters: true, aiSummary: true },
     complianceCalendar:    true,
     documentRepository:    { limitMB: 10240 }, // 10 GB
+    vaultDocumentMaxBytes:  25 * 1024 * 1024,
+    vaultTotalQuotaBytes:   10240 * 1024 * 1024,
+    vaultAllowedMimeTypes:  VAULT_BUSINESS_MIME_TYPES,
     maxSeats:              5,
     supportTier:           'priority-24hr',
     analytics:             'advanced',
@@ -170,6 +215,9 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     alerts:                { historyDays: -1, emailFrequency: 'REALTIME', customFilters: true, aiSummary: true },
     complianceCalendar:    true,
     documentRepository:    { limitMB: -1 }, // unlimited
+    vaultDocumentMaxBytes:  50 * 1024 * 1024,
+    vaultTotalQuotaBytes:   -1,
+    vaultAllowedMimeTypes:  VAULT_ENTERPRISE_MIME_TYPES,
     maxSeats:              -1,              // unlimited
     supportTier:           'dedicated',
     analytics:             'advanced',
@@ -202,6 +250,9 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     alerts:                { historyDays: 7, emailFrequency: null, customFilters: false, aiSummary: false },
     complianceCalendar:    true,
     documentRepository:    { limitMB: 1024 }, // same as STARTUP -- 1 GB
+    vaultDocumentMaxBytes:  5 * 1024 * 1024,
+    vaultTotalQuotaBytes:   100 * 1024 * 1024,
+    vaultAllowedMimeTypes:  VAULT_BASE_MIME_TYPES,
     maxSeats:              1,
     supportTier:           'email-48hr',
     analytics:             'basic',

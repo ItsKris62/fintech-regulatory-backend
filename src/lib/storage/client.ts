@@ -11,6 +11,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHash } from 'node:crypto';
 import type { Readable } from 'node:stream';
+import { z } from 'zod';
 
 import {
   storageConfig,
@@ -108,9 +109,64 @@ export interface StorageService {
   getPresignedUploadUrl: (key: string, options?: PresignedUrlOptions) => Promise<string>;
 }
 
+export interface VaultPresignedUploadOptions {
+  expiresIn?: number;
+  contentType: string;
+  contentLength: number;
+  metadata: Record<string, string>;
+}
+
+export interface VaultPresignedDownloadOptions {
+  expiresIn?: number;
+  bucket?: string;
+  contentDisposition: string;
+  contentType?: string;
+}
+
 /* -------------------------------------------------------------------------- */
 /*                            Config / Validation                              */
 /* -------------------------------------------------------------------------- */
+
+const vaultStorageEnvSchema = z.object({
+  R2_VAULT_BUCKET: z.string().min(1),
+  R2_VAULT_ENDPOINT: z.string().url(),
+  R2_VAULT_ACCESS_KEY_ID: z.string().min(1),
+  R2_VAULT_SECRET_ACCESS_KEY: z.string().min(1),
+});
+
+const vaultStorageEnv = vaultStorageEnvSchema.safeParse({
+  R2_VAULT_BUCKET: process.env.R2_VAULT_BUCKET,
+  R2_VAULT_ENDPOINT: process.env.R2_VAULT_ENDPOINT,
+  R2_VAULT_ACCESS_KEY_ID: process.env.R2_VAULT_ACCESS_KEY_ID,
+  R2_VAULT_SECRET_ACCESS_KEY: process.env.R2_VAULT_SECRET_ACCESS_KEY,
+});
+
+if (!vaultStorageEnv.success) {
+  const missing = vaultStorageEnv.error.issues.map((issue) => issue.path.join('.')).join(', ');
+  throw new Error(`Vault R2 storage config missing or invalid: ${missing}`);
+}
+
+export const vaultStorageConfig = {
+  bucket: vaultStorageEnv.data.R2_VAULT_BUCKET,
+  endpoint: vaultStorageEnv.data.R2_VAULT_ENDPOINT,
+} as const;
+
+export const vaultS3Client = new S3Client({
+  region: 'auto',
+  endpoint: vaultStorageEnv.data.R2_VAULT_ENDPOINT,
+  credentials: {
+    accessKeyId: vaultStorageEnv.data.R2_VAULT_ACCESS_KEY_ID,
+    secretAccessKey: vaultStorageEnv.data.R2_VAULT_SECRET_ACCESS_KEY,
+  },
+  forcePathStyle: false,
+  requestChecksumCalculation: 'WHEN_REQUIRED',
+  responseChecksumValidation: 'WHEN_REQUIRED',
+});
+
+logger.info({
+  type: 'vault.storage.client.initialized',
+  bucket: vaultStorageConfig.bucket,
+});
 
 function bucketName(): string {
   return storageConfig.bucket.name;
@@ -231,6 +287,79 @@ async function runMalwareScanIfEnabled(args: {
 
   if (!result.clean) {
     throw new StorageServiceError(`Malware scan failed: ${result.reason || 'file flagged'}`);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              Vault R2 Client                               */
+/* -------------------------------------------------------------------------- */
+
+export async function getVaultPresignedUploadUrl(
+  key: string,
+  options: VaultPresignedUploadOptions,
+): Promise<string> {
+  const signedHeaders = new Set([
+    'content-length',
+    'content-type',
+    ...Object.keys(options.metadata).map((metadataKey) => `x-amz-meta-${metadataKey}`),
+  ]);
+  const command = new PutObjectCommand({
+    Bucket: vaultStorageConfig.bucket,
+    Key: key,
+    ContentType: options.contentType,
+    ContentLength: options.contentLength,
+    Metadata: options.metadata,
+  });
+
+  return getSignedUrl(vaultS3Client, command, {
+    expiresIn: options.expiresIn ?? storageConfig.presignedUrls.expiry.upload,
+    unhoistableHeaders: signedHeaders,
+    signableHeaders: new Set(['content-type']),
+  });
+}
+
+export async function getVaultPresignedDownloadUrl(
+  key: string,
+  options: VaultPresignedDownloadOptions,
+): Promise<string> {
+  const command = new GetObjectCommand({
+    Bucket: options.bucket ?? vaultStorageConfig.bucket,
+    Key: key,
+    ResponseContentDisposition: options.contentDisposition,
+    ResponseContentType: options.contentType,
+  });
+
+  return getSignedUrl(vaultS3Client, command, {
+    expiresIn: options.expiresIn ?? storageConfig.presignedUrls.expiry.download,
+  });
+}
+
+export async function getVaultFileMetadata(key: string, bucket = vaultStorageConfig.bucket): Promise<FileMetadata | null> {
+  try {
+    const head = await vaultS3Client.send(new HeadObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    }));
+
+    return {
+      key,
+      size: head.ContentLength ?? 0,
+      contentType: head.ContentType ?? 'application/octet-stream',
+      lastModified: head.LastModified,
+      etag: head.ETag,
+      metadata: head.Metadata,
+    };
+  } catch (error: unknown) {
+    const name = error instanceof Error ? error.name : '';
+    const httpStatus = typeof error === 'object' && error !== null && '$metadata' in error
+      ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
+      : undefined;
+
+    if (name === 'NotFound' || httpStatus === 404) {
+      return null;
+    }
+
+    throw error;
   }
 }
 
