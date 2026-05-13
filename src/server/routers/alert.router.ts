@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
 import { createAlertStreamToken } from '@/lib/alerts/stream-token';
 import { alertService } from '@/modules/alert';
@@ -51,13 +51,13 @@ export const alertRouter = router({
   // getAlerts -- paginated list, plan-scoped history window
   // ---------------------------------------------------------------------------
 
-  getAlerts: protectedProcedure
+  getAlerts: orgMemberProcedure
     .use(withPlanContext)
     .input(getAlertsSchema)
     .query(async ({ input, ctx }) => {
       return alertService.getAlerts(
         ctx.user!.id,
-        ctx.user!.organizationId ?? undefined,
+        ctx.orgMembership!.organizationId,
         ctx.plan,
         input,
       );
@@ -97,11 +97,11 @@ export const alertRouter = router({
   // markAllAsRead
   // ---------------------------------------------------------------------------
 
-  markAllAsRead: protectedProcedure
+  markAllAsRead: orgMemberProcedure
     .mutation(async ({ ctx }) => {
       await alertService.markAllAsRead(
         ctx.user!.id,
-        ctx.user!.organizationId ?? undefined,
+        ctx.orgMembership!.organizationId,
       );
     }),
 
@@ -109,11 +109,11 @@ export const alertRouter = router({
   // upsertSubscription -- per-org alert preferences
   // ---------------------------------------------------------------------------
 
-  upsertSubscription: protectedProcedure
+  upsertSubscription: orgMemberProcedure
     .input(upsertSubscriptionSchema)
     .mutation(async ({ input, ctx }) => {
       return alertService.upsertSubscription(
-        ctx.user!.organizationId ?? undefined,
+        ctx.orgMembership!.organizationId,
         input,
       );
     }),
@@ -122,9 +122,9 @@ export const alertRouter = router({
   // getSubscription -- returns null if no org context or no subscription
   // ---------------------------------------------------------------------------
 
-  getSubscription: protectedProcedure
+  getSubscription: orgMemberProcedure
     .query(async ({ ctx }) => {
-      return alertService.getSubscription(ctx.user!.organizationId ?? undefined);
+      return alertService.getSubscription(ctx.orgMembership!.organizationId);
     }),
 
   // ---------------------------------------------------------------------------

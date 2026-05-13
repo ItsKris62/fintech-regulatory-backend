@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { BillingMetric, PaymentProvider, PaymentStatus, SubscriptionPlan } from '@prisma/client';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
@@ -65,13 +65,13 @@ export const billingRouter = router({
    *
    * @protected  -  requires isAuthenticated + withPlanContext
    */
-  getPlanAndUsage: protectedProcedure
+  getPlanAndUsage: orgMemberProcedure
     .use(withPlanContext)
     .query(async ({ ctx }) => {
       try {
         const plan = ctx.plan!;
-        const orgId = ctx.user.organizationId;
-        const scopeId = orgId ?? ctx.user.id;
+        const orgId = ctx.orgMembership!.organizationId;
+        const scopeId = orgId;
         const entitlements = PLAN_ENTITLEMENTS[plan];
 
         // -- Usage counts (Redis, parallel reads) --------------------------
@@ -92,7 +92,7 @@ export const billingRouter = router({
         //    their trial  -  prevents showing the activation banner to expired users)
         const trialStatus =
           plan === 'FREE_TRIAL' || plan === 'REGULATOR'
-            ? await getTrialStatus(ctx.user.id)
+            ? await getTrialStatus(ctx.user!.id)
             : null;
 
         // -- Billing + subscription metadata (org row) ----------------------
@@ -134,7 +134,7 @@ export const billingRouter = router({
 
         logger.info({
           type: 'billing_plan_usage_fetched',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           orgId,
           plan,
         });
@@ -180,7 +180,7 @@ export const billingRouter = router({
 
         logger.error({
           type: 'billing_plan_usage_error',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           error: message,
         });
 
@@ -209,7 +209,7 @@ export const billingRouter = router({
    *
    * @protected  -  requires authentication + an organization
    */
-  createCheckoutSession: protectedProcedure
+  createCheckoutSession: orgMemberProcedure
     .use(withPlanContext)
     .input(
       z.object({
@@ -218,16 +218,9 @@ export const billingRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { user } = ctx;
+      const user = ctx.user!;
 
-      if (!user.organizationId) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'You must belong to an organization to start a subscription.',
-        });
-      }
-
-      const orgId = user.organizationId;
+      const orgId = ctx.orgMembership!.organizationId;
 
       // B7.3 (TD-009): Redis dedup lock — prevents double-click from creating two
       // Stripe checkout sessions. Lock is keyed on orgId+plan+interval so the user
@@ -352,19 +345,12 @@ export const billingRouter = router({
    *
    * @protected  -  requires authentication + an organization with an active Stripe customer
    */
-  createPortalSession: protectedProcedure
+  createPortalSession: orgMemberProcedure
     .use(withPlanContext)
     .mutation(async ({ ctx }) => {
-      const { user } = ctx;
+      const user = ctx.user!;
 
-      if (!user.organizationId) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'You must belong to an organization to manage your subscription.',
-        });
-      }
-
-      const orgId = user.organizationId;
+      const orgId = ctx.orgMembership!.organizationId;
 
       const org = await prisma.organization.findUnique({
         where: { id: orgId },
@@ -404,7 +390,7 @@ export const billingRouter = router({
    *
    * @protected  -  requires authentication + an organization
    */
-  requestEnterprise: protectedProcedure
+  requestEnterprise: orgMemberProcedure
     .use(withPlanContext)
     .input(
       z.object({
@@ -414,16 +400,9 @@ export const billingRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { user } = ctx;
+      const user = ctx.user!;
 
-      if (!user.organizationId) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'You must belong to an organization to submit an Enterprise inquiry.',
-        });
-      }
-
-      const orgId = user.organizationId;
+      const orgId = ctx.orgMembership!.organizationId;
 
       // -- Rate limiting: max 3 per org per day -----------------------------
       const rateKey = enterpriseInquiryKey(orgId);
@@ -489,7 +468,7 @@ export const billingRouter = router({
    * Switching methods does NOT cancel an existing Stripe subscription  -  it only
    * affects the next payment initiated by the user.
    */
-  updatePaymentMethod: protectedProcedure
+  updatePaymentMethod: orgMemberProcedure
     .input(
       z.object({
         provider:          z.nativeEnum(PaymentProvider),
@@ -497,18 +476,16 @@ export const billingRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { user } = ctx;
+      const user = ctx.user!;
 
-      if (!user.organizationId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'No organization found.' });
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       let normalisedPhone: string | undefined;
 
       if (input.provider === PaymentProvider.MPESA) {
         const raw = input.mpesaPhoneNumber;
         const existing = await prisma.organization.findUnique({
-          where:  { id: user.organizationId },
+          where:  { id: orgId },
           select: { mpesaPhoneNumber: true },
         });
 
@@ -532,7 +509,7 @@ export const billingRouter = router({
       }
 
       const updated = await prisma.organization.update({
-        where: { id: user.organizationId },
+        where: { id: orgId },
         data: {
           preferredPaymentMethod: input.provider,
           ...(normalisedPhone ? { mpesaPhoneNumber: normalisedPhone } : {}),
@@ -549,7 +526,7 @@ export const billingRouter = router({
       logger.info({
         type:     'payment_method_updated',
         userId:   user.id,
-        orgId:    user.organizationId,
+        orgId,
         provider: input.provider,
       });
 
@@ -565,7 +542,7 @@ export const billingRouter = router({
    * Creates a PENDING Payment record first (idempotent via providerTransactionId),
    * then triggers the STK push via IntaSend. Returns the paymentId for polling.
    */
-  initiateMpesaPayment: protectedProcedure
+  initiateMpesaPayment: orgMemberProcedure
     .input(
       z.object({
         plan:             z.nativeEnum(SubscriptionPlan),
@@ -573,11 +550,9 @@ export const billingRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { user } = ctx;
+      const user = ctx.user!;
 
-      if (!user.organizationId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'No organization found.' });
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       if (input.plan === SubscriptionPlan.REGULATOR || input.plan === SubscriptionPlan.ENTERPRISE) {
         throw new TRPCError({
@@ -588,7 +563,7 @@ export const billingRouter = router({
 
       // Resolve phone number: use provided value or fall back to stored org number
       const org = await prisma.organization.findUnique({
-        where:  { id: user.organizationId },
+        where:  { id: orgId },
         select: { mpesaPhoneNumber: true, name: true },
       });
 
@@ -611,7 +586,7 @@ export const billingRouter = router({
       // Persist normalised phone if a new number was provided
       if (input.phoneNumber) {
         await prisma.organization.update({
-          where: { id: user.organizationId },
+          where: { id: orgId },
           data:  { mpesaPhoneNumber: phoneNumber, preferredPaymentMethod: PaymentProvider.MPESA },
         });
       }
@@ -633,7 +608,7 @@ export const billingRouter = router({
       const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
       const existingPending = await prisma.payment.findFirst({
         where: {
-          orgId:            user.organizationId,
+          orgId,
           status:           PaymentStatus.PENDING,
           provider:         PaymentProvider.MPESA,
           subscriptionPlan: input.plan as string,
@@ -646,7 +621,7 @@ export const billingRouter = router({
         logger.info({
           type:      'mpesa_payment_dedup_hit',
           userId:    user.id,
-          orgId:     user.organizationId,
+          orgId,
           paymentId: existingPending.id,
           plan:      input.plan,
         });
@@ -658,7 +633,7 @@ export const billingRouter = router({
 
       // Create PENDING payment record before initiating STK push
       const payment = await paymentService.createPaymentRecord({
-        orgId:            user.organizationId,
+        orgId,
         provider:         PaymentProvider.MPESA,
         amount:           amountCents,
         currency:         'KES',
@@ -704,7 +679,7 @@ export const billingRouter = router({
       logger.info({
         type:              'mpesa_payment_initiated',
         userId:            user.id,
-        orgId:             user.organizationId,
+        orgId,
         paymentId:         payment.id,
         intasendInvoiceId: stkResponse.invoiceId,
         plan:              input.plan,
@@ -724,16 +699,11 @@ export const billingRouter = router({
    * Used by the frontend MpesaPaymentFlow component to check every 5 seconds
    * whether the webhook has confirmed the payment (or failed).
    */
-  getMpesaPaymentStatus: protectedProcedure
+  getMpesaPaymentStatus: orgMemberProcedure
     .input(z.object({ paymentId: z.string() }))
     .query(async ({ ctx, input }) => {
-      const { user } = ctx;
-
-      if (!user.organizationId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'No organization found.' });
-      }
-
-      const payment = await paymentService.getPaymentById(input.paymentId, user.organizationId);
+      const orgId = ctx.orgMembership!.organizationId;
+      const payment = await paymentService.getPaymentById(input.paymentId, orgId);
 
       if (!payment) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment record not found.' });

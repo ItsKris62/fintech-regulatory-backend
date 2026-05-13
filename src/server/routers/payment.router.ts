@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { PaymentProvider } from '@prisma/client';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, orgMemberProcedure } from '../trpc/trpc';
 import { paymentService } from '@/modules/billing/payment.service';
 import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
@@ -18,9 +18,11 @@ export const paymentRouter = router({
   /**
    * List paginated payment history for the user's organization.
    *
-   * @protected  -  requires authentication + organization membership
+   * orgMemberProcedure enforces an active OrganizationMember row, so a user
+   * removed from the org loses access immediately (60 s cache TTL), not at
+   * JWT expiry. User-scoped only — orgId always comes from ctx, never input.
    */
-  list: protectedProcedure
+  list: orgMemberProcedure
     .input(
       z.object({
         page:  z.number().int().min(1).default(1),
@@ -28,14 +30,10 @@ export const paymentRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      const { user } = ctx;
-
-      if (!user.organizationId) {
-        return { payments: [], total: 0, page: 1, limit: input.limit, totalPages: 0 };
-      }
+      const user = ctx.user!;
 
       const result = await paymentService.getPaymentsByOrg({
-        orgId: user.organizationId,
+        orgId: user.organizationId!,
         page:  input.page,
         limit: input.limit,
       });
@@ -69,19 +67,14 @@ export const paymentRouter = router({
 
   /**
    * Get a single payment by ID, scoped to the user's organization.
-   *
-   * @protected  -  requires authentication + org ownership
+   * orgId is always sourced from ctx — user cannot supply it.
    */
-  getById: protectedProcedure
+  getById: orgMemberProcedure
     .input(z.object({ id: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
-      const { user } = ctx;
+      const user = ctx.user!;
 
-      if (!user.organizationId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'No organization found.' });
-      }
-
-      const payment = await paymentService.getPaymentById(input.id, user.organizationId);
+      const payment = await paymentService.getPaymentById(input.id, user.organizationId!);
 
       if (!payment) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment record not found.' });
@@ -104,22 +97,18 @@ export const paymentRouter = router({
   /**
    * Get full invoice detail for a single payment.
    *
-   * Joins Payment + Organization + User to return everything the invoice
-   * modal needs in one call. Org-scoped  -  returns 404 if payment does not
-   * belong to the authenticated user's organization.
+   * Joins Payment + Organization + User for the invoice modal.
+   * Org-scoped — returns 404 if payment does not belong to the authenticated
+   * user's organization. orgId always sourced from ctx, never input.
    */
-  getDetail: protectedProcedure
+  getDetail: orgMemberProcedure
     .input(z.object({ paymentId: z.string() }))
     .query(async ({ ctx, input }) => {
-      const { user } = ctx;
-
-      if (!user.organizationId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'No organization found.' });
-      }
+      const user = ctx.user!;
 
       // Fetch payment with org join
       const payment = await prisma.payment.findFirst({
-        where: { id: input.paymentId, orgId: user.organizationId },
+        where: { id: input.paymentId, orgId: user.organizationId! },
         include: {
           org: {
             select: {

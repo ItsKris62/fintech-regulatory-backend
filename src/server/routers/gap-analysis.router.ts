@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { createHash } from 'crypto';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric, SubscriptionPlan } from '@prisma/client';
 import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
 import { complianceModule } from '@/modules/compliance';
@@ -56,10 +56,15 @@ export const gapAnalysisRouter = router({
   /**
    * Run a full AI+RAG gap analysis on an uploaded policy document.
    *
-   * @protected
-   * @rate-limited
+   * Security: organizationId is derived exclusively from ctx.orgMembership
+   * (set by requireOrgMembership via orgMemberProcedure) and never from the
+   * request body, closing the IDOR that allowed cross-tenant org attribution.
+   * Dedup key uses v2 namespace keyed on userId to prevent cross-tenant cache
+   * poisoning with the same file hash.
+   *
+   * @protected @org-member @rate-limited
    */
-  runGapAnalysis: protectedProcedure
+  runGapAnalysis: orgMemberProcedure
     .use(rateLimited('gapAnalysis', 5))
     .use(withPlanContext)
     .use(requirePlanFeature('gapAnalysis'))
@@ -72,7 +77,6 @@ export const gapAnalysisRouter = router({
         regulatoryFrameworks: z.array(z.string()).min(1).max(10),
         analysisDepth: z.enum(['quick', 'standard', 'deep']).default('standard'),
         focusAreas: z.array(z.string()).max(10).optional(),
-        organizationId: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -132,47 +136,52 @@ export const gapAnalysisRouter = router({
           });
         }
 
-        // Idempotency: deduplicate concurrent/retry submissions of the same file
-        const orgId = input.organizationId ?? ctx.user!.organizationId ?? ctx.user!.id;
+        // orgId is always session-derived -- never client-supplied (IDOR closed)
+        const orgId   = ctx.orgMembership!.organizationId;
+        const userId  = ctx.user!.id;
+
+        // Idempotency: v2 key scoped to submitting user, preventing cross-tenant
+        // cache poisoning via identical file hash submitted with a different orgId.
         const fileHash = createHash('sha256').update(input.fileContent).digest('hex');
-        const dedupKey = `sheriabot:gapanalysis:dedup:${orgId}:${fileHash}`;
+        const dedupKey = `sheriabot:gapanalysis:dedup:v2:${userId}:${fileHash}`;
 
         const existing = await redis.get<string>(dedupKey);
         if (existing) {
           const existingAnalysis = await prisma.gapAnalysis.findUnique({ where: { id: existing } });
           if (existingAnalysis) {
-            logger.info({ type: 'gap_analysis_dedup_hit', userId: ctx.user!.id, analysisId: existing });
+            logger.info({ type: 'gap_analysis_dedup_hit', userId, analysisId: existing });
             return existingAnalysis;
           }
         }
 
         logger.info({
-          type: 'gap_analysis_request',
-          userId: ctx.user!.id,
-          fileName: input.fileName,
+          type:       'gap_analysis_request',
+          userId,
+          orgId,
+          fileName:   input.fileName,
           frameworks: input.regulatoryFrameworks,
-          depth: input.analysisDepth,
+          depth:      input.analysisDepth,
         });
 
         const frameworkNames = dbFrameworks.map((f) => f.name);
 
-        const result = await complianceModule.runGapAnalysis(ctx.user!.id, {
-          fileName: input.fileName,
-          fileType: input.fileType,
-          fileContent: input.fileContent,
+        const result = await complianceModule.runGapAnalysis(userId, {
+          fileName:             input.fileName,
+          fileType:             input.fileType,
+          fileContent:          input.fileContent,
           regulatoryFrameworks: frameworkNames,
-          analysisDepth: input.analysisDepth,
-          focusAreas: input.focusAreas,
-          organizationId: input.organizationId ?? ctx.user!.organizationId ?? undefined,
-          ipAddress: ctx.req.ip,
-          userAgent: ctx.req.headers['user-agent'] as string | undefined,
-          trialUserId: ctx.plan === 'FREE_TRIAL' ? ctx.user!.id : undefined,
+          analysisDepth:        input.analysisDepth,
+          focusAreas:           input.focusAreas,
+          organizationId:       orgId,
+          ipAddress:            ctx.req.ip,
+          userAgent:            ctx.req.headers['user-agent'] as string | undefined,
+          trialUserId:          ctx.plan === 'FREE_TRIAL' ? userId : undefined,
         });
 
         await redis.set(dedupKey, result.id, { ex: 900 });
         await ctx.incrementUsage?.();
 
-        logger.info({ type: 'gap_analysis_request_success', userId: ctx.user!.id, analysisId: result.id, status: result.status });
+        logger.info({ type: 'gap_analysis_request_success', userId, analysisId: result.id, status: result.status });
         return result;
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Failed to run gap analysis';

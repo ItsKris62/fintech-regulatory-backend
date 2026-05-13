@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { BillingMetric, MemberRole, MemberStatus, PaymentProvider, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
+import type { OrgMembershipEntry } from './context';
 import { middleware } from './init';
 import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { rateLimiter } from '@/lib/redis/rate-limiter';
@@ -139,37 +140,6 @@ export const rateLimited = (action: string, maxRequests?: number) =>
     return next({ ctx });
   });
 
-/**
- * Organization Member Middleware (Fixed Type Safety)
- * Avoids `as any` by safely checking if the input is an object with an organizationId.
- */
-export const isOrganizationMember = middleware(async ({ ctx, input, next }) => {
-  if (!ctx.user) {
-    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' });
-  }
-
-  // Type-safe way to check input without using `any`
-  const hasOrgId = input && typeof input === 'object' && 'organizationId' in input;
-  const organizationId = hasOrgId ? (input as { organizationId: string }).organizationId : null;
-  
-  if (!organizationId) {
-    throw new TRPCError({
-      code: 'BAD_REQUEST',
-      message: 'Organization ID is required in the request payload',
-    });
-  }
-
-  // Allow admins to bypass this check
-  if (ctx.user.organizationId !== organizationId && ctx.user.role !== 'ADMIN') {
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Access denied to this organization',
-    });
-  }
-
-  return next({ ctx });
-});
-
 // ============================================================================
 // Organization Member Role Middlewares
 // ============================================================================
@@ -266,6 +236,186 @@ export const requireMemberRole = (allowedRoles: MemberRole[]) =>
       });
       throw new TRPCError({
         code: 'FORBIDDEN',
+        message: sanitizeErrorMessage(new Error('Insufficient permissions for this action.')),
+      });
+    }
+
+    return next({ ctx });
+  });
+
+/**
+ * Fraction of successful grants to write to AuditLog.
+ * Env var: AUDIT_GRANT_SAMPLE_RATE  (float 0–1, default 0.10 for pilot).
+ * Drop to 0.01 post-pilot by setting the env var; no code change required.
+ */
+const AUDIT_GRANT_SAMPLE_RATE = Math.min(
+  1,
+  Math.max(0, parseFloat(process.env['AUDIT_GRANT_SAMPLE_RATE'] ?? '0.10')),
+);
+
+/**
+ * Verifies the authenticated user holds an ACTIVE OrganizationMember row for
+ * their session-scoped organization (ctx.user.organizationId). Attaches the
+ * membership record to ctx.orgMembership for downstream handlers and role checks.
+ *
+ * Distinct from requireOrgMember in that it:
+ *   - Caches the DB check in Redis with a 60-second TTL
+ *   - Rate-limits repeated authorization denials (10 per 60s, fail-closed)
+ *   - Uses structured authorization event logging
+ *   - Writes every denial to AuditLog (100%); samples grants at AUDIT_GRANT_SAMPLE_RATE
+ *   - Attaches ctx.orgMembership typed as OrgMembershipEntry
+ *
+ * Security: failures always throw FORBIDDEN, never NOT_FOUND, so callers
+ * cannot determine whether an org exists via error code differences.
+ *
+ * Must run AFTER isAuthenticated.
+ */
+export const requireOrgMembership = middleware(async ({ ctx, next }) => {
+  const userId         = ctx.user!.id;
+  const organizationId = ctx.user!.organizationId;
+
+  // Capture request metadata once for all audit writes below.
+  const ipAddr = ctx.req.ip ?? (ctx.req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? null;
+  const ua     = (ctx.req.headers['user-agent'] as string | undefined)?.substring(0, 500) ?? null;
+
+  if (!organizationId) {
+    logger.warn({ type: 'authorization.denied', userId, organizationId: null, reason: 'no_organization' });
+    void prisma.auditLog.create({
+      data: {
+        userId,
+        action:     'authorization.denied',
+        entityType: 'Organization',
+        metadata:   { reason: 'no_organization' },
+        ipAddress:  ipAddr,
+        userAgent:  ua,
+      },
+    }).catch(() => {});
+    throw new TRPCError({
+      code:    'FORBIDDEN',
+      message: 'You do not belong to an organization.',
+    });
+  }
+
+  const cacheKey = `sheriabot:orgmem:${userId}:${organizationId}`;
+
+  let entry: OrgMembershipEntry | null = null;
+
+  try {
+    const raw = await redis.get<OrgMembershipEntry>(cacheKey);
+    if (raw && typeof raw === 'object' && 'status' in raw) {
+      entry = raw;
+    }
+  } catch {
+    // Cache miss or parse error -- fall through to DB
+  }
+
+  if (!entry) {
+    const member = await prisma.organizationMember.findUnique({
+      where: { userId_organizationId: { userId, organizationId } },
+      select: { userId: true, organizationId: true, role: true, status: true },
+    });
+
+    if (member) {
+      entry = member;
+      if (member.status === MemberStatus.ACTIVE) {
+        await redis.set(cacheKey, JSON.stringify(member), { ex: 60 }).catch(() => {});
+      }
+    }
+  }
+
+  if (!entry || entry.status !== MemberStatus.ACTIVE) {
+    // Denial rate limiting: throttle org-probing attempts
+    const rlResult = await rateLimiter.check(userId, 'auth_denial', 10, 60, { failClosed: true });
+
+    if (!rlResult.allowed) {
+      const reason = 'denial_rate_limit_exceeded';
+      logger.warn({ type: 'authorization.denied', userId, organizationId, reason });
+      void prisma.auditLog.create({
+        data: {
+          userId,
+          action:     'authorization.denied',
+          entityType: 'Organization',
+          entityId:   organizationId,
+          metadata:   { reason },
+          ipAddress:  ipAddr,
+          userAgent:  ua,
+        },
+      }).catch(() => {});
+      throw new TRPCError({
+        code:    'TOO_MANY_REQUESTS',
+        message: 'Too many authorization failures. Please try again later.',
+      });
+    }
+
+    const reason = !entry ? 'no_membership' : `member_status_${entry.status.toLowerCase()}`;
+    logger.warn({ type: 'authorization.denied', userId, organizationId, reason });
+    void prisma.auditLog.create({
+      data: {
+        userId,
+        action:     'authorization.denied',
+        entityType: 'Organization',
+        entityId:   organizationId,
+        metadata:   { reason },
+        ipAddress:  ipAddr,
+        userAgent:  ua,
+      },
+    }).catch(() => {});
+
+    throw new TRPCError({
+      code:    'FORBIDDEN',
+      message: 'You do not have access to this organization.',
+    });
+  }
+
+  // Sampled grant logging — rate controlled by AUDIT_GRANT_SAMPLE_RATE env var.
+  if (Math.random() < AUDIT_GRANT_SAMPLE_RATE) {
+    logger.info({ type: 'authorization.granted', userId, organizationId, role: entry.role });
+    void prisma.auditLog.create({
+      data: {
+        userId,
+        action:     'authorization.granted',
+        entityType: 'Organization',
+        entityId:   organizationId,
+        metadata:   { role: entry.role },
+        ipAddress:  ipAddr,
+        userAgent:  ua,
+      },
+    }).catch(() => {});
+  }
+
+  return next({ ctx: { ...ctx, orgMembership: entry } });
+});
+
+/**
+ * Factory that enforces a minimum MemberRole level on the org membership
+ * resolved by requireOrgMembership. Must run AFTER requireOrgMembership.
+ *
+ * Role hierarchy (ascending access): VIEWER < MEMBER < ADMIN < OWNER
+ *
+ * Usage: orgMemberProcedure.use(requireOrgMembershipRole([MemberRole.ADMIN, MemberRole.OWNER]))
+ */
+export const requireOrgMembershipRole = (allowedRoles: MemberRole[]) =>
+  middleware(async ({ ctx, next }) => {
+    const membership = ctx.orgMembership;
+
+    if (!membership) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Organization membership not resolved.' });
+    }
+
+    const minAllowedLevel = Math.min(...allowedRoles.map((r) => ROLE_LEVEL[r]));
+    const userLevel       = ROLE_LEVEL[membership.role] ?? 0;
+
+    if (userLevel < minAllowedLevel) {
+      logger.warn({
+        type:              'authorization.denied',
+        userId:            ctx.user!.id,
+        organizationId:    membership.organizationId,
+        reason:            'insufficient_role',
+        userRole:          membership.role,
+        requiredMinLevel:  minAllowedLevel,
+      });
+      throw new TRPCError({
+        code:    'FORBIDDEN',
         message: sanitizeErrorMessage(new Error('Insufficient permissions for this action.')),
       });
     }

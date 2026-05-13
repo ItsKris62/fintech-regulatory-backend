@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric, SubscriptionPlan } from '@prisma/client';
 import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
 import { complianceModule } from '@/modules/compliance';
@@ -17,12 +17,15 @@ import { getQuota } from '@/utils/entitlements';
 export const checklistRouter = router({
   /**
    * Generate an AI+RAG compliance checklist.
-   * Requires authentication. RBAC: STARTUP, ENTERPRISE, ADMIN.
+   * Requires authentication and active org membership. RBAC: STARTUP, ENTERPRISE, ADMIN.
    *
-   * @protected
-   * @rate-limited
+   * Security: organizationId is derived exclusively from ctx.orgMembership
+   * (set by requireOrgMembership via orgMemberProcedure) and never from the
+   * request body, closing the IDOR that allowed cross-tenant org attribution.
+   *
+   * @protected @org-member @rate-limited
    */
-  generateChecklist: protectedProcedure
+  generateChecklist: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
     .use(withPlanContext)
     .use(requirePlanFeature('checklistGenerations'))
@@ -34,7 +37,6 @@ export const checklistRouter = router({
         targetSegments: z.array(z.string()).min(1).max(10),
         servicesOffered: z.array(z.string()).min(1).max(20),
         additionalConcerns: z.string().max(1000).optional(),
-        organizationId: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -47,25 +49,30 @@ export const checklistRouter = router({
           });
         }
 
+        // orgId is always session-derived -- never client-supplied (IDOR closed)
+        const orgId  = ctx.orgMembership!.organizationId;
+        const userId = ctx.user!.id;
+
         logger.info({
-          type: 'checklist_generate_request',
-          userId: ctx.user!.id,
-          productType: input.productType,
+          type:          'checklist_generate_request',
+          userId,
+          orgId,
+          productType:   input.productType,
           businessStage: input.businessStage,
         });
 
-        const result = await complianceModule.generateChecklist(ctx.user!.id, {
-          productType: input.productType,
-          businessStage: input.businessStage,
-          targetSegments: input.targetSegments,
-          servicesOffered: input.servicesOffered,
+        const result = await complianceModule.generateChecklist(userId, {
+          productType:        input.productType,
+          businessStage:      input.businessStage,
+          targetSegments:     input.targetSegments,
+          servicesOffered:    input.servicesOffered,
           additionalConcerns: input.additionalConcerns,
-          organizationId: input.organizationId ?? ctx.user!.organizationId ?? undefined,
+          organizationId:     orgId,
         });
 
         logger.info({
-          type: 'checklist_generate_success',
-          userId: ctx.user!.id,
+          type:        'checklist_generate_success',
+          userId,
           checklistId: result.id,
         });
 
@@ -199,36 +206,14 @@ export const checklistRouter = router({
    * @protected
    * @middleware withPlanContext + checkUsageLimit
    */
-  generateChecklistAsync: protectedProcedure
+  generateChecklistAsync: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
     .use(withPlanContext)
     // deferIncrement: true -- usage counter committed only after DB placeholder written
     .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS, { deferIncrement: true }))
     .input(generateChecklistAsyncInputSchema)
     .mutation(async ({ input, ctx }) => {
-      let orgId = ctx.user!.organizationId;
-
-      if (!orgId) {
-        try {
-          const org = await ctx.prisma.organization.create({
-            data: {
-              name: ctx.user!.email.split('@')[0] + ' Organisation',
-              type: ctx.user!.role,
-              users: { connect: { id: ctx.user!.id } },
-            } as any,
-            select: { id: true },
-          });
-          orgId = org.id;
-          await redis.del(`user:session:${ctx.user!.supabaseAuthId}`).catch(() => {});
-          logger.info({ type: 'checklist_auto_created_org', userId: ctx.user!.id, orgId });
-        } catch (orgErr: unknown) {
-          throw new TRPCError({
-            code: 'INTERNAL_SERVER_ERROR',
-            message: 'Failed to create your organisation profile. Please contact support.',
-            cause: orgErr,
-          });
-        }
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       // B7.3 (TD-009): Redis dedup lock — prevents double-submit from starting two
       // Claude AI pipelines simultaneously. Lock is keyed on userId+productType+stage
@@ -285,13 +270,10 @@ export const checklistRouter = router({
    *
    * @protected
    */
-  getChecklistStatus: protectedProcedure
+  getChecklistStatus: orgMemberProcedure
     .input(getChecklistStatusInputSchema)
     .query(async ({ input, ctx }) => {
-      const orgId = ctx.user!.organizationId;
-      if (!orgId) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Your account must be associated with an organization.' });
-      }
+      const orgId = ctx.orgMembership!.organizationId;
       try {
         return await checklistService.getChecklistStatus(input.checklistId, ctx.user!.id, orgId);
       } catch (error: unknown) {
@@ -311,9 +293,8 @@ export const checklistRouter = router({
    *
    * @protected
    */
-  listChecklists: protectedProcedure.query(async ({ ctx }) => {
-    const orgId = ctx.user!.organizationId;
-    if (!orgId) return [];
+  listChecklists: orgMemberProcedure.query(async ({ ctx }) => {
+    const orgId = ctx.orgMembership!.organizationId;
     try {
       return await checklistService.listChecklists(orgId);
     } catch (error: unknown) {
@@ -329,13 +310,10 @@ export const checklistRouter = router({
    *
    * @protected
    */
-  getChecklistDetail: protectedProcedure
+  getChecklistDetail: orgMemberProcedure
     .input(z.object({ checklistId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
-      const orgId = ctx.user!.organizationId;
-      if (!orgId) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Your account must be associated with an organization.' });
-      }
+      const orgId = ctx.orgMembership!.organizationId;
       try {
         return await checklistService.getChecklistDetail(input.checklistId, ctx.user!.id, orgId);
       } catch (error: unknown) {
@@ -354,14 +332,11 @@ export const checklistRouter = router({
    * @protected
    * @middleware withPlanContext
    */
-  updateChecklistItem: protectedProcedure
+  updateChecklistItem: orgMemberProcedure
     .use(withPlanContext)
     .input(updateChecklistItemInputSchema)
     .mutation(async ({ input, ctx }) => {
-      const orgId = ctx.user!.organizationId;
-      if (!orgId) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Your account must be associated with an organization.' });
-      }
+      const orgId = ctx.orgMembership!.organizationId;
       try {
         const result = await checklistService.updateItemStatus(ctx.user!.id, orgId, input);
         logger.info({
@@ -391,11 +366,11 @@ export const checklistRouter = router({
    *
    * @protected
    */
-  getChecklistUsage: protectedProcedure
+  getChecklistUsage: orgMemberProcedure
     .use(withPlanContext)
     .query(async ({ ctx }) => {
       const plan     = ctx.plan ?? SubscriptionPlan.REGULATOR;
-      const scopeId  = ctx.user!.organizationId ?? ctx.user!.id;
+      const scopeId  = ctx.orgMembership!.organizationId;
       const { limit, period } = getQuota(plan, 'checklistGenerations');
 
       if (limit === -1) {
@@ -419,12 +394,12 @@ export const checklistRouter = router({
    * @protected
    * @middleware withPlanContext -- no checkUsageLimit (no credit consumed on retry)
    */
-  retryChecklist: protectedProcedure
+  retryChecklist: orgMemberProcedure
     .use(withPlanContext)
     .input(z.object({ checklistId: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
-      const orgId = ctx.user!.organizationId ?? '';
+      const orgId = ctx.orgMembership!.organizationId;
 
       try {
         const result = await checklistService.retryChecklist(input.checklistId, userId, orgId);

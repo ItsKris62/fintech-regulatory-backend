@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
+import { router, adminProcedure, orgMemberProcedure } from '../trpc/trpc';
 import {
   getUploadUrlSchema,
   confirmUploadSchema,
@@ -28,7 +28,7 @@ export const documentRouter = router({
    *
    * @protected
    */
-  getUploadUrl: protectedProcedure
+  getUploadUrl: orgMemberProcedure
     .input(getUploadUrlSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -65,7 +65,7 @@ export const documentRouter = router({
         const uuidFilename = `${randomUUID()}${ext}`;
 
         // Per-org isolation: documents/{orgId}/{docId}/{uuid}.ext
-        const orgId = ctx.user.organizationId ?? ctx.user.id;
+        const orgId = ctx.orgMembership!.organizationId;
         const storageKey = `documents/${orgId}/${documentId}/${uuidFilename}`;
 
         // Get presigned upload URL using the pre-constructed key
@@ -78,7 +78,7 @@ export const documentRouter = router({
 
         logger.info({
           type: 'document_upload_url_generated',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           organizationId: orgId,
           documentId,
           fileSize: input.fileSize,
@@ -96,7 +96,7 @@ export const documentRouter = router({
       } catch (error: any) {
         logger.error({
           type: 'document_upload_url_error',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           error: error.message,
         });
 
@@ -117,7 +117,7 @@ export const documentRouter = router({
    *
    * @protected
    */
-  confirmUpload: protectedProcedure
+  confirmUpload: orgMemberProcedure
     .input(confirmUploadSchema)
     .mutation(async ({ input, ctx }) => {
       // Strip any path components from the original filename before storing  - 
@@ -153,7 +153,7 @@ export const documentRouter = router({
           } catch (cleanupError: any) {
             logger.error({
               type: 'file_validation_cleanup_error',
-              userId: ctx.user.id,
+              userId: ctx.user!.id,
               key: input.key,
               error: cleanupError.message,
             });
@@ -161,7 +161,7 @@ export const documentRouter = router({
 
           logger.warn({
             type: 'file_validation_rejected',
-            userId: ctx.user.id,
+            userId: ctx.user!.id,
             key: input.key,
             claimedType: input.fileType,
             detectedType: validation.detectedType,
@@ -182,8 +182,8 @@ export const documentRouter = router({
           fileSize: input.fileSize,
           mimeType: input.fileType,
           documentType: input.documentType,
-          userId: ctx.user.id,
-          organizationId: ctx.user.organizationId,
+          userId: ctx.user!.id,
+          organizationId: ctx.orgMembership!.organizationId,
           keywords: [],
           amendedBy: [],
         };
@@ -200,7 +200,7 @@ export const documentRouter = router({
 
         logger.info({
           type: 'document_upload_confirmed',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           documentId: document.id,
           documentType: input.documentType,
           detectedMimeType: validation.detectedType,
@@ -214,7 +214,7 @@ export const documentRouter = router({
       } catch (error: any) {
         logger.error({
           type: 'document_confirm_upload_error',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           error: error.message,
         });
 
@@ -235,7 +235,7 @@ export const documentRouter = router({
    *
    * @protected
    */
-  list: protectedProcedure
+  list: orgMemberProcedure
     .input(listDocumentsSchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -253,11 +253,11 @@ export const documentRouter = router({
         const andConditions: object[] = [];
 
         // Filter by organization unless admin  -  always scoped to DB, never in JS
-        if (ctx.user.role !== 'ADMIN') {
+        if (ctx.user!.role !== 'ADMIN') {
           andConditions.push({
             OR: [
-              { userId: ctx.user.id },
-              { organizationId: ctx.user.organizationId },
+              { userId: ctx.user!.id },
+              { organizationId: ctx.orgMembership!.organizationId },
             ],
           });
         }
@@ -315,7 +315,7 @@ export const documentRouter = router({
       } catch (error: any) {
         logger.error({
           type: 'document_list_error',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           error: error.message,
         });
 
@@ -332,7 +332,7 @@ export const documentRouter = router({
    *
    * @protected
    */
-  get: protectedProcedure
+  get: orgMemberProcedure
     .input(getDocumentSchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -357,16 +357,16 @@ export const documentRouter = router({
         }
 
         // Check access
-        if (ctx.user.role !== 'ADMIN') {
+        if (ctx.user!.role !== 'ADMIN') {
           const hasAccess =
-            document.userId === ctx.user.id ||
-            document.organizationId === ctx.user.organizationId;
+            document.userId === ctx.user!.id ||
+            document.organizationId === ctx.orgMembership!.organizationId;
 
           if (!hasAccess) {
             logger.warn({
               type: 'document_unauthorized_access',
-              userId: ctx.user.id,
-              userOrgId: ctx.user.organizationId,
+              userId: ctx.user!.id,
+              userOrgId: ctx.orgMembership!.organizationId,
               documentId: input.id,
               documentOrgId: document.organizationId,
             });
@@ -381,7 +381,7 @@ export const documentRouter = router({
       } catch (error: any) {
         logger.error({
           type: 'document_get_error',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           documentId: input.id,
           error: error.message,
         });
@@ -403,7 +403,7 @@ export const documentRouter = router({
    *
    * @protected
    */
-  getDownloadUrl: protectedProcedure
+  getDownloadUrl: orgMemberProcedure
     .input(getDownloadUrlSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -419,16 +419,16 @@ export const documentRouter = router({
         }
 
         // Check access
-        if (ctx.user.role !== 'ADMIN') {
+        if (ctx.user!.role !== 'ADMIN') {
           const hasAccess =
-            document.userId === ctx.user.id ||
-            document.organizationId === ctx.user.organizationId;
+            document.userId === ctx.user!.id ||
+            document.organizationId === ctx.orgMembership!.organizationId;
 
           if (!hasAccess) {
             logger.warn({
               type: 'document_unauthorized_download',
-              userId: ctx.user.id,
-              userOrgId: ctx.user.organizationId,
+              userId: ctx.user!.id,
+              userOrgId: ctx.orgMembership!.organizationId,
               documentId: input.id,
               documentOrgId: document.organizationId,
             });
@@ -450,7 +450,7 @@ export const documentRouter = router({
 
         logger.info({
           type: 'document_download_url_generated',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           documentId: input.id,
         });
 
@@ -464,7 +464,7 @@ export const documentRouter = router({
       } catch (error: any) {
         logger.error({
           type: 'document_download_url_error',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           documentId: input.id,
           error: error.message,
         });
@@ -486,7 +486,7 @@ export const documentRouter = router({
    *
    * @protected
    */
-  delete: protectedProcedure
+  delete: orgMemberProcedure
     .input(deleteDocumentSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -502,11 +502,15 @@ export const documentRouter = router({
         }
 
         // Check access
-        if (ctx.user.role !== 'ADMIN' && document.userId !== ctx.user.id) {
+        const canDelete = document.organizationId
+          ? document.organizationId === ctx.orgMembership!.organizationId && document.userId === ctx.user!.id
+          : document.userId === ctx.user!.id;
+
+        if (ctx.user!.role !== 'ADMIN' && !canDelete) {
           logger.warn({
             type: 'document_unauthorized_delete',
-            userId: ctx.user.id,
-            userOrgId: ctx.user.organizationId,
+            userId: ctx.user!.id,
+            userOrgId: ctx.orgMembership!.organizationId,
             documentId: input.id,
             documentOrgId: document.organizationId,
           });
@@ -521,13 +525,13 @@ export const documentRouter = router({
           await deleteByFilter({ documentId: input.id });
           logger.info({
             type: 'document_rag_vectors_deleted',
-            userId: ctx.user.id,
+            userId: ctx.user!.id,
             documentId: input.id,
           });
         } catch (ragError: any) {
           logger.warn({
             type: 'document_rag_remove_error',
-            userId: ctx.user.id,
+            userId: ctx.user!.id,
             documentId: input.id,
             error: ragError.message,
           });
@@ -544,7 +548,7 @@ export const documentRouter = router({
 
         logger.info({
           type: 'document_soft_deleted',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           documentId: input.id,
         });
 
@@ -555,7 +559,7 @@ export const documentRouter = router({
       } catch (error: any) {
         logger.error({
           type: 'document_delete_error',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           documentId: input.id,
           error: error.message,
         });
@@ -581,7 +585,7 @@ export const documentRouter = router({
    *
    * @protected
    */
-  restore: protectedProcedure
+  restore: orgMemberProcedure
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       try {
@@ -601,10 +605,14 @@ export const documentRouter = router({
           });
         }
 
-        if (ctx.user.role !== 'ADMIN' && document.userId !== ctx.user.id) {
+        const canRestore = document.organizationId
+          ? document.organizationId === ctx.orgMembership!.organizationId && document.userId === ctx.user!.id
+          : document.userId === ctx.user!.id;
+
+        if (ctx.user!.role !== 'ADMIN' && !canRestore) {
           logger.warn({
             type: 'document_unauthorized_restore',
-            userId: ctx.user.id,
+            userId: ctx.user!.id,
             documentId: input.id,
           });
           throw new TRPCError({
@@ -620,7 +628,7 @@ export const documentRouter = router({
 
         logger.info({
           type: 'document_restored',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           documentId: input.id,
         });
 
@@ -643,7 +651,7 @@ export const documentRouter = router({
    *
    * @protected
    */
-  getProcessingStatus: protectedProcedure
+  getProcessingStatus: orgMemberProcedure
     .input(z.object({ documentId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
@@ -671,7 +679,7 @@ export const documentRouter = router({
         if (ctx.user!.role !== 'ADMIN') {
           const hasAccess =
             document.userId === ctx.user!.id ||
-            document.organizationId === ctx.user!.organizationId;
+            document.organizationId === ctx.orgMembership!.organizationId;
 
           if (!hasAccess) {
             throw new TRPCError({

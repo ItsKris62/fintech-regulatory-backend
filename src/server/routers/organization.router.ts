@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { MemberRole, MemberStatus } from '@prisma/client';
 import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
 import {
   createOrganizationSchema,
@@ -13,7 +14,28 @@ import {
   deleteOrganizationSchema,
 } from '../schemas/organization.schema';
 import { userCache } from '@/lib/redis/cache.service';
+import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
+import type { Context } from '../trpc/context';
+
+async function assertActiveOrganizationMember(
+  ctx: Pick<Context, 'prisma' | 'user'> & { user: NonNullable<Context['user']> },
+  organizationId: string,
+) {
+  if (ctx.user.role === 'ADMIN') return;
+
+  const member = await ctx.prisma.organizationMember.findUnique({
+    where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
+    select: { status: true },
+  });
+
+  if (!member || member.status !== MemberStatus.ACTIVE) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Access denied to this organization',
+    });
+  }
+}
 
 /**
  * Organization Router
@@ -48,8 +70,15 @@ export const organizationRouter = router({
           ];
         }
 
-        // If not admin, only show user's organization
+        // If not admin, only show user's active organization membership
         if (ctx.user.role !== 'ADMIN') {
+          if (!ctx.user.organizationId) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Access denied to this organization',
+            });
+          }
+          await assertActiveOrganizationMember(ctx, ctx.user.organizationId);
           where.id = ctx.user.organizationId;
         }
 
@@ -95,35 +124,56 @@ export const organizationRouter = router({
   /**
    * Get organization by ID
    *
+   * Security: non-admin callers must hold an ACTIVE OrganizationMember row
+   * for the requested org. Failures always return FORBIDDEN (never NOT_FOUND)
+   * to prevent callers from using the error code as an org-existence oracle.
+   *
    * @protected
    */
   get: protectedProcedure
     .input(getOrganizationSchema)
     .query(async ({ input, ctx }) => {
       try {
-        const organization = await ctx.prisma.organization.findUnique({
-          where: { id: input.id },
-          include: {
-            users: {
-              select: {
-                id: true,
-                fullName: true,
-                email: true,
-                role: true,
-              },
+        if (ctx.user.role === 'ADMIN') {
+          // Admins see everything -- retain NOT_FOUND for their UX
+          const organization = await ctx.prisma.organization.findUnique({
+            where: { id: input.id },
+            include: {
+              users: { select: { id: true, fullName: true, email: true, role: true } },
             },
-          },
+          });
+
+          if (!organization || (organization as any).deletedAt) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization not found' });
+          }
+
+          return organization;
+        }
+
+        // Non-admin: verify active OrganizationMember row BEFORE fetching org details.
+        // Always FORBIDDEN on failure to prevent org-existence oracle.
+        const member = await ctx.prisma.organizationMember.findUnique({
+          where: { userId_organizationId: { userId: ctx.user.id, organizationId: input.id } },
+          select: { status: true },
         });
 
-        if (!organization || (organization as any).deletedAt) {
+        if (!member || member.status !== MemberStatus.ACTIVE) {
           throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: 'Organization not found',
+            code: 'FORBIDDEN',
+            message: 'Access denied to this organization',
           });
         }
 
-        // Check access
-        if (ctx.user.role !== 'ADMIN' && ctx.user.organizationId !== organization.id) {
+        const organization = await ctx.prisma.organization.findUnique({
+          where: { id: input.id },
+          include: {
+            users: { select: { id: true, fullName: true, email: true, role: true } },
+          },
+        });
+
+        // If the org was deleted between our membership check and this query,
+        // return FORBIDDEN (not NOT_FOUND) to avoid the existence oracle.
+        if (!organization || (organization as any).deletedAt) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Access denied to this organization',
@@ -210,13 +260,7 @@ export const organizationRouter = router({
           });
         }
 
-        // Check access
-        if (ctx.user!.role !== 'ADMIN' && ctx.user!.organizationId !== id) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Access denied to this organization',
-          });
-        }
+        await assertActiveOrganizationMember(ctx, id);
 
         const organization = await ctx.prisma.organization.update({
           where: { id },
@@ -299,48 +343,61 @@ export const organizationRouter = router({
   /**
    * Add member to organization
    *
+   * Writes OrganizationMember as the authoritative source of truth for
+   * membership checks (requireOrgMembership reads from this table).
+   * Invalidates the Redis membership cache so the change is visible immediately.
+   *
    * @protected
    */
   addMember: protectedProcedure
     .input(addMemberSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const { organizationId, userId } = input;
+        const { organizationId, userId, role } = input;
 
-        // Check access
-        if (ctx.user.role !== 'ADMIN' && ctx.user.organizationId !== organizationId) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Access denied to this organization',
-          });
-        }
+        await assertActiveOrganizationMember(ctx, organizationId);
 
-        // Update user's organization
+        // Update user's organization foreign key
         await ctx.prisma.user.update({
           where: { id: userId },
-          data: {
+          data: { organizationId, updatedAt: new Date() },
+        });
+
+        // Upsert OrganizationMember row (source of truth for membership checks)
+        await ctx.prisma.organizationMember.upsert({
+          where: { userId_organizationId: { userId, organizationId } },
+          create: {
+            userId,
             organizationId,
-            updatedAt: new Date(),
+            role: role as MemberRole,
+            status: MemberStatus.ACTIVE,
+          },
+          update: {
+            role:   role as MemberRole,
+            status: MemberStatus.ACTIVE,
           },
         });
 
+        // Invalidate cached membership so requireOrgMembership sees the new row
+        await redis.del(`sheriabot:orgmem:${userId}:${organizationId}`).catch(() => {});
+
         logger.info({
-          type: 'organization_member_added',
-          userId: ctx.user.id,
+          type:          'organization_member_added',
+          userId:        ctx.user.id,
           organizationId,
-          newMemberId: userId,
+          newMemberId:   userId,
+          role,
         });
 
-        return {
-          success: true,
-          message: 'Member added successfully',
-        };
+        return { success: true, message: 'Member added successfully' };
       } catch (error: any) {
         logger.error({
-          type: 'organization_add_member_error',
+          type:  'organization_add_member_error',
           userId: ctx.user.id,
           error: error.message,
         });
+
+        if (error instanceof TRPCError) throw error;
 
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
@@ -353,6 +410,10 @@ export const organizationRouter = router({
   /**
    * Remove member from organization
    *
+   * Updates OrganizationMember.status to REMOVED (source of truth for
+   * membership checks) and invalidates the Redis membership cache so the
+   * change is visible to requireOrgMembership on the next request.
+   *
    * @protected
    */
   removeMember: protectedProcedure
@@ -361,40 +422,39 @@ export const organizationRouter = router({
       try {
         const { organizationId, userId } = input;
 
-        // Check access
-        if (ctx.user.role !== 'ADMIN' && ctx.user.organizationId !== organizationId) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Access denied to this organization',
-          });
-        }
+        await assertActiveOrganizationMember(ctx, organizationId);
 
-        // Remove user from organization
+        // Clear user's organization foreign key
         await ctx.prisma.user.update({
           where: { id: userId },
-          data: {
-            organizationId: null,
-            updatedAt: new Date(),
-          },
+          data: { organizationId: null, updatedAt: new Date() },
         });
 
+        // Update OrganizationMember status to REMOVED (source of truth)
+        await ctx.prisma.organizationMember.updateMany({
+          where:  { userId, organizationId },
+          data:   { status: MemberStatus.REMOVED },
+        });
+
+        // Invalidate cached membership so requireOrgMembership blocks access immediately
+        await redis.del(`sheriabot:orgmem:${userId}:${organizationId}`).catch(() => {});
+
         logger.info({
-          type: 'organization_member_removed',
-          userId: ctx.user.id,
+          type:            'organization_member_removed',
+          userId:          ctx.user.id,
           organizationId,
           removedMemberId: userId,
         });
 
-        return {
-          success: true,
-          message: 'Member removed successfully',
-        };
+        return { success: true, message: 'Member removed successfully' };
       } catch (error: any) {
         logger.error({
-          type: 'organization_remove_member_error',
+          type:  'organization_remove_member_error',
           userId: ctx.user.id,
           error: error.message,
         });
+
+        if (error instanceof TRPCError) throw error;
 
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
@@ -416,13 +476,7 @@ export const organizationRouter = router({
         const { organizationId, page, limit } = input;
         const skip = (page - 1) * limit;
 
-        // Check access
-        if (ctx.user.role !== 'ADMIN' && ctx.user.organizationId !== organizationId) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Access denied to this organization',
-          });
-        }
+        await assertActiveOrganizationMember(ctx, organizationId);
 
         const [members, total] = await Promise.all([
           ctx.prisma.user.findMany({
@@ -496,7 +550,7 @@ export const organizationRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       try {
-        // Only admins or org members can update roles
+        // Only admins or active org members can update roles
         const callerOrgId = ctx.user!.organizationId;
 
         // Fetch target user
@@ -526,6 +580,7 @@ export const organizationRouter = router({
               message: 'You can only update roles for members of your organization',
             });
           }
+          await assertActiveOrganizationMember(ctx, callerOrgId);
 
           // Non-admins cannot grant ADMIN role
           if (input.role === 'ADMIN') {
@@ -585,7 +640,7 @@ export const organizationRouter = router({
   /**
    * Get the current user's organization settings fields
    *
-   * @protected  -  resolves org from ctx.user.organizationId (no id param)
+   * @protected  -  resolves org from active OrganizationMember
    */
   getSettings: protectedProcedure.query(async ({ ctx }) => {
     try {
@@ -597,6 +652,7 @@ export const organizationRouter = router({
           message: 'You are not a member of any organization',
         });
       }
+      await assertActiveOrganizationMember(ctx, organizationId);
 
       const organization = await ctx.prisma.organization.findUnique({
         where: { id: organizationId },
@@ -657,6 +713,7 @@ export const organizationRouter = router({
             message: 'You are not a member of any organization',
           });
         }
+        await assertActiveOrganizationMember(ctx, organizationId);
 
         if (ctx.user.role === 'REGULATOR') {
           throw new TRPCError({

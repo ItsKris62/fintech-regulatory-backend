@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric } from '@prisma/client';
 import {
   rateLimited,
@@ -41,22 +41,15 @@ export const enterprisePolicyRouter = router({
    *
    * @returns { policyId, status } — the frontend starts polling getStatus
    */
-  createDraft: protectedProcedure
+  createDraft: orgMemberProcedure
     .use(rateLimited('enterprisePolicyGeneration', 3))
     .use(withPlanContext)
     .use(requirePlanFeature('policyGeneration'))
     .use(checkUsageLimit(BillingMetric.POLICY_GENERATIONS, { deferIncrement: true }))
     .input(createDraftSchema)
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user.id;
-      const organizationId = ctx.user.organizationId;
-
-      if (!organizationId) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Enterprise policy generation requires an organization. Please ensure your account is linked to an organization.',
-        });
-      }
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
 
       // If linking to a gap analysis, verify ownership
       if (input.sourceGapAnalysisId) {
@@ -132,14 +125,16 @@ export const enterprisePolicyRouter = router({
    * Returns the current pipeline status and progress percentage.
    * Frontend polls this with refetchInterval: 2000 while !isComplete && !isFailed.
    */
-  getStatus: protectedProcedure
+  getStatus: orgMemberProcedure
     .use(withPlanContext)
     .input(getStatusSchema)
-    .query(async ({ input, ctx: _ctx }) => {
+    .query(async ({ input, ctx }) => {
       const policy = await prisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
         select: {
           id: true,
+          userId: true,
+          organizationId: true,
           status: true,
           progress: true,
           title: true,
@@ -152,6 +147,13 @@ export const enterprisePolicyRouter = router({
         throw new TRPCError({
           code: 'NOT_FOUND',
           message: 'Generated policy not found.',
+        });
+      }
+
+      if (policy.organizationId !== ctx.orgMembership!.organizationId && policy.userId !== ctx.user!.id) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have access to this policy.',
         });
       }
 
@@ -185,13 +187,13 @@ export const enterprisePolicyRouter = router({
    * Fetches a single generated policy with all content, sections,
    * citations, and metadata. Used when the editor is loaded.
    */
-  getPolicy: protectedProcedure
+  getPolicy: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('policyGeneration'))
     .input(getPolicySchema)
     .query(async ({ input, ctx }) => {
-      const userId = ctx.user.id;
-      const organizationId = ctx.user.organizationId;
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
 
       const policy = await prisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
@@ -235,19 +237,19 @@ export const enterprisePolicyRouter = router({
    * Returns a paginated list of generated policies for the current user's
    * organization.
    */
-  listPolicies: protectedProcedure
+  listPolicies: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('policyGeneration'))
     .input(listPoliciesSchema)
     .query(async ({ input, ctx }) => {
-      const userId = ctx.user.id;
-      const organizationId = ctx.user.organizationId;
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
 
       const where: any = {
         deletedAt: null,
         OR: [
           { userId },
-          ...(organizationId ? [{ organizationId }] : []),
+          { organizationId },
         ],
       };
 
@@ -307,13 +309,13 @@ export const enterprisePolicyRouter = router({
    * Saves updated TipTap JSON content for a single policy section.
    * Called by the editor on auto-save (3-second debounce) or manual save.
    */
-  updateSectionContent: protectedProcedure
+  updateSectionContent: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('policyGeneration'))
     .input(updateSectionContentSchema)
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user.id;
-      const organizationId = ctx.user.organizationId;
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
 
       const policy = await prisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
@@ -387,13 +389,13 @@ export const enterprisePolicyRouter = router({
   /**
    * Soft-deletes a generated policy by setting deletedAt.
    */
-  deletePolicy: protectedProcedure
+  deletePolicy: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('policyGeneration'))
     .input(deletePolicySchema)
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user.id;
-      const organizationId = ctx.user.organizationId;
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
 
       const policy = await prisma.generatedPolicy.findUnique({
         where: { id: input.policyId },

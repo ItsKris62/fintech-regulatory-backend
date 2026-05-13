@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric } from '@prisma/client';
 import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
 import {
@@ -29,7 +29,7 @@ export const policyRouter = router({
    *
    * @protected
    */
-  list: protectedProcedure
+  list: orgMemberProcedure
     .input(listPoliciesSchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -48,12 +48,9 @@ export const policyRouter = router({
             type: 'admin_policy_list_accessed',
             adminUserId: ctx.user!.id,
           });
-        } else if (ctx.user!.organizationId) {
-          // Org-scoped: show all policies belonging to the user's organization
-          where.organizationId = ctx.user!.organizationId;
         } else {
-          // No org  -  fall back to user-scoped (legacy policies without organizationId)
-          where.userId = ctx.user!.id;
+          // Org-scoped: show all policies belonging to the user's organization
+          where.organizationId = ctx.orgMembership!.organizationId;
         }
 
         if (status) {
@@ -122,7 +119,7 @@ export const policyRouter = router({
    *
    * @protected
    */
-  get: protectedProcedure
+  get: orgMemberProcedure
     .input(getPolicySchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -158,7 +155,7 @@ export const policyRouter = router({
         // Check access  -  org-scoped with userId fallback for legacy policies
         if (ctx.user!.role !== 'ADMIN') {
           const hasAccess = policy.organizationId
-            ? policy.organizationId === ctx.user!.organizationId
+            ? policy.organizationId === ctx.orgMembership!.organizationId
             : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
@@ -199,7 +196,7 @@ export const policyRouter = router({
    * @protected
    * @rate-limited
    */
-  generate: protectedProcedure
+  generate: orgMemberProcedure
     .use(rateLimited('policyGeneration'))
     .use(withPlanContext)
     .use(requirePlanFeature('policyGeneration'))
@@ -229,7 +226,7 @@ export const policyRouter = router({
             targetAudience: input.targetAudience,
             status: 'GENERATING',
             userId: ctx.user!.id,
-            organizationId: ctx.user!.organizationId,
+            organizationId: ctx.orgMembership!.organizationId,
             urgency: 'medium',
             stakeholders: [],
           },
@@ -425,7 +422,7 @@ export const policyRouter = router({
    *
    * @protected
    */
-  update: protectedProcedure
+  update: orgMemberProcedure
     .input(updatePolicySchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -445,7 +442,7 @@ export const policyRouter = router({
 
         if (ctx.user!.role !== 'ADMIN') {
           const hasAccess = existingPolicy.organizationId
-            ? existingPolicy.organizationId === ctx.user!.organizationId
+            ? existingPolicy.organizationId === ctx.orgMembership!.organizationId
             : existingPolicy.userId === ctx.user!.id;
 
           if (!hasAccess) {
@@ -500,7 +497,7 @@ export const policyRouter = router({
    *
    * @protected
    */
-  delete: protectedProcedure
+  delete: orgMemberProcedure
     .input(deletePolicySchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -518,7 +515,7 @@ export const policyRouter = router({
 
         if (ctx.user!.role !== 'ADMIN') {
           const hasAccess = policy.organizationId
-            ? policy.organizationId === ctx.user!.organizationId
+            ? policy.organizationId === ctx.orgMembership!.organizationId
             : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
@@ -572,7 +569,7 @@ export const policyRouter = router({
    *
    * @protected
    */
-  export: protectedProcedure
+  export: orgMemberProcedure
     .input(exportPolicySchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -591,7 +588,7 @@ export const policyRouter = router({
         // Check access
         if (ctx.user!.role !== 'ADMIN') {
           const hasAccess = policy.organizationId
-            ? policy.organizationId === ctx.user!.organizationId
+            ? policy.organizationId === ctx.orgMembership!.organizationId
             : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
@@ -649,7 +646,7 @@ export const policyRouter = router({
    * @protected
    * @rate-limited
    */
-  refine: protectedProcedure
+  refine: orgMemberProcedure
     .use(rateLimited('policyRefinement'))
     .input(refinePolicySchema)
     .mutation(async ({ input, ctx }) => {
@@ -668,7 +665,7 @@ export const policyRouter = router({
         // Check access
         if (ctx.user!.role !== 'ADMIN') {
           const hasAccess = policy.organizationId
-            ? policy.organizationId === ctx.user!.organizationId
+            ? policy.organizationId === ctx.orgMembership!.organizationId
             : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
@@ -720,7 +717,7 @@ export const policyRouter = router({
    *
    * @protected
    */
-  verifyCitations: protectedProcedure
+  verifyCitations: orgMemberProcedure
     .input(verifyCitationsSchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -739,7 +736,7 @@ export const policyRouter = router({
         // Check access
         if (ctx.user!.role !== 'ADMIN') {
           const hasAccess = policy.organizationId
-            ? policy.organizationId === ctx.user!.organizationId
+            ? policy.organizationId === ctx.orgMembership!.organizationId
             : policy.userId === ctx.user!.id;
 
           if (!hasAccess) {
@@ -790,7 +787,7 @@ export const policyRouter = router({
    *
    * @protected
    */
-  getStatus: protectedProcedure
+  getStatus: orgMemberProcedure
     .input(z.object({ policyId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
@@ -819,7 +816,7 @@ export const policyRouter = router({
         // Access control
         if (ctx.user!.role !== 'ADMIN') {
           const hasAccess = policy.organizationId
-            ? policy.organizationId === ctx.user!.organizationId
+            ? policy.organizationId === ctx.orgMembership!.organizationId
             : policy.userId === ctx.user!.id;
           if (!hasAccess) {
             throw new TRPCError({
@@ -877,7 +874,7 @@ export const policyRouter = router({
    *
    * @protected
    */
-  getVersionHistory: protectedProcedure
+  getVersionHistory: orgMemberProcedure
     .input(z.object({ policyId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
@@ -903,7 +900,7 @@ export const policyRouter = router({
         // Access control
         if (ctx.user!.role !== 'ADMIN') {
           const hasAccess = policy.organizationId
-            ? policy.organizationId === ctx.user!.organizationId
+            ? policy.organizationId === ctx.orgMembership!.organizationId
             : policy.userId === ctx.user!.id;
           if (!hasAccess) {
             throw new TRPCError({

@@ -14,7 +14,7 @@
 
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, orgMemberProcedure } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
 import { usageTrackingService } from '@/services/usage-tracking.service';
 import { prisma } from '@/lib/prisma/client';
@@ -106,38 +106,25 @@ export const usageRouter = router({
    *
    * @protected  -  requires authentication + withPlanContext
    */
-  current: protectedProcedure
+  current: orgMemberProcedure
     .use(withPlanContext)
     .output(usageSummarySchema)
     .query(async ({ ctx }) => {
-      const orgId = ctx.user.organizationId;
-      if (!orgId) {
-        // Users without an org get REGULATOR defaults with zero usage
-        return {
-          period: {
-            start:         new Date(),
-            end:           new Date(),
-            daysRemaining: 0,
-            daysTotal:     31,
-          },
-          planTier:   'REGULATOR',
-          categories: [],
-        };
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       try {
         const summary = await usageTrackingService.getCurrentUsageSummary(orgId);
 
         logger.info({
           type:   'usage_current_fetched',
-          userId: ctx.user.id,
+          userId: ctx.user!.id,
           orgId,
         });
 
         return summary;
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        logger.error({ type: 'usage_current_error', userId: ctx.user.id, orgId, error: message });
+        logger.error({ type: 'usage_current_error', userId: ctx.user!.id, orgId, error: message });
         throw new TRPCError({
           code:    'INTERNAL_SERVER_ERROR',
           message: 'Failed to load current usage data.',
@@ -157,7 +144,7 @@ export const usageRouter = router({
    *
    * @protected  -  requires authentication
    */
-  history: protectedProcedure
+  history: orgMemberProcedure
     .use(withPlanContext)
     .input(
       z.object({
@@ -167,15 +154,14 @@ export const usageRouter = router({
     )
     .output(z.array(usagePeriodSummarySchema))
     .query(async ({ input, ctx }) => {
-      const orgId = ctx.user.organizationId;
-      if (!orgId) return [];
+      const orgId = ctx.orgMembership!.organizationId;
 
       try {
         const history = await usageTrackingService.getUsageHistory(orgId, input.months);
 
         logger.info({
           type:         'usage_history_fetched',
-          userId:       ctx.user.id,
+          userId:       ctx.user!.id,
           orgId,
           monthsBack:   input.months,
           periodsFound: history.length,
@@ -184,7 +170,7 @@ export const usageRouter = router({
         return history;
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        logger.error({ type: 'usage_history_error', userId: ctx.user.id, orgId, error: message });
+        logger.error({ type: 'usage_history_error', userId: ctx.user!.id, orgId, error: message });
         throw new TRPCError({
           code:    'INTERNAL_SERVER_ERROR',
           message: 'Failed to load usage history.',
@@ -205,7 +191,7 @@ export const usageRouter = router({
    *
    * @protected  -  requires authentication
    */
-  compare: protectedProcedure
+  compare: orgMemberProcedure
     .use(withPlanContext)
     .input(
       z.object({
@@ -219,13 +205,7 @@ export const usageRouter = router({
     )
     .output(usageComparisonSchema)
     .query(async ({ input, ctx }) => {
-      const orgId = ctx.user.organizationId;
-      if (!orgId) {
-        throw new TRPCError({
-          code:    'BAD_REQUEST',
-          message: 'Usage comparison requires an active organisation.',
-        });
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       const comparePeriodStart = new Date(input.comparePeriodStart);
 
@@ -234,7 +214,7 @@ export const usageRouter = router({
 
         logger.info({
           type:               'usage_compare_fetched',
-          userId:             ctx.user.id,
+          userId:             ctx.user!.id,
           orgId,
           comparePeriodStart: input.comparePeriodStart,
         });
@@ -251,7 +231,7 @@ export const usageRouter = router({
           });
         }
 
-        logger.error({ type: 'usage_compare_error', userId: ctx.user.id, orgId, error: message });
+        logger.error({ type: 'usage_compare_error', userId: ctx.user!.id, orgId, error: message });
         throw new TRPCError({
           code:    'INTERNAL_SERVER_ERROR',
           message: 'Failed to load usage comparison.',
@@ -269,7 +249,7 @@ export const usageRouter = router({
    *
    * @protected  -  requires authentication; org-scoped (cannot access another org's data)
    */
-  periodDetail: protectedProcedure
+  periodDetail: orgMemberProcedure
     .use(withPlanContext)
     .input(
       z.object({
@@ -278,13 +258,7 @@ export const usageRouter = router({
     )
     .output(usagePeriodSummarySchema)
     .query(async ({ input, ctx }) => {
-      const orgId = ctx.user.organizationId;
-      if (!orgId) {
-        throw new TRPCError({
-          code:    'BAD_REQUEST',
-          message: 'Usage detail requires an active organisation.',
-        });
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       try {
         const record = await prisma.usagePeriod.findFirst({
@@ -303,7 +277,7 @@ export const usageRouter = router({
 
         logger.info({
           type:     'usage_period_detail_fetched',
-          userId:   ctx.user.id,
+          userId:   ctx.user!.id,
           orgId,
           periodId: input.periodId,
         });
@@ -318,7 +292,7 @@ export const usageRouter = router({
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
         const message = error instanceof Error ? error.message : String(error);
-        logger.error({ type: 'usage_period_detail_error', userId: ctx.user.id, orgId, error: message });
+        logger.error({ type: 'usage_period_detail_error', userId: ctx.user!.id, orgId, error: message });
         throw new TRPCError({
           code:    'INTERNAL_SERVER_ERROR',
           message: 'Failed to load usage period detail.',

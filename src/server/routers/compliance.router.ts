@@ -1,6 +1,6 @@
-﻿import { TRPCError } from '@trpc/server';
+import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric } from '@prisma/client';
 import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
 import {
@@ -34,7 +34,7 @@ export const complianceRouter = router({
    * @protected
    * @rate-limited
    */
-  query: protectedProcedure
+  query: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
     .use(withPlanContext)
     .use(checkUsageLimit(BillingMetric.COMPLIANCE_QUERIES))
@@ -98,7 +98,7 @@ export const complianceRouter = router({
           data: {
             query: input.question,
             userId: ctx.user!.id,
-            organizationId: ctx.user!.organizationId ?? null,
+            organizationId: ctx.orgMembership!.organizationId,
             response: answer.content,
             citations: queryCitations.length > 0 ? queryCitations : undefined,
             metadata: {
@@ -163,7 +163,7 @@ export const complianceRouter = router({
    * @protected
    * @rate-limited
    */
-  followUp: protectedProcedure
+  followUp: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
     .input(followUpQuerySchema)
     .mutation(async ({ input, ctx }) => {
@@ -218,7 +218,7 @@ export const complianceRouter = router({
           data: {
             query: input.question,
             userId: ctx.user!.id,
-            organizationId: ctx.user!.organizationId ?? null,
+            organizationId: ctx.orgMembership!.organizationId,
             response: answer.content,
             citations: queryCitations.length > 0 ? queryCitations : undefined,
             metadata: {
@@ -485,13 +485,9 @@ export const complianceRouter = router({
    *
    * @protected
    */
-  getScore: protectedProcedure.query(async ({ ctx }) => {
+  getScore: orgMemberProcedure.query(async ({ ctx }) => {
     try {
-      const orgId = ctx.user!.organizationId;
-
-      if (!orgId) {
-        return { score: 0, grade: 'N/A', areas: [], calculatedAt: new Date().toISOString() };
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       const score = await complianceModule.calculateComplianceScore(ctx.user!.id, orgId);
 
@@ -522,15 +518,11 @@ export const complianceRouter = router({
    *
    * @protected
    */
-  getScoreHistory: protectedProcedure
+  getScoreHistory: orgMemberProcedure
     .input(z.object({ days: z.number().min(7).max(365).default(90) }))
     .query(async ({ input, ctx }) => {
       try {
-        const orgId = ctx.user!.organizationId;
-
-        if (!orgId) {
-          return [];
-        }
+        const orgId = ctx.orgMembership!.organizationId;
 
         const history = await complianceModule.getComplianceScoreHistory(
           ctx.user!.id,
@@ -567,13 +559,9 @@ export const complianceRouter = router({
    *
    * @protected
    */
-  getRecommendations: protectedProcedure.query(async ({ ctx }) => {
+  getRecommendations: orgMemberProcedure.query(async ({ ctx }) => {
     try {
-      const orgId = ctx.user!.organizationId;
-
-      if (!orgId) {
-        return [];
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       const recommendations = await complianceModule.getRecommendations(ctx.user!.id, orgId);
 
@@ -604,7 +592,7 @@ export const complianceRouter = router({
    *
    * @protected
    */
-  getRequirements: protectedProcedure
+  getRequirements: orgMemberProcedure
     .input(
       z.object({
         page: z.number().min(1).default(1),
@@ -615,11 +603,7 @@ export const complianceRouter = router({
     )
     .query(async ({ input, ctx }) => {
       try {
-        const orgId = ctx.user!.organizationId;
-
-        if (!orgId) {
-          return { requirements: [], total: 0, page: 1, limit: 20, totalPages: 0 };
-        }
+        const orgId = ctx.orgMembership!.organizationId;
 
         const result = await complianceModule.getRequirements(ctx.user!.id, orgId, {
           page: input.page,
@@ -655,7 +639,7 @@ export const complianceRouter = router({
    *
    * @protected
    */
-  updateRequirement: protectedProcedure
+  updateRequirement: orgMemberProcedure
     .input(
       z.object({
         requirementId: z.string(),
@@ -701,15 +685,11 @@ export const complianceRouter = router({
    *
    * @protected
    */
-  getDeadlines: protectedProcedure
+  getDeadlines: orgMemberProcedure
     .input(z.object({ daysAhead: z.number().min(1).max(365).default(30) }))
     .query(async ({ input, ctx }) => {
       try {
-        const orgId = ctx.user!.organizationId;
-
-        if (!orgId) {
-          return [];
-        }
+        const orgId = ctx.orgMembership!.organizationId;
 
         const deadlines = await complianceModule.checkDeadlines(
           ctx.user!.id,
@@ -746,15 +726,11 @@ export const complianceRouter = router({
    * @protected
    * @rate-limited
    */
-  getRoadmap: protectedProcedure
+  getRoadmap: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
     .query(async ({ ctx }) => {
       try {
-        const orgId = ctx.user!.organizationId;
-
-        if (!orgId) {
-          return { phases: [], estimatedDays: 0, priority: [] };
-        }
+        const orgId = ctx.orgMembership!.organizationId;
 
         const roadmap = await complianceModule.generateRoadmap(ctx.user!.id, orgId);
 
@@ -779,17 +755,17 @@ export const complianceRouter = router({
         });
       }
     }),
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ══════════════════════════════════════════════════════════════════════════
   // QUERY FEEDBACK
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ══════════════════════════════════════════════════════════════════════════
 
   /**
    * Submit or toggle feedback (thumbs up / thumbs down) on a compliance query.
    *
    * Toggle semantics (server-side):
-   *  - No existing feedback  â†' create with given rating
-   *  - Existing same rating  â†' delete (toggle off), return null
-   *  - Existing diff rating  â†' update to new rating
+   *  - No existing feedback  �' create with given rating
+   *  - Existing same rating  �' delete (toggle off), return null
+   *  - Existing diff rating  �' update to new rating
    *
    * @protected
    */
@@ -825,7 +801,7 @@ export const complianceRouter = router({
       let newRating: 'up' | 'down' | null;
 
       if (existing && existing.rating === input.rating) {
-        // Same rating clicked again â†' toggle off
+        // Same rating clicked again �' toggle off
         await ctx.prisma.queryFeedback.delete({
           where: { queryId_userId: { queryId: input.queryId, userId } },
         });
@@ -868,15 +844,15 @@ export const complianceRouter = router({
       return { rating: (feedback?.rating ?? null) as 'up' | 'down' | null };
     }),
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ══════════════════════════════════════════════════════════════════════════
   // SAVED RESPONSES
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ══════════════════════════════════════════════════════════════════════════
 
   /**
    * Toggle save/bookmark status for a compliance query response.
    *
-   *  - Not saved â†' save it, return { saved: true }
-   *  - Already saved â†' unsave it, return { saved: false }
+   *  - Not saved �' save it, return { saved: true }
+   *  - Already saved �' unsave it, return { saved: false }
    *
    * @protected
    */
@@ -1006,7 +982,7 @@ export const complianceRouter = router({
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
 
-      // Fire-and-forget audit log â€" never block the response
+      // Fire-and-forget audit log �" never block the response
       prisma.auditLog.create({
         data: {
           userId,
@@ -1035,12 +1011,13 @@ export const complianceRouter = router({
    *
    * @protected
    */
-  exportDocx: protectedProcedure
+  exportDocx: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('gapAnalysis'))
     .input(z.object({ analysisId: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
+      const orgId = ctx.orgMembership!.organizationId;
 
       // 1. Fetch the analysis record with user relation
       const analysis = await prisma.gapAnalysis.findUnique({
@@ -1054,8 +1031,13 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
       }
 
-      // 2. Ownership check (or ADMIN role)
-      if (analysis.userId !== userId && ctx.user!.role !== 'ADMIN') {
+      // 2. Access check: org-scoped records require active membership in that org.
+      // Legacy null-org records stay accessible to their owner only.
+      const hasAccess = analysis.organizationId
+        ? analysis.organizationId === orgId
+        : analysis.userId === userId;
+
+      if (!hasAccess) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this analysis' });
       }
 
@@ -1073,7 +1055,7 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Analysis results are malformed and cannot be exported' });
       }
 
-      // 5. Build DOCX buffer â€" fetch org name separately (GapAnalysis has no direct org relation)
+      // 5. Build DOCX buffer �" fetch org name separately (GapAnalysis has no direct org relation)
       const orgName = analysis.organizationId
         ? (await prisma.organization.findUnique({ where: { id: analysis.organizationId }, select: { name: true } }))?.name
         : undefined;
@@ -1112,7 +1094,7 @@ export const complianceRouter = router({
 
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 
-      // 8b. Persist report tracking fields (fire-and-forget â€" non-blocking)
+      // 8b. Persist report tracking fields (fire-and-forget �" non-blocking)
       prisma.gapAnalysis.update({
         where: { id: input.analysisId },
         data: { reportUrl: uploadResult.key, reportGeneratedAt: new Date() },
@@ -1150,14 +1132,15 @@ export const complianceRouter = router({
    *
    * @protected
    */
-  exportChecklistDocx: protectedProcedure
+  exportChecklistDocx: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('checklistGenerations'))
     .input(z.object({ checklistId: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
+      const orgId = ctx.orgMembership!.organizationId;
 
-      // 1. Fetch the checklist with items and user â€" no direct org relation on Checklist model
+      // 1. Fetch the checklist with items and user �" no direct org relation on Checklist model
       const checklist = await prisma.checklist.findUnique({
         where: { id: input.checklistId },
         include: {
@@ -1172,8 +1155,13 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Checklist not found' });
       }
 
-      // 2. Ownership check (or ADMIN)
-      if (checklist.userId !== userId && ctx.user!.role !== 'ADMIN') {
+      // 2. Access check: org-scoped records require active membership in that org.
+      // The two known legacy null-org rows are kept and remain owner-only.
+      const hasAccess = checklist.organizationId
+        ? checklist.organizationId === orgId
+        : checklist.userId === userId;
+
+      if (!hasAccess) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this checklist' });
       }
 
@@ -1279,7 +1267,7 @@ export const complianceRouter = router({
         userId,
       );
 
-      // 11. Signed URL â€" 15-minute expiry
+      // 11. Signed URL �" 15-minute expiry
       const downloadUrl = await storageService.getDownloadUrl(uploadResult.key, 900, false, filename);
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 

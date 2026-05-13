@@ -1,11 +1,14 @@
 import { router, baseProcedure } from './init';
-import { 
-  isAuthenticated, 
-  isAdmin, 
-  isRegulator, 
+import { MemberRole } from '@prisma/client';
+import {
+  isAuthenticated,
+  isAdmin,
+  isRegulator,
   isStartup,
   isEnterprise,
-  logged 
+  logged,
+  requireOrgMembership,
+  requireOrgMembershipRole,
 } from './middleware';
 
 // Export router builder for use in your controllers
@@ -31,3 +34,21 @@ export const adminProcedure = protectedProcedure.use(isAdmin);
 export const regulatorProcedure = protectedProcedure.use(isRegulator);
 export const startupProcedure = protectedProcedure.use(isStartup);
 export const enterpriseProcedure = protectedProcedure.use(isEnterprise);
+
+// --- Organization-Member Procedures ---
+
+/**
+ * Requires an ACTIVE OrganizationMember row for ctx.user.organizationId.
+ * Applies Redis caching (60s) and denial rate limiting.
+ * Attaches ctx.orgMembership for downstream handlers.
+ */
+export const orgMemberProcedure = protectedProcedure.use(requireOrgMembership);
+
+/**
+ * Factory: orgMemberProcedure + minimum role enforcement.
+ * Role hierarchy (ascending): VIEWER < MEMBER < ADMIN < OWNER
+ *
+ * Usage: orgMemberProcedureWithRole([MemberRole.ADMIN, MemberRole.OWNER])
+ */
+export const orgMemberProcedureWithRole = (allowedRoles: MemberRole[]) =>
+  orgMemberProcedure.use(requireOrgMembershipRole(allowedRoles));

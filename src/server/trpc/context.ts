@@ -1,6 +1,6 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { createHash } from 'crypto';
-import type { OrganizationMember } from '@prisma/client';
+import type { MemberRole, MemberStatus, OrganizationMember } from '@prisma/client';
 import type { EffectivePlan } from '@/types/plan.types';
 import type { TrialContextState } from '@/modules/trial/trial.types';
 import { supabaseAdmin } from '@/lib/supabase';
@@ -14,6 +14,18 @@ import { logger } from '@/utils/logger';
 import { SESSION_CONFIG, lastSeenKey } from '@/config/session';
 import { isTokenRevoked, revokedJtiKey } from '@/utils/token-revocation';
 import { extractJti, extractExp } from '@/utils/jwt';
+
+/**
+ * Minimal membership record attached by requireOrgMembership middleware.
+ * Uses a typed subset instead of full OrganizationMember to survive JSON
+ * round-trips through the Redis cache (Date fields become strings there).
+ */
+export interface OrgMembershipEntry {
+  userId: string;
+  organizationId: string;
+  role: MemberRole;
+  status: MemberStatus;
+}
 
 /** User shape attached to every authenticated tRPC context. */
 export interface User {
@@ -50,6 +62,11 @@ export interface Context {
   incrementUsage?: () => Promise<void>;
   /** Populated by requireOrgMember middleware. Present only after that middleware runs. */
   orgMember?: OrganizationMember;
+  /**
+   * Populated by requireOrgMembership middleware (input-scoped, with caching and
+   * denial rate limiting). Distinct from orgMember -- see middleware.ts for details.
+   */
+  orgMembership?: OrgMembershipEntry;
 }
 
 /** How long to cache the Prisma user lookup in Upstash (matches Supabase default token TTL). */

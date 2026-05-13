@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
+import { router, protectedProcedure, adminProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { withPlanContext, requirePlanFeature } from '../trpc/middleware';
 import {
   getOrgDashboardSchema,
@@ -67,23 +67,17 @@ export const analyticsRouter = router({
    *
    * @protected  -  uses caller's org if orgId not supplied
    */
-  getOrgDashboard: protectedProcedure
+  getOrgDashboard: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('analytics'))
     .input(getOrgDashboardSchema)
     .query(async ({ input, ctx }) => {
       try {
-        const orgId = input.orgId ?? ctx.user!.organizationId;
-
-        if (!orgId) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'No organization associated with your account',
-          });
-        }
+        const memberOrgId = ctx.orgMembership!.organizationId;
+        const orgId = input.orgId ?? memberOrgId;
 
         // Non-admins can only access their own org
-        if (ctx.user!.role !== 'ADMIN' && orgId !== ctx.user!.organizationId) {
+        if (orgId !== memberOrgId) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Access denied to this organization',
@@ -125,16 +119,12 @@ export const analyticsRouter = router({
    *
    * @protected
    */
-  getOrgComplianceScore: protectedProcedure
+  getOrgComplianceScore: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('analytics'))
     .query(async ({ ctx }) => {
     try {
-      const orgId = ctx.user!.organizationId;
-
-      if (!orgId) {
-        return { currentScore: 0, previousScore: 0, change: 0, grade: 'N/A', areaBreakdown: [], generatedAt: new Date() };
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       const score = await analyticsModule.getOrganizationComplianceScore(orgId);
       return score;
@@ -158,19 +148,16 @@ export const analyticsRouter = router({
    *
    * @protected
    */
-  getComplianceTrends: protectedProcedure
+  getComplianceTrends: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('analytics'))
     .input(getComplianceTrendsSchema)
     .query(async ({ input, ctx }) => {
       try {
-        const orgId = input.orgId ?? ctx.user!.organizationId;
+        const memberOrgId = ctx.orgMembership!.organizationId;
+        const orgId = input.orgId ?? memberOrgId;
 
-        if (!orgId) {
-          return [];
-        }
-
-        if (ctx.user!.role !== 'ADMIN' && orgId !== ctx.user!.organizationId) {
+        if (orgId !== memberOrgId) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Access denied to this organization',
@@ -209,16 +196,12 @@ export const analyticsRouter = router({
    *
    * @protected
    */
-  getGapAnalysis: protectedProcedure
+  getGapAnalysis: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('analytics'))
     .query(async ({ ctx }) => {
     try {
-      const orgId = ctx.user!.organizationId;
-
-      if (!orgId) {
-        return { gaps: [], criticalGaps: 0, highGaps: 0, mediumGaps: 0 };
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       const gapAnalysis = await analyticsModule.getComplianceGapAnalysis(
         orgId
@@ -251,13 +234,9 @@ export const analyticsRouter = router({
    *
    * @protected
    */
-  getDeadlineAlerts: protectedProcedure.query(async ({ ctx }) => {
+  getDeadlineAlerts: orgMemberProcedure.query(async ({ ctx }) => {
     try {
-      const orgId = ctx.user!.organizationId;
-
-      if (!orgId) {
-        return [];
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       const alerts = await analyticsModule.getDeadlineAlerts(orgId);
       return alerts;
@@ -281,13 +260,9 @@ export const analyticsRouter = router({
    *
    * @protected
    */
-  getDocumentStats: protectedProcedure.query(async ({ ctx }) => {
+  getDocumentStats: orgMemberProcedure.query(async ({ ctx }) => {
     try {
-      const orgId = ctx.user!.organizationId;
-
-      if (!orgId) {
-        return { total: 0, byType: {}, byStatus: {}, totalSizeMB: 0, recentUploads: 0 };
-      }
+      const orgId = ctx.orgMembership!.organizationId;
 
       const stats = await analyticsModule.getOrganizationDocumentStats(orgId);
       return stats;
@@ -311,15 +286,16 @@ export const analyticsRouter = router({
    *
    * @protected
    */
-  generateReport: protectedProcedure
+  generateReport: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('analytics'))
     .input(generateReportSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const orgId = input.orgId ?? ctx.user!.organizationId;
+        const memberOrgId = ctx.orgMembership!.organizationId;
+        const orgId = input.orgId ?? memberOrgId;
 
-        if (orgId && ctx.user!.role !== 'ADMIN' && orgId !== ctx.user!.organizationId) {
+        if (orgId !== memberOrgId) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Access denied to this organization',
@@ -331,7 +307,7 @@ export const analyticsRouter = router({
           : undefined;
 
         const report = await analyticsModule.generateComplianceReport(
-          orgId ?? ctx.user!.id,
+          orgId,
           {
             dateRange,
           }
@@ -367,15 +343,16 @@ export const analyticsRouter = router({
    *
    * @protected
    */
-  exportData: protectedProcedure
+  exportData: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('analytics'))
     .input(exportAnalyticsSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const orgId = input.orgId ?? ctx.user!.organizationId;
+        const memberOrgId = ctx.orgMembership!.organizationId;
+        const orgId = input.orgId ?? memberOrgId;
 
-        if (orgId && ctx.user!.role !== 'ADMIN' && orgId !== ctx.user!.organizationId) {
+        if (orgId !== memberOrgId) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Access denied to this organization',
@@ -387,7 +364,7 @@ export const analyticsRouter = router({
           : undefined;
 
         const result = await analyticsModule.exportAnalytics({
-          orgId: orgId ?? undefined,
+          orgId,
           format: input.format,
           reportType: input.type as any,
           dateRange,

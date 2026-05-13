@@ -1645,7 +1645,7 @@ Follow-up Question: ${followUp}
       targetSegments: string[];
       servicesOffered: string[];
       additionalConcerns?: string;
-      organizationId?: string;
+      organizationId: string;
     }
   ): Promise<{
     id: string;
@@ -1671,7 +1671,7 @@ Follow-up Question: ${followUp}
       record = await prisma.checklist.create({
         data: {
           userId,
-          organizationId: params.organizationId ?? null,
+          organizationId: params.organizationId,
           title: `${params.productType}  -  ${params.businessStage}`,
           productType: params.productType,
           businessStage: params.businessStage,
