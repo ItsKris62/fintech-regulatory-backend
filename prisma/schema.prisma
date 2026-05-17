@@ -48,6 +48,7 @@ model User {
   organization            Organization?                    @relation(fields: [organizationId], references: [id])
   queryFeedbacks          QueryFeedback[]
   savedResponses          SavedResponse[]
+  corpusGapFeedbacks      CorpusGapFeedback[]
   supportTickets          SupportTicket[]
   ticketComments          TicketComment[]
 
@@ -157,6 +158,8 @@ model Organization {
 
   // Organization membership (multi-member orgs)
   members OrganizationMember[] @relation("OrganizationMembers")
+
+  corpusGapFeedbacks CorpusGapFeedback[]
 
   @@index([name])
   @@index([verificationStatus])
@@ -369,11 +372,54 @@ model ComplianceQuery {
   user             User            @relation(fields: [userId], references: [id])
   feedbacks        QueryFeedback[]
   saves            SavedResponse[]
-  citationRecords  Citation[]      @relation("ComplianceQueryCitations")
+  citationRecords      Citation[]           @relation("ComplianceQueryCitations")
+  runs                 ComplianceQueryRun[]
+  corpusGapFeedbacks   CorpusGapFeedback[]
 
   @@index([userId])
   @@index([createdAt])
   @@index([organizationId])
+  @@index([status])
+}
+
+model ComplianceQueryRun {
+  id                    String    @id @default(cuid())
+  complianceQueryId     String
+  shadow                Boolean   @default(false)
+  status                String?   @default("completed")
+  route                 String
+  routeConfidence       Float?
+  routeDowngraded       Boolean?
+  routeDowngradeReason  String?
+  grounded              Boolean   @default(false)
+  ragSources            Int       @default(0)
+  subQuestions          Json?
+  retrievalQueries      Json?
+  gradeChunksInspected  Int       @default(0)
+  acceptedChunkIds      Json?
+  rejectedChunkCount    Int?
+  tokenBudgetExceeded   Boolean   @default(false)
+  controlTokens         Json?
+  inputTokens           Int?
+  outputTokens          Int?
+  graderFailed          Boolean   @default(false)
+  routerParseFallback   Boolean   @default(false)
+  verifierParseFallback Boolean   @default(false)
+  verifierVerdict       String?
+  unsupportedClaims     Json?
+  fallbackReason        String?
+  errorMessage          String?
+  wallMs                Int
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime? @updatedAt
+  complianceQuery       ComplianceQuery   @relation(fields: [complianceQueryId], references: [id], onDelete: Cascade)
+  corpusGapFeedbacks    CorpusGapFeedback[]
+
+  @@index([complianceQueryId])
+  @@index([shadow])
+  @@index([route])
+  @@index([verifierVerdict])
+  @@index([createdAt])
   @@index([status])
 }
 
@@ -1850,4 +1896,37 @@ model OrganizationMember {
   @@unique([userId, organizationId])
   @@index([organizationId, status])
   @@index([userId, status])
+}
+
+// ============================================================================
+// Corpus Gap Feedback
+// ============================================================================
+
+model CorpusGapFeedback {
+  id                  String    @id @default(cuid())
+  complianceQueryId   String
+  runId               String
+  // onDelete: Restrict — user deletion is blocked if gap feedback rows exist.
+  // ODPC traceability requirement: compliance gap evidence must not be silently
+  // destroyed on user deletion. Deactivate the user account instead.
+  userId              String
+  organizationId      String
+  question            String
+  suggestedDocument   String?
+  notes               String?
+  status              String    @default("open") // "open" | "triaged" | "resolved"
+  statusChangedAt     DateTime? // set when status transitions; used to notify users of resolution
+  createdAt           DateTime  @default(now())
+
+  complianceQuery     ComplianceQuery    @relation(fields: [complianceQueryId], references: [id], onDelete: Cascade)
+  run                 ComplianceQueryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  user                User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization        Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([complianceQueryId])
+  @@index([runId])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([createdAt])
 }

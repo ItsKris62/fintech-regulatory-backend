@@ -16,6 +16,9 @@ import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
 import { incrementTrialUsage } from '@/modules/trial';
 import { prisma } from '@/lib/prisma/client';
+import { runOrchestrator } from '@/modules/compliance/orchestrator';
+import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
+import { appConfig } from '@/config/app.config';
 import { gapAnalysisExportService } from '@/services/gap-analysis-export.service';
 import { checklistExportService } from '@/services/checklist-export.service';
 import { storageService } from '@/lib/storage/storage.service';
@@ -55,12 +58,13 @@ export const complianceRouter = router({
           minScore: 0.7,
         });
 
-        // Generate answer with AI using RAG context
+        // Generate answer grounded in retrieved evidence
         const answer = await ctx.aiService.answerComplianceQuery({
           question: input.question,
           organizationType: input.organizationType,
           industry: input.industry,
           context: input.context,
+          ragContext: ragContext.context || undefined,
         });
 
         // Build RAG source citations for JSON storage.
@@ -105,12 +109,18 @@ export const complianceRouter = router({
               model: answer.model,
               tokensUsed: answer.inputTokens + answer.outputTokens,
               ragSources: ragContext.results.length,
+              ragContextChars: ragContext.context?.length ?? 0,
+              grounded: ragContext.results.length > 0,
+              cacheBypassed: ragContext.results.length > 0,
               organizationType: input.organizationType,
               industry: input.industry,
               context: input.context,
             },
           },
         });
+
+        const agenticComplexityLevel =
+          PLAN_ENTITLEMENTS[ctx.plan ?? 'REGULATOR'].agenticComplexityLevel;
 
         // Track token usage for free trial users (fire-and-forget, non-fatal).
         if (ctx.plan === 'FREE_TRIAL') {
@@ -119,21 +129,93 @@ export const complianceRouter = router({
 
         const duration = Date.now() - startTime;
 
+        // ── Orchestrated path ────────────────────────────────────────────────────
+        if (appConfig.features.orchestratorEnabled) {
+          await runOrchestrator({
+            complianceQueryId:      query.id,
+            question:               input.question,
+            answer:                 answer.content,
+            ragResults:             ragContext.results,
+            agenticComplexityLevel,
+            shadow:                 false,
+          });
+
+          const run = await prisma.complianceQueryRun.findFirst({
+            where:   { complianceQueryId: query.id },
+            orderBy: { createdAt: 'desc' },
+            select:  { id: true, route: true, grounded: true, verifierVerdict: true, acceptedChunkIds: true },
+          });
+
+          const route = run?.route ?? 'simple';
+          const grounded = run?.grounded ?? false;
+          const accepted = Array.isArray(run?.acceptedChunkIds) ? (run!.acceptedChunkIds as unknown[]).length : 0;
+          const abstained = route === 'abstain' || accepted === 0 || run?.verifierVerdict === 'FAIL_ABSTAIN';
+          // Confidence derived from verifier verdict. null when no run row (double-failure edge case).
+          const confidence =
+            run?.verifierVerdict === 'PASS'    ? 0.9 :
+            run?.verifierVerdict === 'PARTIAL' ? 0.7 :
+            null;
+
+          logger.info({
+            type:            'compliance_query_success',
+            userId:          ctx.user!.id,
+            queryId:         query.id,
+            duration,
+            tokensUsed:      answer.inputTokens + answer.outputTokens,
+            citationsCount:  queryCitations.length,
+            route,
+            grounded,
+            abstained,
+            confidence,
+            orchestrated:    true,
+          });
+
+          return {
+            queryId:            query.id,
+            answer:             answer.content,
+            citations:          queryCitations,
+            confidence,
+            suggestedFollowUps: [],
+            route,
+            grounded,
+            abstained,
+            // null only on double-failure (orchestrator threw AND error-row write failed).
+            // Frontend must disable the reportGap affordance when runId is null.
+            runId:              run?.id ?? null,
+          };
+        }
+
+        // ── Legacy grounded query path ────────────────────────────────────────────
+        // Shadow orchestrator is fire-and-forget: never blocks the user response.
+        runOrchestrator({
+          complianceQueryId:      query.id,
+          question:               input.question,
+          answer:                 answer.content,
+          ragResults:             ragContext.results,
+          agenticComplexityLevel,
+          shadow:                 true,
+        }).catch(() => {});
+
         logger.info({
-          type: 'compliance_query_success',
-          userId: ctx.user!.id,
-          queryId: query.id,
+          type:           'compliance_query_success',
+          userId:         ctx.user!.id,
+          queryId:        query.id,
           duration,
-          tokensUsed: answer.inputTokens + answer.outputTokens,
+          tokensUsed:     answer.inputTokens + answer.outputTokens,
           citationsCount: queryCitations.length,
+          orchestrated:   false,
         });
 
         return {
-          queryId: query.id,
-          answer: answer.content,
-          citations: queryCitations,
-          confidence: null,
+          queryId:            query.id,
+          answer:             answer.content,
+          citations:          queryCitations,
+          confidence:         null,
           suggestedFollowUps: [],
+          route:              null as string | null,
+          grounded:           ragContext.results.length > 0,
+          abstained:          false,
+          runId:              null as string | null,
         };
       } catch (error: any) {
         const duration = Date.now() - startTime;
@@ -194,11 +276,12 @@ export const complianceRouter = router({
           minScore: 0.7,
         });
 
-        // Generate answer with context from original query
+        // Generate answer grounded in retrieved evidence and original query context
         const answer = await ctx.aiService.answerFollowUpQuery(
           originalQuery.query,
           (originalQuery as any).answer || originalQuery.summary || '',
-          input.question
+          input.question,
+          ragContext.context || undefined,
         );
 
         // Same citation pattern as the primary query mutation:
@@ -763,9 +846,9 @@ export const complianceRouter = router({
    * Submit or toggle feedback (thumbs up / thumbs down) on a compliance query.
    *
    * Toggle semantics (server-side):
-   *  - No existing feedback  �' create with given rating
-   *  - Existing same rating  �' delete (toggle off), return null
-   *  - Existing diff rating  �' update to new rating
+   *  - No existing feedback  �' create with given rating
+   *  - Existing same rating  �' delete (toggle off), return null
+   *  - Existing diff rating  �' update to new rating
    *
    * @protected
    */
@@ -801,7 +884,7 @@ export const complianceRouter = router({
       let newRating: 'up' | 'down' | null;
 
       if (existing && existing.rating === input.rating) {
-        // Same rating clicked again �' toggle off
+        // Same rating clicked again �' toggle off
         await ctx.prisma.queryFeedback.delete({
           where: { queryId_userId: { queryId: input.queryId, userId } },
         });
@@ -851,8 +934,8 @@ export const complianceRouter = router({
   /**
    * Toggle save/bookmark status for a compliance query response.
    *
-   *  - Not saved �' save it, return { saved: true }
-   *  - Already saved �' unsave it, return { saved: false }
+   *  - Not saved �' save it, return { saved: true }
+   *  - Already saved �' unsave it, return { saved: false }
    *
    * @protected
    */
@@ -982,7 +1065,7 @@ export const complianceRouter = router({
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
 
-      // Fire-and-forget audit log �" never block the response
+      // Fire-and-forget audit log �" never block the response
       prisma.auditLog.create({
         data: {
           userId,
@@ -1055,7 +1138,7 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Analysis results are malformed and cannot be exported' });
       }
 
-      // 5. Build DOCX buffer �" fetch org name separately (GapAnalysis has no direct org relation)
+      // 5. Build DOCX buffer �" fetch org name separately (GapAnalysis has no direct org relation)
       const orgName = analysis.organizationId
         ? (await prisma.organization.findUnique({ where: { id: analysis.organizationId }, select: { name: true } }))?.name
         : undefined;
@@ -1094,7 +1177,7 @@ export const complianceRouter = router({
 
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 
-      // 8b. Persist report tracking fields (fire-and-forget �" non-blocking)
+      // 8b. Persist report tracking fields (fire-and-forget �" non-blocking)
       prisma.gapAnalysis.update({
         where: { id: input.analysisId },
         data: { reportUrl: uploadResult.key, reportGeneratedAt: new Date() },
@@ -1140,7 +1223,7 @@ export const complianceRouter = router({
       const userId = ctx.user!.id;
       const orgId = ctx.orgMembership!.organizationId;
 
-      // 1. Fetch the checklist with items and user �" no direct org relation on Checklist model
+      // 1. Fetch the checklist with items and user �" no direct org relation on Checklist model
       const checklist = await prisma.checklist.findUnique({
         where: { id: input.checklistId },
         include: {
@@ -1267,7 +1350,7 @@ export const complianceRouter = router({
         userId,
       );
 
-      // 11. Signed URL �" 15-minute expiry
+      // 11. Signed URL �" 15-minute expiry
       const downloadUrl = await storageService.getDownloadUrl(uploadResult.key, 900, false, filename);
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 
@@ -1289,6 +1372,74 @@ export const complianceRouter = router({
       logger.info({ type: 'checklist_docx_exported', userId, checklistId: checklist.id, filename, r2Key: uploadResult.key });
 
       return { downloadUrl, expiresAt, fileName: filename };
+    }),
+
+  /**
+   * Report a corpus gap for a compliance query that returned no grounded evidence.
+   * Writes a CorpusGapFeedback row for the corpus expansion backlog.
+   *
+   * @protected — orgMemberProcedure; queryId ownership verified against ctx.user.id
+   */
+  reportGap: orgMemberProcedure
+    .input(z.object({
+      queryId:           z.string().cuid(),
+      // null when orchestrator double-failed (run row not written). Frontend must
+      // disable the "Tell us what's missing" button when runId is null.
+      runId:             z.string().cuid().nullable(),
+      suggestedDocument: z.string().max(500).optional(),
+      notes:             z.string().max(2000).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      // Verify the query belongs to the calling user (IDOR protection).
+      const complianceQuery = await prisma.complianceQuery.findUnique({
+        where:  { id: input.queryId },
+        select: { userId: true, query: true },
+      });
+
+      if (!complianceQuery || complianceQuery.userId !== ctx.user!.id) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Compliance query not found' });
+      }
+
+      // Null runId means the orchestrator double-failed — no run row was written.
+      // The frontend should have disabled the reportGap affordance in this case.
+      if (!input.runId) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'No run record available for this query' });
+      }
+
+      // Verify the run belongs to this query (prevents runId spoofing).
+      const run = await prisma.complianceQueryRun.findFirst({
+        where:  { id: input.runId, complianceQueryId: input.queryId },
+        select: { id: true },
+      });
+
+      if (!run) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Query run not found' });
+      }
+
+      const feedback = await prisma.corpusGapFeedback.create({
+        data: {
+          complianceQueryId: input.queryId,
+          runId:             input.runId,
+          userId:            ctx.user!.id,
+          organizationId:    ctx.orgMembership!.organizationId,
+          question:          complianceQuery.query,
+          suggestedDocument: input.suggestedDocument,
+          notes:             input.notes,
+        },
+        select: { id: true },
+      });
+
+      logger.info({
+        type:             'corpus_gap_feedback_submitted',
+        userId:           ctx.user!.id,
+        organizationId:   ctx.orgMembership!.organizationId,
+        queryId:          input.queryId,
+        runId:            input.runId,
+        feedbackId:       feedback.id,
+        hasSuggestedDoc:  !!input.suggestedDocument,
+      });
+
+      return { feedbackId: feedback.id };
     }),
 
 });

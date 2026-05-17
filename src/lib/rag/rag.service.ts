@@ -2,6 +2,9 @@ import { upsertVectors, queryVectors, deleteByFilter, IntegratedVectorRecord } f
 import { chunkDocument, chunkLegalAct, DocumentChunk, ChunkConfig } from './chunking';
 import { logger } from '@/utils/logger';
 import { hashString } from '@/utils/helpers';
+import { redis } from '@/lib/redis/client';
+
+const RAG_CTX_CACHE_TTL = 1800; // 30 minutes — caches Pinecone lookup, not AI answer
 
 /**
  * Document to index
@@ -421,6 +424,11 @@ export const ragService = new RAGService();
 
 /**
  * Helper: Search and get context for AI
+ *
+ * Retrieval results are cached in Redis for RAG_CTX_CACHE_TTL seconds to
+ * avoid hitting Pinecone on every grounded query for the same question.
+ * Only the Pinecone result is cached — the AI answer is never cached when
+ * ragContext is present, keeping answers fresh as the corpus evolves.
  */
 export async function searchAndGetContext(
   query: string,
@@ -430,11 +438,33 @@ export async function searchAndGetContext(
   results: SearchResult[];
   citations: string[];
 }> {
+  const { topK = 10, minScore = 0.7 } = options;
+  const cacheKey = `sheriabot:rag:ctx:v1:${hashString(`${query}|${topK}|${minScore}`)}`;
+
+  try {
+    const cached = await redis.get<string>(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached) as { context: string; results: SearchResult[]; citations: string[] };
+      logger.debug({ type: 'rag_ctx_cache_hit', cacheKey });
+      return parsed;
+    }
+  } catch {
+    // Cache read failure is non-fatal — proceed to Pinecone
+  }
+
   const results = await ragService.searchWithReranking(query, options);
   const context = ragService.getContextForPrompt(results);
   const citations = ragService.extractCitations(results);
+  const payload = { context, results, citations };
 
-  return { context, results, citations };
+  try {
+    await redis.set(cacheKey, JSON.stringify(payload), { ex: RAG_CTX_CACHE_TTL });
+    logger.debug({ type: 'rag_ctx_cache_set', cacheKey, ttl: RAG_CTX_CACHE_TTL });
+  } catch {
+    // Cache write failure is non-fatal
+  }
+
+  return payload;
 }
 
 /**

@@ -46,6 +46,8 @@ export interface AIStreamOptions extends AICompletionOptions {
   onChunk?: (chunk: string) => void;
   onComplete?: (result: AICompletionResult) => void;
   onError?: (error: Error) => void;
+  /** External abort signal. When fired (e.g. client disconnect), aborts the Anthropic stream. */
+  externalAbortSignal?: AbortSignal;
 }
 
 let anthropicClientCache: { apiKey: string; client: Anthropic } | null = null;
@@ -453,6 +455,20 @@ export async function stream(
     const overallTimeoutId = setTimeout(() => {
       controller.abort();
     }, overallTimeoutMs);
+
+    // Wire external abort signal (e.g. client disconnect) to the internal controller.
+    if (options.externalAbortSignal) {
+      if (options.externalAbortSignal.aborted) {
+        clearTimeout(overallTimeoutId);
+        controller.abort();
+      } else {
+        options.externalAbortSignal.addEventListener('abort', () => {
+          abortReason = 'Client disconnected — stream aborted';
+          clearTimeout(overallTimeoutId);
+          controller.abort();
+        }, { once: true });
+      }
+    }
 
     const streamResponse = await anthropic.messages.create(
       {

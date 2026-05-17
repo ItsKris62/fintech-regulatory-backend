@@ -239,6 +239,15 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2022',
   },
   {
+    fileName: 'kenya/Draft-CBK-Non-Deposit-Taking-Credit-Providers-Regulations.pdf',
+    title: 'Draft CBK Non-Deposit Taking Credit Providers Regulations',
+    source: 'Central Bank of Kenya',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'regulation',
+    version: 'Draft',
+  },
+  {
     // ✅ File present
     fileName: 'kenya/Draft-Regulatory-Sandbox-Policy-Guidance-Note-2018.pdf',
     title: 'CBK Draft Regulatory Sandbox Policy Guidance Note, 2018',

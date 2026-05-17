@@ -12,6 +12,7 @@ export interface ComplianceQueryParams {
   industry?: string;
   context?: string;
   urgency?: 'LOW' | 'MEDIUM' | 'HIGH';
+  ragContext?: string; // formatted retrieved evidence injected by the router; bypasses answer cache
 }
 
 /**
@@ -93,7 +94,7 @@ Example (note the blank lines surrounding the table):
  * Generate user prompt for compliance query
  */
 export function generateComplianceUserPrompt(params: ComplianceQueryParams): string {
-  const { question, organizationType, industry, context, urgency } = params;
+  const { question, organizationType, industry, context, urgency, ragContext } = params;
 
   let prompt = `## Compliance Question\n\n${question}\n`;
 
@@ -101,6 +102,10 @@ export function generateComplianceUserPrompt(params: ComplianceQueryParams): str
   if (industry)         prompt += `\n**Industry / Sector:** ${industry}`;
   if (urgency)          prompt += `\n**Urgency:** ${urgency}`;
   if (context)          prompt += `\n\n**Additional Context:**\n${context}`;
+
+  if (ragContext) {
+    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive claim. If a claim cannot be supported by the evidence below, say so explicitly rather than drawing on general knowledge.\n\n${ragContext}\n`;
+  }
 
   prompt += `
 
@@ -161,20 +166,26 @@ Cite specific laws and regulations throughout. Use authoritative, enterprise-gra
 export function generateFollowUpQueryPrompt(
   originalQuestion: string,
   originalAnswer: string,
-  followUpQuestion: string
+  followUpQuestion: string,
+  ragContext?: string
 ): string {
-  return `You previously answered a compliance question. The user has a follow-up question.
+  let prompt = `You previously answered a compliance question. The user has a follow-up question.
 
 ## Original Question
 ${originalQuestion}
 
 ## Your Previous Answer
-${originalAnswer}
+${originalAnswer}`;
 
-## Follow-up Question
-${followUpQuestion}
+  if (ragContext) {
+    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive claim. If a claim cannot be supported by the evidence below, say so explicitly rather than drawing on general knowledge.\n\n${ragContext}`;
+  }
+
+  prompt += `\n\n## Follow-up Question\n${followUpQuestion}
 
 Answer the follow-up question while building on the previous answer, maintaining consistency, and providing any additional legal citations needed. Use the same Markdown structure (## headings, tables where applicable) and authoritative compliance tone.`;
+
+  return prompt;
 }
 
 /**

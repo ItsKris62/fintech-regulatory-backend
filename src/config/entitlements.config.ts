@@ -99,6 +99,9 @@ export interface PlanEntitlementConfig {
   analytics: AnalyticsTier;
   knowledgeBaseAccess: KnowledgeBaseAccess;
 
+  /** Agentic orchestrator complexity level gated inside the orchestrator itself */
+  agenticComplexityLevel: 'simple' | 'complex';
+
   // Enterprise-only optional flags
   sso?: boolean;
   onPremise?: boolean;
@@ -141,6 +144,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     supportTier:           'community',
     analytics:             'none',
     knowledgeBaseAccess:   'read-only',
+    agenticComplexityLevel: 'simple',
   },
 
   /**
@@ -168,6 +172,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     supportTier:           'email-48hr',
     analytics:             'basic',
     knowledgeBaseAccess:   'full',
+    agenticComplexityLevel: 'simple',
   },
 
   /**
@@ -195,6 +200,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     supportTier:           'priority-24hr',
     analytics:             'advanced',
     knowledgeBaseAccess:   'full',
+    agenticComplexityLevel: 'simple',
   },
 
   /**
@@ -227,6 +233,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     slaGuarantee:          '99.9%',
     legalCorpusManagement: true,
     dedicatedAccountManager: true,
+    agenticComplexityLevel: 'complex',
   },
 
   /**
@@ -257,6 +264,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     supportTier:           'email-48hr',
     analytics:             'basic',
     knowledgeBaseAccess:   'full',
+    agenticComplexityLevel: 'simple',
   },
 };
 

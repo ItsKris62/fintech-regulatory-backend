@@ -56,6 +56,15 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
 
+  // Feature flags
+  // Set to 'true' to route compliance queries through the agentic orchestrator
+  // (router → grader → verifier). Default false — legacy grounded-query path is
+  // the fallback when disabled or when the orchestrator throws.
+  ORCHESTRATOR_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+
   // Cloudflare R2  -  public bucket (avatars, logos, branding)
   R2_PUBLIC_ACCESS_KEY_ID: z.string().min(1, 'R2 public bucket access key is required'),
   R2_PUBLIC_SECRET_ACCESS_KEY: z.string().min(1, 'R2 public bucket secret key is required'),
@@ -116,6 +125,11 @@ export const appConfig = {
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
   malwareScanEnabled: env.MALWARE_SCAN_ENABLED,
+
+  // Feature flags
+  features: {
+    orchestratorEnabled: env.ORCHESTRATOR_ENABLED,
+  },
 
   // Server
   port: env.PORT,

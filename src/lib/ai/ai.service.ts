@@ -389,15 +389,21 @@ export class AIService {
     const systemPrompt = generateComplianceSystemPrompt();
     const userPrompt = generateComplianceUserPrompt(params);
 
+    // Grounded answers skip the 24hr cache — injected ragContext makes each prompt unique.
+    // Larger output budget when context is present (prompt is significantly longer).
+    // See KNOWN_ISSUES.md §C4 for the content-hashed retrieval-cache design.
+    const maxTokens = params.ragContext ? 3000 : aiConfig.parameters.queryMaxTokens;
+    const cacheTtl = params.ragContext ? undefined : aiConfig.caching.ttl.complianceQuery;
+
     const result = await complete(
       {
         prompt: userPrompt,
         systemPrompt,
-        maxTokens: aiConfig.parameters.queryMaxTokens,
+        maxTokens,
         temperature: aiConfig.parameters.queryTemperature,
       },
       'query',
-      aiConfig.caching.ttl.complianceQuery // Cache for 24 hours
+      cacheTtl
     );
 
     const sections = extractAnswerSections(result.content);
@@ -406,6 +412,7 @@ export class AIService {
       type: 'compliance_query_complete',
       cost: result.cost,
       citationCount: sections.citations.length,
+      grounded: !!params.ragContext,
     });
 
     return {
@@ -423,24 +430,29 @@ export class AIService {
   async answerFollowUpQuery(
     originalQuestion: string,
     originalAnswer: string,
-    followUpQuestion: string
+    followUpQuestion: string,
+    ragContext?: string
   ): Promise<ComplianceQueryResult> {
     logger.info({
       type: 'followup_query_started',
+      grounded: !!ragContext,
     });
 
     const systemPrompt = generateComplianceSystemPrompt();
     const userPrompt = generateFollowUpQueryPrompt(
       originalQuestion,
       originalAnswer,
-      followUpQuestion
+      followUpQuestion,
+      ragContext
     );
+
+    const maxTokens = ragContext ? 3000 : aiConfig.parameters.queryMaxTokens;
 
     const result = await complete(
       {
         prompt: userPrompt,
         systemPrompt,
-        maxTokens: aiConfig.parameters.queryMaxTokens,
+        maxTokens,
         temperature: aiConfig.parameters.queryTemperature,
       },
       'query'

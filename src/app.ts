@@ -17,6 +17,7 @@ import { resendWebhookService } from './lib/resend/webhook.service';
 import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
 import { alertPubSub } from './lib/redis/pubsub';
 import { consumeAlertStreamToken } from './lib/alerts/stream-token';
+import { registerComplianceStreamRoute } from './routes/compliance-stream.route';
 
 /**
  * Zod schema for IntaSend webhook payloads.
@@ -431,6 +432,12 @@ export async function buildApp(): Promise<FastifyInstance> {
       logger.info({ type: 'alert_sse_connected', userId });
     },
   );
+
+  // -- Compliance SSE stream -------------------------------------------------
+  // POST /api/compliance/stream — streams Claude tokens as text/event-stream.
+  // Auth: Bearer token (same Supabase JWT as tRPC). Does NOT use EventSource
+  // query-param tokens because fetch() streaming supports custom headers.
+  await registerComplianceStreamRoute(app, allowedOrigins);
 
   // -- Catch-all error handler ----------------------------------------------
   app.setErrorHandler<Error>((error, request, reply) => {
