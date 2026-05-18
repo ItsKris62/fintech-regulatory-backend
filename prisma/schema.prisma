@@ -911,6 +911,8 @@ model RegulatoryDocument {
   documentType    String
   effectiveDate   DateTime?
   version         String?
+  authorityStatus AuthorityStatus            @default(IN_FORCE)
+  isBinding       Boolean                    @default(true)
   storageKey      String
   status          RegulatoryDocumentStatus   @default(PENDING)
   checksum        String?
@@ -925,6 +927,7 @@ model RegulatoryDocument {
   @@index([status])
   @@index([category])
   @@index([jurisdiction])
+  @@index([authorityStatus])
   @@index([checksum])
 }
 
@@ -957,6 +960,13 @@ enum RegulatoryDocumentStatus {
   ACTIVE
   FAILED
   SUPERSEDED
+}
+
+enum AuthorityStatus {
+  DRAFT
+  IN_FORCE
+  SUPERSEDED
+  CONSULTATION
 }
 
 // ============================================================================

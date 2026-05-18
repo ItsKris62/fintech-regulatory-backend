@@ -123,7 +123,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
   },
   {
     // ✅ File present
-    fileName: 'kenya/ODPC---Guidance-Note-on-Processing-by-MSMEs.pdf',
+    fileName: 'kenya/ODPC-\u2013-Guidance-Note-on-Processing-by-MSMEs.pdf',
     title: 'ODPC Guidance Note on Data Processing by MSMEs',
     source: 'Office of Data Protection Commissioner',
     category: 'DATA_PROTECTION' as DocumentCategory,
@@ -219,6 +219,30 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'act',
   },
   {
+    fileName: 'kenya/Draft-Virtual-Asset-Service-Providers-Regulations-2026.pdf',
+    title: 'Draft Virtual Asset Service Providers Regulations, 2026',
+    source: 'National Treasury and Economic Planning',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'regulation',
+    effectiveDate: new Date('2026-01-01'),
+    version: '2026 (Draft)',
+    authorityStatus: 'DRAFT',
+    isBinding: false,
+  },
+  {
+    fileName: 'kenya/Draft Consumer Protection Framework - March 2026.pdf',
+    title: 'Financial Consumer Protection Framework for Kenya (Draft), March 2026',
+    source: 'Kenya Financial Sector Regulators',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'framework',
+    effectiveDate: new Date('2026-03-01'),
+    version: 'March 2026 (Draft)',
+    authorityStatus: 'DRAFT',
+    isBinding: false,
+  },
+  {
     // ✅ File present
     fileName: 'kenya/PRUDENTIAL-GUIDELINES.pdf',
     title: 'CBK Prudential Guidelines for Institutions Licensed under the Banking Act',
@@ -246,6 +270,8 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     jurisdiction: 'Kenya',
     documentType: 'regulation',
     version: 'Draft',
+    authorityStatus: 'DRAFT',
+    isBinding: false,
   },
   {
     // ✅ File present
@@ -257,6 +283,8 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'guideline',
     effectiveDate: new Date('2018-01-01'),
     version: '2018',
+    authorityStatus: 'DRAFT',
+    isBinding: false,
   },
   {
     // ✅ File present
@@ -279,6 +307,8 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     documentType: 'regulation',
     effectiveDate: new Date('2024-01-01'),
     version: '2024 (Draft)',
+    authorityStatus: 'DRAFT',
+    isBinding: false,
   },
   {
     // ✅ File present
@@ -342,6 +372,31 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     category: 'FINTECH_REGULATION' as DocumentCategory,
     jurisdiction: 'Kenya',
     documentType: 'regulation',
+  },
+
+  {
+    fileName: 'kenya/Finance-Bill-2026.pdf',
+    title: 'Finance Bill, 2026',
+    source: 'Parliament of Kenya',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'bill',
+    effectiveDate: new Date('2026-01-01'),
+    version: '2026 (Bill)',
+    authorityStatus: 'DRAFT',
+    isBinding: false,
+  },
+  {
+    fileName: 'kenya/Draft-Green-Fiscal-Incentives-Policy-Framework.pdf',
+    title: 'Draft National Green Fiscal Incentives Policy Framework',
+    source: 'National Treasury and Economic Planning',
+    category: 'FINTECH_REGULATION' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'framework',
+    effectiveDate: new Date('2022-12-01'),
+    version: 'December 2022 (Draft)',
+    authorityStatus: 'DRAFT',
+    isBinding: false,
   },
 
   // -- Kenya: Cybersecurity (Additional) ------------------------------------
@@ -522,6 +577,19 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     version: '2024',
   },
 
+  {
+    fileName: 'kenya/Kenya AI Strategy 2025 - 2030.pdf',
+    title: 'Kenya Artificial Intelligence Strategy 2025-2030',
+    source: 'Government of Kenya',
+    category: 'CYBERSECURITY' as DocumentCategory,
+    jurisdiction: 'Kenya',
+    documentType: 'strategy',
+    effectiveDate: new Date('2025-03-01'),
+    version: '2025-2030',
+    authorityStatus: 'IN_FORCE',
+    isBinding: false,
+  },
+
   // -- International: AI Governance -----------------------------------------
 
   {
@@ -692,6 +760,9 @@ async function main(): Promise<void> {
       documentType: entry.documentType,
       effectiveDate: entry.effectiveDate,
       version: entry.version,
+      authorityStatus: entry.authorityStatus ?? 'IN_FORCE',
+      isBinding: entry.isBinding ?? (entry.authorityStatus ?? 'IN_FORCE') === 'IN_FORCE',
+      supersedesDocumentId: entry.supersedesDocumentId,
     };
 
     try {

@@ -361,6 +361,10 @@ export async function registerComplianceStreamRoute(
           textSnippet:   string;
           score:         number;
           citation:      string | null;
+          authorityStatus: string;
+          isBinding:     boolean;
+          source:        string | null;
+          version:       string | null;
         };
 
         let route: string             = 'simple';
@@ -419,6 +423,10 @@ export async function registerComplianceStreamRoute(
                 textSnippet:   match ? ((match as any).chunkText || '').slice(0, 500) : '',
                 score:         (match as any)?.score ?? 0,
                 citation:      (match as any)?.citation ?? null,
+                authorityStatus: (match as any)?.authorityStatus ?? 'IN_FORCE',
+                isBinding:     (match as any)?.isBinding ?? true,
+                source:        (match as any)?.source ?? null,
+                version:       (match as any)?.version ?? null,
               };
             });
           }
@@ -432,6 +440,10 @@ export async function registerComplianceStreamRoute(
             textSnippet:   (source.chunkText || '').slice(0, 500),
             score:         source.score ?? 0,
             citation:      source.citation ?? null,
+            authorityStatus: source.authorityStatus ?? 'IN_FORCE',
+            isBinding:     source.isBinding ?? true,
+            source:        source.source ?? null,
+            version:       source.version ?? null,
           }));
           runOrchestrator({
             complianceQueryId:      query.id,

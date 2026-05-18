@@ -8,6 +8,7 @@
 *.pem
 *.key
 *.cert
+secrets/
 
 # Dependencies
 node_modules/

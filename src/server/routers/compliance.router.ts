@@ -83,6 +83,10 @@ export const complianceRouter = router({
           textSnippet: (source.chunkText || '').slice(0, 500),
           score: source.score ?? 0,
           citation: source.citation ?? null,
+          authorityStatus: source.authorityStatus ?? 'IN_FORCE',
+          isBinding: source.isBinding ?? true,
+          source: source.source ?? null,
+          version: source.version ?? null,
         }));
 
         // Guard: warn if RAG chunks are missing documentIds (ingestion gap)
@@ -294,6 +298,10 @@ export const complianceRouter = router({
           textSnippet: (source.chunkText || '').slice(0, 500),
           score: source.score ?? 0,
           citation: source.citation ?? null,
+          authorityStatus: source.authorityStatus ?? 'IN_FORCE',
+          isBinding: source.isBinding ?? true,
+          source: source.source ?? null,
+          version: source.version ?? null,
         }));
 
         // Save follow-up query with citations as JSON
@@ -382,6 +390,10 @@ export const complianceRouter = router({
             section: r.section,
             score: r.score,
             documentId: r.documentId,
+            authorityStatus: r.authorityStatus ?? 'IN_FORCE',
+            isBinding: r.isBinding ?? true,
+            sourceAuthority: r.source ?? null,
+            version: r.version ?? null,
           })),
           summary,
           totalResults: results.length,

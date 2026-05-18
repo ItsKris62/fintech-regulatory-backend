@@ -213,6 +213,13 @@ export const checklistRouter = router({
     .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS, { deferIncrement: true }))
     .input(generateChecklistAsyncInputSchema)
     .mutation(async ({ input, ctx }) => {
+      if (ctx.user!.role === 'REGULATOR') {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Regulators cannot generate compliance checklists',
+        });
+      }
+
       const orgId = ctx.orgMembership!.organizationId;
 
       // B7.3 (TD-009): Redis dedup lock — prevents double-submit from starting two

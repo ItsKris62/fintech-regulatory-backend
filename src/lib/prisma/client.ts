@@ -305,22 +305,6 @@ export async function getDatabaseStats(): Promise<{
 }
 
 /**
- * Execute raw SQL query with proper typing
- */
-export async function executeRawQuery<T = any>(query: string, params: any[] = []): Promise<T[]> {
-  try {
-    return await prisma.$queryRawUnsafe<T[]>(query, ...params);
-  } catch (error: any) {
-    logger.error({
-      type: 'raw_query_error',
-      query,
-      error: error.message,
-    });
-    throw error;
-  }
-}
-
-/**
  * Transaction helper with automatic retry on serialization errors
  */
 export async function transaction<T>(

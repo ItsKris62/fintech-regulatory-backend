@@ -36,6 +36,9 @@ export interface DocumentIngestionInput {
   documentType: string;
   effectiveDate?: Date;
   version?: string;
+  authorityStatus?: 'DRAFT' | 'IN_FORCE' | 'SUPERSEDED' | 'CONSULTATION';
+  isBinding?: boolean;
+  supersedesDocumentId?: string;
 }
 
 export interface IngestionResult {
@@ -108,6 +111,12 @@ function safeSlug(input: string): string {
 
 function getFileExt(fileName: string): string {
   return path.extname(fileName).replace('.', '').toLowerCase()
+}
+
+function defaultBindingForAuthority(
+  authorityStatus: DocumentIngestionInput['authorityStatus'] = 'IN_FORCE'
+): boolean {
+  return authorityStatus === 'IN_FORCE'
 }
 
 function assertFileReadable(filePath: string): { size: number } {
@@ -297,6 +306,11 @@ async function processDocument(
           ? new Date(doc.effectiveDate).getFullYear()
           : undefined,
         regulatoryArea: doc.category,
+        authorityStatus: doc.authorityStatus ?? 'IN_FORCE',
+        isBinding: doc.isBinding ?? true,
+        source: doc.source,
+        version: doc.version ?? undefined,
+        corpusStatus: 'ACTIVE',
       }
     })
 
@@ -355,6 +369,22 @@ export class DocumentIngestionService {
     })
 
     if (existing) {
+      const nextAuthorityStatus = input.authorityStatus ?? 'IN_FORCE'
+      const nextIsBinding = input.isBinding ?? defaultBindingForAuthority(nextAuthorityStatus)
+
+      if (
+        existing.authorityStatus !== nextAuthorityStatus ||
+        existing.isBinding !== nextIsBinding ||
+        (input.version !== undefined && existing.version !== input.version)
+      ) {
+        await this.updateDocumentAuthority(existing.id, {
+          authorityStatus: nextAuthorityStatus,
+          isBinding: nextIsBinding,
+          version: input.version,
+          effectiveDate: input.effectiveDate,
+        })
+      }
+
       return {
         documentId: existing.id,
         chunkCount: existing.chunkCount ?? 0,
@@ -381,6 +411,8 @@ export class DocumentIngestionService {
         documentType: input.documentType,
         effectiveDate: input.effectiveDate,
         version: input.version,
+        authorityStatus: input.authorityStatus ?? 'IN_FORCE',
+        isBinding: input.isBinding ?? defaultBindingForAuthority(input.authorityStatus),
         fileName,
         fileType: fileExt,
         storageKey,
@@ -415,6 +447,22 @@ export class DocumentIngestionService {
         })
       })
 
+      if (input.supersedesDocumentId) {
+        try {
+          await this.updateDocumentAuthority(input.supersedesDocumentId, {
+            authorityStatus: 'SUPERSEDED',
+            isBinding: false,
+          })
+        } catch (err: any) {
+          logger.warn({
+            type: 'regulatory_document_supersede_warning',
+            newDocumentId: doc.id,
+            supersedesDocumentId: input.supersedesDocumentId,
+            error: err?.message,
+          })
+        }
+      }
+
       return {
         documentId: doc.id,
         chunkCount: processing.chunkCount,
@@ -432,6 +480,54 @@ export class DocumentIngestionService {
       })
 
       throw error
+    }
+  }
+
+  async updateDocumentAuthority(
+    documentId: string,
+    input: {
+      authorityStatus: 'DRAFT' | 'IN_FORCE' | 'SUPERSEDED' | 'CONSULTATION';
+      isBinding?: boolean;
+      version?: string;
+      effectiveDate?: Date;
+    }
+  ): Promise<void> {
+    const doc = await (prisma as any).regulatoryDocument.update({
+      where: { id: documentId },
+      data: {
+        authorityStatus: input.authorityStatus,
+        isBinding: input.isBinding ?? input.authorityStatus === 'IN_FORCE',
+        version: input.version,
+        effectiveDate: input.effectiveDate,
+        status: input.authorityStatus === 'SUPERSEDED' ? 'SUPERSEDED' : undefined,
+      },
+      include: { chunks: true },
+    })
+
+    if (!doc.chunks?.length) return
+
+    const records: IntegratedVectorRecord[] = doc.chunks.map((chunk: any) => ({
+      id: chunk.pineconeId,
+      chunk_text: chunk.content,
+      documentId: doc.id,
+      documentTitle: doc.title,
+      documentType: doc.documentType,
+      chunkIndex: chunk.chunkIndex,
+      section: chunk.section ?? undefined,
+      jurisdiction: doc.jurisdiction,
+      category: doc.category,
+      year: doc.effectiveDate ? new Date(doc.effectiveDate).getFullYear() : undefined,
+      regulatoryArea: doc.category,
+      authorityStatus: doc.authorityStatus,
+      isBinding: doc.isBinding,
+      source: doc.source,
+      version: doc.version ?? undefined,
+      corpusStatus: doc.status,
+    }))
+
+    for (let i = 0; i < records.length; i += VECTOR_BATCH_SIZE) {
+      const batch = records.slice(i, i + VECTOR_BATCH_SIZE)
+      await withRetry(() => upsertVectors(batch), 'pinecone_authority_metadata_upsert')
     }
   }
 }

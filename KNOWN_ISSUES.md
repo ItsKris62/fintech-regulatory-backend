@@ -600,6 +600,87 @@ done       { route: "abstain", abstained: true, citations: [], confidence: null 
 | Batch 2.5 | payment.router.ts scope clarification + orgMemberProcedure migration | **COMPLETE** |
 | Batch 3 | Audit logging (AuditLog writes, 100% denials / 10% grant sample); trust page; incident runbook | **COMPLETE** |
 | Stage 2 | Compliance orchestrator + SSE streaming + frontend rendering | **CODE COMPLETE — cutover pending** |
+| Sprint 1 | Authorization hardening, dead-code removal, secret-handling controls | **COMPLETE — 2026-05-18** |
+
+---
+
+## Sprint 1 — Authorization Hardening & Code Cleanup (2026-05-18)
+
+### BE-O-015 — updateMemberRole: role change not reflected until session cache expires [RESOLVED — Sprint 1 Batch 1]
+
+| Field | Value |
+|-------|-------|
+| Severity | High |
+| CVE class | Stale session role — Broken Access Control (CWE-284) |
+| Status | **Resolved** |
+| Resolved in | Sprint 1 Batch 1 (2026-05-18) |
+
+**Root cause:** `updateMemberRole` writes the new role to `User.role` (UserRole enum) via
+`prisma.user.update`, but does not invalidate the `user:session:{supabaseAuthId}` cache
+(TTL 3600s). The cache holds the full Prisma `User` object including `.role`. Until the TTL
+expires, `ctx.user.role` on subsequent requests reflects the OLD role — meaning a demotion
+would not take effect for up to one hour, and a promotion (e.g., to ADMIN) would also not
+be visible to the promoted user until expiry.
+
+A secondary gap: the `OrganizationMember` membership cache (`sheriabot:orgmem:{userId}:{orgId}`,
+TTL 60s) was also not invalidated after the `User.role` change, though since
+`updateMemberRole` does not modify `OrganizationMember.role` (a separate `MemberRole` enum:
+`OWNER|ADMIN|MEMBER`), this is a defensive eviction rather than a correctness fix.
+
+**Note on the Phase A proposed fix:** Phase A proposed `organizationMember.updateMany` to
+sync `OrganizationMember.role` with `User.role`. This was not implemented because the two
+role enums are semantically orthogonal — `UserRole` (`REGULATOR|STARTUP|ENTERPRISE|ADMIN`)
+describes the user's platform-level identity type; `MemberRole` (`OWNER|ADMIN|MEMBER`)
+describes their position within a specific organization. Direct assignment would cause DB
+errors for all non-ADMIN values and incorrect semantics for ADMIN.
+
+**Fix applied:**
+- Added `supabaseAuthId: true` to the `findUnique` select in `updateMemberRole`.
+- After `prisma.user.update` succeeds: `redis.del(`user:session:${targetUser.supabaseAuthId}`)`.
+- Also evicts `sheriabot:orgmem:{userId}:{orgId}` defensively.
+- File: `src/server/routers/organization.router.ts`.
+
+---
+
+### BE-D-003 — executeRawQuery: $queryRawUnsafe wrapper with SQL injection surface [RESOLVED — Sprint 1 Batch 3]
+
+| Field | Value |
+|-------|-------|
+| Severity | High (potential injection surface — zero call sites confirmed) |
+| Status | **Resolved — function deleted** |
+| Resolved in | Sprint 1 Batch 3 (2026-05-18) |
+
+**Root cause:** `executeRawQuery<T>(query: string, params: any[])` in
+`src/lib/prisma/client.ts` wrapped `prisma.$queryRawUnsafe` which executes an
+arbitrary caller-supplied SQL string. The function also logged the raw `query` string,
+creating a secondary PII/secret-in-logs risk for any query containing bound parameter
+values. Zero confirmed call sites (grep of full codebase + test directories confirmed
+before deletion).
+
+**Fix:** Function and JSDoc comment deleted in full. Correct replacement for parameterised
+raw SQL is Prisma's `$queryRaw` tagged template literal. `$queryRawUnsafe` usage is banned
+— see `docs/security/secret-handling.md`.
+
+---
+
+### BE-F-005 — generateChecklistAsync: missing REGULATOR role guard [RESOLVED — Sprint 1 Batch 2]
+
+| Field | Value |
+|-------|-------|
+| Severity | Low (mitigated by plan middleware, defense-in-depth gap) |
+| Status | **Resolved** |
+| Resolved in | Sprint 1 Batch 2 (2026-05-18) |
+
+**Root cause:** The async checklist generation path (`generateChecklistAsync` in
+`src/server/routers/checklist.router.ts`) was missing the explicit REGULATOR role check
+present on the legacy synchronous `generateChecklist` procedure. The synchronous path
+blocks REGULATOR callers at line 44–50 with a FORBIDDEN TRPCError. The async path
+proceeded past plan-context and rate-limit middleware before the orgId was resolved,
+with no role check.
+
+**Fix:** Explicit guard inserted as the first statement in the `generateChecklistAsync`
+mutation body — before `orgId` resolution — matching the synchronous counterpart exactly.
+Frontend already handles FORBIDDEN response gracefully (toast.error, no change needed).
 
 ---
 
@@ -610,8 +691,9 @@ done       { route: "abstain", abstained: true, citations: [], confidence: null 
    ranks 1–10. Prerequisite for ODPC submission and pilot expansion.
 2. **RLS follow-up sprint** — proper Supabase Auth + Prisma service-role
    architecture design.
-3. **`organization.router.ts` cleanup** — 10 procedures + `updateMemberRole`
-   pattern fix.
+3. **`organization.router.ts` cleanup** — 10 remaining procedures still on
+   `protectedProcedure` that should be migrated to `orgMemberProcedure`. The
+   `updateMemberRole` cache-invalidation bug (BE-O-015) is now fixed.
 4. **`AuditLogV2` hash-chain delivery** — folded back into DPA 2019 sprint
    resumption.
 5. **Checklist null-org migration** — run the three-step plan from the runbook

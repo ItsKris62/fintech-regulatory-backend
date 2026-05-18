@@ -104,7 +104,7 @@ export function generateComplianceUserPrompt(params: ComplianceQueryParams): str
   if (context)          prompt += `\n\n**Additional Context:**\n${context}`;
 
   if (ragContext) {
-    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive claim. If a claim cannot be supported by the evidence below, say so explicitly rather than drawing on general knowledge.\n\n${ragContext}\n`;
+    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive claim. If a claim cannot be supported by the evidence below, say so explicitly rather than drawing on general knowledge.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every citation to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}\n`;
   }
 
   prompt += `
@@ -178,7 +178,7 @@ ${originalQuestion}
 ${originalAnswer}`;
 
   if (ragContext) {
-    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive claim. If a claim cannot be supported by the evidence below, say so explicitly rather than drawing on general knowledge.\n\n${ragContext}`;
+    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive claim. If a claim cannot be supported by the evidence below, say so explicitly rather than drawing on general knowledge.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every citation to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}`;
   }
 
   prompt += `\n\n## Follow-up Question\n${followUpQuestion}

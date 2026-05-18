@@ -21,6 +21,16 @@ export interface VectorMetadata {
   jurisdiction?: string;
   /** Prisma RegulatoryDocumentCategory value used by RAG filter auto-detection */
   category?: string;
+  /** Legal authority status for the source instrument (DRAFT, IN_FORCE, SUPERSEDED, CONSULTATION) */
+  authorityStatus?: string;
+  /** Whether the source instrument is currently binding law */
+  isBinding?: boolean;
+  /** Publisher/source label, e.g. Central Bank of Kenya */
+  source?: string;
+  /** Human version label from the corpus registry */
+  version?: string;
+  /** Corpus lifecycle status, e.g. ACTIVE or SUPERSEDED */
+  corpusStatus?: string;
 }
 
 /**

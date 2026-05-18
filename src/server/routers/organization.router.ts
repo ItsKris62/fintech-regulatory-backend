@@ -562,6 +562,7 @@ export const organizationRouter = router({
             role: true,
             email: true,
             fullName: true,
+            supabaseAuthId: true,
           },
         });
 
@@ -602,6 +603,18 @@ export const organizationRouter = router({
             organizationId: true,
           },
         });
+
+        // Invalidate caches so the new role is visible on the target user's next request.
+        // user:session cache holds the full Prisma User (including .role) for up to 1 h.
+        if (targetUser.supabaseAuthId) {
+          await redis.del(`user:session:${targetUser.supabaseAuthId}`).catch(() => {});
+        }
+        // Org-membership cache is keyed by Prisma userId; evict defensively.
+        if (targetUser.organizationId) {
+          await redis.del(
+            `sheriabot:orgmem:${input.userId}:${targetUser.organizationId}`
+          ).catch(() => {});
+        }
 
         logger.info({
           type: 'org_member_role_updated',

@@ -39,6 +39,10 @@ export interface ComplianceSource {
   documentTitle: string;
   section?: string;
   relevanceScore: number;
+  authorityStatus?: string;
+  isBinding?: boolean;
+  source?: string;
+  version?: string;
 }
 
 export interface EnhancedComplianceQueryOptions {
@@ -229,10 +233,19 @@ function formatRagContext(results: SearchResult[]): string {
   }
 
   const chunks = results.map((r, i) => {
+    const authorityStatus = r.authorityStatus ?? 'IN_FORCE';
+    const isNonBinding = r.isBinding === false;
     const lines: string[] = [];
     lines.push(`SOURCE ${i + 1}: ${r.documentTitle}`);
     if (r.section) lines.push(`Section: ${r.section}`);
     if (r.citation) lines.push(`Citations: ${r.citation}`);
+    if (r.source) lines.push(`Source: ${r.source}`);
+    if (r.version) lines.push(`Version: ${r.version}`);
+    lines.push(`Authority Status: ${authorityStatus}`);
+    lines.push(`Binding Law: ${isNonBinding ? 'No' : 'Yes'}`);
+    if (isNonBinding) {
+      lines.push('Important: This is non-binding draft/consultation/superseded material. Any citation to it must be labelled accordingly.');
+    }
     lines.push(`Relevance: ${(r.score * 100).toFixed(0)}%`);
     lines.push('');
     lines.push(r.chunkText);
@@ -248,6 +261,7 @@ ${chunks.join('\n\n---\n\n')}
 **INSTRUCTIONS FOR USING THE ABOVE CONTEXT:**
 - Cite each source you reference as: "According to [Document Title], [Section]..."
 - If your answer draws from multiple sources, note each one explicitly
+- If a source has Authority Status DRAFT, CONSULTATION, or SUPERSEDED, clearly label the citation as non-binding and do not describe it as current binding law
 - If the retrieved context does not fully address the query, state this clearly and supplement with your broader knowledge of Kenyan law
 - If the query is entirely outside the scope of the retrieved documents, say so`;
 }
@@ -363,6 +377,10 @@ export async function enhancedComplianceQuery(
     documentTitle: r.documentTitle,
     section: r.section,
     relevanceScore: parseFloat(r.score.toFixed(4)),
+    authorityStatus: r.authorityStatus,
+    isBinding: r.isBinding,
+    source: r.source,
+    version: r.version,
   }));
 
   const documentsFound = [...new Set(searchResults.map(r => r.documentTitle))];

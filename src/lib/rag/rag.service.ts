@@ -17,6 +17,10 @@ export interface DocumentToIndex {
   actName?: string;
   year?: number;
   regulatoryArea?: string;
+  authorityStatus?: string;
+  isBinding?: boolean;
+  source?: string;
+  version?: string;
   metadata?: Record<string, any>;
 }
 
@@ -31,6 +35,11 @@ export interface SearchResult {
   citation?: string;
   score: number;
   rank: number;
+  authorityStatus?: string;
+  isBinding?: boolean;
+  source?: string;
+  version?: string;
+  corpusStatus?: string;
 }
 
 /**
@@ -97,6 +106,10 @@ export class RAGService {
         actName: document.actName,
         year: document.year,
         regulatoryArea: document.regulatoryArea,
+        authorityStatus: document.authorityStatus ?? document.metadata?.authorityStatus,
+        isBinding: document.isBinding ?? document.metadata?.isBinding,
+        source: document.source ?? document.metadata?.source,
+        version: document.version ?? document.metadata?.version,
       }));
 
       // Upsert to Pinecone
@@ -200,6 +213,11 @@ export class RAGService {
           citation: result.metadata.citation,
           score: result.score,
           rank: index + 1,
+          authorityStatus: result.metadata.authorityStatus,
+          isBinding: result.metadata.isBinding,
+          source: result.metadata.source,
+          version: result.metadata.version,
+          corpusStatus: result.metadata.corpusStatus,
         }));
 
       const duration = Date.now() - startTime;
@@ -343,10 +361,17 @@ export class RAGService {
     let totalChars = 0;
 
     for (const result of selectedResults) {
+      const statusLabel = result.authorityStatus ?? 'IN_FORCE';
+      const bindingLabel = result.isBinding === false ? 'No' : 'Yes';
       const chunkContext = `
 [Document: ${result.documentTitle}]
 ${result.section ? `[Section: ${result.section}]` : ''}
 ${result.citation ? `[Citations: ${result.citation}]` : ''}
+${result.source ? `[Source: ${result.source}]` : ''}
+${result.version ? `[Version: ${result.version}]` : ''}
+[Authority Status: ${statusLabel}]
+[Binding Law: ${bindingLabel}]
+${result.isBinding === false ? '[Important: This source is non-binding draft/consultation/superseded material. Label any citation to it accordingly.]' : ''}
 
 ${result.chunkText}
 
@@ -439,7 +464,7 @@ export async function searchAndGetContext(
   citations: string[];
 }> {
   const { topK = 10, minScore = 0.7 } = options;
-  const cacheKey = `sheriabot:rag:ctx:v1:${hashString(`${query}|${topK}|${minScore}`)}`;
+  const cacheKey = `sheriabot:rag:ctx:v2:${hashString(`${query}|${topK}|${minScore}`)}`;
 
   try {
     const cached = await redis.get<string>(cacheKey);
