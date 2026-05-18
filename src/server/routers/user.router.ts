@@ -21,6 +21,8 @@ import { redis } from '@/lib/redis/client';
 import { rateLimiter } from '@/lib/redis/rate-limiter';
 import { supabaseAdmin } from '@/lib/supabase';
 import { logger } from '@/utils/logger';
+import { getSystemConfigNumber } from '@/lib/system-config';
+import { validatePassword } from '@/shared/validation/password.schema';
 
 const TOTP_PENDING_PREFIX = 'totp:pending:';
 const TOTP_PENDING_TTL = 600; // 10 minutes
@@ -227,6 +229,12 @@ export const userRouter = router({
             code: 'UNAUTHORIZED',
             message: 'Current password is incorrect',
           });
+        }
+
+        const passwordMinLength = await getSystemConfigNumber('passwordMinLength', 10);
+        const pwValidation = validatePassword(input.newPassword, user.email, { minLength: passwordMinLength });
+        if (!pwValidation.isValid) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: pwValidation.errors[0] });
         }
 
         // -- 3. Hash and save new password to Prisma -----------------------

@@ -12,7 +12,7 @@ import { z } from 'zod';
 export const getUploadUrlSchema = z.object({
   filename: z.string().min(1).max(255),
   fileType: z.string(),
-  fileSize: z.number().min(1).max(10485760), // 10MB max
+  fileSize: z.number().min(1).max(500 * 1024 * 1024),
   documentType: z.string().default('LEGAL_DOCUMENT'),
 });
 

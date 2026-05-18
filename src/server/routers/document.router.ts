@@ -16,6 +16,7 @@ import { documentIngestionService } from '@/lib/ingestion/document-processor';
 import { validateFileMagicBytes } from '@/utils/file-validation';
 import { storageConfig } from '@/config/storage.config';
 import { logger } from '@/utils/logger';
+import { getSystemConfigNumber } from '@/lib/system-config';
 
 /**
  * Document Router
@@ -48,11 +49,13 @@ export const documentRouter = router({
           });
         }
 
-        // Validate file size (10MB max)
-        if (input.fileSize > 10485760) {
+        const maxFileUploadMB = await getSystemConfigNumber('maxFileUploadMB', 50);
+        const maxFileUploadBytes = Math.round(maxFileUploadMB * 1024 * 1024);
+
+        if (input.fileSize > maxFileUploadBytes) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'File size exceeds maximum limit of 10MB',
+            message: `File size exceeds maximum limit of ${maxFileUploadMB}MB`,
           });
         }
 
@@ -74,6 +77,7 @@ export const documentRouter = router({
           input.fileType,
           undefined,
           storageKey,
+          input.fileSize,
         );
 
         logger.info({

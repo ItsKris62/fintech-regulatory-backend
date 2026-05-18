@@ -182,14 +182,20 @@ export async function createContext({
         });
 
         if (dbUser && dbUser.supabaseAuthId) {
+          const activeSession = await prisma.session.findFirst({
+            where: { userId: dbUser.id, expiresAt: { gte: new Date() } },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, expiresAt: true },
+          });
+
           user = {
             id: dbUser.id,
             email: dbUser.email,
             role: dbUser.role,
             organizationId: dbUser.organizationId ?? undefined,
             supabaseAuthId: dbUser.supabaseAuthId,
-            // sessionId is populated in the Redis cache by the login handler;
-            // it will be present from the next request once the cache is warm.
+            sessionId: activeSession?.id,
+            sessionExpiresAt: activeSession?.expiresAt.getTime(),
           };
 
           // Re-populate cache with well-formed JSON

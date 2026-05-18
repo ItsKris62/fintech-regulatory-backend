@@ -7,6 +7,7 @@ import {
   isStartup,
   isEnterprise,
   logged,
+  systemAvailable,
   requireOrgMembership,
   requireOrgMembershipRole,
 } from './middleware';
@@ -26,7 +27,7 @@ export const publicProcedure = baseProcedure.use(logged);
  * Protected Procedure
  * Requires a valid JWT. Guarantees `ctx.user` is present in downstream resolvers.
  */
-export const protectedProcedure = publicProcedure.use(isAuthenticated);
+export const protectedProcedure = publicProcedure.use(isAuthenticated).use(systemAvailable);
 
 // --- Role-Specific Procedures ---
 

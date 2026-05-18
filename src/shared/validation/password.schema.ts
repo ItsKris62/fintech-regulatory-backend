@@ -53,6 +53,10 @@ export interface PasswordValidationResult {
   };
 }
 
+export interface PasswordValidationOptions {
+  minLength?: number;
+}
+
 /**
  * Validate a password against all policy rules.
  * Returns granular per-rule results so the caller can decide what to surface.
@@ -62,12 +66,17 @@ export interface PasswordValidationResult {
  */
 export function validatePassword(
   password: string,
-  email?: string
+  email?: string,
+  options: PasswordValidationOptions = {}
 ): PasswordValidationResult {
   const errors: string[] = [];
+  const requiredMinLength = Math.max(
+    PASSWORD_MIN_LENGTH,
+    Math.min(options.minLength ?? PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH)
+  );
 
   // -- Structural checks ----------------------------------------------------
-  const minLength = password.length >= PASSWORD_MIN_LENGTH;
+  const minLength = password.length >= requiredMinLength;
   const maxLength = password.length <= PASSWORD_MAX_LENGTH;
   const hasUppercase = /[A-Z]/.test(password);
   const hasLowercase = /[a-z]/.test(password);
@@ -75,7 +84,7 @@ export function validatePassword(
   const hasSpecial = SPECIAL_CHAR_RE.test(password);
 
   if (!minLength)
-    errors.push(`Password must be at least ${PASSWORD_MIN_LENGTH} characters long. You currently have ${password.length}.`);
+    errors.push(`Password must be at least ${requiredMinLength} characters long. You currently have ${password.length}.`);
   if (!maxLength)
     errors.push(`Password must be no more than ${PASSWORD_MAX_LENGTH} characters.`);
   if (!hasUppercase)

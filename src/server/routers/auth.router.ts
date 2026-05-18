@@ -21,6 +21,8 @@ import { logger } from '@/utils/logger';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
 import { SESSION_CONFIG, lastSeenKey, sessionStartKey } from '@/config/session';
 import { revokeToken, revokeAllUserTokens } from '@/utils/token-revocation';
+import { loadSystemConfig } from '@/lib/system-config';
+import { subscriptionTierToPlanOrFree } from '@/utils/plan-mapping';
 
 import {
   isFreeEmailDomain,
@@ -71,6 +73,13 @@ function parseDeviceLabel(userAgent: string | undefined): string {
   return 'Unknown Device';
 }
 
+function resolveSessionTimeoutSeconds(sessionTimeoutHours: unknown): number {
+  const hours = Number(sessionTimeoutHours);
+  const fallbackHours = SESSION_CONFIG.ABSOLUTE_TIMEOUT_SECONDS / 3600;
+  const resolvedHours = Number.isFinite(hours) && hours > 0 ? hours : fallbackHours;
+  return Math.round(Math.min(Math.max(resolvedHours, 1), 720) * 3600);
+}
+
 /**
  * Enforce a rate limit result  -  throws TRPCError(TOO_MANY_REQUESTS) when
  * the limit is exceeded so the router's existing catch blocks handle it cleanly.
@@ -105,8 +114,13 @@ export const authRouter = router({
 
         logger.info({ type: 'auth_register_attempt', email: maskEmail(input.email), role: input.role });
 
+        const systemConfig = await loadSystemConfig();
+        const requireEmailVerification = systemConfig.requireEmailVerification !== false;
+
         // -- Password policy enforcement (before any DB lookups) ----------
-        const pwValidation = validatePassword(input.password, input.email);
+        const pwValidation = validatePassword(input.password, input.email, {
+          minLength: Number(systemConfig.passwordMinLength ?? 10),
+        });
         if (!pwValidation.isValid) {
           if (!pwValidation.rules.notCommon) {
             logger.warn({
@@ -131,11 +145,18 @@ export const authRouter = router({
           });
         }
 
+        const invitation = await findValidInvitation(input.email);
+
+        if (!systemConfig.allowNewRegistrations && !invitation) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'New registrations are temporarily closed. Please contact support.',
+          });
+        }
+
         if (input.role !== 'REGULATOR' && isFreeEmailDomain(input.email)) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: FREE_EMAIL_ERROR_MESSAGE });
         }
-
-        const invitation = await findValidInvitation(input.email);
 
         if (input.role === 'REGULATOR' && !invitation) {
           const domainCheck = await isRegulatorDomain(input.email);
@@ -156,47 +177,81 @@ export const authRouter = router({
           ? (invitation.role as 'REGULATOR' | 'STARTUP' | 'ENTERPRISE')
           : input.role;
 
-        // Create Supabase auth user AND generate a native OTP verification link.
-        // admin.generateLink does NOT send any email  -  it returns the link so we
-        // can embed it in our own custom React Email template.
-        // The link is: https://<project>.supabase.co/auth/v1/verify?token=xxx&type=signup&redirect_to=<callback>
+        // Create Supabase auth user. When verification is required, generate a
+        // native OTP link so our React Email template can deliver it.
         const appCallbackUrl = process.env.APP_CALLBACK_URL || 'https://sheriabot.com/auth/callback';
-        const { data: authData, error: authError } = await supabaseAdmin.auth.admin.generateLink({
-          type: 'signup',
-          email: input.email,
-          password: input.password,
-          options: {
-            redirectTo: appCallbackUrl,
-            data: { role: resolvedRole, fullName: input.name || input.email },
-          },
-        });
+        let supabaseUserId: string;
+        let verificationUrl: string | null = null;
 
-        if (authError || !authData?.user || !authData?.properties?.action_link) {
-          // SECURITY: Never forward raw Supabase error messages to the client.
-          logger.error({
-            type: 'auth_register_supabase_error',
-            email: maskEmail(input.email),
-            supabaseCode: authError?.code ?? 'unknown',
+        if (requireEmailVerification) {
+          const { data: authData, error: authError } = await supabaseAdmin.auth.admin.generateLink({
+            type: 'signup',
+            email: input.email,
+            password: input.password,
+            options: {
+              redirectTo: appCallbackUrl,
+              data: { role: resolvedRole, fullName: input.name || input.email },
+            },
           });
-          throw new TRPCError({
-            code: 'INTERNAL_SERVER_ERROR',
-            message: getAuthErrorMessage(AUTH_ERROR_CODES.REGISTRATION_FAILED),
+
+          if (authError || !authData?.user || !authData?.properties?.action_link) {
+            logger.error({
+              type: 'auth_register_supabase_error',
+              email: maskEmail(input.email),
+              supabaseCode: authError?.code ?? 'unknown',
+            });
+            throw new TRPCError({
+              code: 'INTERNAL_SERVER_ERROR',
+              message: getAuthErrorMessage(AUTH_ERROR_CODES.REGISTRATION_FAILED),
+            });
+          }
+
+          supabaseUserId = authData.user.id;
+          verificationUrl = authData.properties.action_link;
+        } else {
+          const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+            email: input.email,
+            password: input.password,
+            email_confirm: true,
+            user_metadata: { role: resolvedRole, fullName: input.name || input.email },
           });
+
+          if (authError || !authData?.user) {
+            logger.error({
+              type: 'auth_register_supabase_error',
+              email: maskEmail(input.email),
+              supabaseCode: authError?.code ?? 'unknown',
+            });
+            throw new TRPCError({
+              code: 'INTERNAL_SERVER_ERROR',
+              message: getAuthErrorMessage(AUTH_ERROR_CODES.REGISTRATION_FAILED),
+            });
+          }
+
+          supabaseUserId = authData.user.id;
         }
 
         // F3.2b  -  if Prisma creation fails, delete the Supabase user so there
         // are no orphaned auth records that block re-registration.
         let user: any;
+        const initialAccountStatus = requireEmailVerification
+          ? 'pending'
+          : resolvedRole === 'REGULATOR'
+            ? 'pending_approval'
+            : 'active';
         try {
           user = await ctx.prisma.user.create({
             data: {
-              supabaseAuthId: authData.user.id,
+              supabaseAuthId: supabaseUserId,
               email: input.email,
               fullName: input.name || input.email,
               role: resolvedRole,
               phone: input.phone,
               organizationId: invitation?.organizationId || input.organizationId,
-              accountStatus: 'pending',
+              emailVerified: !requireEmailVerification,
+              emailVerifiedAt: requireEmailVerification ? null : new Date(),
+              status: requireEmailVerification ? 'PENDING_VERIFICATION' : 'ACTIVE',
+              accountStatus: initialAccountStatus,
             } as any,
             select: { id: true, email: true, fullName: true, role: true, organizationId: true, createdAt: true },
           });
@@ -207,10 +262,10 @@ export const authRouter = router({
             error: prismaErr.message,
           });
           // Compensating transaction: remove the Supabase user to keep systems consistent
-          await supabaseAdmin.auth.admin.deleteUser(authData.user.id).catch((delErr: any) => {
+          await supabaseAdmin.auth.admin.deleteUser(supabaseUserId).catch((delErr: any) => {
             logger.error({
               type: 'auth_register_supabase_rollback_error',
-              supabaseUserId: authData.user.id,
+              supabaseUserId,
               error: delErr.message,
             });
           });
@@ -230,10 +285,15 @@ export const authRouter = router({
         // Awaited so that user.organizationId is set before the response and first session cache.
         if (input.companyName && !user.organizationId) {
           try {
+            const defaultSubscriptionTier = typeof systemConfig.defaultSubscriptionTier === 'string'
+              ? systemConfig.defaultSubscriptionTier
+              : 'starter';
             const org = await ctx.prisma.organization.create({
               data: {
                 name: input.companyName,
                 type: resolvedRole,
+                subscriptionTier: defaultSubscriptionTier,
+                plan: subscriptionTierToPlanOrFree(defaultSubscriptionTier),
                 users: { connect: { id: user.id } },
               } as any,
               select: { id: true },
@@ -246,17 +306,15 @@ export const authRouter = router({
 
         initializeNotificationPreferences(user.id).catch(() => {});
 
-        // Use the Supabase-generated OTP link so that clicking it marks
-        // email_confirmed_at in Supabase natively, then redirects to our
-        // /auth/callback page which syncs Prisma emailVerified.
-        const verificationUrl = authData.properties.action_link;
-        reactMailer.sendVerificationEmail(user.email, {
-          userName: (user as any).fullName || user.email,
-          verificationUrl,
-          expiresInHours: 24,
-        }).catch((err: any) => {
-          logger.error({ type: 'auth_register_email_failed', userId: user.id, error: err.message });
-        });
+        if (requireEmailVerification && verificationUrl) {
+          reactMailer.sendVerificationEmail(user.email, {
+            userName: (user as any).fullName || user.email,
+            verificationUrl,
+            expiresInHours: 24,
+          }).catch((err: any) => {
+            logger.error({ type: 'auth_register_email_failed', userId: user.id, error: err.message });
+          });
+        }
 
         logger.info({ type: 'auth_register_success', userId: user.id, email: maskEmail(user.email), duration: Date.now() - startTime });
 
@@ -264,7 +322,9 @@ export const authRouter = router({
           success: true,
           userId: user.id,
           email: user.email,
-          message: 'Registration successful. Please check your email to verify your account.',
+          message: requireEmailVerification
+            ? 'Registration successful. Please check your email to verify your account.'
+            : 'Registration successful. You can now log in.',
         };
       } catch (error: any) {
         logger.error({ type: 'auth_register_error', email: maskEmail(input.email), error: error.message, duration: Date.now() - startTime });
@@ -301,6 +361,9 @@ export const authRouter = router({
         }
 
         logger.info({ type: 'auth_login_attempt', email: maskEmail(input.email) });
+        const systemConfig = await loadSystemConfig();
+        const requireEmailVerification = systemConfig.requireEmailVerification !== false;
+        const sessionTtlSeconds = resolveSessionTimeoutSeconds(systemConfig.sessionTimeoutHours);
 
         const { data: authData, error: authError } = await supabaseClient.auth.signInWithPassword({
           email: input.email,
@@ -356,8 +419,29 @@ export const authRouter = router({
           }
         }
 
-        // Block login if email is not yet verified
-        if (!user.emailVerified) {
+        if (!user.emailVerified && !requireEmailVerification) {
+          const syncedStatus = user.role === 'REGULATOR' ? 'pending_approval' : 'active';
+          try {
+            await ctx.prisma.user.update({
+              where: { id: user.id },
+              data: {
+                emailVerified: true,
+                emailVerifiedAt: new Date(),
+                status: 'ACTIVE',
+                accountStatus: syncedStatus,
+              } as any,
+            });
+            (user as any).emailVerified = true;
+            (user as any).accountStatus = syncedStatus;
+            logger.info({ type: 'auth_login_email_verification_bypassed_by_config', userId: user.id });
+          } catch (syncErr: any) {
+            logger.warn({ type: 'auth_login_email_bypass_sync_failed', userId: user.id, error: syncErr.message });
+          }
+        }
+
+        // Block login if email is not yet verified and the current system
+        // configuration requires verification.
+        if (requireEmailVerification && !user.emailVerified) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: getAuthErrorMessage(AUTH_ERROR_CODES.EMAIL_NOT_VERIFIED),
@@ -385,7 +469,7 @@ export const authRouter = router({
             data: {
               userId: user.id,
               token: nanoid(64),
-              expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+              expiresAt: new Date(Date.now() + sessionTtlSeconds * 1000),
               device: parseDeviceLabel(ctx.req.headers['user-agent']),
               ipAddress: ctx.req.ip || 'Unknown',
               userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
@@ -398,8 +482,8 @@ export const authRouter = router({
 
         // B6: Include session expiry in the Redis user profile so context.ts
         // can enforce it on every request without an extra DB query.
-        // Session.expiresAt was set to +30 days above; store as Unix ms.
-        const sessionExpiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+        // Session.expiresAt is controlled by System Configuration.
+        const sessionExpiresAt = Date.now() + sessionTtlSeconds * 1000;
 
         // Cache user profile in Upstash for fast context lookups (1 hour)
         const userProfile = {
@@ -418,7 +502,7 @@ export const authRouter = router({
         const loginNow = Date.now();
         await Promise.all([
           redis.set(lastSeenKey(user.id),    String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
-          redis.set(sessionStartKey(user.id), String(loginNow), { ex: SESSION_CONFIG.ABSOLUTE_TIMEOUT_SECONDS }),
+          redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
         ]).catch((err: unknown) => {
           logger.warn({ type: 'auth_login_session_keys_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
         });
@@ -431,7 +515,7 @@ export const authRouter = router({
           const rawUa = (ctx.req.headers['user-agent'] ?? '').substring(0, 500);
           const fingerprint = createHash('sha256').update(`${rawIp}:${rawUa}`).digest('hex');
           await redis
-            .set(`sheriabot:session_fingerprint:${dbSessionId}`, fingerprint, { ex: 30 * 24 * 60 * 60 })
+            .set(`sheriabot:session_fingerprint:${dbSessionId}`, fingerprint, { ex: sessionTtlSeconds })
             .catch((err: unknown) => {
               logger.warn({ type: 'auth_login_fingerprint_store_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
             });
@@ -647,7 +731,10 @@ export const authRouter = router({
         }
 
         // Enforce password policy on the new password before updating anything.
-        const pwValidation = validatePassword(input.newPassword, user.email ?? undefined);
+        const resetSystemConfig = await loadSystemConfig();
+        const pwValidation = validatePassword(input.newPassword, user.email ?? undefined, {
+          minLength: Number(resetSystemConfig.passwordMinLength ?? 10),
+        });
         if (!pwValidation.isValid) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: pwValidation.errors[0] });
         }

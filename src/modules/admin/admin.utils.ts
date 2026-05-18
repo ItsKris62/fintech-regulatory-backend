@@ -77,7 +77,7 @@ export const systemConfigUpdateSchema = z.object({
   defaultSubscriptionTier: z.string().optional(),
   supportEmail: z.string().email().optional(),
   sessionTimeoutHours: z.number().min(1).max(720).optional(),
-  passwordMinLength: z.number().int().min(8).max(128).optional(),
+  passwordMinLength: z.number().int().min(10).max(128).optional(),
   automatedBackupsEnabled: z.boolean().optional(),
   resourceUsageAlertThreshold: z.number().min(50).max(100).optional(),
   webhookFailureAlertThreshold: z.number().int().min(1).max(50).optional(),

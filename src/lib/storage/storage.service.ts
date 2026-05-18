@@ -10,6 +10,7 @@ import { storageConfig, isFileTypeAllowed, generateUniqueFilename, getMaxFileSiz
 import { logger } from '@/utils/logger';
 import { StorageServiceError, ValidationError } from '@/utils/error';
 import { getMimeType } from '@/utils/helpers';
+import { getSystemConfigNumber } from '@/lib/system-config';
 
 /**
  * File upload result
@@ -36,11 +37,11 @@ export class StorageService {
    * @param filename Original filename
    * @param category File category
    */
-  private validateFile(
+  private async validateFile(
     fileBuffer: Buffer,
     filename: string,
     category: 'documents' | 'images' | 'exports'
-  ): void {
+  ): Promise<void> {
     // Get file extension and content type
     const extension = filename.split('.').pop()?.toLowerCase() || '';
     const contentType = getMimeType(extension);
@@ -53,7 +54,11 @@ export class StorageService {
     }
 
     // Check file size
-    const maxSize = getMaxFileSize(category);
+    const configuredMaxUploadMB = await getSystemConfigNumber('maxFileUploadMB', 50);
+    const maxSize = Math.min(
+      getMaxFileSize(category),
+      Math.round(configuredMaxUploadMB * 1024 * 1024)
+    );
     if (fileBuffer.length > maxSize) {
       throw new ValidationError(
         `File size ${(fileBuffer.length / 1024 / 1024).toFixed(2)}MB exceeds maximum ${(maxSize / 1024 / 1024).toFixed(2)}MB`
@@ -119,7 +124,7 @@ export class StorageService {
 
     try {
       // Validate file
-      this.validateFile(fileBuffer, filename, 'documents');
+      await this.validateFile(fileBuffer, filename, 'documents');
 
       // Scan for malware (if enabled)
       if (storageConfig.security.malwareScan) {
@@ -194,7 +199,7 @@ export class StorageService {
 
     try {
       // Validate file
-      this.validateFile(fileBuffer, filename, 'images');
+      await this.validateFile(fileBuffer, filename, 'images');
 
       // Generate unique filename
       const uniqueFilename = generateUniqueFilename(filename);
@@ -258,7 +263,7 @@ export class StorageService {
 
     try {
       // Validate file
-      this.validateFile(fileBuffer, filename, 'exports');
+      await this.validateFile(fileBuffer, filename, 'exports');
 
       const key = `${storageConfig.paths.policyExports}${policyId}/${filename}`;
 
@@ -589,6 +594,19 @@ export class StorageService {
         error: error.message,
       });
       return null;
+    }
+  }
+
+  async healthCheck(): Promise<{ status: 'healthy' | 'down'; latencyMs?: number; message?: string }> {
+    const startedAt = Date.now();
+
+    try {
+      await storageClient.listFiles(undefined, 1);
+      return { status: 'healthy', latencyMs: Date.now() - startedAt };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn({ type: 'storage_health_check_failed', error: message });
+      return { status: 'down', latencyMs: Date.now() - startedAt, message };
     }
   }
 

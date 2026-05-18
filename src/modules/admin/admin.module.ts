@@ -33,6 +33,8 @@ import { planCtxCacheKey } from '@/modules/trial';
 import { revokeAllUserTokens } from '@/utils/token-revocation';
 import { nanoid } from 'nanoid';
 import { supabaseAdmin } from '@/lib/supabase';
+import { getIndexStats } from '@/lib/rag/client';
+import { storageService } from '@/lib/storage/storage.service';
 import {
   loadSystemConfig,
   normalizeSystemConfigPatch,
@@ -944,11 +946,27 @@ class AdminModule {
       health.status = 'degraded';
     }
 
+    // Pinecone / vector DB
+    try {
+      const t = Date.now();
+      await getIndexStats();
+      health.services.pinecone = { status: 'healthy', latencyMs: Date.now() - t };
+    } catch (err: unknown) {
+      health.services.pinecone = { status: 'down', message: (err as Error).message };
+    }
+
+    // R2 / storage
+    const storageHealth = await storageService.healthCheck();
+    health.services.storage = storageHealth;
+
+    const serviceStatuses = Object.values(health.services).map((service) => service.status);
     if (
       health.services.database.status === 'down' &&
       health.services.redis.status === 'down'
     ) {
       health.status = 'down';
+    } else if (serviceStatuses.some((status) => status === 'down' || status === 'degraded')) {
+      health.status = 'degraded';
     }
 
     return health;
@@ -989,19 +1007,45 @@ class AdminModule {
   }
 
   async getVectorDBStats(): Promise<VectorDBStats> {
-    return {
-      indexName: process.env.PINECONE_INDEX_NAME ?? 'sheriabot-legal-corpus',
-      vectorCount: 0,
-      dimensionality: 1536,
-      status: 'healthy',
-    };
+    try {
+      const stats = await getIndexStats() as {
+        totalRecordCount?: number;
+        dimension?: number;
+        namespaces?: Record<string, { recordCount?: number }>;
+      };
+      const vectorCount = stats.totalRecordCount
+        ?? Object.values(stats.namespaces ?? {}).reduce((sum, namespace) => sum + (namespace.recordCount ?? 0), 0);
+
+      return {
+        indexName: process.env.PINECONE_INDEX_NAME ?? 'sheriabot-legal-docs',
+        vectorCount,
+        dimensionality: stats.dimension ?? 1536,
+        status: 'healthy',
+      };
+    } catch (error: unknown) {
+      logger.warn({
+        type: 'admin_vector_db_stats_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return {
+        indexName: process.env.PINECONE_INDEX_NAME ?? 'sheriabot-legal-docs',
+        vectorCount: 0,
+        dimensionality: 1536,
+        status: 'down',
+      };
+    }
   }
 
   async getStorageStats(): Promise<StorageStats> {
-    const docs = await prisma.legalDocument.findMany({
-      where: { deletedAt: null },
-      select: { fileSize: true },
-    });
+    const [docs, health] = await Promise.all([
+      prisma.legalDocument.findMany({
+        where: { deletedAt: null },
+        select: { fileSize: true },
+      }),
+      storageService.healthCheck(),
+    ]);
+
     const totalSizeMB = Math.round(
       docs.reduce((sum, d) => sum + d.fileSize, 0) / (1024 * 1024)
     );
@@ -1009,7 +1053,7 @@ class AdminModule {
     return {
       totalFiles: docs.length,
       totalSizeMB,
-      status: 'healthy',
+      status: health.status,
     };
   }
 
