@@ -912,6 +912,7 @@ export const complianceRouter = router({
       });
 
       let newRating: 'up' | 'down' | null;
+      let action: 'created' | 'updated' | 'cleared';
 
       if (existing && existing.rating === input.rating) {
         // Same rating clicked again -> toggle off
@@ -919,6 +920,7 @@ export const complianceRouter = router({
           where: { queryId_userId: { queryId: input.queryId, userId } },
         });
         newRating = null;
+        action = 'cleared';
       } else {
         // Create or switch to new rating
         await ctx.prisma.queryFeedback.upsert({
@@ -927,6 +929,7 @@ export const complianceRouter = router({
           update: { rating: input.rating },
         });
         newRating = input.rating;
+        action = existing ? 'updated' : 'created';
       }
 
       logger.info({
@@ -934,9 +937,12 @@ export const complianceRouter = router({
         userId,
         queryId: input.queryId,
         rating: newRating,
+        previousRating: existing?.rating ?? null,
+        action,
+        tracked: newRating !== null,
       });
 
-      return { rating: newRating };
+      return { rating: newRating, action, tracked: newRating !== null };
     }),
 
   /**
