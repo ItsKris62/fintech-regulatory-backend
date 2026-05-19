@@ -39,9 +39,9 @@ describe('runtime billing plan catalog', () => {
 
     const startup = catalog.plans.find((plan) => plan.id === 'STARTUP');
 
-    expect(startup?.price.monthly).toBe(25000);
+    expect(startup?.price.monthly).toBe(4999);
+    expect(startup?.price.yearly).toBe(50390);
     expect(startup?.trialDays).toBe(14);
     expect(startup?.stripe?.monthlyPriceId).toBe(PLANS.STARTUP.stripe?.monthlyPriceId);
   });
 });
-

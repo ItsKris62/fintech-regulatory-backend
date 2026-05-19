@@ -20,6 +20,7 @@ import {
   fireTrialExpiredEmail,
 } from '@/modules/trial';
 import { TrialUsageSchema, EMPTY_TRIAL_USAGE } from '@/modules/trial/trial.types';
+import { getRuntimePlan, resolvePlanPriceForInterval } from '@/lib/runtime-billing-plans';
 
 /**
  * Logging Middleware (Fixed Error Handling)
@@ -140,6 +141,24 @@ export const rateLimited = (action: string, maxRequests?: number) =>
     return next({ ctx });
   });
 
+async function resolveMonthlyPlanAmountKes(plan: SubscriptionPlan | null | undefined): Promise<number> {
+  if (plan !== SubscriptionPlan.STARTUP && plan !== SubscriptionPlan.BUSINESS) {
+    return 0;
+  }
+
+  try {
+    const runtimePlan = await getRuntimePlan(plan);
+    return resolvePlanPriceForInterval(runtimePlan, 'monthly') ?? 0;
+  } catch (error: unknown) {
+    logger.warn({
+      type: 'mpesa_plan_price_resolution_failed',
+      plan,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  }
+}
+
 // ============================================================================
 // Organization Member Role Middlewares
 // ============================================================================
@@ -245,7 +264,7 @@ export const requireMemberRole = (allowedRoles: MemberRole[]) =>
 
 /**
  * Fraction of successful grants to write to AuditLog.
- * Env var: AUDIT_GRANT_SAMPLE_RATE  (float 0–1, default 0.10 for pilot).
+ * Env var: AUDIT_GRANT_SAMPLE_RATE  (float 0-1, default 0.10 for pilot).
  * Drop to 0.01 post-pilot by setting the env var; no code change required.
  */
 const AUDIT_GRANT_SAMPLE_RATE = Math.min(
@@ -367,7 +386,7 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
     });
   }
 
-  // Sampled grant logging — rate controlled by AUDIT_GRANT_SAMPLE_RATE env var.
+  // Sampled grant logging - rate controlled by AUDIT_GRANT_SAMPLE_RATE env var.
   if (Math.random() < AUDIT_GRANT_SAMPLE_RATE) {
     logger.info({ type: 'authorization.granted', userId, organizationId, role: entry.role });
     void prisma.auditLog.create({
@@ -756,7 +775,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
                 select: { plan: true },
               });
               const planLabel  = (org?.plan ?? 'Subscription').charAt(0) + (org?.plan ?? '').slice(1).toLowerCase();
-              const amountKes  = org?.plan === 'STARTUP' ? 25000 : org?.plan === 'BUSINESS' ? 75000 : 0;
+              const amountKes  = await resolveMonthlyPlanAmountKes(org?.plan);
               const amountStr  = `KES ${amountKes.toLocaleString('en-KE')}`;
               const base       = appConfig.frontendUrl.replace(/\/$/, '');
               await reactMailer.sendPaymentDueEmail(contact.email, contact.id, {
@@ -792,7 +811,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
                 select: { plan: true },
               });
               const planLabel  = (org?.plan ?? 'Subscription').charAt(0) + (org?.plan ?? '').slice(1).toLowerCase();
-              const amountKes  = org?.plan === 'STARTUP' ? 25000 : org?.plan === 'BUSINESS' ? 75000 : 0;
+              const amountKes  = await resolveMonthlyPlanAmountKes(org?.plan);
               const amountStr  = `KES ${amountKes.toLocaleString('en-KE')}`;
               const base       = appConfig.frontendUrl.replace(/\/$/, '');
               await reactMailer.sendPaymentDueEmail(contact.email, contact.id, {

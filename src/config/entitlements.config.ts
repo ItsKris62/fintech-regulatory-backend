@@ -148,7 +148,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   },
 
   /**
-   * STARTUP -- KES 25,000/month.
+   * STARTUP -- KES 4,999/month.
    * Unlimited queries, 5 checklists/month, 1 GB storage.
    * Gap analysis / API / custom integrations greyed out (upsell to Business).
    */
@@ -176,7 +176,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   },
 
   /**
-   * BUSINESS -- KES 75,000/month. "Most Popular".
+   * BUSINESS -- KES 44,999/month. "Most Popular".
    * Unlimited queries + checklists, gap analysis, API (10k calls/month),
    * 5 seats, 10 GB storage.
    */
