@@ -13,7 +13,6 @@ import { reactMailer } from '@/lib/email/react-mailer.service';
 import { appConfig } from '@/config/app.config';
 import type { EffectivePlan, TrialFeature } from '@/types/plan.types';
 import { FREE_TRIAL_LIMITS } from '@/types/plan.types';
-import { loadSystemConfig } from '@/lib/system-config';
 import {
   checkTrialLimit,
   incrementTrialUsage,
@@ -81,26 +80,6 @@ export const isAuthenticated = middleware(async ({ ctx, next }) => {
       user: ctx.user, // TypeScript now infers user as NonNullable downstream
     },
   });
-});
-
-/**
- * Blocks non-admin protected traffic while maintenance mode is enabled.
- * Admins bypass this so they can keep using the portal to disable maintenance.
- */
-export const systemAvailable = middleware(async ({ ctx, next }) => {
-  if (!ctx.user || ctx.user.role === 'ADMIN') {
-    return next({ ctx });
-  }
-
-  const config = await loadSystemConfig();
-  if (config.maintenanceMode) {
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: config.maintenanceMessage || 'The platform is temporarily in maintenance mode.',
-    });
-  }
-
-  return next({ ctx });
 });
 
 /**

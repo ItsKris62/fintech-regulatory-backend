@@ -1002,7 +1002,12 @@ class OrganizationModule {
   }
 
   /**
-   * Update member role
+   * Update a member's org-level role (MemberRole: OWNER/ADMIN/MEMBER/VIEWER).
+   *
+   * Operates on OrganizationMember.role, NOT User.role. These are independent
+   * role dimensions. Cache invalidation targets the orgmem cache used by
+   * requireOrgMembership middleware, not the session cache.
+   * See docs/architecture/data-model-invariants.md for the full distinction.
    */
   async updateMemberRole(
     requesterId: string,
@@ -1096,7 +1101,15 @@ class OrganizationModule {
         },
       });
 
-      // 6. Invalidate cache
+      // 6. Invalidate caches
+      // Per-user orgmem cache: requireOrgMembership reads this key to enforce MemberRole.
+      await redis.del(`sheriabot:orgmem:${memberUserId}:${orgId}`).catch(() => {});
+      logger.info({
+        type: 'orgmem_cache_invalidated',
+        userId: memberUserId,
+        organizationId: orgId,
+        action: 'membership_role_change',
+      });
       await this.invalidateMembersCache(orgId);
 
       // 7. Send notification email
@@ -1144,7 +1157,12 @@ class OrganizationModule {
   }
 
   /**
-   * Transfer organization ownership
+   * Transfer ownership of the organization to another member.
+   *
+   * Operates on OrganizationMember.role for TWO users (new owner -> OWNER,
+   * previous owner -> ADMIN). Both users' orgmem cache entries are invalidated
+   * independently so requireOrgMembership middleware sees the new roles immediately.
+   * See docs/architecture/data-model-invariants.md for the MemberRole vs UserRole distinction.
    */
   async transferOwnership(
     currentOwnerId: string,
@@ -1230,6 +1248,22 @@ class OrganizationModule {
       });
 
       // 6. Invalidate caches
+      // Per-user orgmem cache for both affected members (new OWNER and demoted ADMIN).
+      // Both del() calls are independent; one failure must not suppress the other.
+      await redis.del(`sheriabot:orgmem:${newOwnerId}:${orgId}`).catch(() => {});
+      logger.info({
+        type: 'orgmem_cache_invalidated',
+        userId: newOwnerId,
+        organizationId: orgId,
+        action: 'ownership_transfer',
+      });
+      await redis.del(`sheriabot:orgmem:${currentOwnerId}:${orgId}`).catch(() => {});
+      logger.info({
+        type: 'orgmem_cache_invalidated',
+        userId: currentOwnerId,
+        organizationId: orgId,
+        action: 'ownership_transfer',
+      });
       await this.invalidateOrgCache(orgId);
       await this.invalidateMembersCache(orgId);
 

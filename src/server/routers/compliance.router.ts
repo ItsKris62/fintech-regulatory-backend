@@ -133,7 +133,7 @@ export const complianceRouter = router({
 
         const duration = Date.now() - startTime;
 
-        // ── Orchestrated path ────────────────────────────────────────────────────
+        // -- Orchestrated path --------------------------------------------------
         if (appConfig.features.orchestratorEnabled) {
           await runOrchestrator({
             complianceQueryId:      query.id,
@@ -189,7 +189,7 @@ export const complianceRouter = router({
           };
         }
 
-        // ── Legacy grounded query path ────────────────────────────────────────────
+        // -- Legacy grounded query path -----------------------------------------
         // Shadow orchestrator is fire-and-forget: never blocks the user response.
         runOrchestrator({
           complianceQueryId:      query.id,
@@ -253,6 +253,9 @@ export const complianceRouter = router({
     .use(rateLimited('complianceQuery'))
     .input(followUpQuerySchema)
     .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
+      logger.info({ type: 'compliance_query_followup', userId, organizationId });
       try {
         // Get original query
         const originalQuery = await ctx.prisma.complianceQuery.findUnique({
@@ -266,8 +269,12 @@ export const complianceRouter = router({
           });
         }
 
-        // Check access
-        if (ctx.user!.role !== 'ADMIN' && originalQuery.userId !== ctx.user!.id) {
+        // Strict OR semantics (Option 2): block follow-up if either the user is not the
+        // original author OR the query does not belong to the active org. Legacy null-org
+        // queries are read-only -- even the original author cannot follow up (null !== orgId).
+        const userMismatch = originalQuery.userId !== userId;
+        const orgMismatch = originalQuery.organizationId !== organizationId;
+        if (ctx.user!.role !== 'ADMIN' && (userMismatch || orgMismatch)) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Access denied to this query',
@@ -283,7 +290,7 @@ export const complianceRouter = router({
         // Generate answer grounded in retrieved evidence and original query context
         const answer = await ctx.aiService.answerFollowUpQuery(
           originalQuery.query,
-          (originalQuery as any).answer || originalQuery.summary || '',
+          originalQuery.response || originalQuery.summary || '',
           input.question,
           ragContext.context || undefined,
         );
@@ -308,8 +315,8 @@ export const complianceRouter = router({
         const query = await (ctx.prisma.complianceQuery.create as any)({
           data: {
             query: input.question,
-            userId: ctx.user!.id,
-            organizationId: ctx.orgMembership!.organizationId,
+            userId,
+            organizationId,
             response: answer.content,
             citations: queryCitations.length > 0 ? queryCitations : undefined,
             metadata: {
@@ -322,7 +329,8 @@ export const complianceRouter = router({
 
         logger.info({
           type: 'compliance_followup_success',
-          userId: ctx.user!.id,
+          userId,
+          organizationId,
           queryId: query.id,
           originalQueryId: input.originalQueryId,
           citationsCount: queryCitations.length,
@@ -336,7 +344,8 @@ export const complianceRouter = router({
       } catch (error: any) {
         logger.error({
           type: 'compliance_followup_error',
-          userId: ctx.user!.id,
+          userId,
+          organizationId,
           error: error.message,
         });
 
@@ -414,22 +423,30 @@ export const complianceRouter = router({
     }),
 
   /**
-   * Get query history
+   * Get query history, scoped to the caller's active organization.
    *
-   * @protected
+   * @protected @org-member
    */
-  history: protectedProcedure
+  history: orgMemberProcedure
     .input(getQueryHistorySchema)
     .query(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
+      logger.info({ type: 'compliance_query_history', userId, organizationId });
       try {
         const { page, limit } = input;
         const skip = (page - 1) * limit;
 
-        const where: any = {};
+        const where: any = {
+          OR: [
+            { organizationId },
+            { organizationId: null }, // Legacy rows per KNOWN_ISSUES B5; remove when migrated
+          ],
+        };
 
-        // Filter by user unless admin
+        // Filter by user unless admin (admins see all queries within the org context)
         if (ctx.user!.role !== 'ADMIN') {
-          where.userId = ctx.user!.id;
+          where.userId = userId;
         }
 
         const [queries, total] = await Promise.all([
@@ -466,7 +483,8 @@ export const complianceRouter = router({
       } catch (error: any) {
         logger.error({
           type: 'compliance_history_error',
-          userId: ctx.user!.id,
+          userId,
+          organizationId,
           error: error.message,
         });
 
@@ -850,17 +868,17 @@ export const complianceRouter = router({
         });
       }
     }),
-  // ══════════════════════════════════════════════════════════════════════════
+  // ===========================================================================
   // QUERY FEEDBACK
-  // ══════════════════════════════════════════════════════════════════════════
+  // ===========================================================================
 
   /**
    * Submit or toggle feedback (thumbs up / thumbs down) on a compliance query.
    *
    * Toggle semantics (server-side):
-   *  - No existing feedback  �' create with given rating
-   *  - Existing same rating  �' delete (toggle off), return null
-   *  - Existing diff rating  �' update to new rating
+   *  - No existing feedback  -> create with given rating
+   *  - Existing same rating  -> delete (toggle off), return null
+   *  - Existing diff rating  -> update to new rating
    *
    * @protected
    */
@@ -896,7 +914,7 @@ export const complianceRouter = router({
       let newRating: 'up' | 'down' | null;
 
       if (existing && existing.rating === input.rating) {
-        // Same rating clicked again �' toggle off
+        // Same rating clicked again -> toggle off
         await ctx.prisma.queryFeedback.delete({
           where: { queryId_userId: { queryId: input.queryId, userId } },
         });
@@ -939,15 +957,15 @@ export const complianceRouter = router({
       return { rating: (feedback?.rating ?? null) as 'up' | 'down' | null };
     }),
 
-  // ══════════════════════════════════════════════════════════════════════════
+  // ==========================================================================
   // SAVED RESPONSES
-  // ══════════════════════════════════════════════════════════════════════════
+  // ==========================================================================
 
   /**
    * Toggle save/bookmark status for a compliance query response.
    *
-   *  - Not saved �' save it, return { saved: true }
-   *  - Already saved �' unsave it, return { saved: false }
+   *  - Not saved -> save it, return { saved: true }
+   *  - Already saved -> unsave it, return { saved: false }
    *
    * @protected
    */
@@ -1077,7 +1095,7 @@ export const complianceRouter = router({
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
 
-      // Fire-and-forget audit log �" never block the response
+      // Fire-and-forget audit log -- never block the response
       prisma.auditLog.create({
         data: {
           userId,
@@ -1150,7 +1168,7 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Analysis results are malformed and cannot be exported' });
       }
 
-      // 5. Build DOCX buffer �" fetch org name separately (GapAnalysis has no direct org relation)
+      // 5. Build DOCX buffer -- fetch org name separately (GapAnalysis has no direct org relation)
       const orgName = analysis.organizationId
         ? (await prisma.organization.findUnique({ where: { id: analysis.organizationId }, select: { name: true } }))?.name
         : undefined;
@@ -1189,7 +1207,7 @@ export const complianceRouter = router({
 
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 
-      // 8b. Persist report tracking fields (fire-and-forget �" non-blocking)
+      // 8b. Persist report tracking fields (fire-and-forget -- non-blocking)
       prisma.gapAnalysis.update({
         where: { id: input.analysisId },
         data: { reportUrl: uploadResult.key, reportGeneratedAt: new Date() },
@@ -1235,7 +1253,7 @@ export const complianceRouter = router({
       const userId = ctx.user!.id;
       const orgId = ctx.orgMembership!.organizationId;
 
-      // 1. Fetch the checklist with items and user �" no direct org relation on Checklist model
+      // 1. Fetch the checklist with items and user -- no direct org relation on Checklist model
       const checklist = await prisma.checklist.findUnique({
         where: { id: input.checklistId },
         include: {
@@ -1362,7 +1380,7 @@ export const complianceRouter = router({
         userId,
       );
 
-      // 11. Signed URL �" 15-minute expiry
+      // 11. Signed URL -- 15-minute expiry
       const downloadUrl = await storageService.getDownloadUrl(uploadResult.key, 900, false, filename);
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 
@@ -1390,7 +1408,7 @@ export const complianceRouter = router({
    * Report a corpus gap for a compliance query that returned no grounded evidence.
    * Writes a CorpusGapFeedback row for the corpus expansion backlog.
    *
-   * @protected — orgMemberProcedure; queryId ownership verified against ctx.user.id
+   * @protected -- orgMemberProcedure; queryId ownership verified against ctx.user.id
    */
   reportGap: orgMemberProcedure
     .input(z.object({
@@ -1412,7 +1430,7 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Compliance query not found' });
       }
 
-      // Null runId means the orchestrator double-failed — no run row was written.
+      // Null runId means the orchestrator double-failed -- no run row was written.
       // The frontend should have disabled the reportGap affordance in this case.
       if (!input.runId) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'No run record available for this query' });

@@ -1317,10 +1317,10 @@ Follow-up Question: ${followUp}
     let count = 1;
     try {
       const key = `${REDIS_KEYS.QUERY_RATE}${userId}`;
-      // Use incr then set TTL only on first write — atomic via nx guard
+      // Use incr then set TTL only on first write -- atomic via nx guard
       count = await redis.incr(key);
       if (count === 1) {
-        // First increment this window — set TTL (always overwrite is correct here)
+        // First increment this window -- set TTL (always overwrite is correct here)
         await redis.set(key, String(count), { ex: 3600 });
       }
     } catch (err: unknown) {
@@ -1329,7 +1329,7 @@ Follow-up Question: ${followUp}
         userId,
         error:  err instanceof Error ? err.message : String(err),
       });
-      // Fail-open: Redis unavailable — allow the request
+      // Fail-open: Redis unavailable -- allow the request
       return;
     }
 
@@ -1839,9 +1839,10 @@ Follow-up Question: ${followUp}
   }
 
   /**
-   * List all checklists for a user.
+   * List all checklists for a user within an organization.
+   * Includes legacy null-org rows owned by this user (KNOWN_ISSUES B5).
    */
-  async getUserChecklists(userId: string): Promise<{
+  async getUserChecklists(userId: string, organizationId: string): Promise<{
     id: string;
     title: string;
     productType: string | null;
@@ -1857,8 +1858,14 @@ Follow-up Question: ${followUp}
     criticalItems: number;
   }[]> {
     const checklists = await prisma.checklist.findMany({
-      // deletedAt added in March 2026 schema migration; cast until prisma generate runs
-      where: { userId, ...({ deletedAt: null } as any) },
+      where: {
+        userId,
+        ...({ deletedAt: null } as any),
+        OR: [
+          { organizationId },
+          { organizationId: null }, // Legacy rows per KNOWN_ISSUES B5; remove when migrated
+        ],
+      },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -1898,9 +1905,9 @@ Follow-up Question: ${followUp}
 
   /**
    * Get a single checklist by ID.
-   * Ensures the requesting user owns the checklist.
+   * Org-scoped: org records require active membership; legacy null-org records remain owner-only.
    */
-  async getChecklist(userId: string, checklistId: string): Promise<{
+  async getChecklist(userId: string, checklistId: string, organizationId: string): Promise<{
     id: string;
     title: string;
     productType: string | null;
@@ -1924,9 +1931,13 @@ Follow-up Question: ${followUp}
       throw new Error('Checklist not found');
     }
 
-    // RBAC: only owner or admin can view
-    if (checklist.userId !== userId) {
-      // Check if user is admin
+    // Org-scoped access: org-scoped records accessible to any org member;
+    // legacy null-org records remain owner-only. ADMIN bypasses.
+    const hasAccess = checklist.organizationId
+      ? checklist.organizationId === organizationId
+      : checklist.userId === userId;
+
+    if (!hasAccess) {
       const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
       if (user?.role !== 'ADMIN') {
         throw new Error('Access denied to this checklist');
@@ -2019,16 +2030,23 @@ Follow-up Question: ${followUp}
 
   /**
    * Soft-delete a checklist (sets deletedAt timestamp; record is NOT destroyed).
-   * All list/get queries filter deletedAt: null so the record becomes invisible.
+   * Org-scoped: owner within the org can delete; legacy null-org records remain owner-only.
    */
-  async deleteChecklist(userId: string, checklistId: string): Promise<void> {
+  async deleteChecklist(userId: string, checklistId: string, organizationId: string): Promise<void> {
     const checklist = await prisma.checklist.findUnique({
       where: { id: checklistId },
-      select: { userId: true },
+      select: { userId: true, organizationId: true },
     });
 
     if (!checklist) throw new Error('Checklist not found');
-    if (checklist.userId !== userId) {
+
+    // Org-scoped delete: owner within org can delete their records;
+    // legacy null-org records remain owner-only. ADMIN bypasses org check.
+    const isOrgOwner = checklist.organizationId
+      ? checklist.organizationId === organizationId && checklist.userId === userId
+      : checklist.userId === userId;
+
+    if (!isOrgOwner) {
       const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
       if (user?.role !== 'ADMIN') throw new Error('Access denied');
     }
@@ -2039,7 +2057,7 @@ Follow-up Question: ${followUp}
       data: { deletedAt: new Date() },
     });
 
-    logger.info({ type: 'checklist_soft_deleted', userId, checklistId });
+    logger.info({ type: 'checklist_soft_deleted', userId, checklistId, organizationId });
   }
 
   // ==========================================================================
@@ -2390,7 +2408,7 @@ Follow-up Question: ${followUp}
    * Compliance Score cache.
    * Key:   compliance:score:{orgId}
    * Value: full DashboardResponse (JSON, auto-parsed by Upstash SDK)
-   * TTL:   300s (5 min — matches frontend React Query staleTime)
+   * TTL:   300s (5 min -- matches frontend React Query staleTime)
    * Invalidated by:
    *   - updateChecklistItem (item toggle)
    *   - Snapshot creation (score change detected on dashboard read)
@@ -2496,8 +2514,8 @@ Follow-up Question: ${followUp}
 
   /**
    * Calculate score for a single compliance category.
-   * Returns scoreFloat (unrounded, 0–100) for use in the weighted sum, plus
-   * the integer display score and item counts. No rounding inside this function —
+   * Returns scoreFloat (unrounded, 0-100) for use in the weighted sum, plus
+   * the integer display score and item counts. No rounding inside this function --
    * the single Math.round lives in getComplianceDashboardData (fixes F-05).
    */
   async calculateCategoryScore(
@@ -2520,10 +2538,10 @@ Follow-up Question: ${followUp}
   /**
    * Get full compliance dashboard data for an organization.
    * Fixes:
-   *   F-04 — trend semantics (pts vs 30d, not %, not calendar month)
-   *   F-05 — single rounding: floats used in weighted sum; round only at the end
-   *   F-06 — no fallback to latestSnapshot (masked progress for new orgs)
-   *   F-10 — lastUpdated reflects actual data freshness
+   *   F-04 -- trend semantics (pts vs 30d, not %, not calendar month)
+   *   F-05 -- single rounding: floats used in weighted sum; round only at the end
+   *   F-06 -- no fallback to latestSnapshot (masked progress for new orgs)
+   *   F-10 -- lastUpdated reflects actual data freshness
    */
   async getComplianceDashboardData(orgId: string): Promise<{
     overallScore: number;
@@ -2545,7 +2563,7 @@ Follow-up Question: ${followUp}
     const startedAt = Date.now();
     const cacheKey = ComplianceModule.SCORE_CACHE_KEY(orgId);
 
-    // Cache read — return immediately on hit (TTL 5 min, matches frontend staleTime)
+    // Cache read -- return immediately on hit (TTL 5 min, matches frontend staleTime)
     const cached = await redis.get<Awaited<ReturnType<typeof this.getComplianceDashboardData>>>(cacheKey);
     if (cached) {
       logger.info({ type: 'compliance_dashboard.cache_hit', orgId });
@@ -2572,7 +2590,7 @@ Follow-up Question: ${followUp}
       })
     );
 
-    // Single Math.round — applied to the weighted float sum (fixes F-05 double-rounding)
+    // Single Math.round -- applied to the weighted float sum (fixes F-05 double-rounding)
     const overallScore = Math.round(
       categoryResults.reduce((sum, cat) => {
         const weight = ComplianceModule.DASHBOARD_WEIGHTS[cat.key] ?? 0;
@@ -2581,7 +2599,7 @@ Follow-up Question: ${followUp}
     );
 
     // Trend: compare against a snapshot from exactly 30 rolling days ago.
-    // No fallback to latestSnapshot — that masked progress for new orgs (fixes F-06).
+    // No fallback to latestSnapshot -- that masked progress for new orgs (fixes F-06).
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     const [latestSnapshot, oldSnapshot] = await Promise.all([
@@ -2639,7 +2657,7 @@ Follow-up Question: ${followUp}
       logger.info({ type: 'compliance_dashboard.snapshot_skipped', orgId, overallScore, skipReason });
     }
 
-    // lastUpdated: actual data freshness — MAX(item.updatedAt, snapshot.calculatedAt, org.createdAt)
+    // lastUpdated: actual data freshness -- MAX(item.updatedAt, snapshot.calculatedAt, org.createdAt)
     // (fixes F-10: was always returning request time)
     const [lastItem, lastSnap, org] = await Promise.all([
       prisma.complianceItem.findFirst({

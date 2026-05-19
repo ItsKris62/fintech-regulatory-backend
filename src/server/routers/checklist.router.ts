@@ -86,37 +86,43 @@ export const checklistRouter = router({
     }),
 
   /**
-   * List all checklists for the current user.
+   * List all checklists for the current user scoped to their active organization.
    *
-   * @protected
+   * @protected @org-member
    */
-  getUserChecklists: protectedProcedure.query(async ({ ctx }) => {
+  getUserChecklists: orgMemberProcedure.query(async ({ ctx }) => {
+    const userId = ctx.user!.id;
+    const organizationId = ctx.orgMembership!.organizationId;
+    logger.info({ type: 'checklist_query', userId, organizationId });
     try {
-      const checklists = await complianceModule.getUserChecklists(ctx.user!.id);
-      logger.info({ type: 'user_checklists_retrieved', userId: ctx.user!.id, count: checklists.length });
+      const checklists = await complianceModule.getUserChecklists(userId, organizationId);
+      logger.info({ type: 'user_checklists_retrieved', userId, organizationId, count: checklists.length });
       return checklists;
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Failed to retrieve checklists';
-      logger.error({ type: 'user_checklists_error', userId: ctx.user!.id, error: msg });
+      logger.error({ type: 'user_checklists_error', userId, organizationId, error: msg });
       throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
     }
   }),
 
   /**
-   * Get a single checklist by ID.
+   * Get a single checklist by ID, scoped to the caller's active organization.
    *
-   * @protected
+   * @protected @org-member
    */
-  getChecklist: protectedProcedure
+  getChecklist: orgMemberProcedure
     .input(z.object({ id: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
+      logger.info({ type: 'checklist_query', userId, organizationId, checklistId: input.id });
       try {
-        const checklist = await complianceModule.getChecklist(ctx.user!.id, input.id);
-        logger.info({ type: 'checklist_retrieved', userId: ctx.user!.id, checklistId: input.id });
+        const checklist = await complianceModule.getChecklist(userId, input.id, organizationId);
+        logger.info({ type: 'checklist_retrieved', userId, organizationId, checklistId: input.id });
         return checklist;
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Failed to retrieve checklist';
-        logger.error({ type: 'checklist_retrieve_error', userId: ctx.user!.id, checklistId: input.id, error: msg });
+        logger.error({ type: 'checklist_retrieve_error', userId, organizationId, checklistId: input.id, error: msg });
         if (msg === 'Checklist not found') throw new TRPCError({ code: 'NOT_FOUND', message: msg });
         if (msg.includes('Access denied')) throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this checklist' });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to retrieve checklist', cause: error });
@@ -168,35 +174,39 @@ export const checklistRouter = router({
 
   /**
    * Soft-delete a checklist (sets deletedAt; record is NOT destroyed).
+   * Caller must own the checklist and be an active member of its organization.
    *
-   * @protected
+   * @protected @org-member
    * @middleware withPlanContext
    */
-  deleteChecklist: protectedProcedure
+  deleteChecklist: orgMemberProcedure
     .use(withPlanContext)
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
+      logger.info({ type: 'checklist_delete', userId, organizationId, checklistId: input.id });
       try {
-        await complianceModule.deleteChecklist(ctx.user!.id, input.id);
-        logger.info({ type: 'checklist_deleted', userId: ctx.user!.id, checklistId: input.id });
+        await complianceModule.deleteChecklist(userId, input.id, organizationId);
+        logger.info({ type: 'checklist_deleted', userId, organizationId, checklistId: input.id });
         return { success: true };
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Failed to delete checklist';
-        logger.error({ type: 'checklist_delete_error', userId: ctx.user!.id, checklistId: input.id, error: msg });
+        logger.error({ type: 'checklist_delete_error', userId, organizationId, checklistId: input.id, error: msg });
         if (msg === 'Checklist not found') throw new TRPCError({ code: 'NOT_FOUND', message: msg });
         if (msg.includes('Access denied')) throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to delete checklist', cause: error });
       }
     }),
 
-  // ══════════════════════════════════════════════════════════════════════════
+  // ===========================================================================
   // NORMALIZED CHECKLIST PROCEDURES (post-March 2026)
   //
   // Middleware policy:
   //   READ queries  -- no plan gate (reads are free)
   //   WRITE mutations -- withPlanContext applied; requirePlanFeature NOT applied
   //     (plan gate already enforced on generateChecklistAsync via checkUsageLimit)
-  // ══════════════════════════════════════════════════════════════════════════
+  // ===========================================================================
 
   /**
    * Fire-and-forget checklist generation.
@@ -222,7 +232,7 @@ export const checklistRouter = router({
 
       const orgId = ctx.orgMembership!.organizationId;
 
-      // B7.3 (TD-009): Redis dedup lock — prevents double-submit from starting two
+      // B7.3 (TD-009): Redis dedup lock -- prevents double-submit from starting two
       // Claude AI pipelines simultaneously. Lock is keyed on userId+productType+stage
       // so different checklist types are not blocked by each other. TTL = 60s
       // (covers the full async pipeline initiation time). nx=true = only set if absent.
@@ -253,7 +263,7 @@ export const checklistRouter = router({
 
         await ctx.incrementUsage?.();
 
-        // Release lock after the pipeline is queued (not after it completes —
+        // Release lock after the pipeline is queued (not after it completes --
         // the pipeline runs in the background after this response is sent).
         await redis.del(checklistLockKey);
 

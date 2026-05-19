@@ -1,4 +1,5 @@
-import { router, baseProcedure } from './init';
+import { TRPCError } from '@trpc/server';
+import { router, baseProcedure, middleware } from './init';
 import { MemberRole } from '@prisma/client';
 import {
   isAuthenticated,
@@ -7,13 +8,13 @@ import {
   isStartup,
   isEnterprise,
   logged,
-  systemAvailable,
   requireOrgMembership,
   requireOrgMembershipRole,
 } from './middleware';
+import { loadSystemConfig } from '@/lib/system-config';
 
 // Export router builder for use in your controllers
-export { router }; 
+export { router };
 
 // --- Core Procedures ---
 
@@ -24,8 +25,32 @@ export { router };
 export const publicProcedure = baseProcedure.use(logged);
 
 /**
+ * Maintenance-mode gate. Module-internal -- not exported.
+ *
+ * Calls next() with NO argument so the context type narrowed by isAuthenticated
+ * (ctx.user: User, non-null) is preserved for downstream handlers.
+ * Calling next({ ctx }) instead would reset ctx.user to User|null -- see
+ * docs/architecture/data-model-invariants.md (tRPC v11 middleware composition).
+ *
+ * Admins bypass the gate so they can use the portal to disable maintenance mode.
+ */
+const systemAvailable = middleware(async ({ ctx, next }) => {
+  if (!ctx.user || ctx.user.role === 'ADMIN') {
+    return next();
+  }
+  const config = await loadSystemConfig();
+  if (config.maintenanceMode) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: config.maintenanceMessage || 'The platform is temporarily in maintenance mode.',
+    });
+  }
+  return next();
+});
+
+/**
  * Protected Procedure
- * Requires a valid JWT. Guarantees `ctx.user` is present in downstream resolvers.
+ * Requires a valid JWT. Guarantees ctx.user is User (non-null) in downstream handlers.
  */
 export const protectedProcedure = publicProcedure.use(isAuthenticated).use(systemAvailable);
 

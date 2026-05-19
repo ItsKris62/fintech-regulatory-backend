@@ -9,6 +9,56 @@ const loggerConfig = {
   // Log level based on environment
   level: appConfig.isDevelopment ? 'debug' : 'info',
 
+  /**
+   * PII and secret redaction for structured logs.
+   *
+   * Categories:
+   * - Auth secrets: password, token, accessToken, refreshToken, authorization,
+   *   apiKey, secret, cookie.
+   * - Contact PII: email, phone, mpesaPhoneNumber.
+   * - Identifier PII: nationalId and Supabase Auth IDs.
+   * - Generic catch-alls: top-level fields plus one-level nested metadata fields
+   *   that commonly arrive through request bodies, webhook payloads, or helper
+   *   metadata.
+   *
+   * DPA 2019 concern: logs are retained operational records, so avoid storing
+   * personal data or credentials in log sinks while preserving field presence
+   * for debugging.
+   */
+  redact: {
+    paths: [
+      // Top-level paths
+      'email',
+      'password',
+      'token',
+      'accessToken',
+      'refreshToken',
+      'authorization',
+      'apiKey',
+      'phone',
+      'mpesaPhoneNumber',
+      'nationalId',
+      'secret',
+      'cookie',
+      'supabaseAuthId',
+      // Wildcard one-level-nested
+      '*.email',
+      '*.password',
+      '*.token',
+      '*.accessToken',
+      '*.refreshToken',
+      '*.authorization',
+      '*.apiKey',
+      '*.phone',
+      '*.mpesaPhoneNumber',
+      '*.nationalId',
+      '*.secret',
+      '*.cookie',
+      '*.supabaseAuthId',
+    ],
+    censor: '[REDACTED]',
+  },
+
   // Production: JSON format, Development: Pretty print
   ...(appConfig.isDevelopment
     ? {
@@ -251,7 +301,7 @@ export function logStartup() {
       port: appConfig.port,
       nodeVersion: process.version,
     },
-    '🚀 SheriaBot Backend Starting...'
+    'SheriaBot Backend Starting...'
   );
 }
 
@@ -264,7 +314,7 @@ export function logShutdown(signal: string) {
       type: 'shutdown',
       signal,
     },
-    '👋 SheriaBot Backend Shutting Down...'
+    'SheriaBot Backend Shutting Down...'
   );
 }
 
