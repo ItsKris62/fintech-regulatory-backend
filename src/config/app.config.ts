@@ -84,6 +84,12 @@ const envSchema = z.object({
   INTASEND_PUBLISHABLE_KEY: z.string().optional().default(''),
   INTASEND_SECRET_KEY: z.string().optional().default(''),
   INTASEND_IS_TEST: z.string().optional().default('true'),
+  INTASEND_WEBHOOK_CHALLENGE: z.string().optional().default(''),
+  INTASEND_WEBHOOK_URL: z.string().optional().default(''),
+  INTASEND_PLAN_STARTUP_MONTHLY: z.string().optional().default(''),
+  INTASEND_PLAN_STARTUP_YEARLY: z.string().optional().default(''),
+  INTASEND_PLAN_BUSINESS_MONTHLY: z.string().optional().default(''),
+  INTASEND_PLAN_BUSINESS_YEARLY: z.string().optional().default(''),
 
   // Marketing & Outreach Module
   RESEND_MARKETING_FROM_EMAIL: z.string().email().default('marketing@sheriabot.com'),
@@ -216,6 +222,18 @@ export const appConfig = {
     publishableKey: env.INTASEND_PUBLISHABLE_KEY,
     secretKey: env.INTASEND_SECRET_KEY,
     isTest: env.INTASEND_IS_TEST === 'true',
+    webhookChallenge: env.INTASEND_WEBHOOK_CHALLENGE,
+    webhookUrl: env.INTASEND_WEBHOOK_URL,
+    subscriptionPlans: {
+      STARTUP: {
+        monthly: env.INTASEND_PLAN_STARTUP_MONTHLY,
+        yearly: env.INTASEND_PLAN_STARTUP_YEARLY,
+      },
+      BUSINESS: {
+        monthly: env.INTASEND_PLAN_BUSINESS_MONTHLY,
+        yearly: env.INTASEND_PLAN_BUSINESS_YEARLY,
+      },
+    },
   },
 
   // Marketing & Outreach Module

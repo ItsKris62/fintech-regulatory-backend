@@ -1,5 +1,6 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import { timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { createContext } from './server/trpc/context';
@@ -18,6 +19,7 @@ import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
 import { alertPubSub } from './lib/redis/pubsub';
 import { consumeAlertStreamToken } from './lib/alerts/stream-token';
 import { registerComplianceStreamRoute } from './routes/compliance-stream.route';
+import { appConfig } from './config/app.config';
 
 /**
  * Zod schema for IntaSend webhook payloads.
@@ -37,6 +39,12 @@ const intaSendWebhookSchema = z.object({
   meta:          z.record(z.string(), z.unknown()).optional(),
   challenge:     z.string().max(512).optional(),
 }).passthrough();
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
 
 /**
  * Build and configure the Fastify application.
@@ -150,6 +158,16 @@ export async function buildApp(): Promise<FastifyInstance> {
       }
 
       const payload = parseResult.data as IntaSendWebhookPayload;
+      const expectedChallenge = appConfig.intasend.webhookChallenge;
+      if (expectedChallenge && (!payload.challenge || !timingSafeStringEqual(payload.challenge, expectedChallenge))) {
+        logger.warn({
+          type: 'intasend_webhook_invalid_challenge',
+          ip: request.ip,
+          hasChallenge: Boolean(payload.challenge),
+        });
+        return reply.status(401).send({ error: 'Invalid webhook challenge' });
+      }
+
       try {
         await intaSendWebhookService.handleEvent(payload);
         return reply.status(200).send({ received: true });
