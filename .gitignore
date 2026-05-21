@@ -40,8 +40,13 @@ src/generated/prisma
 fix-batch2.js
 fix-batch3.js
 fix_git_error.ps1
+scripts/verify-sprint-3-batch-1.ts
+scripts/verify-sprint-3-batch-2.ts
+scripts/verify-sprint-3-batch-3.ts
+scripts/verify-sprint-3-batch-4.ts
+scripts/verify-sprint-3-batch-5.ts
 
-# Regulatory document source files (large binaries — gitignored, store in R2)
+# Regulatory document source files (large binaries -- gitignored, store in R2)
 # Place documents in documents/kenya/ and documents/international/
 # The folder structure (README.md, .gitkeep) is tracked; only binaries are ignored.
 documents/**/*.pdf

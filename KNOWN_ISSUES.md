@@ -833,6 +833,376 @@ audit (2026-05-18, confirmed by grep). No dedicated fix pass required.
 
 ---
 
+### BE-I-008 -- Free trial TOCTOU on increment [RESOLVED -- Sprint 3 Batch 2]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium |
+| Status | **Resolved** |
+| Discovered | Sprint 3 Phase A refinement (2026-05-18) |
+| Resolved in | Sprint 3 Batch 2 (2026-05-20) |
+| Affected | `src/modules/trial/trial.service.ts` -- trial usage increments |
+
+**Root cause:** Trial quota enforcement used a check-then-increment pattern:
+`checkTrialLimit` read `User.freeTrialUsage`, then `incrementTrialUsage` performed
+a separate read-modify-write after successful feature execution. Parallel trial
+requests could both pass the preflight check and then under-count or exceed a cap.
+
+**Fix:** Added `incrementTrialUsageAtomic`, backed by a single Postgres conditional
+`UPDATE ... RETURNING` against the `freeTrialUsage` JSONB column. The update only
+commits when `current + incrementBy <= limit`; otherwise it returns
+`allowed: false` with the unchanged count. Existing `incrementTrialUsage` now routes
+through the atomic helper.
+
+**Verification:** `scripts/verify-sprint-3-batch-2.ts` covers under-cap, exact-cap,
+past-cap, large token step, and concurrent 24/25 increments. The concurrency scenario
+confirmed exactly one winner and final DB value 25.
+
+**Batch 2 review (2026-05-20) -- APPROVED**
+
+_Pre-approval items resolved:_
+
+**1. Call-site update status -- scenario (a) confirmed on both files.**
+
+`checkUsageLimit` FREE_TRIAL branch (`src/server/trpc/middleware.ts`):
+- `incrementTrialUsageAtomic` called directly at line 611, BEFORE `next()`.
+- If `allowed: false` → throws `TRPCError({ code: 'FORBIDDEN' })` → handler never runs.
+- The `deferIncrement` option is in the Redis monthly quota path below the FREE_TRIAL
+  branch and is structurally unreachable from it. FREE_TRIAL always increments atomically
+  before calling `next()`. Enforcement gap: closed.
+
+SSE stream increment closure (`src/routes/compliance-stream.route.ts`):
+- Imports `incrementTrialUsageAtomic` directly (line 16); `incrementTrialUsage` not used.
+- Closure (lines 158-184): calls atomic helper for both `complianceQueries` and
+  `totalTokensUsed`; branches on `allowed: false` with `logger.warn(type:
+  'compliance_stream_trial_usage_increment_blocked')` + `return`.
+- Closure is invoked at line 410 AFTER synthesis is complete and the DB record is written.
+  Log-and-continue is correct for a post-answer deferred path: the next request is blocked
+  at the `checkTrialLimit` preflight. Log entry confirmed present.
+
+Neither file required changes; both already call `incrementTrialUsageAtomic` directly.
+
+**2. Near-miss scan -- 0 findings across `trial.service.ts`, `trial.types.ts`, `index.ts`.**
+
+| Pattern | Findings | Notes |
+|---------|----------|-------|
+| `incrementTrialUsage` used as enforcement entry point | 0 | Line 275 is the legacy wrapper only; delegates to atomic and throws on `allowed: false` |
+| `checkTrialLimit` used as enforcement primitive | 0 | Preflight/display only; always followed by the atomic increment in enforcement paths |
+| `(err as Error).message` unsafe cast | 0 | Lines 91, 107, 184, 353 pass `err` directly to structured logger |
+| `redis.setex()` wrong Upstash API | 0 | `redis.set(k, v, { ex: ttl })` at lines 174, 342 |
+| `$queryRawUnsafe` | 0 | `prisma.$queryRaw` tagged template at line 226 |
+| Missing null guard on Prisma result | 0 | Guards at lines 62, 144, 261 |
+| Non-null assertions or `any` casts | 0 | None present |
+| Fire-and-forget without try/catch | 0 | `void (async () => {...})()` at lines 97-109, 169-188 both have full try/catch |
+
+**3. Invariants doc -- already present.** "Trial usage increment invariant" section at
+`docs/architecture/data-model-invariants.md` lines 82-99. Content: `incrementTrialUsageAtomic`
+named as enforcement entry point, `incrementTrialUsage` as legacy wrapper, `checkTrialLimit`
+scoped to preflight/display only. No edit required.
+
+---
+
+### BE-S3-001 -- SSE compliance stream duplicates quota-gate business logic [OPEN -- sprint-4]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium (drift risk between tRPC and SSE quota enforcement) |
+| Status | **Open** |
+| Discovered | Sprint 3 Batch 1 amended near-miss scan (2026-05-20) |
+| Affected | `src/routes/compliance-stream.route.ts` -- `checkAndPrepareUsage` |
+
+**Issue:** The SSE route carries a local quota implementation for compliance queries
+instead of sharing the tRPC `checkUsageLimit` code path. Batch 1 correctly moved
+effective-plan resolution into `resolveEffectivePlan`, but the quota check itself can
+still drift from middleware semantics over time.
+
+**Deferred action:** Extract a shared compliance-query usage gate or add an integration
+test that proves the SSE and tRPC gates remain behaviourally equivalent for FREE_TRIAL,
+REGULATOR, and paid plans.
+
+---
+
+### BE-S3-002 -- SSE RAG retrieval failure falls through to ungrounded generation [OPEN -- sprint-4]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium (regulatory-answer quality and auditability risk) |
+| Status | **Open** |
+| Discovered | Sprint 3 Batch 1 amended near-miss scan (2026-05-20) |
+| Affected | `src/routes/compliance-stream.route.ts` -- RAG retrieval before stream hijack |
+
+**Issue:** `searchAndGetContext(...).catch(...)` logs retrieval errors and returns an
+empty context, allowing the route to continue into AI synthesis. That preserves uptime,
+but it can silently convert a grounded compliance answer into an ungrounded answer when
+the retrieval dependency fails.
+
+**Deferred action:** Decide whether retrieval failure should return an HTTP 500 before
+stream hijack, emit an explicit degraded-mode response, or be allowed only for
+non-regulatory/general queries.
+
+---
+
+### BE-S3-003 -- SSE usage increment failure is swallowed after successful answer [OPEN -- sprint-4]
+
+| Field | Value |
+|-------|-------|
+| Severity | High (quota undercount / billing enforcement bypass on Redis failure) |
+| Status | **Open** |
+| Discovered | Sprint 3 Batch 1 amended near-miss scan (2026-05-20) |
+| Affected | `src/routes/compliance-stream.route.ts` -- deferred usage increment |
+
+**Issue:** After a successful stream, `usage.increment(...)` logs and swallows Redis or
+trial JSON update failures. The user receives a successful answer while quota accounting
+may not be committed.
+
+**Deferred action:** Define a durable accounting fallback for post-answer increment
+failures, such as a retryable usage-adjustment table/event, and alert on failed commits.
+
+---
+
+### BE-S3-004 -- Plan-context cache parser trusts enum-shaped strings [OPEN -- sprint-5a]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium (malformed Redis cache can skew plan resolution until expiry) |
+| Status | **Open** |
+| Discovered | Sprint 3 Batch 1 amended near-miss scan (2026-05-20) |
+| Affected | `src/modules/billing/resolve-effective-plan.ts` -- `parseCachedPlanCtx` |
+
+**Issue:** Cached plan context parsing checks that `orgPlan` is a string, then casts
+several enum fields without validating membership in the Prisma enum value sets. A
+corrupt cache entry could survive as a typed value until the five-minute TTL expires.
+
+**Deferred action:** Validate cached enum values explicitly and treat invalid cache
+payloads as misses with eviction.
+
+---
+
+### BE-S3-005 -- Fire-and-forget audit/export update errors use unsafe Error casts [OPEN -- sprint-5b]
+
+| Field | Value |
+|-------|-------|
+| Severity | Low (logging robustness / secondary-error risk) |
+| Status | **Open** |
+| Discovered | Sprint 3 Batch 1 amended near-miss scan (2026-05-20) |
+| Affected | `src/server/routers/compliance.router.ts` -- export audit/report tracking catch handlers |
+
+**Issue:** Several `.catch((err: unknown) => ...)` handlers log `(err as Error).message`.
+If a non-Error rejection is thrown, the log loses useful detail and can itself become
+misleading. Batch 1 briefly cleaned this up but the amended scope correction reverted
+those unrelated export-path changes.
+
+**Deferred action:** Replace with a local `errorMessage(err)` helper or equivalent in a
+future export cleanup pass.
+
+---
+
+### BE-S3-006 -- compliance.router.ts catch blocks use unsafe error casts [OPEN -- sprint-4]
+
+| Field | Value |
+|-------|-------|
+| Severity | Low |
+| Status | **Open** |
+| Discovered | Sprint 3 Batch 1 (2026-05-20) |
+| Affected | `src/server/routers/compliance.router.ts` -- catch blocks |
+
+**Issue:** 16 catch blocks in `compliance.router.ts` (lines 224, 421, 494, 552,
+592, 625, 665, 699, 746, 791, 832, 868, 1127, 1232, 1247, 1416) use the
+`(err as Error).message` pattern, which loses detail on non-Error rejections and
+can produce misleading logs. Batch 1 cleaned these up incidentally; the cleanup
+was reverted to preserve Sprint 3 scope discipline.
+
+**Deferred action:** Handle in a Sprint 4 catch-block hardening pass alongside
+BE-S3-005.
+
+---
+
+### BE-C-011 -- applyForPilot: no rate limiting and no email idempotency [RESOLVED -- Sprint 3 Batch 3]
+
+| Field | Value |
+|-------|-------|
+| Severity | High (AI-cost exposure + duplicate contact records) |
+| Status | **Resolved** |
+| Discovered | Sprint 3 Phase A audit refinement (2026-05-20) |
+| Resolved in | Sprint 3 Batch 3 (2026-05-20) |
+| Affected | `src/server/routers/publicMarketing.router.ts` -- `applyForPilot` mutation |
+
+**Root cause (rate limiting):** `applyForPilot` was on `publicProcedure` with no middleware
+guard. A single IP could submit unlimited pilot applications, generating unbounded contact
+records and consent log entries at zero marginal cost to the attacker.
+
+**Root cause (email idempotency):** No dedup sentinel existed for the normalised email
+address. Identical emails submitted in rapid succession (network retry, double-click, bot
+replay) each ran the full contact-creation flow and wrote multiple consent log rows for the
+same contact.
+
+**Secondary bug (discovered in-batch):** The pre-fix `createContact` call passed the raw
+`email` field from `input` rather than `normalizedEmail = email.trim().toLowerCase()`. The
+upstream `prisma.contact.findFirst` queried on `normalizedEmail`, so `findFirst` returned
+null on a match (different case) and the code took the `createContact` branch, creating a
+duplicate contact row under the un-normalized key.
+
+**Fix:**
+- `rateLimited('pilotApply', 5, { window: 600, identifier: (ctx) => ctx.req.ip ?? 'anonymous' })`
+  added as `.use()` middleware on `applyForPilot`. Five submissions per IP per 10-minute
+  sliding window. Uses the three-argument `rateLimited` overload added in the same batch.
+- `rateLimited` middleware signature extended in `src/server/trpc/middleware.ts` from
+  `(action, maxRequests?)` to `(action, maxRequests?, opts?)` with an optional `opts.window`
+  (default 900 s) and `opts.identifier` callback. Backward-compatible -- all 10 pre-existing
+  two-argument call sites are unchanged.
+- Email idempotency sentinel: `redis.set(dedupKey, '1', { nx: true, ex: 600 })`. Upstash
+  returns `'OK'` on first write, `null` on collision. Duplicate submissions within the
+  600-second window return `{ success: true }` without entering the contact-creation flow.
+  Key: `sheriabot:pilot_apply:dedup:{sha256(normalizedEmail)}`.
+- `normalizedEmail = email.trim().toLowerCase()` introduced; used consistently for the
+  `contact.findFirst` lookup, `createContact`, `updateContact`, `redis.set` key, and the
+  `prisma.contact.update` call.
+
+**Verification:** `scripts/verify-sprint-3-batch-3.ts` (gitignored). Four scenarios:
+- S1: 5 calls from same IP succeed; Redis zcard asserted at 5.
+- S2: 6th call from same IP returns `TOO_MANY_REQUESTS`; counter asserted at 6
+  (zadd runs unconditionally in the pipeline before the allowed check).
+- S3: two IPs, same email -- TTL >590 s after first; `recordConsent` called once only.
+- S4: `redis.del(dedupKey)` simulates TTL expiry; re-submission accepted and sentinel
+  re-acquired (TTL >590 s); `recordConsent` called again.
+
+**Batch 3 conditional review satisfied (2026-05-20) -- APPROVED**
+
+_Pre-approval quality gates:_
+
+**Precondition -- tsc --noEmit (pre-batch):** 0 errors.
+
+**1. Near-miss scan -- 0 findings. Code-location evidence per pattern.**
+
+| Pattern | Findings | Code-location evidence |
+|---------|----------|----------------------|
+| Redis nx written as `setnx` or wrong option shape | 0 | `publicMarketing.router.ts:191` -- `const acquired = await redis.set(dedupKey, '1', { nx: true, ex: PILOT_APPLY_DEDUP_TTL });` Correct Upstash form. |
+| Missing `await` on Redis nx/TTL write | 0 | `publicMarketing.router.ts:191` -- `const acquired = await redis.set(...)`. `await` is present; result captured for null-check at line 192. |
+| `email` used where `normalizedEmail` required in contact path | 0 | `publicMarketing.router.ts:181` -- `const normalizedEmail = email.trim().toLowerCase();`. Used at: `:186` (hash input), `:187` (dedupKey via hash), `:202` (`findOrCreateByEmailDomain`), `:209` (`findFirst` where clause), `:229` (`createContact` email field). No bare `email` in the contact path. |
+| `opts.identifier` callback typed too broadly / accepting wrong ctx shape | 0 | `middleware.ts:118` -- `opts?: { window?: number; identifier?: (ctx: { req: { ip: string } }) => string }`. Structural type, no `Context` import. Matches Fastify request shape. `publicMarketing.router.ts:167` -- `identifier: (ctx) => ctx.req.ip ?? 'anonymous'` correctly inferred. |
+| `as any` casts in new code | 0 | `publicMarketing.router.ts` -- grep for `as any` / `as never` / `!` returns 0 matches in the file. `middleware.ts:115-145` (new three-arg signature and body) -- no casts. |
+| Non-ASCII characters introduced by Batch 3 | 0 | New code at `publicMarketing.router.ts:163-263` (applyForPilot) and `middleware.ts:115-145` (rateLimited extension) is clean. Pre-existing em-dashes at `publicMarketing.router.ts:2` (`— Phase B4`) and `:92` (`— suppresses`) are from Phase B4 authorship, not Batch 3. Same class as BE-I-024 (deferred to Sprint 4 non-ASCII pass). |
+| `(err as Error)` unsafe cast in new catch blocks | 0 | `publicMarketing.router.ts:86-87` (`validateUnsubscribeToken` catch), `:146-147` (`unsubscribe` catch), `:260-261` (`applyForPilot` catch) -- all three delegate to `mapError(err)` (`unknown` typed). `mapError` at `:47-56` uses `instanceof TRPCError` and `instanceof BadRequestError` guards before the fallback. No unsafe cast. |
+| `window` option silently defaulting to wrong value on pre-existing call sites | 0 | `middleware.ts:126` -- `const windowSeconds = opts?.window ?? 900;`. Pre-existing 2-arg call sites supply no `opts`, so `windowSeconds` remains 900 (unchanged). `publicMarketing.router.ts:165-168` -- explicit `{ window: 600 }` supplied; no reliance on default. |
+
+**2. Router registration check.**
+
+`publicMarketingRouter` confirmed at:
+- `src/server/trpc/router.ts:27` -- import
+- `src/server/trpc/router.ts:80` -- registration
+
+**3. `rateLimited(` call-site count -- zero regressions.**
+
+Total call sites: 11 (10 pre-existing two-argument form + 1 new three-argument `pilotApply`
+form). All 10 prior call sites confirmed to use the two-argument form with no third argument.
+Default `windowSeconds = 900` and default identifier `ctx.user?.id || ctx.req.ip || 'anonymous'`
+are preserved for all pre-existing call sites.
+
+**4. Email-normalisation bug blast-radius audit -- 0 duplicate rows.**
+
+Pre-fix behaviour (git HEAD, `publicMarketing.router.ts` before Batch 3):
+
+```typescript
+// BEFORE (pre-Batch-3):
+const { firstName, lastName, email, companyName, jobTitle, phone } = input;
+
+// findFirst queried on normalised form:
+const existing = await prisma.contact.findFirst({
+  where: { email: email.trim().toLowerCase(), deletedAt: null },
+});
+// ...
+} else {
+  const created = await createContact(
+    {
+      email,           // <-- raw input.email, NOT normalised
+      firstName,
+      ...
+```
+
+```typescript
+// AFTER (Batch 3, publicMarketing.router.ts:181-229):
+const normalizedEmail = email.trim().toLowerCase();   // line 181
+// ...
+const companyId = await findOrCreateByEmailDomain(
+  normalizedEmail,   // line 202
+  ...
+);
+const existing = await prisma.contact.findFirst({
+  where: { email: normalizedEmail, deletedAt: null },   // line 209
+});
+// ...
+  const created = await createContact(
+    { email: normalizedEmail, ... },   // line 229
+```
+
+Blast-radius query run against production `Contact` table (2026-05-20):
+
+```sql
+SELECT LOWER(TRIM(email)) AS normalised_email,
+       COUNT(*)::int      AS cnt,
+       array_agg(email ORDER BY email) AS raw_emails,
+       array_agg(id ORDER BY email)    AS ids
+FROM "Contact"
+GROUP BY LOWER(TRIM(email))
+HAVING COUNT(*) > 1;
+```
+
+**Result: 0 rows.** The normalisation gap was in shipping code but never produced duplicate
+contact rows in the production database. No data hygiene pass required. Bug closed.
+
+**Post-batch -- tsc --noEmit:** 0 errors.
+
+---
+
+### BE-S3-TESTENV-01 -- prisma.policy.count() column-mismatch in test env [OPEN]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium (Test Environment Defect) |
+| Status | **Open** |
+| Discovered | Sprint 3 Batch 5 Verification |
+
+**Issue:** `prisma.policy.count()` throws a column-mismatch error during end-to-end testing of `suspendOrganization`, preventing full automated verification of cache invalidation paths. Suspected stale Prisma client or seed-data issue.
+
+**Deferred action:** Manual verification of `suspendOrganization` end-to-end is required before Batch 7 starts.
+
+### CC-C-039 -- SUSPENDED not a real SubscriptionStatus; suspendOrganization wrote CANCELLED [PARTIALLY RESOLVED -- Sprint 3 Batch 5]
+
+| Field | Value |
+|---|---|
+| Severity | High |
+| CVE class | Semantic / Admin correctness |
+| Status | **Partially Resolved** -- Phase 1 complete; Phases 2 and 3 are Batches 6 and 7 |
+| Resolved in | Sprint 3 Batch 5 (2026-05-21) |
+| Remaining | Batch 6: row backfill. Batch 7: call-site sweep, webhook hardening, billing halt, reactivation. |
+
+**Root cause:** `suspendOrganization` in `src/modules/admin/admin.module.ts` wrote `subscriptionStatus: 'CANCELLED'` instead of `'SUSPENDED'`. `SUSPENDED` did not exist as a Postgres enum value, so no correct write was possible.
+
+**Phase 1 fix (Batch 5 -- 2026-05-21):**
+- `ALTER TYPE "SubscriptionStatus" ADD VALUE 'SUSPENDED'` applied to production Supabase DB by operator.
+- `prisma/schema.prisma` updated: `SUSPENDED` added to `SubscriptionStatus` enum.
+- `pnpm prisma generate` run; Prisma client regenerated.
+- `admin.module.ts:suspendOrganization` -- `subscriptionStatus: 'CANCELLED'` changed to `subscriptionStatus: SubscriptionStatus.SUSPENDED`.
+- `admin.module.ts:suspendOrganization` -- `await this.invalidatePlanCacheForOrg(orgId, 'admin_suspend_org')` added (was missing; now clears `sheriabot:planctx:{userId}` for all org members on suspension).
+- `resolve-effective-plan.ts` -- SUSPENDED branch added as the first guard inside `if (pilotEffectivePlan === null)`. Logs `effective_plan_resolved_suspended` (warn) + `effective_plan_resolved_regulator` (reason: `admin_suspended`). `effectivePlan` remains REGULATOR. FREE_TRIAL is also blocked for SUSPENDED orgs by control-flow position (SUSPENDED is checked before the FREE_TRIAL branch).
+
+**Operator constraint (Batches 5 -- 7 gap):** Do **not** use the admin UI "Suspend organization" button between Batch 5 close and Batch 7 close. The IntaSend `COMPLETE` webhook handler (`src/lib/intasend/webhook.service.ts:244-258`) unconditionally transitions to `ACTIVE` on payment completion; this gate does not check for SUSPENDED until Batch 7. An in-flight payment can silently lift an admin-imposed suspension. If urgent, suspend via direct Supabase SQL (see Sprint 3 Batch 5 brief section 0.3).
+
+**Phase 2 (Batch 6):** Row classification + backfill. Live DB has zero `CANCELLED` rows (confirmed by Phase A audit), so Batch 6 is expected to be a no-op.
+
+**Phase 3 (Batch 7):** Call-site sweep (including churn counter at `admin.module.ts:1257`), IntaSend webhook SUSPENDED guard, Stripe-gated cancellation (`STRIPE_BILLING_ENABLED=false` until Batch 7), reactivation policy (`subscriptionStatus = 'EXPIRED'` to restore previous tier).
+
+**Near-miss findings deferred to Batch 7:**
+
+| ID | Location | Finding |
+|----|----------|---------|
+| NM-B5-01 | `admin.module.ts:1257` | Churn counter: `SUSPENDED` not counted in `churned` (only CANCELLED \| EXPIRED). Intentional for now -- admin-suspended ≠ churned -- but needs a dedicated `suspended` count field in org analytics. Batch 7 call-site sweep. |
+| NM-B5-02 | `pilot-lifecycle-cron.ts:114` | Hardcoded cache key `` `sheriabot:planctx:${user.id}` `` instead of `planCtxCacheKey(user.id)`. Pre-existing; not Batch 5 scope. Batch 7. |
+| NM-B5-03 | `billing.router.ts:524` | Same hardcoded key format as NM-B5-02. Batch 7. |
+| NM-B5-04 | `admin.module.ts` | `suspendOrganization` missing `invalidatePlanCacheForOrg(orgId, 'admin_suspend_org')` call. Pre-existing; not Batch 5 scope. Deferred to Batch 7. |
+
+---
+
 ## Next Sprint Priorities (in order)
 
 1. **Automated test coverage** -- Vitest setup, integration tests for

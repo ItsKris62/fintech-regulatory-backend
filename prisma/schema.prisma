@@ -1096,6 +1096,7 @@ enum SubscriptionStatus {
   CANCELLED // Stripe subscription deleted; immediately enters GRACE_PERIOD
   GRACE_PERIOD // Cancelled but within the 7-day grace window; full access retained
   EXPIRED // Grace period elapsed; plan has been downgraded to REGULATOR
+  SUSPENDED // Administratively suspended by platform operator; full access revoked
 }
 
 enum SubscriptionPlan {

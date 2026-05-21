@@ -489,7 +489,11 @@ class AdminModule {
         const [members, documents, policies] = await Promise.all([
           prisma.user.count({ where: { organizationId: org.id } }),
           prisma.legalDocument.count({ where: { organizationId: org.id, deletedAt: null } }),
-          prisma.policy.count({ where: { user: { organizationId: org.id } } }),
+          prisma.policy.count({
+            where: {
+              OR: [{ organizationId: org.id }, { user: { organizationId: org.id } }],
+            },
+          }),
         ]);
         return toAdminOrgDetail(org as unknown as Record<string, unknown>, {
           members,
@@ -557,7 +561,11 @@ class AdminModule {
 
     const [documents, policies] = await Promise.all([
       prisma.legalDocument.count({ where: { organizationId: orgId, deletedAt: null } }),
-      prisma.policy.count({ where: { user: { organizationId: orgId } } }),
+      prisma.policy.count({
+        where: {
+          OR: [{ organizationId: orgId }, { user: { organizationId: orgId } }],
+        },
+      }),
     ]);
 
     return toAdminOrgDetail(org as unknown as Record<string, unknown>, {
@@ -586,7 +594,7 @@ class AdminModule {
 
     await prisma.organization.update({
       where: { id: orgId },
-      data: { subscriptionStatus: 'CANCELLED' },
+      data: { subscriptionStatus: SubscriptionStatus.SUSPENDED },
     });
 
     // Suspend all org members
@@ -597,6 +605,7 @@ class AdminModule {
 
     await this.writeAuditLog(adminId, 'admin_suspend_org', 'Organization', orgId, { reason });
     logger.info({ type: 'admin_org_suspended', adminId, orgId, reason });
+    await this.invalidatePlanCacheForOrg(orgId, 'admin_suspend_org');
     await this.invalidateOrganizationStatsCache();
 
     return this.getOrganizationDetails(orgId);

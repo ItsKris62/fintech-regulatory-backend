@@ -251,6 +251,8 @@ export const complianceRouter = router({
    */
   followUp: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
+    .use(withPlanContext)
+    .use(checkUsageLimit(BillingMetric.COMPLIANCE_QUERIES, { deferIncrement: true }))
     .input(followUpQuerySchema)
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
@@ -326,6 +328,15 @@ export const complianceRouter = router({
             },
           },
         });
+
+        await ctx.incrementUsage?.();
+
+        if (ctx.plan === 'FREE_TRIAL') {
+          const tokensUsed = answer.inputTokens + answer.outputTokens;
+          if (tokensUsed > 0) {
+            await incrementTrialUsage(ctx.user!.id, 'totalTokensUsed', tokensUsed);
+          }
+        }
 
         logger.info({
           type: 'compliance_followup_success',

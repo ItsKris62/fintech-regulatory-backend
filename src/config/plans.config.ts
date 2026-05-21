@@ -117,9 +117,9 @@ export const PLANS: Record<SubscriptionPlan, PlanConfig> = {
     name: 'Business',
     tagline: 'For established fintech companies with complex compliance needs',
     price: { monthly: 44999, yearly: 453590, currency: 'KES' },
-    badge: 'Most Popular',
+    badge: null,
     cta: { type: 'subscribe', label: 'Start Free Trial' },
-    popular: true,
+    popular: false,
     trialDays: 14,
     features: [
       { text: 'Everything in Startup', included: true },

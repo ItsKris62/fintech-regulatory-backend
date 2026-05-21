@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { BillingMetric, MemberRole, MemberStatus, PaymentProvider, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
+import { BillingMetric, MemberRole, MemberStatus, SubscriptionPlan } from '@prisma/client';
 import type { OrgMembershipEntry } from './context';
 import { middleware } from './init';
 import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
@@ -9,18 +9,13 @@ import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { getQuota, requireFeature } from '@/utils/entitlements';
 import type { FeatureKey } from '@/config/entitlements.config';
-import { reactMailer } from '@/lib/email/react-mailer.service';
-import { appConfig } from '@/config/app.config';
-import type { EffectivePlan, TrialFeature } from '@/types/plan.types';
+import type { TrialFeature } from '@/types/plan.types';
 import { FREE_TRIAL_LIMITS } from '@/types/plan.types';
 import {
   checkTrialLimit,
-  incrementTrialUsage,
-  planCtxCacheKey,
-  fireTrialExpiredEmail,
+  incrementTrialUsageAtomic,
 } from '@/modules/trial';
-import { TrialUsageSchema, EMPTY_TRIAL_USAGE } from '@/modules/trial/trial.types';
-import { getRuntimePlan, resolvePlanPriceForInterval } from '@/lib/runtime-billing-plans';
+import { resolveEffectivePlan } from '@/modules/billing/resolve-effective-plan';
 
 /**
  * Logging Middleware (Fixed Error Handling)
@@ -117,13 +112,21 @@ export const isEnterprise = middleware(async ({ ctx, next }) => {
 /**
  * Rate Limiting Middleware
  */
-export const rateLimited = (action: string, maxRequests?: number) =>
+export const rateLimited = (
+  action: string,
+  maxRequests?: number,
+  opts?: { window?: number; identifier?: (ctx: { req: { ip: string } }) => string },
+) =>
   middleware(async ({ ctx, next }) => {
-    // Fallback securely if Fastify IP is missing for some reason
-    const identifier = ctx.user?.id || ctx.req.ip || 'anonymous';
+    // For public (unauthenticated) procedures pass opts.identifier to use
+    // ctx.req.ip explicitly. Authenticated procedures fall back to user ID.
+    const identifier = opts?.identifier
+      ? opts.identifier(ctx)
+      : ctx.user?.id || ctx.req.ip || 'anonymous';
+    const windowSeconds = opts?.window ?? 900;
 
     try {
-      await rateLimiter.checkOrThrow(identifier, action, maxRequests ?? 100, 900);
+      await rateLimiter.checkOrThrow(identifier, action, maxRequests ?? 100, windowSeconds);
     } catch (error: unknown) {
       logger.warn({
         type: 'rate_limit_exceeded',
@@ -140,24 +143,6 @@ export const rateLimited = (action: string, maxRequests?: number) =>
 
     return next({ ctx });
   });
-
-async function resolveMonthlyPlanAmountKes(plan: SubscriptionPlan | null | undefined): Promise<number> {
-  if (plan !== SubscriptionPlan.STARTUP && plan !== SubscriptionPlan.BUSINESS) {
-    return 0;
-  }
-
-  try {
-    const runtimePlan = await getRuntimePlan(plan);
-    return resolvePlanPriceForInterval(runtimePlan, 'monthly') ?? 0;
-  } catch (error: unknown) {
-    logger.warn({
-      type: 'mpesa_plan_price_resolution_failed',
-      plan,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return 0;
-  }
-}
 
 // ============================================================================
 // Organization Member Role Middlewares
@@ -446,54 +431,17 @@ export const requireOrgMembershipRole = (allowedRoles: MemberRole[]) =>
 // Plan-Aware Middleware
 // ============================================================================
 
-/** TTL for the user-scoped plan+trial context cache in Redis: 5 minutes */
-const PLAN_CACHE_TTL = 300;
-
 /** TTL for usage counters in Redis: 35 days (covers billing cycle edge cases) */
 const USAGE_TTL = 35 * 24 * 60 * 60;
 
 /**
- * Shape stored in the user-scoped plan context cache (sheriabot:planctx:{userId}).
- * Includes subscription status and trial timestamps so all resolution logic
- * works on cache hits without extra DB round-trips.
- */
-type CachedPlanCtx = {
-  orgPlan:                  SubscriptionPlan;
-  customLimits:             Record<string, unknown> | null;
-  subscriptionStatus:       SubscriptionStatus | null;
-  gracePeriodEndsAt:        string | null; // ISO-8601
-  trialActivatedAt:         string | null; // ISO-8601
-  trialExpiresAt:           string | null; // ISO-8601
-  // M-Pesa renewal fields
-  preferredPaymentMethod:   PaymentProvider | null;
-  mpesaNextPaymentDueDate:  string | null; // ISO-8601
-  // Pilot testing fields
-  isPilot:                  boolean;
-  pilotExpiresAt:           string | null; // ISO-8601
-};
-
-/**
- * Returns true when an org is in the GRACE_PERIOD state and the window has
- * already passed -- i.e. access should be revoked NOW.
- */
-function isGracePeriodExpired(
-  status:            SubscriptionStatus | null,
-  gracePeriodEndsAt: string | Date | null,
-): boolean {
-  return (
-    status === SubscriptionStatus.GRACE_PERIOD &&
-    gracePeriodEndsAt !== null &&
-    new Date(gracePeriodEndsAt) <= new Date()
-  );
-}
-
-/**
  * Resolves the effective plan for a request, with this priority:
  *
- *  1. Active paid subscription                  -> orgPlan (STARTUP/BUSINESS/ENTERPRISE)
- *  2. Grace period active                       -> orgPlan (retain access until window closes)
- *  3. Free trial active (expiresAt > now)       -> 'FREE_TRIAL'
- *  4. Fallback                                  -> REGULATOR
+ *  1. Pilot active                              -> ENTERPRISE
+ *  2. Active paid subscription                  -> orgPlan (STARTUP/BUSINESS/ENTERPRISE)
+ *  3. Grace period active                       -> orgPlan (retain access until window closes)
+ *  4. Free trial active (expiresAt > now)       -> 'FREE_TRIAL'
+ *  5. Fallback                                  -> REGULATOR
  *
  * Notes:
  *  - The trial check (step 3) runs BEFORE the org-less fast-return so that
@@ -511,441 +459,25 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
     throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required.' });
   }
 
-  const user  = ctx.user;
-  const userId = user.id;
-  const orgId  = user.organizationId;
-
-  const cacheKey = planCtxCacheKey(userId);
-
-  // -- Try user-scoped plan context cache ------------------------------------
-  let orgPlan:                  SubscriptionPlan            = SubscriptionPlan.REGULATOR;
-  let customLimits:             Record<string, unknown> | null = null;
-  let subscriptionStatus:       SubscriptionStatus | null   = null;
-  let gracePeriodEndsAt:        string | null               = null;
-  let trialActivatedAt:         string | null               = null;
-  let trialExpiresAt:           string | null               = null;
-  let preferredPaymentMethod:   PaymentProvider | null      = null;
-  let mpesaNextPaymentDueDate:  string | null               = null;
-  // Pilot testing fields (only non-zero for users with isPilot === true)
-  let isPilot:                  boolean                     = false;
-  let pilotExpiresAt:           string | null               = null;
-  let fromCache = false;
-
-  try {
-    const cached = await redis.get<CachedPlanCtx>(cacheKey);
-    if (cached && typeof cached === 'object' && cached.orgPlan) {
-      orgPlan                 = cached.orgPlan;
-      customLimits            = cached.customLimits ?? null;
-      subscriptionStatus      = cached.subscriptionStatus ?? null;
-      gracePeriodEndsAt       = cached.gracePeriodEndsAt ?? null;
-      trialActivatedAt        = cached.trialActivatedAt ?? null;
-      trialExpiresAt          = cached.trialExpiresAt ?? null;
-      preferredPaymentMethod  = cached.preferredPaymentMethod ?? null;
-      mpesaNextPaymentDueDate = cached.mpesaNextPaymentDueDate ?? null;
-      isPilot                 = cached.isPilot        ?? false;
-      pilotExpiresAt          = cached.pilotExpiresAt ?? null;
-      fromCache               = true;
-    }
-  } catch {
-    // Cache miss or parse error -- fall through to DB
-  }
-
-  // -- DB lookup on cache miss ------------------------------------------------
-  if (!fromCache) {
-    // Always fetch trial fields from the User row
-    const userRow = await prisma.user.findUnique({
-      where:  { id: userId },
-      select: {
-        freeTrialActivatedAt: true,
-        freeTrialExpiresAt:   true,
-        freeTrialUsage:       true,
-        fullName:             true,
-        isPilot:              true,
-        pilotExpiresAt:       true,
-      },
-    });
-
-    trialActivatedAt = userRow?.freeTrialActivatedAt?.toISOString() ?? null;
-    trialExpiresAt   = userRow?.freeTrialExpiresAt?.toISOString()   ?? null;
-    isPilot          = userRow?.isPilot                              ?? false;
-    pilotExpiresAt   = userRow?.pilotExpiresAt?.toISOString()       ?? null;
-
-    // Fetch org subscription state only if the user belongs to an org
-    if (orgId) {
-      const org = await prisma.organization.findUnique({
-        where:  { id: orgId },
-        select: {
-          plan:                    true,
-          customLimits:            true,
-          subscriptionStatus:      true,
-          gracePeriodEndsAt:       true,
-          preferredPaymentMethod:  true,
-          mpesaNextPaymentDueDate: true,
-        },
-      });
-
-      orgPlan                 = org?.plan               ?? SubscriptionPlan.REGULATOR;
-      customLimits            = (org?.customLimits as Record<string, unknown> | null) ?? null;
-      subscriptionStatus      = org?.subscriptionStatus ?? null;
-      gracePeriodEndsAt       = org?.gracePeriodEndsAt?.toISOString()       ?? null;
-      preferredPaymentMethod  = org?.preferredPaymentMethod                 ?? null;
-      mpesaNextPaymentDueDate = org?.mpesaNextPaymentDueDate?.toISOString() ?? null;
-    }
-
-    // Populate user-scoped cache
-    await redis.set(
-      cacheKey,
-      JSON.stringify({
-        orgPlan,
-        customLimits,
-        subscriptionStatus,
-        gracePeriodEndsAt,
-        trialActivatedAt,
-        trialExpiresAt,
-        preferredPaymentMethod,
-        mpesaNextPaymentDueDate,
-        isPilot,
-        pilotExpiresAt,
-      }),
-      { ex: PLAN_CACHE_TTL },
-    ).catch(() => { /* non-fatal */ });
-
-    // -- Lazy trial-expiry email (fires once per trial, on cache miss only) ----
-    // If a trial was previously active but has now expired, fire the email once.
-    if (
-      trialActivatedAt !== null &&
-      trialExpiresAt !== null &&
-      new Date(trialExpiresAt) <= new Date()
-    ) {
-      const usage = (() => {
-        const parsed = TrialUsageSchema.safeParse(userRow?.freeTrialUsage);
-        return parsed.success ? parsed.data : { ...EMPTY_TRIAL_USAGE };
-      })();
-
-      void fireTrialExpiredEmail(
-        userId,
-        user.email,
-        userRow?.fullName ?? '',
-        usage,
-      ).catch(() => { /* non-fatal */ });
-    }
-  }
-
-  // -- Lazy grace-period enforcement -----------------------------------------
-  if (orgId && isGracePeriodExpired(subscriptionStatus, gracePeriodEndsAt)) {
-    const previousPlan = orgPlan;
-
-    await prisma.organization.update({
-      where: { id: orgId },
-      data: {
-        plan:               SubscriptionPlan.REGULATOR,
-        subscriptionStatus: SubscriptionStatus.EXPIRED,
-      },
-    });
-
-    // Invalidate user-scoped cache
-    try { await redis.del(cacheKey); } catch { /* non-fatal */ }
-
-    orgPlan            = SubscriptionPlan.REGULATOR;
-    subscriptionStatus = SubscriptionStatus.EXPIRED;
-
-    logger.info({
-      type:  'grace_period_expired_downgraded',
-      orgId,
-      userId,
-      previousGracePeriodEndsAt: gracePeriodEndsAt,
-    });
-
-    void (async () => {
-      try {
-        const contact = await prisma.user.findFirst({
-          where:   { organizationId: orgId, role: { in: ['ADMIN', 'STARTUP', 'ENTERPRISE'] } },
-          select:  { email: true, fullName: true },
-          orderBy: { createdAt: 'asc' },
-        });
-        const org = await prisma.organization.findUnique({
-          where:  { id: orgId },
-          select: { name: true },
-        });
-        if (contact && org) {
-          const base      = appConfig.frontendUrl.replace(/\/$/, '');
-          const planLabel = previousPlan.charAt(0) + previousPlan.slice(1).toLowerCase();
-          await reactMailer.sendPlanDowngradedEmail(contact.email, {
-            userName:         contact.fullName,
-            orgName:          org.name,
-            previousPlanName: planLabel,
-            reactivateUrl:    `${base}/settings/billing`,
-            dashboardUrl:     `${base}/startup`,
-          });
-        }
-      } catch { /* email failure must never affect the request */ }
-    })();
-  }
-
-  // -- M-Pesa renewal lazy check ---------------------------------------------
-  //
-  // Only runs when the org has elected M-Pesa as their payment method.
-  // Stripe subscriptions are managed entirely by Stripe -- do NOT touch them here.
-  //
-  // Logic:
-  //   Past 7-day grace   -> downgrade to REGULATOR
-  //   Within grace       -> keep plan, fire once-per-day payment-due reminder
-  //   Within 3 days      -> fire once-per-72h upcoming payment reminder
-  if (
-    orgId &&
-    preferredPaymentMethod === PaymentProvider.MPESA &&
-    mpesaNextPaymentDueDate !== null
-  ) {
-    const now        = new Date();
-    const dueDate    = new Date(mpesaNextPaymentDueDate);
-    const msPerDay   = 1000 * 60 * 60 * 24;
-    const msDiff     = dueDate.getTime() - now.getTime();
-    const daysPast   = msDiff < 0 ? Math.floor(-msDiff / msPerDay) : 0;
-    const daysUntil  = msDiff > 0 ? Math.floor(msDiff / msPerDay) : 0;
-
-    if (daysPast > 7) {
-      // Past the 7-day grace window  -  downgrade to REGULATOR
-      const previousPlan = orgPlan;
-
-      await prisma.organization.update({
-        where: { id: orgId },
-        data: {
-          plan:               SubscriptionPlan.REGULATOR,
-          subscriptionStatus: SubscriptionStatus.EXPIRED,
-        },
-      });
-
-      try { await redis.del(cacheKey); } catch { /* non-fatal */ }
-
-      orgPlan            = SubscriptionPlan.REGULATOR;
-      subscriptionStatus = SubscriptionStatus.EXPIRED;
-
-      logger.info({
-        type:  'mpesa_grace_period_expired_downgraded',
-        orgId,
-        userId,
-        previousPlan,
-        mpesaNextPaymentDueDate,
-      });
-
-      // Fire downgrade email (non-blocking)
-      void (async () => {
-        try {
-          const contact = await prisma.user.findFirst({
-            where:   { organizationId: orgId, role: { in: ['ADMIN', 'STARTUP', 'ENTERPRISE'] } },
-            select:  { email: true, fullName: true },
-            orderBy: { createdAt: 'asc' },
-          });
-          const org = await prisma.organization.findUnique({
-            where:  { id: orgId },
-            select: { name: true },
-          });
-          if (contact && org) {
-            const base      = appConfig.frontendUrl.replace(/\/$/, '');
-            const planLabel = previousPlan.charAt(0) + previousPlan.slice(1).toLowerCase();
-            await reactMailer.sendPlanDowngradedEmail(contact.email, {
-              userName:         contact.fullName,
-              orgName:          org.name,
-              previousPlanName: planLabel,
-              reactivateUrl:    `${base}/settings/billing`,
-              dashboardUrl:     `${base}/startup`,
-            });
-          }
-        } catch { /* email failure must never affect the request */ }
-      })();
-    } else if (daysPast > 0) {
-      // Within 7-day grace window  -  keep current plan, send daily reminder
-      const today       = now.toISOString().slice(0, 10); // YYYY-MM-DD
-      const sentinelKey = `sheriabot:mpesa:due_notified:${orgId}:${today}`;
-
-      void (async () => {
-        try {
-          const alreadyNotified = await redis.get<string>(sentinelKey);
-          if (!alreadyNotified) {
-            await redis.set(sentinelKey, '1', { ex: 60 * 60 * 24 }); // 24-hour TTL
-
-            const contact = await prisma.user.findFirst({
-              where:   { organizationId: orgId, role: { in: ['ADMIN', 'STARTUP', 'ENTERPRISE'] } },
-              select:  { email: true, fullName: true, id: true },
-              orderBy: { createdAt: 'asc' },
-            });
-            if (contact) {
-              const org = await prisma.organization.findUnique({
-                where:  { id: orgId },
-                select: { plan: true },
-              });
-              const planLabel  = (org?.plan ?? 'Subscription').charAt(0) + (org?.plan ?? '').slice(1).toLowerCase();
-              const amountKes  = await resolveMonthlyPlanAmountKes(org?.plan);
-              const amountStr  = `KES ${amountKes.toLocaleString('en-KE')}`;
-              const base       = appConfig.frontendUrl.replace(/\/$/, '');
-              await reactMailer.sendPaymentDueEmail(contact.email, contact.id, {
-                userName:     contact.fullName,
-                amount:       amountStr,
-                dueDate:      dueDate.toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' }),
-                planName:     planLabel,
-                paymentUrl:   `${base}/settings/billing`,
-                daysUntilDue: -daysPast, // negative = overdue
-              });
-            }
-          }
-        } catch { /* non-fatal */ }
-      })();
-    } else if (daysUntil <= 3 && daysUntil >= 0) {
-      // Approaching due date (within 3 days)  -  send one-time upcoming reminder
-      const sentinelKey = `sheriabot:mpesa:upcoming_notified:${orgId}`;
-
-      void (async () => {
-        try {
-          const alreadyNotified = await redis.get<string>(sentinelKey);
-          if (!alreadyNotified) {
-            await redis.set(sentinelKey, '1', { ex: 60 * 60 * 72 }); // 72-hour TTL
-
-            const contact = await prisma.user.findFirst({
-              where:   { organizationId: orgId, role: { in: ['ADMIN', 'STARTUP', 'ENTERPRISE'] } },
-              select:  { email: true, fullName: true, id: true },
-              orderBy: { createdAt: 'asc' },
-            });
-            if (contact) {
-              const org = await prisma.organization.findUnique({
-                where:  { id: orgId },
-                select: { plan: true },
-              });
-              const planLabel  = (org?.plan ?? 'Subscription').charAt(0) + (org?.plan ?? '').slice(1).toLowerCase();
-              const amountKes  = await resolveMonthlyPlanAmountKes(org?.plan);
-              const amountStr  = `KES ${amountKes.toLocaleString('en-KE')}`;
-              const base       = appConfig.frontendUrl.replace(/\/$/, '');
-              await reactMailer.sendPaymentDueEmail(contact.email, contact.id, {
-                userName:     contact.fullName,
-                amount:       amountStr,
-                dueDate:      dueDate.toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' }),
-                planName:     planLabel,
-                paymentUrl:   `${base}/settings/billing`,
-                daysUntilDue: daysUntil,
-              });
-            }
-          }
-        } catch { /* non-fatal */ }
-      })();
-    }
-  }
-
-  // -- Pilot override (Option A: derived, no Org mutation) ------------------
-  //
-  // Runs ONLY when isPilot === true. Non-pilot users skip this block entirely
-  // -- zero performance or behavioural impact on the non-pilot code path.
-  //
-  // Security: pilotExpiresAt is always read from the server-side Redis cache
-  // (populated from the DB) and is never derived from client input.
-  //
-  // pilotEffectivePlan is non-null only when isPilot === true. When set, it
-  // replaces the standard resolution result at the final return next() below.
-  // The DB downgrade (clearing isPilot, PilotEvent logging) is the cron job's
-  // responsibility. This middleware is read-only.
-  let pilotEffectivePlan: EffectivePlan | null = null;
-  if (isPilot && pilotExpiresAt !== null) {
-    const now = new Date();
-    if (new Date(pilotExpiresAt) <= now) {
-      // Pilot window has closed -- invalidate cache so the cron's DB update
-      // is picked up on the next request, then cap access at REGULATOR.
-      try { await redis.del(cacheKey); } catch { /* non-fatal */ }
-      logger.info({
-        type:          'PILOT_EXPIRED_GATE',
-        userId,
-        pilotExpiresAt,
-      });
-      pilotEffectivePlan = SubscriptionPlan.REGULATOR;
-    } else {
-      // Pilot is active -- override to ENTERPRISE regardless of org plan.
-      const msRemaining   = new Date(pilotExpiresAt).getTime() - now.getTime();
-      const daysRemaining = Math.max(0, Math.floor(msRemaining / (1000 * 60 * 60 * 24)));
-      logger.debug({
-        type:          'PILOT_ACTIVE_GATE',
-        userId,
-        daysRemaining,
-        pilotExpiresAt,
-      });
-      pilotEffectivePlan = SubscriptionPlan.ENTERPRISE;
-    }
-  }
-
-  // -- Resolve effective plan (priority order) -------------------------------
-  //
-  //  1. Active paid subscription (ACTIVE or TRIALING from Stripe)
-  //  2. Grace period active (not yet expired)
-  //  3. Free trial active
-  //  4. REGULATOR fallback
-  //
-  // Pilot users bypass this block: pilotEffectivePlan replaces the result below.
-
-  let effectivePlan: EffectivePlan = SubscriptionPlan.REGULATOR;
-  let trialState: { isActive: boolean; daysRemaining: number | null } | undefined;
-
-  // Only ACTIVE and TRIALING (Stripe 14-day trial) are considered a live paid
-  // subscription.  GRACE_PERIOD is handled separately below (it uses a date
-  // check so we don't grant access past gracePeriodEndsAt).
-  // CANCELLED, PAST_DUE, and EXPIRED are explicitly excluded: a CANCELLED org
-  // must go through the grace period path, PAST_DUE loses access immediately
-  // so the failed-payment email motivates quick resolution, and EXPIRED means
-  // the grace window has already closed.
-  const hasPaidPlan =
-    orgPlan !== SubscriptionPlan.REGULATOR &&
-    (subscriptionStatus === SubscriptionStatus.ACTIVE ||
-     subscriptionStatus === SubscriptionStatus.TRIALING);
-
-  const graceStillActive =
-    subscriptionStatus === SubscriptionStatus.GRACE_PERIOD &&
-    gracePeriodEndsAt !== null &&
-    new Date(gracePeriodEndsAt) > new Date();
-
-  if (!hasPaidPlan && !graceStillActive && orgPlan !== SubscriptionPlan.REGULATOR) {
-    // Plan is set to a paid tier but status is not ACTIVE/TRIALING/GRACE_PERIOD
-    // (e.g. CANCELLED, PAST_DUE, EXPIRED)  -  log and fall through to trial/REGULATOR.
-    logger.warn({
-      type:               'plan_downgrade',
-      userId,
-      orgId,
-      orgPlan,
-      subscriptionStatus,
-      effectivePlan:      'REGULATOR',
-    });
-  }
-
-  if (hasPaidPlan || graceStillActive) {
-    // Steps 1 & 2: paid plan or active grace period
-    effectivePlan = orgPlan;
-  } else if (
-    trialActivatedAt !== null &&
-    trialExpiresAt !== null &&
-    new Date(trialExpiresAt) > new Date()
-  ) {
-    // Step 3: free trial active
-    effectivePlan = 'FREE_TRIAL';
-    const msRemaining = new Date(trialExpiresAt).getTime() - Date.now();
-    const daysRemaining = Math.max(0, Math.floor(msRemaining / (1000 * 60 * 60 * 24)));
-    trialState = { isActive: true, daysRemaining };
-  }
-  // Step 4: falls through to REGULATOR (default above)
-
-  // Pilot override replaces the standard resolution when set.
-  const finalPlan: EffectivePlan = pilotEffectivePlan ?? effectivePlan;
-
-  logger.debug({
-    type:   'plan_context_loaded',
-    userId,
-    orgId,
-    effectivePlan: finalPlan,
-    subscriptionStatus,
-    fromCache,
-    isPilot,
+  const resolved = await resolveEffectivePlan({
+    userId: ctx.user.id,
+    organizationId: ctx.user.organizationId ?? null,
+    userEmail: ctx.user.email,
+    prisma,
+    redis,
   });
+
+  const customLimits = typeof resolved.customLimits === 'object' && !Array.isArray(resolved.customLimits)
+    ? resolved.customLimits as Record<string, unknown> | null
+    : null;
 
   return next({
     ctx: {
       ...ctx,
-      user,
-      plan:         finalPlan,
-      customLimits: pilotEffectivePlan !== null ? null : customLimits,
-      trialState:   pilotEffectivePlan !== null ? undefined : trialState,
+      user: ctx.user,
+      plan: resolved.plan,
+      customLimits,
+      trialState: resolved.trialState,
     },
   });
 });
@@ -1081,17 +613,30 @@ export const checkUsageLimit = (
           }
         }
 
-        // Increment deferred to after successful execution via ctx.incrementUsage
-        const doTrialIncrement = async (): Promise<void> => {
-          await incrementTrialUsage(user.id, trialFeature);
-        };
+        // Atomic pre-handler consumption closes the check-then-increment race:
+        // if a parallel request wins the final slot, this request is blocked
+        // before the procedure handler runs.
+        const featureIncrement = await incrementTrialUsageAtomic(user.id, trialFeature, 1);
+        if (!featureIncrement.allowed) {
+          logger.warn({
+            type:    'trial_limit_reached_atomic',
+            userId:  user.id,
+            feature: trialFeature,
+            current: featureIncrement.newCount,
+            limit:   featureIncrement.limit,
+          });
+          throw new TRPCError({
+            code:    'FORBIDDEN',
+            message: `Trial limit reached for this feature (${featureIncrement.newCount}/${featureIncrement.limit}). Upgrade to continue.`,
+          });
+        }
 
         return next({
           ctx: {
             ...ctx,
             user,
-            usageInfo:      { metric, current: featureCheck.current, limit: featureCheck.limit },
-            incrementUsage: doTrialIncrement,
+            usageInfo:      { metric, current: featureIncrement.newCount, limit: featureIncrement.limit },
+            incrementUsage: async () => {},
           },
         });
       }

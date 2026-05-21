@@ -1,6 +1,5 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
-import { timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { createContext } from './server/trpc/context';
@@ -20,16 +19,29 @@ import { alertPubSub } from './lib/redis/pubsub';
 import { consumeAlertStreamToken } from './lib/alerts/stream-token';
 import { registerComplianceStreamRoute } from './routes/compliance-stream.route';
 import { appConfig } from './config/app.config';
+import { verifyIntaSendWebhook, isAllowedIntaSendIp, parseAllowedIps } from './lib/intasend/webhook-verifier';
 
 /**
  * Zod schema for IntaSend webhook payloads.
  *
- * IntaSend does not sign webhook bodies, so we cannot verify authenticity via
- * HMAC. Instead we:
- *  1. Validate the payload shape strictly here (rejects log-injection strings
- *     and unexpected types before they reach handleEvent).
- *  2. In handleEvent, confirm the invoice exists in our DB *before* calling
- *     IntaSend's status API with the caller-supplied invoice_id (SSRF guard).
+ * IntaSend webhook authenticity verification — three-layer defence:
+ *
+ *   Layer 1: IP allowlist (src/app.ts route handler).
+ *            Source IP must match INTASEND_WEBHOOK_ALLOWED_IPS.
+ *            Default: 68.183.180.25, 157.245.201.212 (per IntaSend
+ *            support, 2026-05-20). Rejection: 403 forbidden.
+ *
+ *   Layer 2: Challenge field verification (verifyIntaSendWebhook).
+ *            payload.challenge must equal INTASEND_WEBHOOK_CHALLENGE.
+ *            IntaSend supports challenge-only authentication; no HMAC
+ *            is available or planned per vendor confirmation 2026-05-20.
+ *            Rejection: 400 webhook_verification_failed.
+ *
+ *   Layer 3: DB invoice lookup + getPaymentStatus re-verification.
+ *            Existing flow, unchanged. Confirms the invoice exists in
+ *            our DB and the upstream payment state matches.
+ *
+ * Three layers, independent. Each fails closed.
  */
 const intaSendWebhookSchema = z.object({
   invoice_id:    z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
@@ -39,12 +51,6 @@ const intaSendWebhookSchema = z.object({
   meta:          z.record(z.string(), z.unknown()).optional(),
   challenge:     z.string().max(512).optional(),
 }).passthrough();
-
-function timingSafeStringEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-}
 
 /**
  * Build and configure the Fastify application.
@@ -57,6 +63,20 @@ function timingSafeStringEqual(left: string, right: string): boolean {
  * Call this once from src/index.ts inside the start() bootstrap function.
  */
 export async function buildApp(): Promise<FastifyInstance> {
+  if (process.env.NODE_ENV === 'production') {
+    const allowedIps = parseAllowedIps(process.env.INTASEND_WEBHOOK_ALLOWED_IPS || '68.183.180.25,157.245.201.212');
+    if (allowedIps.length === 0) {
+      throw new Error(
+        'Production startup blocked: INTASEND_WEBHOOK_ALLOWED_IPS must contain at least one IP.',
+      );
+    }
+    if (!process.env.INTASEND_WEBHOOK_CHALLENGE && !appConfig.intasend?.webhookChallenge) {
+      throw new Error(
+        'Production startup blocked: INTASEND_WEBHOOK_CHALLENGE must be set.',
+      );
+    }
+  }
+
   const app = Fastify({
     logger: false, // Structured logging handled by Pino via src/utils/logger
     maxParamLength: 5000,
@@ -144,40 +164,98 @@ export async function buildApp(): Promise<FastifyInstance> {
   //  1. Payload shape is validated via intaSendWebhookSchema before processing.
   //  2. handleEvent checks the invoice exists in our DB before calling the
   //     IntaSend status API, preventing SSRF with attacker-controlled IDs.
-  app.post<{ Body: IntaSendWebhookPayload }>(
-    '/api/webhooks/intasend',
-    async (request, reply) => {
-      const parseResult = intaSendWebhookSchema.safeParse(request.body);
-      if (!parseResult.success) {
-        logger.warn({
-          type:   'intasend_webhook_invalid_body',
-          ip:     request.ip,
-          errors: parseResult.error.flatten(),
-        });
-        return reply.status(400).send({ error: 'Invalid webhook payload' });
-      }
+  await app.register(async (webhookApp) => {
+    webhookApp.addContentTypeParser(
+      'application/json',
+      { parseAs: 'buffer' },
+      (req, body, done) => {
+        try {
+          const text = (body as Buffer).toString('utf8');
+          const json = JSON.parse(text);
+          req.rawBody = body as Buffer;
+          done(null, json);
+        } catch (err) {
+          done(err instanceof Error ? err : new Error('json_parse_failed'), undefined);
+        }
+      },
+    );
 
-      const payload = parseResult.data as IntaSendWebhookPayload;
-      const expectedChallenge = appConfig.intasend.webhookChallenge;
-      if (expectedChallenge && (!payload.challenge || !timingSafeStringEqual(payload.challenge, expectedChallenge))) {
-        logger.warn({
-          type: 'intasend_webhook_invalid_challenge',
+    webhookApp.post<{ Body: IntaSendWebhookPayload }>(
+      '/api/webhooks/intasend',
+      async (request, reply) => {
+        // Layer 1: IP allowlist
+        const allowedIps = parseAllowedIps(process.env.INTASEND_WEBHOOK_ALLOWED_IPS || '68.183.180.25,157.245.201.212');
+
+        if (allowedIps.length === 0) {
+          logger.error({
+            type: 'intasend_webhook_misconfigured_no_ips',
+            ip: request.ip,
+          });
+          return reply.code(500).send({ error: 'misconfigured' });
+        }
+
+        if (!isAllowedIntaSendIp(request, allowedIps)) {
+          logger.warn({
+            type: 'intasend_webhook_rejected_ip',
+            ip: request.ip,
+            allowed_count: allowedIps.length,
+          });
+          return reply.code(403).send({ error: 'forbidden' });
+        }
+
+        // Layer 2: challenge verification
+        const expectedChallenge = process.env.INTASEND_WEBHOOK_CHALLENGE || appConfig.intasend?.webhookChallenge;
+        if (!expectedChallenge) {
+          logger.error({
+            type: 'intasend_webhook_misconfigured_no_challenge',
+            ip: request.ip,
+          });
+          return reply.code(500).send({ error: 'misconfigured' });
+        }
+
+        const parseResult = intaSendWebhookSchema.safeParse(request.body);
+        if (!parseResult.success) {
+          logger.warn({
+            type:   'intasend_webhook_invalid_body',
+            ip:     request.ip,
+            errors: parseResult.error.flatten(),
+          });
+          return reply.status(400).send({ error: 'Invalid webhook payload' });
+        }
+
+        const payload = parseResult.data as IntaSendWebhookPayload;
+
+        const verification = verifyIntaSendWebhook({
+          payload,
+          expectedChallenge,
+        });
+
+        if (!verification.ok) {
+          logger.warn({
+            type: 'intasend_webhook_rejected_challenge',
+            reason: verification.reason,
+            ip: request.ip,
+          });
+          return reply.code(400).send({ error: 'webhook_verification_failed' });
+        }
+
+        logger.info({
+          type: 'intasend_webhook_verified',
+          mode: verification.mode,
           ip: request.ip,
-          hasChallenge: Boolean(payload.challenge),
         });
-        return reply.status(401).send({ error: 'Invalid webhook challenge' });
-      }
 
-      try {
-        await intaSendWebhookService.handleEvent(payload);
-        return reply.status(200).send({ received: true });
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'Webhook processing error';
-        logger.error({ type: 'intasend_webhook_error', error: message });
-        return reply.status(500).send({ error: 'Webhook handler failed' });
-      }
-    },
-  );
+        try {
+          await intaSendWebhookService.handleEvent(payload);
+          return reply.status(200).send({ received: true });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Webhook processing error';
+          logger.error({ type: 'intasend_webhook_error', error: message });
+          return reply.status(500).send({ error: 'Webhook handler failed' });
+        }
+      },
+    );
+  });
 
   // -- Resend Webhook  -  raw body required for Svix signature verification ----
   // Encapsulated plugin so the Buffer parser is scoped only to this route and

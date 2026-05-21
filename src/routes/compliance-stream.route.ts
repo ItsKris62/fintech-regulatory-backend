@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { stream } from '@/lib/ai/client';
-import { searchAndGetContext } from '@/lib/rag/rag.service';
+import { searchAndGetContext, type SearchResult } from '@/lib/rag/rag.service';
 import { runOrchestrator } from '@/modules/compliance/orchestrator';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import { appConfig } from '@/config/app.config';
@@ -12,22 +12,26 @@ import { logger } from '@/utils/logger';
 import { isTokenRevoked } from '@/utils/token-revocation';
 import { aiConfig } from '@/config/ai.config';
 import { rateLimiter } from '@/lib/redis/rate-limiter';
+import { resolveEffectivePlan } from '@/modules/billing/resolve-effective-plan';
+import { checkTrialLimit, incrementTrialUsageAtomic } from '@/modules/trial';
+import type { TrialContextState } from '@/modules/trial/trial.types';
+import type { EffectivePlan } from '@/types/plan.types';
 import {
   generateComplianceSystemPrompt,
   generateComplianceUserPrompt,
 } from '@/lib/ai/prompts/compliance-query';
 import type { OrgMembershipEntry } from '@/server/trpc/context';
 
-// ── Constants ────────────────────────────────────────────────────────────────
+// Constants
 const RATE_LIMIT_MAX     = 100; // same window as tRPC rateLimited('complianceQuery')
 const RATE_LIMIT_WINDOW  = 900; // 15 min
-const HEARTBEAT_INTERVAL = 15_000; // 15 s — below Render's ~60 s idle timeout
+const HEARTBEAT_INTERVAL = 15_000; // 15 s, below Render's ~60 s idle timeout
 const USAGE_TTL_SECONDS  = 35 * 24 * 60 * 60; // 35 days (matches middleware)
 
-// Redis metric key segment — matches BillingMetric.COMPLIANCE_QUERIES enum value
+// Redis metric key segment; matches BillingMetric.COMPLIANCE_QUERIES enum value
 const METRIC_KEY = 'COMPLIANCE_QUERIES';
 
-// ── Input schema ─────────────────────────────────────────────────────────────
+// Input schema
 const inputSchema = z.object({
   question:         z.string().min(1).max(5000),
   organizationType: z.string().optional(),
@@ -35,15 +39,16 @@ const inputSchema = z.object({
   context:          z.string().optional(),
 });
 
-// ── Auth resolution ──────────────────────────────────────────────────────────
+// Auth resolution
 interface AuthContext {
   userId:         string;
   organizationId: string;
-  plan:           string;
+  plan:           EffectivePlan;
+  trialState:     TrialContextState | undefined;
   orgMembership:  OrgMembershipEntry;
 }
 
-async function resolveAuth(authHeader: string | undefined): Promise<AuthContext | null> {
+export async function resolveAuth(authHeader: string | undefined): Promise<AuthContext | null> {
   if (!authHeader?.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
 
@@ -54,7 +59,7 @@ async function resolveAuth(authHeader: string | undefined): Promise<AuthContext 
     const supabaseUserId = data.user.id;
     if (await isTokenRevoked(token, supabaseUserId)) return null;
 
-    // User profile — Redis cache first (same key as tRPC context)
+    // User profile: Redis cache first (same key as tRPC context)
     const cacheKey = `user:session:${supabaseUserId}`;
     let dbUser: { id: string; organizationId: string | null; role: string } | null = null;
 
@@ -72,7 +77,7 @@ async function resolveAuth(authHeader: string | undefined): Promise<AuthContext 
 
     if (!dbUser?.organizationId) return null;
 
-    // Org membership — ACTIVE check with Redis cache (same key as middleware)
+    // Org membership: ACTIVE check with Redis cache (same key as middleware)
     const orgCacheKey = `sheriabot:orgmem:${dbUser.id}:${dbUser.organizationId}`;
     let entry: OrgMembershipEntry | null = null;
 
@@ -91,36 +96,95 @@ async function resolveAuth(authHeader: string | undefined): Promise<AuthContext 
 
     if (!entry || entry.status !== 'ACTIVE') return null;
 
-    // Resolve plan from org
-    const org = await prisma.organization.findUnique({
-      where:  { id: dbUser.organizationId },
-      select: { plan: true },
+    const resolved = await resolveEffectivePlan({
+      userId: dbUser.id,
+      organizationId: dbUser.organizationId,
+      prisma,
+      redis,
     });
 
     return {
       userId:         dbUser.id,
       organizationId: dbUser.organizationId,
-      plan:           org?.plan ?? 'REGULATOR',
+      plan:           resolved.plan,
+      trialState:     resolved.trialState,
       orgMembership:  entry,
     };
-  } catch (err: any) {
-    logger.warn({ type: 'compliance_stream_auth_error', error: err?.message });
+  } catch (err: unknown) {
+    logger.warn({
+      type: 'compliance_stream_auth_error',
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }
 
-// ── Usage enforcement ─────────────────────────────────────────────────────────
+// Usage enforcement
 // Replicates checkUsageLimit(BillingMetric.COMPLIANCE_QUERIES) from tRPC middleware.
-// NOTE: FREE_TRIAL effective plan is not resolved here — trial users are treated
-// as their base org plan. Stage 3 TODO: mirror withPlanContext trial resolution.
+// FREE_TRIAL users are enforced against trial JSON counters before Redis quotas.
 interface UsageCheck {
   allowed: boolean;
   statusCode: 403 | 429;
   message: string;
-  increment: () => Promise<void>;
+  increment: (tokensUsed?: number) => Promise<void>;
 }
 
-async function checkAndPrepareUsage(auth: AuthContext): Promise<UsageCheck> {
+export async function checkAndPrepareUsage(auth: AuthContext): Promise<UsageCheck> {
+  if (auth.plan === 'FREE_TRIAL') {
+    const queryCheck = await checkTrialLimit(auth.userId, 'complianceQueries');
+    if (!queryCheck.allowed) {
+      return {
+        allowed: false,
+        statusCode: 403,
+        message: `Trial limit reached (${queryCheck.current}/${queryCheck.limit}). Upgrade to continue.`,
+        increment: async () => {},
+      };
+    }
+
+    const tokenCheck = await checkTrialLimit(auth.userId, 'totalTokensUsed');
+    if (!tokenCheck.allowed) {
+      return {
+        allowed: false,
+        statusCode: 403,
+        message: `Trial token budget reached (${tokenCheck.current}/${tokenCheck.limit}). Upgrade to continue.`,
+        increment: async () => {},
+      };
+    }
+
+    return {
+      allowed: true,
+      statusCode: 429,
+      message: '',
+      increment: async (tokensUsed?: number) => {
+        const queryIncrement = await incrementTrialUsageAtomic(auth.userId, 'complianceQueries', 1);
+        if (!queryIncrement.allowed) {
+          logger.warn({
+            type: 'compliance_stream_trial_usage_increment_blocked',
+            userId: auth.userId,
+            feature: 'complianceQueries',
+            current: queryIncrement.newCount,
+            limit: queryIncrement.limit,
+          });
+          return;
+        }
+
+        if (tokensUsed !== undefined && tokensUsed > 0) {
+          const tokenIncrement = await incrementTrialUsageAtomic(auth.userId, 'totalTokensUsed', tokensUsed);
+          if (!tokenIncrement.allowed) {
+            logger.warn({
+              type: 'compliance_stream_trial_usage_increment_blocked',
+              userId: auth.userId,
+              feature: 'totalTokensUsed',
+              incrementBy: tokensUsed,
+              current: tokenIncrement.newCount,
+              limit: tokenIncrement.limit,
+            });
+          }
+        }
+      },
+    };
+  }
+
   const planKey = auth.plan as keyof typeof PLAN_ENTITLEMENTS;
   const entitlements = PLAN_ENTITLEMENTS[planKey] ?? PLAN_ENTITLEMENTS['REGULATOR'];
   const quota = entitlements.complianceQueries;
@@ -175,7 +239,7 @@ async function checkAndPrepareUsage(auth: AuthContext): Promise<UsageCheck> {
   return { allowed: true, statusCode: 429, message: '', increment };
 }
 
-// ── SSE helpers ───────────────────────────────────────────────────────────────
+// SSE helpers
 function sseData(obj: Record<string, unknown>): string {
   return `data: ${JSON.stringify(obj)}\n\n`;
 }
@@ -184,7 +248,7 @@ function sseComment(text: string): string {
   return `: ${text}\n\n`;
 }
 
-// ── Route registration ────────────────────────────────────────────────────────
+// Route registration
 export async function registerComplianceStreamRoute(
   app: FastifyInstance,
   allowedOrigins: string[],
@@ -193,24 +257,21 @@ export async function registerComplianceStreamRoute(
     '/api/compliance/stream',
     async (request, reply) => {
 
-      // ═══════════════════════════════════════════════════════════════════════
-      // PRE-HIJACK: all checks that need HTTP error responses
-      // ═══════════════════════════════════════════════════════════════════════
-
-      // ── Auth ───────────────────────────────────────────────────────────────
+      // Pre-hijack: all checks that need HTTP error responses.
+      // Auth
       const auth = await resolveAuth(request.headers.authorization);
       if (!auth) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      // ── Input validation ───────────────────────────────────────────────────
+      // Input validation
       const parsed = inputSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.status(400).send({ error: 'Invalid input', issues: parsed.error.flatten() });
       }
       const input = parsed.data;
 
-      // ── Rate limiting (same Redis counter as tRPC rateLimited('complianceQuery')) ──
+      // Rate limiting (same Redis counter as tRPC rateLimited('complianceQuery'))
       try {
         await rateLimiter.checkOrThrow(auth.userId, 'complianceQuery', RATE_LIMIT_MAX, RATE_LIMIT_WINDOW);
       } catch {
@@ -218,20 +279,23 @@ export async function registerComplianceStreamRoute(
         return reply.status(429).send({ error: 'Rate limit exceeded. Please try again later.' });
       }
 
-      // ── Usage entitlement enforcement ──────────────────────────────────────
+      // Usage entitlement enforcement
       const usage = await checkAndPrepareUsage(auth);
       if (!usage.allowed) {
         return reply.status(usage.statusCode).send({ error: usage.message });
       }
 
-      // ── RAG retrieval (before hijack so we can return HTTP 500 if needed) ──
-      const ragContext = await searchAndGetContext(input.question, { topK: 10, minScore: 0.7 }).catch((err: any) => {
-        logger.error({ type: 'compliance_stream_rag_error', error: err?.message });
+      // RAG retrieval (before hijack so we can return HTTP 500 if needed)
+      const ragContext = await searchAndGetContext(input.question, { topK: 10, minScore: 0.7 }).catch((err: unknown) => {
+        logger.error({
+          type: 'compliance_stream_rag_error',
+          error: err instanceof Error ? err.message : String(err),
+        });
         return { results: [], context: null };
       });
 
-      // ── Persist query record ───────────────────────────────────────────────
-      const query = await (prisma.complianceQuery.create as any)({
+      // Persist query record
+      const query = await prisma.complianceQuery.create({
         data: {
           query:          input.question,
           userId:         auth.userId,
@@ -247,9 +311,7 @@ export async function registerComplianceStreamRoute(
         },
       });
 
-      // ═══════════════════════════════════════════════════════════════════════
-      // POST-HIJACK: SSE socket — HTTP error responses no longer possible
-      // ═══════════════════════════════════════════════════════════════════════
+      // Post-hijack: HTTP error responses are no longer possible.
       reply.hijack();
 
       const requestOrigin = typeof request.headers.origin === 'string'
@@ -268,7 +330,7 @@ export async function registerComplianceStreamRoute(
         // no-cache: prevent proxy caching; no-transform: prevent Render/nginx buffering/compression
         'Cache-Control':   'no-cache, no-transform',
         'Connection':      'keep-alive',
-        // Disables Nginx/Render proxy response buffering — required for true streaming
+        // Disables Nginx/Render proxy response buffering; required for true streaming
         'X-Accel-Buffering': 'no',
         ...corsHeaders,
       });
@@ -277,7 +339,7 @@ export async function registerComplianceStreamRoute(
         if (!reply.raw.destroyed) reply.raw.write(sseData(obj));
       };
 
-      // ── AbortController — wired to client disconnect ──────────────────────
+      // AbortController wired to client disconnect
       const streamController = new AbortController();
       request.raw.on('close', () => {
         streamController.abort();
@@ -285,7 +347,7 @@ export async function registerComplianceStreamRoute(
         logger.info({ type: 'compliance_stream_client_disconnect', userId: auth.userId, queryId: query.id });
       });
 
-      // ── Keepalive heartbeat every 15 s ────────────────────────────────────
+      // Keepalive heartbeat every 15 s
       // Render's idle timeout is ~60 s. Claude's first-token latency plus
       // mid-generation pauses can exceed this without a keepalive.
       const heartbeatTimer = setInterval(() => {
@@ -294,7 +356,7 @@ export async function registerComplianceStreamRoute(
 
       write({ type: 'connected', queryId: query.id, ragSources: ragContext.results.length });
 
-      // ── Stream AI synthesis ───────────────────────────────────────────────
+      // Stream AI synthesis
       const systemPrompt = generateComplianceSystemPrompt();
       const userPrompt   = generateComplianceUserPrompt({
         question:         input.question,
@@ -326,8 +388,8 @@ export async function registerComplianceStreamRoute(
         // Signal frontend: synthesis complete, verification starting
         write({ type: 'synthesis_complete' });
 
-        // ── Persist full answer ─────────────────────────────────────────────
-        await (prisma.complianceQuery.update as any)({
+        // Persist full answer
+        await prisma.complianceQuery.update({
           where: { id: query.id },
           data: {
             response: fullContent,
@@ -344,12 +406,16 @@ export async function registerComplianceStreamRoute(
           },
         });
 
-        // ── Usage increment (deferred to here so failed synthesis costs nothing) ──
-        await usage.increment().catch((err: any) => {
-          logger.error({ type: 'compliance_stream_usage_increment_failed', userId: auth.userId, error: err?.message });
+        // Usage increment deferred so failed synthesis costs nothing
+        await usage.increment(result.inputTokens + result.outputTokens).catch((err: unknown) => {
+          logger.error({
+            type: 'compliance_stream_usage_increment_failed',
+            userId: auth.userId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
 
-        // ── Orchestrator ────────────────────────────────────────────────────
+        // Orchestrator
         const agenticComplexityLevel =
           PLAN_ENTITLEMENTS[auth.plan as keyof typeof PLAN_ENTITLEMENTS]?.agenticComplexityLevel ?? 'simple';
 
@@ -365,6 +431,12 @@ export async function registerComplianceStreamRoute(
           isBinding:     boolean;
           source:        string | null;
           version:       string | null;
+        };
+        type AcceptedChunkRef = {
+          documentId: string;
+          documentTitle: string;
+          section?: string;
+          rank: number;
         };
 
         let route: string             = 'simple';
@@ -406,34 +478,32 @@ export async function registerComplianceStreamRoute(
             // Build citations from verifier-accepted chunks only.
             // Join AcceptedChunkRef with ragContext.results to recover text snippets.
             const acceptedRefs = Array.isArray(run.acceptedChunkIds)
-              ? (run.acceptedChunkIds as unknown as Array<{
-                  documentId: string; documentTitle: string; section?: string; rank: number;
-                }>)
+              ? (run.acceptedChunkIds as unknown as AcceptedChunkRef[])
               : [];
             citations = acceptedRefs.map((ref): CitationRow => {
               const match =
                 ragContext.results.find(
-                  (r: any) => r.documentId === ref.documentId && (r.section ?? '') === (ref.section ?? ''),
+                  (r) => r.documentId === ref.documentId && (r.section ?? '') === (ref.section ?? ''),
                 ) ??
-                ragContext.results.find((r: any) => r.documentId === ref.documentId);
+                ragContext.results.find((r) => r.documentId === ref.documentId);
               return {
                 documentId:    ref.documentId,
                 documentTitle: ref.documentTitle,
                 section:       ref.section ?? '',
-                textSnippet:   match ? ((match as any).chunkText || '').slice(0, 500) : '',
-                score:         (match as any)?.score ?? 0,
-                citation:      (match as any)?.citation ?? null,
-                authorityStatus: (match as any)?.authorityStatus ?? 'IN_FORCE',
-                isBinding:     (match as any)?.isBinding ?? true,
-                source:        (match as any)?.source ?? null,
-                version:       (match as any)?.version ?? null,
+                textSnippet:   match ? match.chunkText.slice(0, 500) : '',
+                score:         match?.score ?? 0,
+                citation:      match?.citation ?? null,
+                authorityStatus: match?.authorityStatus ?? 'IN_FORCE',
+                isBinding:     match?.isBinding ?? true,
+                source:        match?.source ?? null,
+                version:       match?.version ?? null,
               };
             });
           }
         } else {
-          // Legacy shadow path — include all RAG sources as citations (mirrors tRPC legacy path).
-          // fire-and-forget; runId remains null — frontend must disable "Tell us what's missing".
-          citations = ragContext.results.map((source: any): CitationRow => ({
+          // Legacy shadow path: include all RAG sources as citations (mirrors tRPC legacy path).
+          // Fire-and-forget; runId remains null, so frontend must disable "Tell us what's missing".
+          citations = ragContext.results.map((source: SearchResult): CitationRow => ({
             documentId:    source.documentId ?? null,
             documentTitle: source.documentTitle || 'Unknown',
             section:       source.section || '',
@@ -468,19 +538,19 @@ export async function registerComplianceStreamRoute(
           abstained,
           orchestrated: appConfig.features.orchestratorEnabled,
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         const isDisconnect = streamController.signal.aborted;
 
         logger.error({
           type:        'compliance_stream_error',
           userId:      auth.userId,
           queryId:     query.id,
-          error:       err?.message,
+          error:       err instanceof Error ? err.message : String(err),
           disconnect:  isDisconnect,
         });
 
         // Mark query failed (best-effort; ignore if socket already gone)
-        await (prisma.complianceQuery.update as any)({
+        await prisma.complianceQuery.update({
           where: { id: query.id },
           data:  { status: 'failed' },
         }).catch(() => {});

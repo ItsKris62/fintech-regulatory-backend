@@ -202,14 +202,72 @@ export async function getTrialStatus(userId: string): Promise<TrialStatus> {
 // incrementTrialUsage
 // ============================================================================
 
+export interface AtomicTrialIncrementResult {
+  allowed: boolean;
+  newCount: number;
+  limit: number;
+}
+
+/**
+ * Atomically checks and increments a free-trial usage counter in one Postgres
+ * statement. The increment is rejected when current + incrementBy would exceed
+ * the configured trial limit.
+ */
+export async function incrementTrialUsageAtomic(
+  userId: string,
+  feature: TrialFeature,
+  incrementBy = 1,
+): Promise<AtomicTrialIncrementResult> {
+  if (!Number.isInteger(incrementBy) || incrementBy < 1) {
+    throw new Error('incrementBy must be a positive integer.');
+  }
+
+  const limit = FREE_TRIAL_LIMITS[feature];
+  const rows = await prisma.$queryRaw<Array<{ new_count: number }>>`
+    UPDATE "User"
+    SET "freeTrialUsage" = jsonb_set(
+      COALESCE(
+        "freeTrialUsage",
+        jsonb_build_object(
+          'complianceQueries', 0,
+          'gapAnalyses', 0,
+          'checklists', 0,
+          'vaultUploads', 0,
+          'totalTokensUsed', 0
+        )
+      ),
+      ARRAY[${feature}]::text[],
+      to_jsonb((COALESCE("freeTrialUsage"->>${feature}, '0')::int + ${incrementBy})),
+      true
+    )
+    WHERE id = ${userId}
+      AND (COALESCE("freeTrialUsage"->>${feature}, '0')::int + ${incrementBy}) <= ${limit}
+    RETURNING (COALESCE("freeTrialUsage"->>${feature}, '0')::int) AS new_count
+  `;
+
+  const updated = rows[0];
+  if (updated) {
+    logger.info({
+      type: 'trial_usage_incremented',
+      userId,
+      feature,
+      incrementBy,
+      newCount: updated.new_count,
+      atomic: true,
+    });
+    return { allowed: true, newCount: updated.new_count, limit };
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { freeTrialUsage: true },
+  });
+  const usage = parseUsage(user?.freeTrialUsage);
+  return { allowed: false, newCount: usage[feature], limit };
+}
+
 /**
  * Increments a trial usage counter after a successful feature execution.
- *
- * Note: This performs a read-modify-write on the freeTrialUsage JSON column.
- * It is NOT atomic at the DB level. This is acceptable for single-user trial
- * concurrency -- a user cannot realistically execute two AI requests simultaneously
- * in a way that would cause meaningful data loss. The worst case is an under-count
- * by one, which is a minor inconvenience rather than a billing concern.
  *
  * When feature === 'totalTokensUsed', the tokenCount argument is added to the
  * running total. For all other features, the counter is incremented by 1.
@@ -219,30 +277,24 @@ export async function incrementTrialUsage(
   feature:    TrialFeature,
   tokenCount?: number,
 ): Promise<void> {
-  const user = await prisma.user.findUnique({
-    where:  { id: userId },
-    select: { freeTrialUsage: true },
-  });
+  const incrementBy = feature === 'totalTokensUsed' ? tokenCount ?? 0 : 1;
+  if (incrementBy < 1) return;
 
-  const current = parseUsage(user?.freeTrialUsage);
-
-  if (feature === 'totalTokensUsed') {
-    current.totalTokensUsed += tokenCount ?? 0;
-  } else {
-    (current[feature] as number) += 1;
+  const result = await incrementTrialUsageAtomic(userId, feature, incrementBy);
+  if (!result.allowed) {
+    logger.warn({
+      type: 'trial_usage_increment_blocked',
+      userId,
+      feature,
+      incrementBy,
+      current: result.newCount,
+      limit: result.limit,
+    });
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: `Trial limit reached for this feature (${result.newCount}/${result.limit}). Upgrade to continue.`,
+    });
   }
-
-  await prisma.user.update({
-    where: { id: userId },
-    data:  { freeTrialUsage: current },
-  });
-
-  logger.info({
-    type:     'trial_usage_incremented',
-    userId,
-    feature,
-    newCount: current[feature],
-  });
 }
 
 // ============================================================================

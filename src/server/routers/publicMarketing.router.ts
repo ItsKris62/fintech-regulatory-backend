@@ -12,6 +12,9 @@ import crypto from "crypto";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc/trpc";
 import { prisma } from "@/lib/prisma/client";
+import { redis } from "@/lib/redis/client";
+import { logger } from "@/utils/logger";
+import { rateLimited } from "../trpc/middleware";
 import { suppress } from "@/modules/marketing/suppression.service";
 import { recordConsent } from "@/modules/marketing/consent.service";
 import { createContact, updateContact } from "@/modules/marketing/contact.service";
@@ -25,6 +28,13 @@ import { SuppressionReason, ConsentAction } from "@prisma/client";
 
 /** Sentinel userId for system-initiated actions (public forms, webhooks). */
 const SYSTEM_USER_ID = "system";
+
+/**
+ * Dedup window for pilot applications: a second submission of the same
+ * normalised email within this window returns the same success shape without
+ * re-running the contact-creation flow.
+ */
+const PILOT_APPLY_DEDUP_TTL = 600; // seconds
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -140,9 +150,22 @@ export const publicMarketingRouter = router({
 
   /**
    * Apply for the SheriaBot Pilot Programme.
-   * Creates/updates a Contact with consent, notifies admin.
+   *
+   * Security controls applied in middleware-chain order:
+   *   1. rateLimited('pilotApply', 5, { window: 600 }) -- 5 submissions per
+   *      IP per 10 min; identifier is ctx.req.ip (Fastify, respects
+   *      trustProxy setting in app.ts).
+   *   2. Email idempotency sentinel -- redis nx key on normalised email hash,
+   *      600 s TTL. Duplicate submissions within the window return the same
+   *      { success: true } shape without re-running the contact flow.
+   *
+   * Creates/updates a Contact with consent on first submission.
    */
   applyForPilot: publicProcedure
+    .use(rateLimited('pilotApply', 5, {
+      window:     600,
+      identifier: (ctx) => ctx.req.ip ?? 'anonymous',
+    }))
     .input(z.object({
       firstName:   z.string().min(1).max(100),
       lastName:    z.string().min(1).max(100),
@@ -155,18 +178,35 @@ export const publicMarketingRouter = router({
     .mutation(async ({ input }) => {
       try {
         const { firstName, lastName, email, companyName, jobTitle, phone } = input;
+        const normalizedEmail = email.trim().toLowerCase();
 
-        // 1. Find or create company (uses email domain heuristic; pass a fake
-        //    domain derived from companyName since we have no email domain here)
+        // Email idempotency: duplicate submissions within the 600 s window
+        // return the same success shape without re-running the contact flow.
+        // Key uses the full SHA-256 hex of the normalised email to avoid collisions.
+        const emailHash = crypto.createHash('sha256').update(normalizedEmail).digest('hex');
+        const dedupKey  = `sheriabot:pilot_apply:dedup:${emailHash}`;
+
+        // Upstash redis.set with { nx: true } returns 'OK' when the key is
+        // newly written, null when the key already exists.
+        const acquired = await redis.set(dedupKey, '1', { nx: true, ex: PILOT_APPLY_DEDUP_TTL });
+        if (acquired === null) {
+          logger.info({
+            type:        'pilot_apply_dedup_hit',
+            emailPrefix: emailHash.slice(0, 8),
+          });
+          return { success: true };
+        }
+
+        // 1. Find or create company (uses email domain heuristic)
         const companyId = await findOrCreateByEmailDomain(
-          email,
+          normalizedEmail,
           companyName,
           SYSTEM_USER_ID,
         );
 
-        // 2. Upsert contact
+        // 2. Upsert contact (use normalised email consistently)
         const existing = await prisma.contact.findFirst({
-          where: { email: email.trim().toLowerCase(), deletedAt: null },
+          where: { email: normalizedEmail, deletedAt: null },
         });
 
         let contactId: string;
@@ -179,7 +219,6 @@ export const publicMarketingRouter = router({
           );
           contactId = updated.id;
 
-          // Update consent fields directly
           await prisma.contact.update({
             where: { id: contactId },
             data:  { consentStatus: "GRANTED", consentSource: "pilot_apply_form" },
@@ -187,7 +226,7 @@ export const publicMarketingRouter = router({
         } else {
           const created = await createContact(
             {
-              email,
+              email:     normalizedEmail,
               firstName,
               lastName,
               role:      jobTitle,
@@ -198,7 +237,6 @@ export const publicMarketingRouter = router({
           );
           contactId = created.id;
 
-          // Set consent fields
           await prisma.contact.update({
             where: { id: contactId },
             data:  { consentStatus: "GRANTED", consentSource: "pilot_apply_form" },
@@ -210,6 +248,12 @@ export const publicMarketingRouter = router({
           contactId,
           action: ConsentAction.GRANTED,
           source: "pilot_apply_form",
+        });
+
+        logger.info({
+          type:        'pilot_apply_submitted',
+          contactId,
+          emailPrefix: emailHash.slice(0, 8),
         });
 
         return { success: true };
