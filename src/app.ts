@@ -1,12 +1,15 @@
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import { z } from 'zod';
+import Stripe from 'stripe';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { createContext } from './server/trpc/context';
 import { appRouter } from './server/trpc/router';
 import { logger } from './utils/logger';
+import { sanitizeErrorMessage } from './utils/error-sanitizer';
 import { prisma } from './lib/prisma/client';
 import { redis } from './lib/redis/client';
+import { rateLimiter } from './lib/redis/rate-limiter';
 import { errorTracker } from './lib/error-tracker';
 import { supabaseAdmin } from './lib/supabase';
 import securityPlugin from './plugins/security.plugin';
@@ -20,11 +23,12 @@ import { consumeAlertStreamToken } from './lib/alerts/stream-token';
 import { registerComplianceStreamRoute } from './routes/compliance-stream.route';
 import { appConfig } from './config/app.config';
 import { verifyIntaSendWebhook, isAllowedIntaSendIp, parseAllowedIps } from './lib/intasend/webhook-verifier';
+import { hashIp } from './utils/request-identifiers';
 
 /**
  * Zod schema for IntaSend webhook payloads.
  *
- * IntaSend webhook authenticity verification — three-layer defence:
+ * IntaSend webhook authenticity verification - three-layer defence:
  *
  *   Layer 1: IP allowlist (src/app.ts route handler).
  *            Source IP must match INTASEND_WEBHOOK_ALLOWED_IPS.
@@ -51,6 +55,43 @@ const intaSendWebhookSchema = z.object({
   meta:          z.record(z.string(), z.unknown()).optional(),
   challenge:     z.string().max(512).optional(),
 }).passthrough();
+
+type TrustProxyValue = NonNullable<FastifyServerOptions['trustProxy']>;
+
+export function parseTrustProxy(rawValue: string | undefined): TrustProxyValue {
+  if (rawValue === undefined || rawValue.trim() === '') {
+    return true;
+  }
+
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized === 'false') {
+    return false;
+  }
+
+  if (normalized === 'true') {
+    return true;
+  }
+
+  const hopCount = Number(normalized);
+  if (Number.isInteger(hopCount) && hopCount >= 0) {
+    return hopCount;
+  }
+
+  return rawValue;
+}
+
+function getFastifyStatusCode(error: Error): number {
+  const maybeFastifyError = error as Error & { statusCode?: unknown };
+  return typeof maybeFastifyError.statusCode === 'number'
+    ? maybeFastifyError.statusCode
+    : 500;
+}
+
+async function checkIntaSendIngressRateLimit(
+  ip: string | undefined,
+): Promise<{ allowed: boolean; retryAfter?: number }> {
+  return rateLimiter.check(hashIp(ip), 'intasend-webhook', 30, 60, { failClosed: true });
+}
 
 /**
  * Build and configure the Fastify application.
@@ -84,7 +125,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Render's reverse proxy is trusted  -  accepts X-Forwarded-For.
     // Override with TRUST_PROXY env var if deploying behind a different proxy.
     // See: https://fastify.dev/docs/latest/Reference/Server/#trustproxy
-    trustProxy: process.env.TRUST_PROXY ?? true,
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   });
 
   // -- CORS  -  must be registered before Helmet so security headers don't --
@@ -143,10 +184,10 @@ export async function buildApp(): Promise<FastifyInstance> {
           await stripeWebhookService.handleEvent(request.body, signature);
           return reply.status(200).send({ received: true });
         } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : 'Webhook processing error';
+          const message = sanitizeErrorMessage(err, 'Webhook processing error');
 
           // Signature mismatch -> return 400 so Stripe retries with correct secret
-          if (err instanceof Error && err.message.includes('No signatures found')) {
+          if (err instanceof Stripe.errors.StripeSignatureVerificationError) {
             logger.warn({ type: 'stripe_webhook_invalid_signature', error: message });
             return reply.status(400).send({ error: 'Invalid webhook signature' });
           }
@@ -201,6 +242,16 @@ export async function buildApp(): Promise<FastifyInstance> {
             allowed_count: allowedIps.length,
           });
           return reply.code(403).send({ error: 'forbidden' });
+        }
+
+        const rlResult = await checkIntaSendIngressRateLimit(request.ip);
+        if (!rlResult.allowed) {
+          logger.warn({
+            type: 'intasend_webhook_rate_limited',
+            ipHash: hashIp(request.ip),
+            retryAfter: rlResult.retryAfter,
+          });
+          return reply.code(429).send({ error: 'rate_limited' });
         }
 
         // Layer 2: challenge verification
@@ -296,7 +347,7 @@ export async function buildApp(): Promise<FastifyInstance> {
           return reply.status(400).send({ error: verification.reason });
         }
 
-        // Respond 200 immediately — Resend must not time out waiting for DB writes
+        // Respond 200 immediately - Resend must not time out waiting for DB writes
         void reply.status(200).send({ received: true });
 
         // Phase B: fire-and-forget; errors caught and logged, never rethrown
@@ -479,7 +530,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      // Hand the socket to raw Node — Fastify must not finalize the response.
+      // Hand the socket to raw Node - Fastify must not finalize the response.
       reply.hijack();
 
       const requestOrigin = typeof request.headers.origin === 'string'
@@ -518,7 +569,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         }
       }, 30000);
 
-      // Cleanup — must call unsubscribe() to avoid leaking EventEmitter listeners.
+      // Cleanup - must call unsubscribe() to avoid leaking EventEmitter listeners.
       request.raw.on('close', () => {
         clearInterval(keepAliveInterval);
         unsubscribe();
@@ -530,14 +581,14 @@ export async function buildApp(): Promise<FastifyInstance> {
   );
 
   // -- Compliance SSE stream -------------------------------------------------
-  // POST /api/compliance/stream — streams Claude tokens as text/event-stream.
+  // POST /api/compliance/stream - streams Claude tokens as text/event-stream.
   // Auth: Bearer token (same Supabase JWT as tRPC). Does NOT use EventSource
   // query-param tokens because fetch() streaming supports custom headers.
   await registerComplianceStreamRoute(app, allowedOrigins);
 
   // -- Catch-all error handler ----------------------------------------------
   app.setErrorHandler<Error>((error, request, reply) => {
-    const statusCode = (error as any).statusCode || 500;
+    const statusCode = getFastifyStatusCode(error);
 
     logger.error({
       type: 'fastify_error',

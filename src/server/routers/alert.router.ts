@@ -17,6 +17,7 @@ export const alertRouter = router({
   // ---------------------------------------------------------------------------
 
   createStreamToken: protectedProcedure
+    .input(z.void())
     .mutation(async ({ ctx }) => {
       return createAlertStreamToken(ctx.user!.id);
     }),
@@ -78,6 +79,7 @@ export const alertRouter = router({
   // ---------------------------------------------------------------------------
 
   getUnreadCount: protectedProcedure
+    .input(z.void())
     .query(async ({ ctx }) => {
       const count = await alertService.getUnreadCount(ctx.user!.id);
       return { count };

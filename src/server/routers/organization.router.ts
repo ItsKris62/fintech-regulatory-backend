@@ -655,7 +655,9 @@ export const organizationRouter = router({
    *
    * @protected  -  resolves org from active OrganizationMember
    */
-  getSettings: protectedProcedure.query(async ({ ctx }) => {
+  getSettings: protectedProcedure
+    .input(z.void())
+    .query(async ({ ctx }) => {
     try {
       const { organizationId } = ctx.user;
 

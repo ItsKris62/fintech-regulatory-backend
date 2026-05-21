@@ -207,18 +207,18 @@ all grounded compliance queries.
 
 **Measured impact (Stage 0 acceptance gate -- 2026-05-16):**
 
-Baseline source: direct ungrounded-path live runs (3 questions × run 1, AI cache
+Baseline source: direct ungrounded-path live runs (3 questions -- run 1, AI cache
 primed from prior session -- reflects typical user experience for repeated queries).
 
 | Metric | Baseline (pre-fix) | Post-fix (grounded) | Ratio |
 |---|---|---|---|
-| p50 latency | 1,492 ms | 27,037 ms | 18.1× |
-| p95 latency | 3,287 ms | 34,167 ms | 10.4× |
-| Mean cost/query | $0.00911 | $0.01211 | 1.33× |
+| p50 latency | 1,492 ms | 27,037 ms | 18.1x |
+| p95 latency | 3,287 ms | 34,167 ms | 10.4x |
+| Mean cost/query | $0.00911 | $0.01211 | 1.33x |
 | Mean input tokens | ~1,387 | 2,303 | +916 (evidence block) |
 | Mean output tokens | 2,000 (ceiling hit) | 2,566 (many at 3,000 ceiling) | -- |
 
-Decision: **BLOCK** -- p95 regressed 10.4× (threshold: 2.0×). Cost: **PASS** (1.33× < 1.4×).
+Decision: **BLOCK** -- p95 regressed 10.4x (threshold: 2.0x). Cost: **PASS** (1.33x < 1.4x).
 
 **Resolution:** Retrieval cache implemented in `src/lib/rag/rag.service.ts`
 (`searchAndGetContext`). Key: `sheriabot:rag:ctx:v1:{sha256(question|topK|minScore)}`,
@@ -229,7 +229,7 @@ Cache-hit latency improvement: ~2-3s savings per hit (Pinecone lookup removed).
 The dominant latency component is Claude generation (~23-27s for 2,000-3,000 output
 tokens), which cannot be cached. p95 on cache hit: ~30-31s vs ~34s on cache miss.
 
-**Residual note:** The grounded path is structurally 20-30× slower than the cached
+**Residual note:** The grounded path is structurally 20-30x slower than the cached
 ungrounded path. Streaming response (Stage 4) is the UX mitigation -- first token
 arrives in ~2s; users see progressive output rather than a 30s blank wait.
 
@@ -334,7 +334,7 @@ to `src/scripts/ingest-documents.ts` registry and re-ingest.
 **S2 -- DPA 2019 data controller registration deadline:**
 The right documents are in the corpus (Data Protection Act 2019, Registration
 Regulations 2021, ODPC Guidance Note). The top 10 hits land on scope/purpose and
-definitions sections (score ≥ 0.994). These sections establish the registration
+definitions sections (score >= 0.994). These sections establish the registration
 obligation and cite the Regulations effective date (14 July 2022) but do not contain
 the compliance deadline period (e.g., "within 6 months for existing controllers").
 That deadline provision lives in the transitional section of the Registration
@@ -507,16 +507,16 @@ trace rows. Update `SearchResult` in `rag.service.ts` to carry the vector id fro
 | `AbstainCard` component | `fintech-regulatory-platform/components/compliance/abstain-card.tsx` | Two variants: scope-abstain (amber) + corpus-gap (blue); inline `GapForm` |
 | `UngroundedBanner` component | `fintech-regulatory-platform/components/compliance/ungrounded-banner.tsx` | Blue info banner for PARTIAL verdict |
 | Compliance query page | `fintech-regulatory-platform/app/(dashboard)/startup/compliance-query/page.tsx` | Streaming path; conditional AbstainCard / UngroundedBanner; live streaming bubble |
-| R07 registry entry | `src/scripts/ingest-documents.ts` | ✅ Ingested -- 565 chunks, ACTIVE, verified in Pinecone (2026-05-17) |
+| R07 registry entry | `src/scripts/ingest-documents.ts` | ... Ingested -- 565 chunks, ACTIVE, verified in Pinecone (2026-05-17) |
 | Smoke test script | `src/scripts/smoke-stream-done.ts` | Manual SSE smoke test verifying `done` event shape |
 
 ### Pending actions before production cutover
 
-1. ✅ **R07 ingestion** -- COMPLETE (2026-05-17). Draft CBK NDTCP Regulations obtained from CBK public register, ingested (565 chunks, ACTIVE), Pinecone verification query confirmed 5/5 top-K chunks from this document with capital threshold provisions. C8 closed. In-scope abstention rate: 0/12 (was 1/12 = 8.3%).
+1. ... **R07 ingestion** -- COMPLETE (2026-05-17). Draft CBK NDTCP Regulations obtained from CBK public register, ingested (565 chunks, ACTIVE), Pinecone verification query confirmed 5/5 top-K chunks from this document with capital threshold provisions. C8 closed. In-scope abstention rate: 0/12 (was 1/12 = 8.3%).
 
-2. ✅ **Staging 19-query re-baseline** -- COMPLETE (2026-05-17). All gates PASS. See staging verification record below.
+2. ... **Staging 19-query re-baseline** -- COMPLETE (2026-05-17). All gates PASS. See staging verification record below.
 
-3. **Production cutover** -- Both pre-conditions confirmed (2026-05-17): rollback runbook at `docs/runbooks/orchestrator-rollback.md` ✅, C12 abstain-route behavior documented (non-blocking) ✅. **Ready for production flip** -- set `ORCHESTRATOR_ENABLED=true` in Render dashboard -> SheriaBot Backend -> Environment, trigger redeploy, monitor 30 min.
+3. **Production cutover** -- Both pre-conditions confirmed (2026-05-17): rollback runbook at `docs/runbooks/orchestrator-rollback.md` ..., C12 abstain-route behavior documented (non-blocking) .... **Ready for production flip** -- set `ORCHESTRATOR_ENABLED=true` in Render dashboard -> SheriaBot Backend -> Environment, trigger redeploy, monitor 30 min.
 
 ### Staging Verification Record (2026-05-17)
 
@@ -524,7 +524,7 @@ trace rows. Update `SearchResult` in `rag.service.ts` to carry the vector id fro
 
 | Gate | Target | Result | Status |
 |------|--------|--------|--------|
-| In-scope abstention rate | ≤10% | 0/11 = **0.0%** | **PASS** |
+| In-scope abstention rate | <=10% | 0/11 = **0.0%** | **PASS** |
 | p50 latency (grounded synthesis) | <35,000ms | **13,616ms** | **PASS** |
 | p95 latency (grounded synthesis) | <45,000ms | **17,573ms** | **PASS** |
 | PASS-with-citations rendering | verified | `grounded=true, abstained=false, conf=0.9, citations=6` | **PASS** |
@@ -540,7 +540,7 @@ trace rows. Update `SearchResult` in `rag.service.ts` to carry the vector id fro
 **Latency detail (grounded, n=12):** min=12,084ms p50=13,616ms p75=15,037ms p90=16,314ms p95=17,573ms max=17,573ms
 *Note: In-process measurements with 600-token answer cap. Real streaming queries (2,000-3,000 tokens) will be somewhat slower; first token via SSE chunk arrives in ~2s regardless.*
 
-**SSE event shape (verified via curl):** `connected -> [N chunks] -> synthesis_complete -> done`. Abstain-route queries still stream synthesis chunks -- `abstained=true` in done event is the frontend signal to suppress streamed content and show AbstainCard. See §C12 for the synthesis-waste issue (Stage 2.5 fix, does not block cutover).
+**SSE event shape (verified via curl):** `connected -> [N chunks] -> synthesis_complete -> done`. Abstain-route queries still stream synthesis chunks -- `abstained=true` in done event is the frontend signal to suppress streamed content and show AbstainCard. See Section C12 for the synthesis-waste issue (Stage 2.5 fix, does not block cutover).
 
 **R07 verification in pilot:** `route=simple, grounded=true, verdict=PASS, accepted=2, confidence=0.85` -- NDTCP corpus ingestion confirmed working.
 
@@ -578,7 +578,7 @@ The frontend `useComplianceStream` hook suppresses all streamed content when `ab
 **Verified event sequence** (query: "what is the weather in Nairobi today"):
 ```
 connected  { ragSources: 10 }
-chunk × 24
+chunk x 24
 synthesis_complete
 done       { route: "abstain", abstained: true, citations: [], confidence: null }
 ```
@@ -866,7 +866,7 @@ _Pre-approval items resolved:_
 
 `checkUsageLimit` FREE_TRIAL branch (`src/server/trpc/middleware.ts`):
 - `incrementTrialUsageAtomic` called directly at line 611, BEFORE `next()`.
-- If `allowed: false` → throws `TRPCError({ code: 'FORBIDDEN' })` → handler never runs.
+- If `allowed: false` -> throws `TRPCError({ code: 'FORBIDDEN' })` -> handler never runs.
 - The `deferIncrement` option is in the Redis monthly quota path below the FREE_TRIAL
   branch and is structurally unreachable from it. FREE_TRIAL always increments atomically
   before calling `next()`. Enforcement gap: closed.
@@ -1081,7 +1081,7 @@ _Pre-approval quality gates:_
 | `email` used where `normalizedEmail` required in contact path | 0 | `publicMarketing.router.ts:181` -- `const normalizedEmail = email.trim().toLowerCase();`. Used at: `:186` (hash input), `:187` (dedupKey via hash), `:202` (`findOrCreateByEmailDomain`), `:209` (`findFirst` where clause), `:229` (`createContact` email field). No bare `email` in the contact path. |
 | `opts.identifier` callback typed too broadly / accepting wrong ctx shape | 0 | `middleware.ts:118` -- `opts?: { window?: number; identifier?: (ctx: { req: { ip: string } }) => string }`. Structural type, no `Context` import. Matches Fastify request shape. `publicMarketing.router.ts:167` -- `identifier: (ctx) => ctx.req.ip ?? 'anonymous'` correctly inferred. |
 | `as any` casts in new code | 0 | `publicMarketing.router.ts` -- grep for `as any` / `as never` / `!` returns 0 matches in the file. `middleware.ts:115-145` (new three-arg signature and body) -- no casts. |
-| Non-ASCII characters introduced by Batch 3 | 0 | New code at `publicMarketing.router.ts:163-263` (applyForPilot) and `middleware.ts:115-145` (rateLimited extension) is clean. Pre-existing em-dashes at `publicMarketing.router.ts:2` (`— Phase B4`) and `:92` (`— suppresses`) are from Phase B4 authorship, not Batch 3. Same class as BE-I-024 (deferred to Sprint 4 non-ASCII pass). |
+| Non-ASCII characters introduced by Batch 3 | 0 | New code at `publicMarketing.router.ts:163-263` (applyForPilot) and `middleware.ts:115-145` (rateLimited extension) is clean. Pre-existing em-dashes at `publicMarketing.router.ts:2` (`-- Phase B4`) and `:92` (`-- suppresses`) are from Phase B4 authorship, not Batch 3. Same class as BE-I-024 (deferred to Sprint 4 non-ASCII pass). |
 | `(err as Error)` unsafe cast in new catch blocks | 0 | `publicMarketing.router.ts:86-87` (`validateUnsubscribeToken` catch), `:146-147` (`unsubscribe` catch), `:260-261` (`applyForPilot` catch) -- all three delegate to `mapError(err)` (`unknown` typed). `mapError` at `:47-56` uses `instanceof TRPCError` and `instanceof BadRequestError` guards before the fallback. No unsafe cast. |
 | `window` option silently defaulting to wrong value on pre-existing call sites | 0 | `middleware.ts:126` -- `const windowSeconds = opts?.window ?? 900;`. Pre-existing 2-arg call sites supply no `opts`, so `windowSeconds` remains 900 (unchanged). `publicMarketing.router.ts:165-168` -- explicit `{ window: 600 }` supplied; no reliance on default. |
 
@@ -1196,12 +1196,216 @@ contact rows in the production database. No data hygiene pass required. Bug clos
 
 | ID | Location | Finding |
 |----|----------|---------|
-| NM-B5-01 | `admin.module.ts:1257` | Churn counter: `SUSPENDED` not counted in `churned` (only CANCELLED \| EXPIRED). Intentional for now -- admin-suspended ≠ churned -- but needs a dedicated `suspended` count field in org analytics. Batch 7 call-site sweep. |
+| NM-B5-01 | `admin.module.ts:1257` | Churn counter: `SUSPENDED` not counted in `churned` (only CANCELLED \| EXPIRED). Intentional for now -- admin-suspended != churned -- but needs a dedicated `suspended` count field in org analytics. Batch 7 call-site sweep. |
 | NM-B5-02 | `pilot-lifecycle-cron.ts:114` | Hardcoded cache key `` `sheriabot:planctx:${user.id}` `` instead of `planCtxCacheKey(user.id)`. Pre-existing; not Batch 5 scope. Batch 7. |
 | NM-B5-03 | `billing.router.ts:524` | Same hardcoded key format as NM-B5-02. Batch 7. |
 | NM-B5-04 | `admin.module.ts` | `suspendOrganization` missing `invalidatePlanCacheForOrg(orgId, 'admin_suspend_org')` call. Pre-existing; not Batch 5 scope. Deferred to Batch 7. |
 
 ---
+
+## Phase B Remediation Sprint -- Batch 1 (2026-05-21)
+
+### SK-3 -- Pino logger missing global PII/secret redaction [RESOLVED -- Phase B Batch 1]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 1 (2026-05-21) |
+| Affected | `src/utils/logger.ts` |
+
+**Fix:** Expanded the Pino `redact` configuration to cover auth secrets, tokens,
+API keys, emails, phone numbers, IP addresses, request authorization/cookie headers,
+and common `user`/`params` envelopes. Censor remains `[REDACTED]`.
+
+### RL-2 -- trustProxy string coercion [RESOLVED -- Phase B Batch 1]
+
+| Field | Value |
+|-------|-------|
+| Severity | Low |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 1 (2026-05-21) |
+| Affected | `src/app.ts`, `src/index.ts` |
+
+**Fix:** Added strict trust-proxy parsing so `TRUST_PROXY=false` becomes boolean
+`false`, `TRUST_PROXY=true` becomes boolean `true`, numeric hop-count values are
+preserved as numbers for proxy deployments, and unset/blank values retain the
+existing trusted Render proxy default.
+
+### IV-1 -- Stripe webhook fragile signature error matching [RESOLVED -- Phase B Batch 1]
+
+| Field | Value |
+|-------|-------|
+| Severity | Low |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 1 (2026-05-21) |
+| Affected | `src/app.ts` |
+
+**Fix:** Replaced message-string matching with
+`err instanceof Stripe.errors.StripeSignatureVerificationError`, preserving the
+400 response for signature verification failures and avoiding SDK message drift.
+
+## Phase B Remediation Sprint -- Batch 2 (2026-05-21)
+
+### RL-3 -- Token-redemption endpoints missing rate limits [RESOLVED -- Phase B Batch 2]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 2 (2026-05-21) |
+| Affected | `src/server/routers/auth.router.ts` |
+
+**Fix:** Added fail-closed, IP-hash keyed rate limits to `auth.resetPassword`,
+`auth.verifyEmail`, `auth.confirmEmailCallback`, and `auth.refreshToken`.
+Limits are 5/15 min for reset-password token redemption, 10/15 min for email
+verification and callback confirmation, and 20/15 min for refresh-token calls.
+
+### RL-4 -- Unsubscribe token endpoints missing rate limits [RESOLVED -- Phase B Batch 2]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 2 (2026-05-21) |
+| Affected | `src/server/routers/publicMarketing.router.ts` |
+
+**Fix:** Added fail-closed, IP-hash keyed 10/15 min rate limits to
+`publicMarketing.validateUnsubscribeToken` and `publicMarketing.unsubscribe`.
+
+### RL-1 -- Public content.getBySlug missing rate limit [RESOLVED -- Phase B Batch 2]
+
+| Field | Value |
+|-------|-------|
+| Severity | Low |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 2 (2026-05-21) |
+| Affected | `src/server/routers/content.router.ts` |
+
+**Fix:** Added a generous fail-open 60/min rate limit keyed by hashed IP to
+`content.getBySlug`, preserving public content availability if Redis is down.
+
+### IV-2 -- IntaSend webhook ingress missing rate limit [RESOLVED -- Phase B Batch 2]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 2 (2026-05-21) |
+| Affected | `src/app.ts` |
+
+**Fix:** Added a fail-closed 30/min ingress rate limit keyed by hashed IP after
+the existing IntaSend IP allowlist and before challenge/payload processing. The
+existing allowlist and invoice re-verification SSRF mitigation were left intact.
+
+## Phase B Remediation Sprint -- Batch 3 (2026-05-21)
+
+### SA-3 -- Logout sequence can leave token usable after partial failure [RESOLVED -- Phase B Batch 3]
+
+| Field | Value |
+|-------|-------|
+| Severity | High |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 3 (2026-05-21) |
+| Affected | `src/server/routers/auth.router.ts` |
+
+**Fix:** Reordered logout so the presented JWT ID is blocklisted before any
+best-effort cleanup. Supabase signOut, Redis user-cache cleanup, Prisma session
+deletion, and idle/fingerprint key cleanup now run in separate non-fatal
+try/catch blocks after the blocklist write succeeds.
+
+### SA-2 -- No concurrent-session cap or per-role fingerprint enforcement [RESOLVED -- Phase B Batch 3]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 3 (2026-05-21) |
+| Affected | `src/server/trpc/context.ts`, `docs/security/session-policy.md` |
+
+**Fix:** Documented the current session policy and deferred concurrent-session
+cap decisions. Added ADMIN-only fingerprint enforcement override so ADMIN
+requests are treated as `enforce` even when the global
+`SESSION_FINGERPRINT_MODE` is `monitor` or `off`.
+
+## Phase B Remediation Sprint -- Batch 4 (2026-05-21)
+
+### SK-5 -- Legacy AuthModule reads JWT secret in dead token-generation paths [RESOLVED -- Phase B Batch 4]
+
+| Field | Value |
+|-------|-------|
+| Severity | High |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 4 (2026-05-21) |
+| Affected | `src/modules/auth/auth.module.ts`, `src/modules/auth/index.ts`, `src/modules/index.ts` |
+
+**Fix:** Verified zero live importers of the legacy `AuthModule` or its JWT
+stub helpers from routers, routes, cron paths, or tests. Removed the dead
+module and its barrel exports while preserving live `auth.types` and
+`auth.utils` exports.
+
+### IV-3 -- Procedures without explicit `.input()` require reclassification [PARTIALLY RESOLVED -- Phase B Batch 4]
+
+| Field | Value |
+|-------|-------|
+| Severity | Medium |
+| Status | **Partially resolved** |
+| Resolved in | Phase B Batch 4 (2026-05-21) |
+| Affected | `src/server/routers/*.ts` |
+
+**Fix:** Reclassified the first 20 prioritized procedures as Category B
+because their bodies do not read `input`. Added explicit `.input(z.void())`
+schemas to those no-input procedures. No Category A validation gaps were found
+in the 20-procedure Batch 4 cap.
+
+**Remaining:** Continue Appendix B reclassification for the procedures beyond
+the 20-procedure cap in a future approved batch.
+
+## Phase B Remediation Sprint -- Batch 5 (2026-05-21)
+
+### SK-1 -- Render environment declaration drift [RESOLVED -- Phase B Batch 5]
+
+| Field | Value |
+|-------|-------|
+| Severity | Low |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 5 (2026-05-21) |
+| Affected | `render.yaml` |
+
+**Fix:** Reconciled `render.yaml` with `src/config/env.validator.ts`. Replaced
+deprecated `REDIS_URL` with `UPSTASH_REDIS_REST_URL` and
+`UPSTASH_REDIS_REST_TOKEN`, replaced `JWT_SECRET` with
+`SUPABASE_JWT_SECRET`, added Supabase/Direct URL declarations, and removed the
+unused HuggingFace deployment variable after confirming no live source-code
+references.
+
+### SK-4 -- Environment validation output hardening [RESOLVED -- Phase B Batch 5]
+
+| Field | Value |
+|-------|-------|
+| Severity | Low |
+| Status | **Resolved** |
+| Resolved in | Phase B Batch 5 (2026-05-21) |
+| Affected | `src/config/app.config.ts`, `src/config/env.validator.ts` |
+
+**Fix:** Hardened boot-time environment validation output so it reports only
+invalid variable names and explicitly states that values and parsed defaults are
+not logged.
+
+### SK-2 -- Anthropic startup active-ping recommendation [EVALUATED -- recommend declining; see Batch 5 report]
+
+| Field | Value |
+|-------|-------|
+| Severity | Low |
+| Status | **Evaluated - recommend declining** |
+| Evaluated in | Phase B Batch 5 (2026-05-21) |
+| Affected | Anthropic client startup behavior |
+
+**Decision:** Declined the proposed startup active-ping. A synchronous
+boot-time network dependency would prevent the backend from starting during an
+Anthropic transient outage, which is a worse failure mode than the current
+request-time error handling. Prefer an on-demand `/health/anthropic` endpoint
+for operator checks.
 
 ## Next Sprint Priorities (in order)
 

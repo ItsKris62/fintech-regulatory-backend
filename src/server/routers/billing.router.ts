@@ -194,9 +194,11 @@ export const billingRouter = router({
       }
     }),
 
-  getPlanCatalog: protectedProcedure.query(async () => {
-    return getBillingPlanCatalog();
-  }),
+  getPlanCatalog: protectedProcedure
+    .input(z.void())
+    .query(async () => {
+      return getBillingPlanCatalog();
+    }),
 
   /**
    * Create a Stripe Checkout Session for upgrading to STARTUP or BUSINESS.
@@ -222,7 +224,7 @@ export const billingRouter = router({
 
       const orgId = ctx.orgMembership!.organizationId;
 
-      // B7.3 (TD-009): Redis dedup lock — prevents double-click from creating two
+      // B7.3 (TD-009): Redis dedup lock - prevents double-click from creating two
       // Stripe checkout sessions. Lock is keyed on orgId+plan+interval so the user
       // can still switch plans without being blocked. TTL = 30s (well above the
       // Stripe API round-trip time). nx=true means "only set if not exists".
@@ -326,7 +328,7 @@ export const billingRouter = router({
         customerId,
       });
 
-      // Release the dedup lock immediately — the user is being redirected to Stripe
+      // Release the dedup lock immediately - the user is being redirected to Stripe
       // so there is no risk of a second call succeeding before the redirect completes.
       await redis.del(checkoutLockKey);
 
@@ -422,7 +424,7 @@ export const billingRouter = router({
       // Use set with ex on first write to atomically apply TTL.
       const newCount = await redis.incr(rateKey);
       if (newCount === 1) {
-        // First submission today — set TTL atomically (always overwrite is correct here)
+        // First submission today - set TTL atomically (always overwrite is correct here)
         await redis.set(rateKey, String(newCount), { ex: 86400 });
       }
 

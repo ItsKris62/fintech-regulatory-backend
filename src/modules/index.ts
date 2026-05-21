@@ -4,7 +4,7 @@
  */
 
 // Auth
-export { authModule, AuthModule } from './auth';
+export * from './auth';
 
 // User
 export { userModule, UserModule } from './user';

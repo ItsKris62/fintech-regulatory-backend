@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
 import {
   listNotificationsSchema,
@@ -58,7 +59,7 @@ export const notificationRouter = router({
    *
    * @protected
    */
-  getUnreadCount: protectedProcedure.query(async ({ ctx }) => {
+  getUnreadCount: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
     try {
       const count = await notificationModule.getUnreadCount(ctx.user!.id);
       return { count };
@@ -126,7 +127,7 @@ export const notificationRouter = router({
    *
    * @protected
    */
-  markAllAsRead: protectedProcedure.mutation(async ({ ctx }) => {
+  markAllAsRead: protectedProcedure.input(z.void()).mutation(async ({ ctx }) => {
     try {
       const count = await notificationModule.markAllAsRead(ctx.user!.id);
 
@@ -198,7 +199,7 @@ export const notificationRouter = router({
    *
    * @protected
    */
-  deleteAllRead: protectedProcedure.mutation(async ({ ctx }) => {
+  deleteAllRead: protectedProcedure.input(z.void()).mutation(async ({ ctx }) => {
     try {
       const count = await notificationModule.deleteAllRead(ctx.user!.id);
 
@@ -229,7 +230,7 @@ export const notificationRouter = router({
    *
    * @protected
    */
-  getPreferences: protectedProcedure.query(async ({ ctx }) => {
+  getPreferences: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
     try {
       const prefs = await notificationModule.getNotificationPreferences(ctx.user!.id);
       return prefs;
@@ -288,7 +289,7 @@ export const notificationRouter = router({
    *
    * @protected
    */
-  unreadCountByCategory: protectedProcedure.query(async ({ ctx }) => {
+  unreadCountByCategory: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
     try {
       const counts = await notificationModule.getUnreadCountByCategory(ctx.user!.id);
       return counts;
@@ -311,7 +312,7 @@ export const notificationRouter = router({
    *
    * @protected
    */
-  getCategoryPreferences: protectedProcedure.query(async ({ ctx }) => {
+  getCategoryPreferences: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
     try {
       const prefs = await notificationModule.getCategoryPreferences(ctx.user!.id);
       return prefs;

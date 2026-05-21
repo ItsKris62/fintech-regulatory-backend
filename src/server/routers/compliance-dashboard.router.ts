@@ -14,6 +14,7 @@ export const complianceDashboardRouter = router({
    */
   getComplianceDashboard: protectedProcedure
     .use(requireOrgMember)
+    .input(z.void())
     .query(async ({ ctx }) => {
     try {
       // orgId is guaranteed non-null by requireOrgMember middleware

@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
 import { notificationModule } from '@/modules/notification';
 import {
@@ -37,7 +38,7 @@ export const userRouter = router({
   /**
    * Get current user profile
    */
-  getProfile: protectedProcedure.query(async ({ ctx }) => {
+  getProfile: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
     try {
       const cached = await userCache.get(ctx.user.id);
       if (cached) {

@@ -16,11 +16,13 @@ import {
 import { appConfig } from '@/config/app.config';
 import { redis } from '@/lib/redis/client';
 import { hashPassword } from '@/utils/helpers';
-import { authRateLimiter } from '@/lib/redis/rate-limiter';
+import { authRateLimiter, rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
+import { hashIp, revokedBearerTokenKey } from '@/utils/request-identifiers';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
 import { SESSION_CONFIG, lastSeenKey, sessionStartKey } from '@/config/session';
-import { revokeToken, revokeAllUserTokens } from '@/utils/token-revocation';
+import { revokedJtiKey, revokeAllUserTokens } from '@/utils/token-revocation';
+import { extractExp, extractJti } from '@/utils/jwt';
 import { loadSystemConfig } from '@/lib/system-config';
 import { subscriptionTierToPlanOrFree } from '@/utils/plan-mapping';
 
@@ -55,14 +57,6 @@ function maskEmail(email: string): string {
   return `${local[0]}***@${domain}`;
 }
 
-/**
- * Hash an IP address for logging  -  never log raw IPs in plaintext.
- */
-function hashIp(ip: string | undefined): string {
-  if (!ip) return 'unknown';
-  return createHash('sha256').update(ip).digest('hex').slice(0, 16);
-}
-
 function parseDeviceLabel(userAgent: string | undefined): string {
   if (!userAgent) return 'Unknown Device';
   if (/iPhone|iPad/.test(userAgent)) return 'iOS Device';
@@ -92,6 +86,32 @@ function enforceRateLimit(
     const suffix = result.retryAfter ? ` Try again in ${result.retryAfter} seconds.` : '';
     throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: message + suffix });
   }
+}
+
+async function enforcePublicTokenRateLimit(
+  ip: string | undefined,
+  action: string,
+  maxRequests: number,
+  message: string,
+): Promise<void> {
+  const rlResult = await rateLimiter.check(hashIp(ip), action, maxRequests, 900, { failClosed: true });
+  enforceRateLimit(rlResult, message);
+}
+
+async function revokeLogoutBearerTokenStrict(token: string): Promise<void> {
+  const jti = extractJti(token);
+  const exp = extractExp(token);
+  const ttlSeconds = exp
+    ? Math.min(Math.max(exp - Math.floor(Date.now() / 1000), 1), 7200)
+    : 3600;
+
+  const key = jti ? revokedJtiKey(jti) : revokedBearerTokenKey(token);
+  await redis.set(key, 'logout', { ex: ttlSeconds });
+  logger.info({
+    type: 'auth_logout_token_revoked',
+    tokenRef: jti ?? 'token_hash',
+    ttlSeconds,
+  });
 }
 
 // -- router ----------------------------------------------------------------
@@ -564,62 +584,106 @@ export const authRouter = router({
   /**
    * Logout  -  deletes DB session and invalidates the Upstash Redis user cache.
    */
-  logout: protectedProcedure.mutation(async ({ ctx }) => {
+  logout: protectedProcedure
+    .input(z.void())
+    .mutation(async ({ ctx }) => {
+    const userId = ctx.user!.id;
+    const supabaseAuthId = ctx.user!.supabaseAuthId;
+    const sessionId = ctx.user!.sessionId;
+
+    logger.info({ type: 'auth_logout', userId });
+
+    // Step 1: security-critical JTI blocklist. This is the only logout step
+    // allowed to abort, because the presented token must be unusable after it
+    // succeeds.
     try {
-      const userId = ctx.user!.id;
-      const supabaseAuthId = ctx.user!.supabaseAuthId;
+      const authorization = ctx.req.headers.authorization;
+      const bearerToken = authorization?.startsWith('Bearer ')
+        ? authorization.substring(7)
+        : null;
 
-      logger.info({ type: 'auth_logout', userId });
-
-      if (ctx.user!.sessionId) {
-        await ctx.prisma.session.deleteMany({ where: { id: ctx.user!.sessionId, userId } });
+      if (!bearerToken) {
+        throw new Error('logout_bearer_token_missing');
       }
 
-      // B4: Add the current Bearer token to the JTI revocation blocklist so
-      // it cannot be replayed even during its remaining lifetime.
-      const bearerToken = ctx.req.headers.authorization?.substring(7);
-      if (bearerToken) {
-        await revokeToken(bearerToken, 'logout');
-      }
+      await revokeLogoutBearerTokenStrict(bearerToken);
+    } catch (error: unknown) {
+      logger.error({
+        type: 'auth_logout_token_revoke_failed',
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Logout failed. Please try again.',
+        cause: error,
+      });
+    }
 
-      // Invalidate Redis user cache so next request forces a fresh DB lookup.
-      // Also clean up idle-timeout / session-start (B3) + fingerprint (B5) keys.
-      const sessionId = ctx.user!.sessionId;
+    // Step 2: provider session revoke. Non-fatal after JTI blocklist succeeds.
+    try {
+      await supabaseAdmin.auth.admin.signOut(supabaseAuthId);
+    } catch (error: unknown) {
+      logger.warn({
+        type: 'auth_logout_supabase_signout_failed',
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Step 3: Redis user cache eviction. Non-fatal after JTI blocklist succeeds.
+    try {
+      await redis.del(`user:session:${supabaseAuthId}`);
+    } catch (error: unknown) {
+      logger.warn({
+        type: 'auth_logout_user_cache_cleanup_failed',
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Step 4: Prisma session deletion. Non-fatal audit/UI consistency cleanup.
+    if (sessionId) {
+      try {
+        await ctx.prisma.session.deleteMany({ where: { id: sessionId, userId } });
+      } catch (error: unknown) {
+        logger.warn({
+          type: 'auth_logout_session_delete_failed',
+          userId,
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Step 5: B3/B5 key cleanup. Non-fatal after JTI blocklist succeeds.
+    try {
       const keysToDelete: string[] = [
-        `user:session:${supabaseAuthId}`,
         lastSeenKey(userId),
         sessionStartKey(userId),
         ...(sessionId ? [`sheriabot:session_fingerprint:${sessionId}`] : []),
       ];
-      await Promise.all(keysToDelete.map((k) => redis.del(k))).catch((err: unknown) => {
-        logger.warn({ type: 'auth_logout_redis_cleanup_failed', userId, error: err instanceof Error ? err.message : String(err) });
+      await Promise.all(keysToDelete.map((key) => redis.del(key)));
+    } catch (error: unknown) {
+      logger.warn({
+        type: 'auth_logout_session_key_cleanup_failed',
+        userId,
+        error: error instanceof Error ? error.message : String(error),
       });
-
-      // Revoke the Supabase session immediately so the JWT cannot be reused
-      // after logout (matches the pattern used in resetPassword at line ~614).
-      // Non-fatal: if Supabase is unreachable the token expires naturally in ≤1 hour.
-      await supabaseAdmin.auth.admin.signOut(supabaseAuthId).catch((signOutErr: unknown) => {
-        logger.warn({
-          type: 'auth_logout_supabase_signout_failed',
-          userId,
-          error: signOutErr instanceof Error ? signOutErr.message : 'Unknown error',
-        });
-      });
-
-      return { success: true, message: 'Logged out successfully' };
-    } catch (error: any) {
-      logger.error({ type: 'auth_logout_error', userId: ctx.user!.id, error: error.message });
-      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Logout failed', cause: error });
     }
+
+    return { success: true, message: 'Logged out successfully' };
   }),
 
   /** Get current authenticated user */
-  me: protectedProcedure.query(async ({ ctx }) => {
-    try {
-      const user = await ctx.prisma.user.findUnique({
-        where: { id: ctx.user!.id },
-        include: { organization: { select: { id: true, name: true, type: true, registrationNumber: true } } },
-      });
+  me: protectedProcedure
+    .input(z.void())
+    .query(async ({ ctx }) => {
+      try {
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: ctx.user!.id },
+          include: { organization: { select: { id: true, name: true, type: true, registrationNumber: true } } },
+        });
 
       if (!user || (user as any).deletedAt) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
@@ -719,6 +783,13 @@ export const authRouter = router({
     .input(resetPasswordSchema)
     .mutation(async ({ input, ctx }) => {
       try {
+        await enforcePublicTokenRateLimit(
+          ctx.req.ip,
+          'reset-password-token',
+          5,
+          'Too many password reset attempts. Please try again later.',
+        );
+
         const user = await ctx.prisma.user.findFirst({
           where: { passwordResetToken: input.token, passwordResetExpiry: { gt: new Date() } } as any,
         });
@@ -810,6 +881,13 @@ export const authRouter = router({
     .input(verifyEmailSchema)
     .mutation(async ({ input, ctx }) => {
       try {
+        await enforcePublicTokenRateLimit(
+          ctx.req.ip,
+          'verify-email-token',
+          10,
+          'Too many email verification attempts. Please try again later.',
+        );
+
         const user = await ctx.prisma.user.findFirst({
           where: {
             emailVerificationToken: input.token,
@@ -964,6 +1042,13 @@ export const authRouter = router({
     .input(z.object({ accessToken: z.string().min(1, 'Access token is required') }))
     .mutation(async ({ input, ctx }) => {
       try {
+        await enforcePublicTokenRateLimit(
+          ctx.req.ip,
+          'confirm-email-callback',
+          10,
+          'Too many email confirmation attempts. Please try again later.',
+        );
+
         // 1. Verify the access token with Supabase and get the authenticated user
         const { data: { user: supabaseUser }, error: supabaseError } =
           await supabaseAdmin.auth.getUser(input.accessToken);
@@ -1034,7 +1119,14 @@ export const authRouter = router({
    */
   refreshToken: publicProcedure
     .input(refreshTokenSchema)
-    .mutation(async () => {
+    .mutation(async ({ ctx }) => {
+      await enforcePublicTokenRateLimit(
+        ctx.req.ip,
+        'refresh-token',
+        20,
+        'Too many token refresh attempts. Please try again later.',
+      );
+
       throw new TRPCError({
         code: 'METHOD_NOT_SUPPORTED',
         message:

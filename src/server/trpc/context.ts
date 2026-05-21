@@ -11,6 +11,7 @@ import { ragService } from '@/lib/rag/rag.service';
 import { storageService } from '@/lib/storage/storage.service';
 import { mailer } from '@/lib/email/mailer.service';
 import { logger } from '@/utils/logger';
+import { revokedBearerTokenKey } from '@/utils/request-identifiers';
 import { SESSION_CONFIG, lastSeenKey } from '@/config/session';
 import { isTokenRevoked, revokedJtiKey } from '@/utils/token-revocation';
 import { extractJti, extractExp } from '@/utils/jwt';
@@ -97,6 +98,10 @@ logger.info({
   mode: SESSION_FINGERPRINT_MODE,
 });
 
+function resolveEffectiveFingerprintMode(user: User): SessionFingerprintMode {
+  return user.role === 'ADMIN' ? 'enforce' : SESSION_FINGERPRINT_MODE;
+}
+
 /**
  * Create tRPC context for each request.
  *
@@ -137,6 +142,24 @@ export async function createContext({
       const revoked = await isTokenRevoked(token, supabaseUserId);
       if (revoked) {
         throw new Error('Token has been revoked');
+      }
+
+      try {
+        const bearerRevoked = await redis.exists(revokedBearerTokenKey(token));
+        if (bearerRevoked === 1) {
+          throw new Error('Token has been revoked');
+        }
+      } catch (error: unknown) {
+        if (error instanceof Error && error.message === 'Token has been revoked') {
+          throw error;
+        }
+
+        logger.warn({
+          type: 'token_hash_revocation_check_error',
+          supabaseUserId,
+          error: error instanceof Error ? error.message : String(error),
+          action: 'fail_open',
+        });
       }
 
       // Cache key for the Prisma user profile
@@ -258,63 +281,76 @@ export async function createContext({
         // at login. Mode `off` skips this section entirely. Mode `monitor`
         // records mismatches without revocation. Mode `enforce` adds the JTI
         // to the Redis blocklist and rejects the request (user = null).
-        if (SESSION_FINGERPRINT_MODE !== 'off' && user && user.sessionId) {
-          try {
-            const storedFp = await redis.get<string>(`sheriabot:session_fingerprint:${user.sessionId}`);
-            if (storedFp) {
-              const currentIp = req.ip ?? '';
-              const currentUa = (req.headers['user-agent'] ?? '').substring(0, 500);
-              const currentFp = createHash('sha256').update(`${currentIp}:${currentUa}`).digest('hex');
-              if (currentFp !== storedFp) {
-                const bearerToken = req.headers.authorization?.substring(7);
-                const jti = bearerToken ? extractJti(bearerToken) : null;
-                const exp = bearerToken ? extractExp(bearerToken) : null;
-                const anomalyType = SESSION_FINGERPRINT_MODE === 'enforce'
-                  ? 'session_anomaly_blocked'
-                  : 'session_anomaly_monitored';
+        if (user && user.role === 'ADMIN' && SESSION_FINGERPRINT_MODE === 'monitor') {
+          logger.info({
+            type: 'session_fingerprint_role_upgrade',
+            userId: user.id,
+            role: user.role,
+            fromMode: SESSION_FINGERPRINT_MODE,
+            toMode: 'enforce',
+          });
+        }
 
-                logger.warn({
-                  type:            anomalyType,
-                  event:           anomalyType,
-                  userId:          user.id,
-                  sessionId:       user.sessionId,
-                  jti,
-                  // Do not log raw UAs in production; hashes are sufficient for correlation
-                  storedFpPrefix:  storedFp.substring(0, 8),
-                  currentFpPrefix: currentFp.substring(0, 8),
-                  timestamp:       new Date().toISOString(),
-                  mode:            SESSION_FINGERPRINT_MODE,
-                });
+        if (user && user.sessionId) {
+          const effectiveFingerprintMode = resolveEffectiveFingerprintMode(user);
+          if (effectiveFingerprintMode !== 'off') {
+            try {
+              const storedFp = await redis.get<string>(`sheriabot:session_fingerprint:${user.sessionId}`);
+              if (storedFp) {
+                const currentIp = req.ip ?? '';
+                const currentUa = (req.headers['user-agent'] ?? '').substring(0, 500);
+                const currentFp = createHash('sha256').update(`${currentIp}:${currentUa}`).digest('hex');
+                if (currentFp !== storedFp) {
+                  const bearerToken = req.headers.authorization?.substring(7);
+                  const jti = bearerToken ? extractJti(bearerToken) : null;
+                  const exp = bearerToken ? extractExp(bearerToken) : null;
+                  const anomalyType = effectiveFingerprintMode === 'enforce'
+                    ? 'session_anomaly_blocked'
+                    : 'session_anomaly_monitored';
 
-                if (SESSION_FINGERPRINT_MODE === 'enforce') {
-                  // Revoke the JTI so this token cannot be replayed on any subsequent request.
-                  // TTL = remaining token lifetime (capped at 2 hours, same as revokeToken util).
-                  if (jti) {
-                    const ttlSeconds = exp
-                      ? Math.min(Math.max(exp - Math.floor(Date.now() / 1000), 1), 7200)
-                      : 3600;
-                    await redis.set(revokedJtiKey(jti), 'session_anomaly', { ex: ttlSeconds })
-                      .catch((revErr: unknown) => {
-                        logger.error({
-                          type:  'session_anomaly_blocklist_write_failed',
-                          userId: user!.id,
-                          jti,
-                          error: revErr instanceof Error ? revErr.message : String(revErr),
+                  logger.warn({
+                    type:            anomalyType,
+                    event:           anomalyType,
+                    userId:          user.id,
+                    sessionId:       user.sessionId,
+                    jti,
+                    // Do not log raw UAs in production; hashes are sufficient for correlation
+                    storedFpPrefix:  storedFp.substring(0, 8),
+                    currentFpPrefix: currentFp.substring(0, 8),
+                    timestamp:       new Date().toISOString(),
+                    mode:            effectiveFingerprintMode,
+                  });
+
+                  if (effectiveFingerprintMode === 'enforce') {
+                    // Revoke the JTI so this token cannot be replayed on any subsequent request.
+                    // TTL = remaining token lifetime (capped at 2 hours, same as revokeToken util).
+                    if (jti) {
+                      const ttlSeconds = exp
+                        ? Math.min(Math.max(exp - Math.floor(Date.now() / 1000), 1), 7200)
+                        : 3600;
+                      await redis.set(revokedJtiKey(jti), 'session_anomaly', { ex: ttlSeconds })
+                        .catch((revErr: unknown) => {
+                          logger.error({
+                            type:  'session_anomaly_blocklist_write_failed',
+                            userId: user!.id,
+                            jti,
+                            error: revErr instanceof Error ? revErr.message : String(revErr),
+                          });
                         });
-                      });
+                    }
+                    // Evict the user session cache so the next request also sees null
+                    await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+                    user = null;
                   }
-                  // Evict the user session cache so the next request also sees null
-                  await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
-                  user = null;
                 }
               }
+            } catch (fpErr: unknown) {
+              logger.warn({
+                type:  'context_fingerprint_check_error',
+                userId: user?.id,
+                error: fpErr instanceof Error ? fpErr.message : String(fpErr),
+              });
             }
-          } catch (fpErr: unknown) {
-            logger.warn({
-              type:  'context_fingerprint_check_error',
-              userId: user?.id,
-              error: fpErr instanceof Error ? fpErr.message : String(fpErr),
-            });
           }
         }
       } else {

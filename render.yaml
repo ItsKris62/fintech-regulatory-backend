@@ -8,59 +8,65 @@ services:
     startCommand: pnpm run start:prod
     healthCheckPath: /health
     envVars:
-      # ── Application ──────────────────────────────────────────────────
+      # Application
       - key: NODE_ENV
         value: production
+      - key: PORT
+        value: "4000"
       - key: LOG_LEVEL
         value: info
 
-      # ── URLs (set in Render dashboard) ──────────────────────────────
-      # FRONTEND_URL  → your Vercel app URL, e.g. https://my-app.vercel.app
-      #               → supports comma-separated list for multiple origins
-      # APP_URL       → this Render service URL, e.g. https://fintech-regulatory-backend.onrender.com
+      # URLs (set in Render dashboard)
+      # FRONTEND_URL supports a comma-separated list for multiple origins.
+      # APP_URL is this Render service URL.
       - key: FRONTEND_URL
         sync: false
       - key: APP_URL
         sync: false
 
-      # ── Database ─────────────────────────────────────────────────────
+      # Database
       - key: DATABASE_URL
         sync: false
-
-      # ── Redis ────────────────────────────────────────────────────────
-      - key: REDIS_URL
+      - key: DIRECT_URL
         sync: false
 
-      # ── JWT Authentication ───────────────────────────────────────────
-      # Both access and refresh tokens use JWT_SECRET
-      - key: JWT_SECRET
+      # Upstash Redis
+      - key: UPSTASH_REDIS_REST_URL
         sync: false
-      - key: JWT_EXPIRES_IN
-        value: 7d
-      - key: REFRESH_TOKEN_EXPIRES_IN
-        value: 30d
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
 
-      # ── Email (Resend) ───────────────────────────────────────────────
+      # Supabase Auth
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+
+      # Email (Resend)
       - key: RESEND_API_KEY
         sync: false
       - key: FROM_EMAIL
         sync: false
 
-      # ── AI (Anthropic Claude) ────────────────────────────────────────
+      # AI (Anthropic Claude)
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-6
 
-      # ── Vector Database (Pinecone) ───────────────────────────────────
+      # Vector Database (Pinecone)
       - key: PINECONE_API_KEY
         sync: false
       - key: PINECONE_ENVIRONMENT
-        sync: false
+        value: us-east-1-aws
       - key: PINECONE_INDEX_NAME
-        value: sheriabot-legal-docs
+        value: sheriabot-legal-corpus
 
-      # ── File Storage (Cloudflare R2) ─────────────────────────────────
+      # File Storage (Cloudflare R2)
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID
@@ -68,20 +74,22 @@ services:
       - key: R2_SECRET_ACCESS_KEY
         sync: false
       - key: R2_BUCKET_NAME
-        value: sheria-bot-saas
+        value: sheriabot-documents
       - key: R2_PUBLIC_URL
         sync: false
-      - key: R2_ENDPOINT
-        sync: false
 
-      # ── Embeddings (HuggingFace) ─────────────────────────────────────
-      - key: EMBEDDING_PROVIDER
-        value: huggingface
-      - key: HUGGINGFACE_API_KEY
-        sync: false
-
-      # ── Rate Limiting ────────────────────────────────────────────────
+      # Rate Limiting
       - key: RATE_LIMIT_MAX
         value: "100"
       - key: RATE_LIMIT_WINDOW
         value: 15m
+
+      # Admin Seed (optional, used by seed script)
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+
+      # Vault Reconciliation Cron
+      - key: VAULT_RECONCILIATION_DRY_RUN
+        value: "true"

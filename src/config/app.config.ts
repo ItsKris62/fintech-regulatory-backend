@@ -58,8 +58,8 @@ const envSchema = z.object({
 
   // Feature flags
   // Set to 'true' to route compliance queries through the agentic orchestrator
-  // (router → grader → verifier). Default false — legacy grounded-query path is
-  // the fallback when disabled or when the orchestrator throws.
+  // (router -> grader -> verifier). Default false - legacy grounded-query path
+  // is the fallback when disabled or when the orchestrator throws.
   ORCHESTRATOR_ENABLED: z
     .enum(['true', 'false'])
     .default('false')
@@ -110,8 +110,14 @@ function validateEnv() {
     return envSchema.parse(process.env);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      const missingVars = error.issues.map((err) => `  - ${err.path.join('.')}: ${err.message}`);
-      console.error('❌ Environment validation failed:\n' + missingVars.join('\n'));
+      const invalidVariables = error.issues.map((err) => `  - ${err.path.join('.') || '<root>'}`);
+      console.error(
+        [
+          'Environment validation failed.',
+          'Invalid variable names only; values and parsed defaults are intentionally not logged.',
+          ...invalidVariables,
+        ].join('\n')
+      );
       process.exit(1);
     }
     throw error;
@@ -270,8 +276,8 @@ export type AppConfig = typeof appConfig;
 
 // Log configuration on startup (in development only)
 if (isDevelopment()) {
-  console.log('✅ Configuration loaded successfully');
-  console.log(`📍 Environment: ${appConfig.env}`);
-  console.log(`🌐 App URL: ${appConfig.appUrl}`);
-  console.log(`🎨 Frontend URL: ${appConfig.frontendUrl}`);
+  console.log('Configuration loaded successfully');
+  console.log(`Environment: ${appConfig.env}`);
+  console.log(`App URL: ${appConfig.appUrl}`);
+  console.log(`Frontend URL: ${appConfig.frontendUrl}`);
 }

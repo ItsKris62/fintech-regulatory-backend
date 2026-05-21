@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
 import { activateTrial, getTrialStatus } from '@/modules/trial';
 
@@ -18,6 +19,7 @@ export const trialRouter = router({
    * @protected -- requires isAuthenticated
    */
   activate: protectedProcedure
+    .input(z.void())
     .mutation(async ({ ctx }) => {
       return activateTrial(ctx.user.id);
     }),
@@ -31,6 +33,7 @@ export const trialRouter = router({
    * @protected -- requires isAuthenticated
    */
   status: protectedProcedure
+    .input(z.void())
     .query(async ({ ctx }) => {
       return getTrialStatus(ctx.user.id);
     }),

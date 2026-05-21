@@ -21,6 +21,7 @@ export const gapAnalysisRouter = router({
    */
   getFrameworks: protectedProcedure
     .use(withPlanContext)
+    .input(z.void())
     .query(async ({ ctx }) => {
       const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
 
@@ -196,17 +197,19 @@ export const gapAnalysisRouter = router({
    *
    * @protected
    */
-  getGapAnalyses: protectedProcedure.query(async ({ ctx }) => {
-    try {
-      const analyses = await complianceModule.getUserGapAnalyses(ctx.user!.id);
-      logger.info({ type: 'gap_analysis_list_retrieved', userId: ctx.user!.id, count: analyses.length });
-      return analyses;
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Failed to retrieve gap analyses';
-      logger.error({ type: 'gap_analysis_list_error', userId: ctx.user!.id, error: msg });
-      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
-    }
-  }),
+  getGapAnalyses: protectedProcedure
+    .input(z.void())
+    .query(async ({ ctx }) => {
+      try {
+        const analyses = await complianceModule.getUserGapAnalyses(ctx.user!.id);
+        logger.info({ type: 'gap_analysis_list_retrieved', userId: ctx.user!.id, count: analyses.length });
+        return analyses;
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : 'Failed to retrieve gap analyses';
+        logger.error({ type: 'gap_analysis_list_error', userId: ctx.user!.id, error: msg });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
+      }
+    }),
 
   /**
    * Get a specific gap analysis result by ID.
@@ -235,6 +238,7 @@ export const gapAnalysisRouter = router({
    */
   getGapAnalysisLimits: protectedProcedure
     .use(withPlanContext)
+    .input(z.void())
     .query(({ ctx }) => {
       const limits = GAP_ANALYSIS_UPLOAD_LIMITS[ctx.plan];
       return { maxFileSizeMB: limits.maxFileSizeMB };

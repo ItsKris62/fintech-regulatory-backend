@@ -1,5 +1,5 @@
 /**
- * Public Marketing Router — Phase B4
+ * Public Marketing Router - Phase B4
  *
  * Unauthenticated procedures for:
  *   - Unsubscribe token validation
@@ -13,7 +13,9 @@ import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc/trpc";
 import { prisma } from "@/lib/prisma/client";
 import { redis } from "@/lib/redis/client";
+import { rateLimiter } from "@/lib/redis/rate-limiter";
 import { logger } from "@/utils/logger";
+import { hashIp } from "@/utils/request-identifiers";
 import { rateLimited } from "../trpc/middleware";
 import { suppress } from "@/modules/marketing/suppression.service";
 import { recordConsent } from "@/modules/marketing/consent.service";
@@ -55,6 +57,17 @@ function mapError(error: unknown): never {
   });
 }
 
+async function enforceUnsubscribeRateLimit(ip: string | undefined, action: string): Promise<void> {
+  const result = await rateLimiter.check(hashIp(ip), action, 10, 900, { failClosed: true });
+  if (!result.allowed) {
+    const suffix = result.retryAfter ? ` Try again in ${result.retryAfter} seconds.` : "";
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Too many unsubscribe requests.${suffix}`,
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -66,8 +79,10 @@ export const publicMarketingRouter = router({
    */
   validateUnsubscribeToken: publicProcedure
     .input(z.object({ token: z.string().min(1) }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       try {
+        await enforceUnsubscribeRateLimit(ctx.req.ip, "marketing-validate-unsubscribe-token");
+
         const tokenHash = hashToken(input.token);
 
         const send = await prisma.campaignSend.findFirst({
@@ -89,12 +104,14 @@ export const publicMarketingRouter = router({
     }),
 
   /**
-   * Confirm unsubscribe — suppresses the contact and marks the token used.
+   * Confirm unsubscribe - suppresses the contact and marks the token used.
    */
   unsubscribe: publicProcedure
     .input(z.object({ token: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       try {
+        await enforceUnsubscribeRateLimit(ctx.req.ip, "marketing-unsubscribe");
+
         const tokenHash = hashToken(input.token);
 
         const send = await prisma.campaignSend.findFirst({

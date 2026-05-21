@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * Production environment variable validation schema.
- * Stricter than app.config.ts  -  enforces minimum secret lengths,
+ * Stricter than app.config.ts - enforces minimum secret lengths,
  * URL formats, and production-only requirements.
  */
 
@@ -55,11 +55,11 @@ const envSchema = z.object({
     .string()
     .min(32, 'SUPABASE_JWT_SECRET must be at least 32 characters'),
 
-  // -- Email (Resend) ------------------------------------------------------
+  // -- Email (Resend) -------------------------------------------------------
   RESEND_API_KEY: z.string().startsWith('re_', 'RESEND_API_KEY must start with re_'),
   FROM_EMAIL: z.string().email('FROM_EMAIL must be a valid email address'),
 
-  // -- AI (Anthropic Claude) -----------------------------------------------
+  // -- AI (Anthropic Claude) ------------------------------------------------
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-', 'ANTHROPIC_API_KEY must start with sk-ant-'),
   ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
 
@@ -75,7 +75,7 @@ const envSchema = z.object({
   R2_BUCKET_NAME: z.string().default('sheriabot-documents'),
   R2_PUBLIC_URL: z.string().url('R2_PUBLIC_URL must be a valid URL'),
 
-  // -- Rate Limiting -------------------------------------------------------
+  // -- Rate Limiting --------------------------------------------------------
   RATE_LIMIT_MAX: z.string().default('100').transform(Number).pipe(z.number().positive()),
   RATE_LIMIT_WINDOW: z.string().default('15m'),
 
@@ -83,7 +83,7 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_PASSWORD: z.string().min(12).optional(),
 
-  // -- Vault Reconciliation Cron --------------------------------------------
+  // -- Vault Reconciliation Cron -------------------------------------------
   // When true (default), the nightly cron logs orphans but does not delete.
   // Flip to false after reviewing 2 nights of dry-run logs.
   VAULT_RECONCILIATION_DRY_RUN: z.coerce.boolean().default(true).optional(),
@@ -93,27 +93,26 @@ export type EnvConfig = z.infer<typeof envSchema>;
 
 /**
  * Validate environment variables.
- * Exits the process with a detailed error report on failure.
+ * Exits the process with a value-safe error report on failure.
  */
 export function validateEnvironment(): EnvConfig {
   try {
     return envSchema.parse(process.env);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      const errors = error.issues.map(
-        (issue) => `  - ${issue.path.join('.')}: ${issue.message}`
+      const invalidVariables = error.issues.map(
+        (issue) => `  - ${issue.path.join('.') || '<root>'}`
       );
 
       console.error(
         [
           '',
-          '╔══════════════════════════════════════════════════╗',
-          '║       ENVIRONMENT VALIDATION FAILED              ║',
-          '╚══════════════════════════════════════════════════╝',
+          'ENVIRONMENT VALIDATION FAILED',
           '',
-          ...errors,
+          'Invalid variable names only; values and parsed defaults are intentionally not logged.',
+          ...invalidVariables,
           '',
-          `Total errors: ${errors.length}`,
+          `Total errors: ${invalidVariables.length}`,
           'Fix the above variables in your .env file or Render/Supabase dashboard.',
           '',
         ].join('\n')

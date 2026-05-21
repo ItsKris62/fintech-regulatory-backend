@@ -1,5 +1,5 @@
 import 'dotenv/config'; // Must be first - populates process.env before any other import reads it
-import { buildApp } from './app';
+import { buildApp, parseTrustProxy } from './app';
 import { logger } from './utils/logger';
 import { connectionManager } from './lib/connection-manager';
 import { errorTracker } from './lib/error-tracker';
@@ -108,20 +108,20 @@ const start = async () => {
 
     logger.info({
       type: 'server_config',
-      trustProxy: process.env.TRUST_PROXY ?? true,
+      trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     });
 
     console.log(`
-╔═══════════════════════════════════════════════════════════╗
-║                                                           ║
-║   SheriaBot API Server Started Successfully               ║
-║                                                           ║
-║   URL:         http://localhost:${port}                      ║
-║   tRPC:        http://localhost:${port}/trpc                 ║
-║   Health:      http://localhost:${port}/health               ║
-║   Environment: ${(process.env.NODE_ENV || 'development').toUpperCase().padEnd(11)}                          ║
-║                                                           ║
-╚═══════════════════════════════════════════════════════════╝
+=============================================================
+
+  SheriaBot API Server Started Successfully
+
+  URL:         http://localhost:${port}
+  tRPC:        http://localhost:${port}/trpc
+  Health:      http://localhost:${port}/health
+  Environment: ${(process.env.NODE_ENV || 'development').toUpperCase()}
+
+=============================================================
     `);
   } catch (err: unknown) {
     const error = err as Error;

@@ -11,7 +11,9 @@ import {
   rateContentSchema,
 } from '../schemas/content.schema';
 import { ContentService } from '@/lib/content/content.service';
+import { rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
+import { hashIp } from '@/utils/request-identifiers';
 
 /**
  * Content Router
@@ -392,6 +394,15 @@ export const contentRouter = router({
     .input(getContentBySlugSchema)
     .query(async ({ input, ctx }) => {
       try {
+        const rlResult = await rateLimiter.check(hashIp(ctx.req.ip), 'content-get-by-slug', 60, 60);
+        if (!rlResult.allowed) {
+          const suffix = rlResult.retryAfter ? ` Try again in ${rlResult.retryAfter} seconds.` : '';
+          throw new TRPCError({
+            code: 'TOO_MANY_REQUESTS',
+            message: `Too many content requests.${suffix}`,
+          });
+        }
+
         const document = await ctx.prisma.legalDocument.findUnique({
           where: { slug: input.slug },
           include: {

@@ -9,6 +9,7 @@
  * keeping the backend session alive in sync with the frontend timer reset.
  */
 
+import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
 
 export const sessionRouter = router({
@@ -21,7 +22,9 @@ export const sessionRouter = router({
    *
    * Called by useIdleTimeout.resetTimer() when the user clicks "Stay Logged In".
    */
-  heartbeat: protectedProcedure.mutation(() => {
-    return { ok: true as const };
-  }),
+  heartbeat: protectedProcedure
+    .input(z.void())
+    .mutation(() => {
+      return { ok: true as const };
+    }),
 });

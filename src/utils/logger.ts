@@ -30,13 +30,17 @@ const loggerConfig = {
       // Top-level paths
       'email',
       'password',
+      'currentPassword',
+      'newPassword',
       'token',
       'accessToken',
       'refreshToken',
       'authorization',
       'apiKey',
+      'phoneNumber',
       'phone',
       'mpesaPhoneNumber',
+      'ipAddress',
       'nationalId',
       'secret',
       'cookie',
@@ -44,17 +48,26 @@ const loggerConfig = {
       // Wildcard one-level-nested
       '*.email',
       '*.password',
+      '*.currentPassword',
+      '*.newPassword',
       '*.token',
       '*.accessToken',
       '*.refreshToken',
       '*.authorization',
       '*.apiKey',
+      '*.phoneNumber',
       '*.phone',
       '*.mpesaPhoneNumber',
+      '*.ipAddress',
       '*.nationalId',
       '*.secret',
       '*.cookie',
       '*.supabaseAuthId',
+      // Common request and parameter envelopes
+      'user.email',
+      'params.email',
+      'req.headers.authorization',
+      'req.headers.cookie',
     ],
     censor: '[REDACTED]',
   },
@@ -113,7 +126,7 @@ export function createRequestLogger(requestId: string, userId?: string) {
  * @param startTime Start time in milliseconds
  * @param metadata Additional metadata
  */
-export function logPerformance(label: string, startTime: number, metadata?: Record<string, any>) {
+export function logPerformance(label: string, startTime: number, metadata?: Record<string, unknown>) {
   const duration = Date.now() - startTime;
 
   logger.info(
@@ -140,7 +153,7 @@ export function logApiCall(
   method: string,
   duration: number,
   success: boolean,
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 ) {
   const logLevel = success ? 'info' : 'error';
 
@@ -168,7 +181,7 @@ export function logDatabaseQuery(
   operation: string,
   model: string,
   duration: number,
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 ) {
   // In production, only log slow queries (> 1000ms)
   if (appConfig.isProduction && duration < 1000) {
@@ -198,7 +211,7 @@ export function logAuth(
   event: string,
   userId?: string,
   success: boolean = true,
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 ) {
   logger.info(
     {
@@ -218,7 +231,7 @@ export function logAuth(
  * @param userId User ID
  * @param metadata Additional metadata
  */
-export function logBusinessEvent(event: string, userId: string, metadata?: Record<string, any>) {
+export function logBusinessEvent(event: string, userId: string, metadata?: Record<string, unknown>) {
   logger.info(
     {
       type: 'business_event',
@@ -236,7 +249,7 @@ export function logBusinessEvent(event: string, userId: string, metadata?: Recor
  * @param context Error context
  * @param userId Optional user ID
  */
-export function logError(error: Error | string, context?: Record<string, any>, userId?: string) {
+export function logError(error: Error | string, context?: Record<string, unknown>, userId?: string) {
   const errorObj = error instanceof Error ? error : new Error(error);
 
   logger.error(
@@ -259,7 +272,7 @@ export function logError(error: Error | string, context?: Record<string, any>, u
 export function logSecurity(
   event: string,
   severity: 'low' | 'medium' | 'high' | 'critical',
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 ) {
   logger.warn(
     {
@@ -285,7 +298,7 @@ export function logSecurity(
 export function performanceTimer(label: string) {
   const startTime = Date.now();
 
-  return (metadata?: Record<string, any>) => {
+  return (metadata?: Record<string, unknown>) => {
     logPerformance(label, startTime, metadata);
   };
 }
