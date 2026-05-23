@@ -1,10 +1,13 @@
 import path from 'node:path';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import {
   createStorageService,
   FileMetadata,
   getVaultFileMetadata,
   getVaultPresignedDownloadUrl,
   getVaultPresignedUploadUrl,
+  vaultS3Client,
+  vaultStorageConfig,
 } from './client';
 import { storageConfig, isFileTypeAllowed, generateUniqueFilename, getMaxFileSize, getPublicUrl } from '@/config/storage.config';
 import { logger } from '@/utils/logger';
@@ -734,6 +737,53 @@ export class StorageService {
     } catch (error: unknown) {
       logger.error({
         type: 'gap_analysis_export_upload_error',
+        key,
+        error: (error as Error).message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Upload a generated compliance query DOCX export to R2.
+   * Skips file-type validation since the buffer is generated server-side.
+   * @param fileBuffer DOCX buffer
+   * @param queryId ComplianceQuery record ID used as the R2 path segment
+   * @param timestamp Stable timestamp segment for the generated export key
+   * @param userId Uploader user ID stored as metadata
+   */
+  async uploadComplianceQueryExport(
+    fileBuffer: Buffer,
+    queryId: string,
+    timestamp: number,
+    userId: string,
+  ): Promise<FileUploadResult> {
+    const key = `exports/compliance-queries/${queryId}/${timestamp}.docx`;
+    const contentType =
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    logger.info({ type: 'compliance_query_export_upload_started', key, size: fileBuffer.length });
+
+    try {
+      await vaultS3Client.send(new PutObjectCommand({
+        Bucket: vaultStorageConfig.bucket,
+        Key: key,
+        Body: fileBuffer,
+        ContentType: contentType,
+        Metadata: { queryId, userId, exportedAt: new Date().toISOString() },
+      }));
+
+      logger.info({ type: 'compliance_query_export_upload_success', key });
+
+      return {
+        key,
+        url: key,
+        size: fileBuffer.length,
+        contentType,
+      };
+    } catch (error: unknown) {
+      logger.error({
+        type: 'compliance_query_export_upload_error',
         key,
         error: (error as Error).message,
       });

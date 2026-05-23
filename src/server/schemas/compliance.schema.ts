@@ -82,3 +82,19 @@ export const quickCheckSchema = z.object({
 });
 
 export type QuickCheckInput = z.infer<typeof quickCheckSchema>;
+
+/**
+ * Get suggested queries for the active user
+ */
+export const getSuggestedQueriesSchema = z.object({});
+
+export type GetSuggestedQueriesInput = z.infer<typeof getSuggestedQueriesSchema>;
+
+/**
+ * Record a suggestion click (telemetry)
+ */
+export const recordSuggestionClickSchema = z.object({
+  suggestionId: z.string().min(1),
+});
+
+export type RecordSuggestionClickInput = z.infer<typeof recordSuggestionClickSchema>;

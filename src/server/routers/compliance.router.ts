@@ -10,6 +10,8 @@ import {
   getQuerySchema,
   followUpQuerySchema,
   quickCheckSchema,
+  getSuggestedQueriesSchema,
+  recordSuggestionClickSchema,
 } from '../schemas/compliance.schema';
 import { searchAndGetContext } from '@/lib/rag/rag.service';
 import { complianceModule } from '@/modules/compliance';
@@ -21,6 +23,7 @@ import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import { appConfig } from '@/config/app.config';
 import { gapAnalysisExportService } from '@/services/gap-analysis-export.service';
 import { checklistExportService } from '@/services/checklist-export.service';
+import { complianceQueryExportService } from '@/services/complianceQueryExport.service';
 import { storageService } from '@/lib/storage/storage.service';
 import { GapAnalysisResultSchema } from '@/lib/ai/prompts/gap-analysis';
 
@@ -128,7 +131,7 @@ export const complianceRouter = router({
 
         // Track token usage for free trial users (fire-and-forget, non-fatal).
         if (ctx.plan === 'FREE_TRIAL') {
-          incrementTrialUsage(ctx.user!.id, 'totalTokensUsed', answer.inputTokens + answer.outputTokens).catch(() => {});
+          incrementTrialUsage(ctx.user!.id, 'totalTokensUsed', answer.inputTokens + answer.outputTokens).catch(() => { });
         }
 
         const duration = Date.now() - startTime;
@@ -136,18 +139,18 @@ export const complianceRouter = router({
         // -- Orchestrated path --------------------------------------------------
         if (appConfig.features.orchestratorEnabled) {
           await runOrchestrator({
-            complianceQueryId:      query.id,
-            question:               input.question,
-            answer:                 answer.content,
-            ragResults:             ragContext.results,
+            complianceQueryId: query.id,
+            question: input.question,
+            answer: answer.content,
+            ragResults: ragContext.results,
             agenticComplexityLevel,
-            shadow:                 false,
+            shadow: false,
           });
 
           const run = await prisma.complianceQueryRun.findFirst({
-            where:   { complianceQueryId: query.id },
+            where: { complianceQueryId: query.id },
             orderBy: { createdAt: 'desc' },
-            select:  { id: true, route: true, grounded: true, verifierVerdict: true, acceptedChunkIds: true },
+            select: { id: true, route: true, grounded: true, verifierVerdict: true, acceptedChunkIds: true },
           });
 
           const route = run?.route ?? 'simple';
@@ -156,28 +159,28 @@ export const complianceRouter = router({
           const abstained = route === 'abstain' || accepted === 0 || run?.verifierVerdict === 'FAIL_ABSTAIN';
           // Confidence derived from verifier verdict. null when no run row (double-failure edge case).
           const confidence =
-            run?.verifierVerdict === 'PASS'    ? 0.9 :
-            run?.verifierVerdict === 'PARTIAL' ? 0.7 :
-            null;
+            run?.verifierVerdict === 'PASS' ? 0.9 :
+              run?.verifierVerdict === 'PARTIAL' ? 0.7 :
+                null;
 
           logger.info({
-            type:            'compliance_query_success',
-            userId:          ctx.user!.id,
-            queryId:         query.id,
+            type: 'compliance_query_success',
+            userId: ctx.user!.id,
+            queryId: query.id,
             duration,
-            tokensUsed:      answer.inputTokens + answer.outputTokens,
-            citationsCount:  queryCitations.length,
+            tokensUsed: answer.inputTokens + answer.outputTokens,
+            citationsCount: queryCitations.length,
             route,
             grounded,
             abstained,
             confidence,
-            orchestrated:    true,
+            orchestrated: true,
           });
 
           return {
-            queryId:            query.id,
-            answer:             answer.content,
-            citations:          queryCitations,
+            queryId: query.id,
+            answer: answer.content,
+            citations: queryCitations,
             confidence,
             suggestedFollowUps: [],
             route,
@@ -185,41 +188,41 @@ export const complianceRouter = router({
             abstained,
             // null only on double-failure (orchestrator threw AND error-row write failed).
             // Frontend must disable the reportGap affordance when runId is null.
-            runId:              run?.id ?? null,
+            runId: run?.id ?? null,
           };
         }
 
         // -- Legacy grounded query path -----------------------------------------
         // Shadow orchestrator is fire-and-forget: never blocks the user response.
         runOrchestrator({
-          complianceQueryId:      query.id,
-          question:               input.question,
-          answer:                 answer.content,
-          ragResults:             ragContext.results,
+          complianceQueryId: query.id,
+          question: input.question,
+          answer: answer.content,
+          ragResults: ragContext.results,
           agenticComplexityLevel,
-          shadow:                 true,
-        }).catch(() => {});
+          shadow: true,
+        }).catch(() => { });
 
         logger.info({
-          type:           'compliance_query_success',
-          userId:         ctx.user!.id,
-          queryId:        query.id,
+          type: 'compliance_query_success',
+          userId: ctx.user!.id,
+          queryId: query.id,
           duration,
-          tokensUsed:     answer.inputTokens + answer.outputTokens,
+          tokensUsed: answer.inputTokens + answer.outputTokens,
           citationsCount: queryCitations.length,
-          orchestrated:   false,
+          orchestrated: false,
         });
 
         return {
-          queryId:            query.id,
-          answer:             answer.content,
-          citations:          queryCitations,
-          confidence:         null,
+          queryId: query.id,
+          answer: answer.content,
+          citations: queryCitations,
+          confidence: null,
           suggestedFollowUps: [],
-          route:              null as string | null,
-          grounded:           ragContext.results.length > 0,
-          abstained:          false,
-          runId:              null as string | null,
+          route: null as string | null,
+          grounded: ragContext.results.length > 0,
+          abstained: false,
+          runId: null as string | null,
         };
       } catch (error: any) {
         const duration = Date.now() - startTime;
@@ -879,6 +882,84 @@ export const complianceRouter = router({
         });
       }
     }),
+
+  // ===========================================================================
+  // SUGGESTED QUERIES
+  // ===========================================================================
+
+  /**
+   * Get personalised suggested queries for the active user.
+   *
+   * Builds 5 suggestions from five signal tiers (graceful degradation):
+   * 1. Organization.industry -> curated template match
+   * 2. User's recent query regulatory areas (last ~20)
+   * 3. Most recent active RegulatoryAlert
+   * 4. Cohort popular templates (same organizationType, >=5 distinct orgs, 30d)
+   * 5. Curated baseline
+   *
+   * Result is cached per-user in Redis for 1 hour.
+   *
+   * @protected @org-member
+   */
+  getSuggestedQueries: orgMemberProcedure
+    .use(rateLimited('suggestedQueries'))
+    .input(getSuggestedQueriesSchema)
+    .query(async ({ ctx }) => {
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
+
+      logger.info({ type: 'suggested_queries_requested', userId, organizationId });
+
+      try {
+        const suggestions = await complianceModule.buildSuggestedQueries(userId, organizationId);
+
+        logger.info({
+          type: 'suggested_queries_shown',
+          userId,
+          organizationId,
+          count: suggestions.length,
+          signals: suggestions.map((s) => s.reason),
+        });
+
+        return { suggestions };
+      } catch (error: any) {
+        logger.error({
+          type: 'suggested_queries_endpoint_error',
+          userId,
+          organizationId,
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get suggested queries',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Record a suggestion click for telemetry.
+   *
+   * Fire-and-forget from the frontend. Never blocks the user.
+   *
+   * @protected
+   */
+  recordSuggestionClick: protectedProcedure
+    .use(rateLimited('suggestionClick'))
+    .input(recordSuggestionClickSchema)
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+
+      logger.info({
+        type: 'suggested_query_clicked',
+        userId,
+        suggestionId: input.suggestionId,
+      });
+
+      return { success: true };
+    }),
+
   // ===========================================================================
   // QUERY FEEDBACK
   // ===========================================================================
@@ -1274,7 +1355,7 @@ export const complianceRouter = router({
       const checklist = await prisma.checklist.findUnique({
         where: { id: input.checklistId },
         include: {
-          user:          { select: { fullName: true } },
+          user: { select: { fullName: true } },
           checklistItems: {
             orderBy: [{ category: 'asc' }, { priority: 'asc' }, { createdAt: 'asc' }],
           },
@@ -1333,20 +1414,20 @@ export const complianceRouter = router({
           completedCount,
           totalCount: items.length,
           items: items.map((i) => ({
-            id:                  i.id,
-            itemCode:            i.itemCode ?? null,
-            category:            i.category ?? 'General',
-            title:               i.title,
-            description:         i.description,
-            guidance:            i.guidance ?? null,
+            id: i.id,
+            itemCode: i.itemCode ?? null,
+            category: i.category ?? 'General',
+            title: i.title,
+            description: i.description,
+            guidance: i.guidance ?? null,
             regulatoryReference: i.regulatoryReference ?? '',
-            actionItems:         Array.isArray(i.actionItems) ? (i.actionItems as string[]) : [],
-            deadline:            i.deadline ?? null,
-            penalty:             i.penalty ?? null,
-            priority:            i.priority,
-            status:              i.status,
-            notes:               i.notes ?? null,
-            completedAt:         i.completedAt ?? null,
+            actionItems: Array.isArray(i.actionItems) ? (i.actionItems as string[]) : [],
+            deadline: i.deadline ?? null,
+            penalty: i.penalty ?? null,
+            priority: i.priority,
+            status: i.status,
+            notes: i.notes ?? null,
+            completedAt: i.completedAt ?? null,
           })),
         };
       });
@@ -1355,10 +1436,10 @@ export const complianceRouter = router({
       const summaryRaw = checklist.summary as Record<string, unknown> | null;
       const summary = summaryRaw
         ? {
-            criticalItems:           typeof summaryRaw['criticalItems'] === 'number' ? summaryRaw['criticalItems'] : undefined,
-            highItems:               typeof summaryRaw['highItems'] === 'number' ? summaryRaw['highItems'] : undefined,
-            estimatedCompletionDays: typeof summaryRaw['estimatedCompletionDays'] === 'number' ? summaryRaw['estimatedCompletionDays'] : undefined,
-          }
+          criticalItems: typeof summaryRaw['criticalItems'] === 'number' ? summaryRaw['criticalItems'] : undefined,
+          highItems: typeof summaryRaw['highItems'] === 'number' ? summaryRaw['highItems'] : undefined,
+          estimatedCompletionDays: typeof summaryRaw['estimatedCompletionDays'] === 'number' ? summaryRaw['estimatedCompletionDays'] : undefined,
+        }
         : null;
 
       // 8. Compute progress
@@ -1367,19 +1448,19 @@ export const complianceRouter = router({
 
       // 9. Build DOCX buffer
       const docxBuffer = await checklistExportService.generateChecklistDocx({
-        checklistId:   checklist.id,
-        title:         checklist.title,
-        productType:   checklist.productType ?? null,
+        checklistId: checklist.id,
+        title: checklist.title,
+        productType: checklist.productType ?? null,
         businessStage: checklist.businessStage ?? null,
         progress,
         completedItems,
-        totalItems:    checklist.totalItems > 0 ? checklist.totalItems : itemCount,
-        generatedAt:   checklist.generatedAt ?? null,
-        createdAt:     checklist.createdAt,
+        totalItems: checklist.totalItems > 0 ? checklist.totalItems : itemCount,
+        generatedAt: checklist.generatedAt ?? null,
+        createdAt: checklist.createdAt,
         summary,
         categories,
         organizationName: orgName ?? undefined,
-        userName:         checklist.user?.fullName ?? undefined,
+        userName: checklist.user?.fullName ?? undefined,
       });
 
       // 10. Build sanitised filename
@@ -1422,6 +1503,95 @@ export const complianceRouter = router({
     }),
 
   /**
+   * Export a compliance query as a DOCX file.
+   *
+   * Generates a Word document containing the question and AI response,
+   * uploads it to R2, and returns a signed download URL with 1-hour expiry.
+   *
+   * @protected @org-member - gated on complianceQuery feature
+   */
+  exportQueryDocx: orgMemberProcedure
+    .use(withPlanContext)
+    .input(z.object({ queryId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+
+      // 1. Fetch the query
+      const queryRecord = await prisma.complianceQuery.findUnique({
+        where: { id: input.queryId },
+        select: {
+          id: true,
+          query: true,
+          response: true,
+          userId: true,
+          organizationId: true,
+          createdAt: true,
+        },
+      });
+
+      if (!queryRecord) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Query not found' });
+      }
+
+      // 2. Access check - user owns the query or is admin
+      if (ctx.user!.role !== 'ADMIN' && queryRecord.userId !== userId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this query' });
+      }
+
+      // 3. Must have a response to export
+      if (!queryRecord.response || queryRecord.response.trim().length === 0) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This query has no response to export.',
+        });
+      }
+
+      // 4. Fetch org name for the DOCX cover
+      const orgName = queryRecord.organizationId
+        ? (await prisma.organization.findUnique({
+          where: { id: queryRecord.organizationId },
+          select: { name: true },
+        }))?.name ?? undefined
+        : undefined;
+
+      // 5. Build DOCX buffer
+      const docxBuffer = await complianceQueryExportService.generateComplianceQueryDocx({
+        queryId: queryRecord.id,
+        question: queryRecord.query,
+        response: queryRecord.response,
+        createdAt: queryRecord.createdAt,
+        organizationName: orgName,
+      });
+
+      // 6. Build sanitised filename
+      const dateSafe = queryRecord.createdAt.toISOString().slice(0, 10);
+      const timestamp = Date.now();
+      const filename = `SheriaBot_Compliance_Query_${dateSafe}_${timestamp}.docx`;
+
+      // 7. Upload to R2 under exports/compliance-queries/
+      const uploadResult = await storageService.uploadComplianceQueryExport(
+        docxBuffer,
+        input.queryId,
+        timestamp,
+        userId,
+      );
+
+      // 9. Generate signed URL with 1-hour expiry (3600 seconds)
+      const downloadUrl = await storageService.getVaultDownloadUrl(uploadResult.key, 3600, filename);
+      const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
+
+      logger.info({
+        type: 'compliance_query_docx_exported',
+        userId,
+        queryId: input.queryId,
+        filename,
+        r2Key: uploadResult.key,
+      });
+
+      return { downloadUrl, expiresAt, fileName: filename };
+    }),
+
+  /**
    * Report a corpus gap for a compliance query that returned no grounded evidence.
    * Writes a CorpusGapFeedback row for the corpus expansion backlog.
    *
@@ -1429,17 +1599,17 @@ export const complianceRouter = router({
    */
   reportGap: orgMemberProcedure
     .input(z.object({
-      queryId:           z.string().cuid(),
+      queryId: z.string().cuid(),
       // null when orchestrator double-failed (run row not written). Frontend must
       // disable the "Tell us what's missing" button when runId is null.
-      runId:             z.string().cuid().nullable(),
+      runId: z.string().cuid().nullable(),
       suggestedDocument: z.string().max(500).optional(),
-      notes:             z.string().max(2000).optional(),
+      notes: z.string().max(2000).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       // Verify the query belongs to the calling user (IDOR protection).
       const complianceQuery = await prisma.complianceQuery.findUnique({
-        where:  { id: input.queryId },
+        where: { id: input.queryId },
         select: { userId: true, query: true },
       });
 
@@ -1455,7 +1625,7 @@ export const complianceRouter = router({
 
       // Verify the run belongs to this query (prevents runId spoofing).
       const run = await prisma.complianceQueryRun.findFirst({
-        where:  { id: input.runId, complianceQueryId: input.queryId },
+        where: { id: input.runId, complianceQueryId: input.queryId },
         select: { id: true },
       });
 
@@ -1466,24 +1636,24 @@ export const complianceRouter = router({
       const feedback = await prisma.corpusGapFeedback.create({
         data: {
           complianceQueryId: input.queryId,
-          runId:             input.runId,
-          userId:            ctx.user!.id,
-          organizationId:    ctx.orgMembership!.organizationId,
-          question:          complianceQuery.query,
+          runId: input.runId,
+          userId: ctx.user!.id,
+          organizationId: ctx.orgMembership!.organizationId,
+          question: complianceQuery.query,
           suggestedDocument: input.suggestedDocument,
-          notes:             input.notes,
+          notes: input.notes,
         },
         select: { id: true },
       });
 
       logger.info({
-        type:             'corpus_gap_feedback_submitted',
-        userId:           ctx.user!.id,
-        organizationId:   ctx.orgMembership!.organizationId,
-        queryId:          input.queryId,
-        runId:            input.runId,
-        feedbackId:       feedback.id,
-        hasSuggestedDoc:  !!input.suggestedDocument,
+        type: 'corpus_gap_feedback_submitted',
+        userId: ctx.user!.id,
+        organizationId: ctx.orgMembership!.organizationId,
+        queryId: input.queryId,
+        runId: input.runId,
+        feedbackId: feedback.id,
+        hasSuggestedDoc: !!input.suggestedDocument,
       });
 
       return { feedbackId: feedback.id };

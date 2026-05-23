@@ -412,7 +412,7 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
 
     // Track token usage for free trial users (fire-and-forget, non-fatal).
     if (trialUserId) {
-      incrementTrialUsage(trialUserId, 'totalTokensUsed', gapInputTokens + gapOutputTokens).catch(() => {});
+      incrementTrialUsage(trialUserId, 'totalTokensUsed', gapInputTokens + gapOutputTokens).catch(() => { });
     }
 
     // -- CITATION VERIFICATION (progress: 88) --------------------------------
@@ -546,7 +546,7 @@ class ComplianceModule {
       // 3. Check cache for similar query
       const cacheKey = this.getQueryCacheKey(validated.query, validated.regulatoryAreas);
       const cached = await redis.get<string>(cacheKey);
-      
+
       if (cached) {
         logger.debug({ type: 'compliance_query_cache_hit', userId });
         return JSON.parse(cached);
@@ -628,8 +628,8 @@ class ComplianceModule {
       // Pilot event -- fire-and-forget, never throws.
       logPilotEvent({
         userId,
-        action:   'AI_QUERY_SENT',
-        feature:  'compliance-query',
+        action: 'AI_QUERY_SENT',
+        feature: 'compliance-query',
         metadata: { queryId: savedQuery.id },
       }).catch((err) => logger.error({ type: 'PILOT_EVENT_LOG_FAILED', err }));
 
@@ -752,6 +752,263 @@ Follow-up Question: ${followUp}
         error: error.message,
       });
       throw error;
+    }
+  }
+
+  /**
+   * Build personalised suggested queries for the active user.
+   *
+   * Signal priority (graceful degradation):
+   * 1. Organization.industry -> curated template match
+   * 2. User's recent query regulatory areas (last ~20)
+   * 3. Most recent active RegulatoryAlert
+   * 4. Cohort popular templates (same organizationType, >=5 distinct orgs, 30d)
+   * 5. Curated baseline (DEFAULT_SUGGESTIONS)
+   *
+   * Always returns exactly 5 suggestions. Cached in Redis for 1 hour.
+   */
+  async buildSuggestedQueries(
+    userId: string,
+    organizationId: string,
+  ): Promise<Array<{
+    id: string;
+    text: string;
+    reason: 'industry' | 'history' | 'alert' | 'cohort' | 'curated';
+    relatedArea?: string;
+  }>> {
+    const CACHE_KEY = `sheriabot:suggested-queries:${userId}`;
+
+    try {
+      // Check Redis cache first
+      const cached = await redis.get<string>(CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length === 5) {
+          return parsed;
+        }
+        // Malformed cache -- fall through to rebuild
+        logger.warn({ type: 'suggested_queries_cache_malformed', userId });
+      }
+
+      const results: Array<{
+        id: string;
+        text: string;
+        reason: 'industry' | 'history' | 'alert' | 'cohort' | 'curated';
+        relatedArea?: string;
+      }> = [];
+
+      // Fetch org + industry in parallel
+      const org = await prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { industry: true, type: true },
+      });
+
+      const industry = org?.industry ?? null;
+
+      // -- Signal 1: Industry templates
+      const { resolveTemplatesForIndustry, DEFAULT_SUGGESTIONS } =
+        await import('@/config/suggested-queries.config');
+      const industryTemplates = resolveTemplatesForIndustry(industry);
+
+      function addFromPool(
+        pool: readonly string[],
+        reason: 'industry' | 'history' | 'alert' | 'cohort' | 'curated',
+        relatedArea?: string,
+      ): void {
+        for (const text of pool) {
+          if (results.length >= 5) return;
+          const exists = results.some((r) => r.text === text);
+          if (exists) continue;
+          results.push({
+            id: `sg_${reason}_${results.length}`,
+            text,
+            reason,
+            ...(relatedArea ? { relatedArea } : {}),
+          });
+        }
+      }
+
+      // Fill from industry first
+      if (industry) {
+        addFromPool(industryTemplates, 'industry');
+      }
+
+      // -- Signal 2: Recent query regulatory areas
+      if (results.length < 5) {
+        const recentQueries = await prisma.complianceQuery.findMany({
+          where: { userId, organizationId },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+          select: { regulatoryAreas: true },
+        });
+
+        const areaCounts = new Map<string, number>();
+        for (const q of recentQueries) {
+          const areas: string[] = Array.isArray(q.regulatoryAreas) ? q.regulatoryAreas as string[] : [];
+          for (const area of areas) {
+            areaCounts.set(area, (areaCounts.get(area) ?? 0) + 1);
+          }
+        }
+
+        // Sort by frequency, pick top areas
+        const sortedAreas = [...areaCounts.entries()].sort((a, b) => b[1] - a[1]);
+        const topAreas = sortedAreas.slice(0, 4).map(([area]) => area);
+        // Keep one area outside their history to surface coverage gaps
+        const uncoveredAreas = ['DPA', 'AML', 'CFT', 'CYBERSECURITY', 'CONSUMER_PROTECTION', 'CBK', 'CMA', 'E_MONEY', 'PAYMENT_SYSTEMS', 'DIGITAL_LENDING'].filter(
+          (a) => !topAreas.includes(a),
+        );
+        const gapArea = uncoveredAreas[Math.floor(Math.random() * uncoveredAreas.length)];
+
+        // Map areas to templates using curated config
+        const { getAllCuratedTemplates } = await import('@/config/suggested-queries.config');
+        const allTemplates = getAllCuratedTemplates();
+
+        for (const area of topAreas.slice(0, 3)) {
+          const match = allTemplates.find((t) =>
+            t.template.toLowerCase().includes(area.toLowerCase().replace(/_/g, ' ')) ||
+            t.industryKey.toLowerCase().includes(area.toLowerCase())
+          );
+          if (match) {
+            addFromPool([match.template], 'history', area);
+          }
+        }
+
+        // Add the gap-area suggestion
+        if (results.length < 5 && gapArea) {
+          const gapMatch = allTemplates.find((t) =>
+            t.template.toLowerCase().includes(gapArea.toLowerCase().replace(/_/g, ' '))
+          );
+          if (gapMatch) {
+            addFromPool([gapMatch.template], 'history', gapArea);
+          }
+        }
+      }
+
+      // -- Signal 3: Recent RegulatoryAlert
+      if (results.length < 5) {
+        try {
+          const recentAlert = await prisma.regulatoryAlert.findFirst({
+            where: {
+              isActive: true,
+            },
+            orderBy: { publishedAt: 'desc' },
+            select: { title: true, regulatoryBody: true },
+          });
+
+          if (recentAlert) {
+            const { getAllCuratedTemplates } = await import('@/config/suggested-queries.config');
+            const allTemplates = getAllCuratedTemplates();
+            const bodyStr = recentAlert.regulatoryBody || '';
+            const match = allTemplates.find((t) =>
+              t.template.toLowerCase().includes(bodyStr.toLowerCase().slice(0, 15))
+            );
+            if (match) {
+              addFromPool([match.template], 'alert', bodyStr || undefined);
+            }
+          }
+        } catch {
+          // Alert signal is non-critical -- fall through
+        }
+      }
+
+      // -- Signal 4: Cohort popular queries
+      if (results.length < 5) {
+        try {
+          const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+          const orgType = org?.type ?? 'startup';
+
+          const cohortOrgs = await prisma.organization.findMany({
+            where: { type: orgType, id: { not: organizationId } },
+            select: { id: true },
+            take: 100,
+          });
+
+          if (cohortOrgs.length >= 5) {
+            const cohortOrgIds = cohortOrgs.map((o) => o.id);
+
+            // Count query occurrences per regulatory area across cohort
+            const cohortQueries = await prisma.complianceQuery.findMany({
+              where: {
+                organizationId: { in: cohortOrgIds },
+                createdAt: { gte: thirtyDaysAgo },
+              },
+              select: { regulatoryAreas: true, organizationId: true },
+              take: 500,
+            });
+
+            // Track distinct orgs per area
+            const areaOrgSet = new Map<string, Set<string>>();
+            for (const q of cohortQueries) {
+              const areas: string[] = Array.isArray(q.regulatoryAreas)
+                ? (q.regulatoryAreas as string[])
+                : [];
+              for (const area of areas) {
+                if (!areaOrgSet.has(area)) areaOrgSet.set(area, new Set());
+                areaOrgSet.get(area)!.add(q.organizationId!);
+              }
+            }
+
+            // Only areas with 5+ distinct orgs qualify
+            const qualifyingAreas = [...areaOrgSet.entries()]
+              .filter(([, orgs]) => orgs.size >= 5)
+              .sort((a, b) => b[1].size - a[1].size)
+              .map(([area]) => area);
+
+            if (qualifyingAreas.length > 0) {
+              const { getAllCuratedTemplates } = await import('@/config/suggested-queries.config');
+              const allTemplates = getAllCuratedTemplates();
+
+              for (const area of qualifyingAreas) {
+                if (results.length >= 5) break;
+                const match = allTemplates.find((t) =>
+                  t.template.toLowerCase().includes(area.toLowerCase().replace(/_/g, ' '))
+                );
+                if (match) {
+                  addFromPool([match.template], 'cohort', area);
+                }
+              }
+            }
+          }
+        } catch {
+          // Cohort signal is non-critical -- fall through
+        }
+      }
+
+      // -- Signal 5: Curated baseline
+      if (results.length < 5) {
+        addFromPool(DEFAULT_SUGGESTIONS, 'curated');
+      }
+
+      // Trim to exactly 5
+      const final = results.slice(0, 5);
+
+      // Cache in Redis for 1 hour
+      await redis.set(CACHE_KEY, JSON.stringify(final), { ex: 3600 } as any);
+
+      logger.info({
+        type: 'suggested_queries_built',
+        userId,
+        organizationId,
+        count: final.length,
+        signals: final.map((s) => s.reason),
+      });
+
+      return final;
+    } catch (error: any) {
+      logger.error({
+        type: 'suggested_queries_build_failed',
+        userId,
+        organizationId,
+        error: error.message,
+      });
+
+      // Fallback: return 5 curated defaults
+      const { DEFAULT_SUGGESTIONS } = await import('@/config/suggested-queries.config');
+      return DEFAULT_SUGGESTIONS.slice(0, 5).map((text, i) => ({
+        id: `sg_curated_${i}`,
+        text,
+        reason: 'curated' as const,
+      }));
     }
   }
 
@@ -1163,8 +1420,8 @@ Follow-up Question: ${followUp}
       // Pilot event -- fire-and-forget, never throws.
       logPilotEvent({
         userId,
-        action:   'REPORT_GENERATED',
-        feature:  'compliance-risk',
+        action: 'REPORT_GENERATED',
+        feature: 'compliance-risk',
         metadata: { orgId, periodDays, totalRisks: summary.totalRisks },
       }).catch((err) => logger.error({ type: 'PILOT_EVENT_LOG_FAILED', err }));
 
@@ -1325,9 +1582,9 @@ Follow-up Question: ${followUp}
       }
     } catch (err: unknown) {
       logger.warn({
-        type:   'query_rate_limit_redis_error',
+        type: 'query_rate_limit_redis_error',
         userId,
-        error:  err instanceof Error ? err.message : String(err),
+        error: err instanceof Error ? err.message : String(err),
       });
       // Fail-open: Redis unavailable -- allow the request
       return;
@@ -1357,9 +1614,9 @@ Follow-up Question: ${followUp}
       }
     } catch (err: unknown) {
       logger.warn({
-        type:   'quick_check_rate_limit_redis_error',
+        type: 'quick_check_rate_limit_redis_error',
         userId,
-        error:  err instanceof Error ? err.message : String(err),
+        error: err instanceof Error ? err.message : String(err),
       });
       return;
     }
@@ -1503,8 +1760,8 @@ Follow-up Question: ${followUp}
     const ROLE_LEVEL: Record<MemberRole, number> = {
       [MemberRole.VIEWER]: 0,
       [MemberRole.MEMBER]: 1,
-      [MemberRole.ADMIN]:  2,
-      [MemberRole.OWNER]:  3,
+      [MemberRole.ADMIN]: 2,
+      [MemberRole.OWNER]: 3,
     };
 
     if ((ROLE_LEVEL[member.role] ?? 0) < (ROLE_LEVEL[requiredRole] ?? 1)) {
@@ -2437,51 +2694,51 @@ Follow-up Question: ${followUp}
     title: string;
     description: string;
   }> = [
-    // Data Protection  -  Kenya Data Protection Act 2019
-    { category: 'DATA_PROTECTION', title: 'Data Protection Officer (DPO) registered', description: 'A Data Protection Officer has been appointed and registered with the Office of the Data Protection Commissioner.' },
-    { category: 'DATA_PROTECTION', title: 'Privacy policy published', description: 'A comprehensive privacy policy is publicly available on the company website or accessible to customers.' },
-    { category: 'DATA_PROTECTION', title: 'Data processing agreements in place', description: 'Written data processing agreements exist with all third-party vendors and processors handling personal data.' },
-    { category: 'DATA_PROTECTION', title: 'Consent management procedures documented', description: 'Procedures for obtaining, recording, and withdrawing data subject consent are formally documented and implemented.' },
-    { category: 'DATA_PROTECTION', title: 'Data breach notification procedure documented', description: 'A documented procedure exists for detecting, reporting, and notifying data breaches within 72 hours.' },
-    { category: 'DATA_PROTECTION', title: 'Cross-border data transfer safeguards', description: 'Adequate safeguards are in place for any transfer of personal data outside Kenya.' },
-    { category: 'DATA_PROTECTION', title: 'Data Protection Impact Assessments (DPIA) completed', description: 'DPIAs have been conducted for all high-risk data processing activities.' },
+      // Data Protection  -  Kenya Data Protection Act 2019
+      { category: 'DATA_PROTECTION', title: 'Data Protection Officer (DPO) registered', description: 'A Data Protection Officer has been appointed and registered with the Office of the Data Protection Commissioner.' },
+      { category: 'DATA_PROTECTION', title: 'Privacy policy published', description: 'A comprehensive privacy policy is publicly available on the company website or accessible to customers.' },
+      { category: 'DATA_PROTECTION', title: 'Data processing agreements in place', description: 'Written data processing agreements exist with all third-party vendors and processors handling personal data.' },
+      { category: 'DATA_PROTECTION', title: 'Consent management procedures documented', description: 'Procedures for obtaining, recording, and withdrawing data subject consent are formally documented and implemented.' },
+      { category: 'DATA_PROTECTION', title: 'Data breach notification procedure documented', description: 'A documented procedure exists for detecting, reporting, and notifying data breaches within 72 hours.' },
+      { category: 'DATA_PROTECTION', title: 'Cross-border data transfer safeguards', description: 'Adequate safeguards are in place for any transfer of personal data outside Kenya.' },
+      { category: 'DATA_PROTECTION', title: 'Data Protection Impact Assessments (DPIA) completed', description: 'DPIAs have been conducted for all high-risk data processing activities.' },
 
-    // AML/KYC  -  Proceeds of Crime and Anti-Money Laundering Act
-    { category: 'AML_KYC', title: 'KYC procedures documented and implemented', description: 'Formal Know Your Customer procedures are documented, approved, and actively implemented across all onboarding flows.' },
-    { category: 'AML_KYC', title: 'Customer Due Diligence (CDD) process in place', description: 'A structured Customer Due Diligence process is operational for all new and existing customers.' },
-    { category: 'AML_KYC', title: 'Enhanced Due Diligence for high-risk customers', description: 'Enhanced Due Diligence procedures are applied to politically exposed persons (PEPs) and other high-risk customers.' },
-    { category: 'AML_KYC', title: 'Suspicious Transaction Reporting (STR) procedures', description: 'Formal procedures exist for identifying, reviewing, and reporting suspicious transactions to the Financial Reporting Centre (FRC).' },
-    { category: 'AML_KYC', title: 'AML compliance officer appointed', description: 'A dedicated AML Compliance Officer has been appointed and is registered with the relevant regulatory authority.' },
-    { category: 'AML_KYC', title: 'Staff AML training completed', description: 'All relevant staff have completed AML/CFT awareness and compliance training within the past 12 months.' },
-    { category: 'AML_KYC', title: 'Transaction monitoring system in place', description: 'An automated or manual transaction monitoring system is operational to detect unusual or suspicious activity.' },
-    { category: 'AML_KYC', title: 'Record-keeping policy (7-year minimum)', description: 'A record-keeping policy compliant with the 7-year minimum retention requirement under Kenyan AML law is implemented.' },
+      // AML/KYC  -  Proceeds of Crime and Anti-Money Laundering Act
+      { category: 'AML_KYC', title: 'KYC procedures documented and implemented', description: 'Formal Know Your Customer procedures are documented, approved, and actively implemented across all onboarding flows.' },
+      { category: 'AML_KYC', title: 'Customer Due Diligence (CDD) process in place', description: 'A structured Customer Due Diligence process is operational for all new and existing customers.' },
+      { category: 'AML_KYC', title: 'Enhanced Due Diligence for high-risk customers', description: 'Enhanced Due Diligence procedures are applied to politically exposed persons (PEPs) and other high-risk customers.' },
+      { category: 'AML_KYC', title: 'Suspicious Transaction Reporting (STR) procedures', description: 'Formal procedures exist for identifying, reviewing, and reporting suspicious transactions to the Financial Reporting Centre (FRC).' },
+      { category: 'AML_KYC', title: 'AML compliance officer appointed', description: 'A dedicated AML Compliance Officer has been appointed and is registered with the relevant regulatory authority.' },
+      { category: 'AML_KYC', title: 'Staff AML training completed', description: 'All relevant staff have completed AML/CFT awareness and compliance training within the past 12 months.' },
+      { category: 'AML_KYC', title: 'Transaction monitoring system in place', description: 'An automated or manual transaction monitoring system is operational to detect unusual or suspicious activity.' },
+      { category: 'AML_KYC', title: 'Record-keeping policy (7-year minimum)', description: 'A record-keeping policy compliant with the 7-year minimum retention requirement under Kenyan AML law is implemented.' },
 
-    // Consumer Protection  -  CBK Consumer Protection Guidelines
-    { category: 'CONSUMER_PROTECTION', title: 'Transparent pricing and fee disclosure', description: 'All fees, charges, interest rates, and penalties are clearly disclosed to customers before and during service use.' },
-    { category: 'CONSUMER_PROTECTION', title: 'Complaints handling mechanism in place', description: 'A formal complaints handling mechanism with defined escalation paths and response SLAs is operational.' },
-    { category: 'CONSUMER_PROTECTION', title: 'Fair debt collection practices documented', description: 'Debt collection policies comply with CBK guidelines prohibiting abusive, unfair, or deceptive practices.' },
-    { category: 'CONSUMER_PROTECTION', title: 'Product terms clearly communicated', description: 'All product terms and conditions are written in plain language and communicated clearly to customers before sign-up.' },
-    { category: 'CONSUMER_PROTECTION', title: 'Customer data used only for stated purposes', description: 'A policy exists ensuring customer data is not used for any purpose beyond what was disclosed at the time of collection.' },
-    { category: 'CONSUMER_PROTECTION', title: 'Accessible customer support channels', description: 'Multiple accessible customer support channels (phone, email, chat) are available with published operating hours.' },
+      // Consumer Protection  -  CBK Consumer Protection Guidelines
+      { category: 'CONSUMER_PROTECTION', title: 'Transparent pricing and fee disclosure', description: 'All fees, charges, interest rates, and penalties are clearly disclosed to customers before and during service use.' },
+      { category: 'CONSUMER_PROTECTION', title: 'Complaints handling mechanism in place', description: 'A formal complaints handling mechanism with defined escalation paths and response SLAs is operational.' },
+      { category: 'CONSUMER_PROTECTION', title: 'Fair debt collection practices documented', description: 'Debt collection policies comply with CBK guidelines prohibiting abusive, unfair, or deceptive practices.' },
+      { category: 'CONSUMER_PROTECTION', title: 'Product terms clearly communicated', description: 'All product terms and conditions are written in plain language and communicated clearly to customers before sign-up.' },
+      { category: 'CONSUMER_PROTECTION', title: 'Customer data used only for stated purposes', description: 'A policy exists ensuring customer data is not used for any purpose beyond what was disclosed at the time of collection.' },
+      { category: 'CONSUMER_PROTECTION', title: 'Accessible customer support channels', description: 'Multiple accessible customer support channels (phone, email, chat) are available with published operating hours.' },
 
-    // CBK Licensing  -  CBK Act / National Payment System Act
-    { category: 'CBK_LICENSING', title: 'Primary CBK license obtained', description: 'The organization holds the appropriate CBK license (Payment Service Provider, Mobile Money, Digital Credit Provider, etc.).' },
-    { category: 'CBK_LICENSING', title: 'License is current and not expired', description: 'The CBK license has been renewed and is valid with no lapsed expiry date.' },
-    { category: 'CBK_LICENSING', title: 'Annual returns filed with CBK', description: 'Annual regulatory returns have been submitted to the CBK within the required deadlines.' },
-    { category: 'CBK_LICENSING', title: 'Capital adequacy requirements met', description: 'The organization meets minimum capital requirements as stipulated by the CBK for its license category.' },
-    { category: 'CBK_LICENSING', title: 'Regulatory reports submitted on time', description: 'All required periodic reports (monthly, quarterly) have been submitted to the CBK on schedule.' },
-    { category: 'CBK_LICENSING', title: 'Authorized signatories registered with CBK', description: 'All authorized signatories and key management personnel are registered with the CBK as required.' },
+      // CBK Licensing  -  CBK Act / National Payment System Act
+      { category: 'CBK_LICENSING', title: 'Primary CBK license obtained', description: 'The organization holds the appropriate CBK license (Payment Service Provider, Mobile Money, Digital Credit Provider, etc.).' },
+      { category: 'CBK_LICENSING', title: 'License is current and not expired', description: 'The CBK license has been renewed and is valid with no lapsed expiry date.' },
+      { category: 'CBK_LICENSING', title: 'Annual returns filed with CBK', description: 'Annual regulatory returns have been submitted to the CBK within the required deadlines.' },
+      { category: 'CBK_LICENSING', title: 'Capital adequacy requirements met', description: 'The organization meets minimum capital requirements as stipulated by the CBK for its license category.' },
+      { category: 'CBK_LICENSING', title: 'Regulatory reports submitted on time', description: 'All required periodic reports (monthly, quarterly) have been submitted to the CBK on schedule.' },
+      { category: 'CBK_LICENSING', title: 'Authorized signatories registered with CBK', description: 'All authorized signatories and key management personnel are registered with the CBK as required.' },
 
-    // Cybersecurity  -  CBK Cybersecurity Guidelines + Computer Misuse and Cybercrimes Act
-    { category: 'CYBERSECURITY', title: 'Information security policy documented', description: 'A comprehensive information security policy has been formally documented, approved by management, and communicated to all staff.' },
-    { category: 'CYBERSECURITY', title: 'Incident response plan in place', description: 'A formal cybersecurity incident response plan exists with defined roles, escalation paths, and communication procedures.' },
-    { category: 'CYBERSECURITY', title: 'Regular penetration testing conducted', description: 'Penetration testing or vulnerability assessments are conducted at least annually by qualified internal or external parties.' },
-    { category: 'CYBERSECURITY', title: 'Data encryption at rest and in transit', description: 'All sensitive customer and business data is encrypted at rest (AES-256 or equivalent) and in transit (TLS 1.2+).' },
-    { category: 'CYBERSECURITY', title: 'Access control policies implemented', description: 'Role-based access controls, principle of least privilege, and multi-factor authentication are enforced across systems.' },
-    { category: 'CYBERSECURITY', title: 'Business continuity and disaster recovery plan', description: 'A documented and tested business continuity / disaster recovery plan exists with defined RTO and RPO targets.' },
-    { category: 'CYBERSECURITY', title: 'Cybersecurity risk assessment completed', description: 'A formal cybersecurity risk assessment has been conducted and documented within the past 12 months.' },
-    { category: 'CYBERSECURITY', title: 'Employee cybersecurity awareness training', description: 'All employees have completed cybersecurity awareness training within the past 12 months.' },
-  ];
+      // Cybersecurity  -  CBK Cybersecurity Guidelines + Computer Misuse and Cybercrimes Act
+      { category: 'CYBERSECURITY', title: 'Information security policy documented', description: 'A comprehensive information security policy has been formally documented, approved by management, and communicated to all staff.' },
+      { category: 'CYBERSECURITY', title: 'Incident response plan in place', description: 'A formal cybersecurity incident response plan exists with defined roles, escalation paths, and communication procedures.' },
+      { category: 'CYBERSECURITY', title: 'Regular penetration testing conducted', description: 'Penetration testing or vulnerability assessments are conducted at least annually by qualified internal or external parties.' },
+      { category: 'CYBERSECURITY', title: 'Data encryption at rest and in transit', description: 'All sensitive customer and business data is encrypted at rest (AES-256 or equivalent) and in transit (TLS 1.2+).' },
+      { category: 'CYBERSECURITY', title: 'Access control policies implemented', description: 'Role-based access controls, principle of least privilege, and multi-factor authentication are enforced across systems.' },
+      { category: 'CYBERSECURITY', title: 'Business continuity and disaster recovery plan', description: 'A documented and tested business continuity / disaster recovery plan exists with defined RTO and RPO targets.' },
+      { category: 'CYBERSECURITY', title: 'Cybersecurity risk assessment completed', description: 'A formal cybersecurity risk assessment has been conducted and documented within the past 12 months.' },
+      { category: 'CYBERSECURITY', title: 'Employee cybersecurity awareness training', description: 'All employees have completed cybersecurity awareness training within the past 12 months.' },
+    ];
 
   /**
    * Seed default checklist items for an organization (idempotent  -  skips if items already exist)
@@ -2619,9 +2876,9 @@ Follow-up Question: ${followUp}
 
     const trendLabel: 'increase' | 'decrease' | 'no_change' | 'insufficient_history' =
       trendPoints === null ? 'insufficient_history'
-      : trendPoints > 0   ? 'increase'
-      : trendPoints < 0   ? 'decrease'
-      :                     'no_change';
+        : trendPoints > 0 ? 'increase'
+          : trendPoints < 0 ? 'decrease'
+            : 'no_change';
 
     // Snapshot creation: write only when score changed AND no snapshot exists in the
     // last hour (prevents rapid-fire writes from toggle-heavy sessions).
