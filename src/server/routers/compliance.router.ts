@@ -18,6 +18,7 @@ import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
 import { incrementTrialUsage } from '@/modules/trial';
 import { prisma } from '@/lib/prisma/client';
+import { redis } from '@/lib/redis/client';
 import { runOrchestrator } from '@/modules/compliance/orchestrator';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import { appConfig } from '@/config/app.config';
@@ -975,6 +976,7 @@ export const complianceRouter = router({
    * @protected
    */
   submitFeedback: protectedProcedure
+    .use(rateLimited('compliance_feedback', 30, { window: 60 }))
     .input(
       z.object({
         queryId: z.string().min(1),
@@ -1033,6 +1035,27 @@ export const complianceRouter = router({
         action,
         tracked: newRating !== null,
       });
+
+      // Invalidate feedback summary cache -- fail-soft so a cache error never
+      // blocks a successful vote write.
+      try {
+        const members = await redis.smembers<string[]>('sheriabot:idx:analytics:feedback-keys');
+        if (members.length > 0) {
+          await redis.del(...(members as [string, ...string[]]));
+        }
+        await redis.del('sheriabot:idx:analytics:feedback-keys');
+        logger.info({
+          type: 'analytics_feedback_cache_invalidated',
+          success: true,
+          keysInvalidated: members.length,
+        });
+      } catch (cacheErr: unknown) {
+        logger.warn({
+          type: 'analytics_feedback_cache_invalidated',
+          success: false,
+          error: cacheErr instanceof Error ? cacheErr.message : String(cacheErr),
+        });
+      }
 
       return { rating: newRating, action, tracked: newRating !== null };
     }),

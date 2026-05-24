@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { router, protectedProcedure, adminProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { withPlanContext, requirePlanFeature } from '../trpc/middleware';
 import {
@@ -10,6 +11,8 @@ import {
 } from '../schemas/analytics.schema';
 import { analyticsModule } from '@/modules/analytics';
 import { logger } from '@/utils/logger';
+import { analyticsAdminService } from '../services/analytics.service';
+import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 
 /**
  * Analytics Router
@@ -501,6 +504,94 @@ export const analyticsRouter = router({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to get organization growth metrics',
           cause: error,
+        });
+      }
+    }),
+
+  // -- New admin analytics procedures (Analytics Dashboard Sprint) ------------
+
+  /**
+   * Daily Active Users -- distinct userId count per calendar day (Africa/Nairobi).
+   * Returns today's DAU as a headline number plus a per-day series for charting.
+   *
+   * @admin
+   */
+  getDailyActiveUsers: adminProcedure
+    .input(
+      z.object({
+        range: z.enum(['last7d', 'last30d', 'last90d']).default('last30d'),
+      }),
+    )
+    .query(async ({ input }) => {
+      try {
+        return await analyticsAdminService.getDailyActiveUsers(input);
+      } catch (err: unknown) {
+        logger.error({
+          type: 'analytics_dau_query',
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: sanitizeErrorMessage(err, 'Failed to retrieve daily active users'),
+        });
+      }
+    }),
+
+  /**
+   * Queries per user -- total, 30-day, 7-day counts plus status breakdown and
+   * last-query timestamp for a given userId. Admin-only.
+   *
+   * @admin
+   */
+  getQueriesPerUser: adminProcedure
+    .input(
+      z.object({
+        userId: z.string().min(1),
+        range: z.enum(['last7d', 'last30d', 'alltime']).default('alltime'),
+      }),
+    )
+    .query(async ({ input }) => {
+      try {
+        return await analyticsAdminService.getQueriesPerUser(input);
+      } catch (err: unknown) {
+        logger.error({
+          type: 'analytics_qpu_query',
+          userId: input.userId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: sanitizeErrorMessage(err, 'Failed to retrieve queries per user'),
+        });
+      }
+    }),
+
+  /**
+   * Feedback summary -- aggregated thumbs up/down counts plus paginated vote rows.
+   * Backed by the existing QueryFeedback table. Admin-only.
+   *
+   * @admin
+   */
+  getFeedbackSummary: adminProcedure
+    .input(
+      z.object({
+        range: z.enum(['last7d', 'last30d', 'last90d']).default('last30d'),
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(100).default(20),
+      }),
+    )
+    .query(async ({ input }) => {
+      try {
+        return await analyticsAdminService.getFeedbackSummary(input);
+      } catch (err: unknown) {
+        logger.error({
+          type: 'analytics_feedback_summary_query',
+          range: input.range,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: sanitizeErrorMessage(err, 'Failed to retrieve feedback summary'),
         });
       }
     }),

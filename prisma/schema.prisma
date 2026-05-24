@@ -380,6 +380,7 @@ model ComplianceQuery {
   @@index([createdAt])
   @@index([organizationId])
   @@index([status])
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model ComplianceQueryRun {
@@ -1014,6 +1015,8 @@ model QueryFeedback {
   @@unique([queryId, userId])
   @@index([userId])
   @@index([queryId])
+  @@index([createdAt])
+  @@index([rating])
 }
 
 model SavedResponse {
