@@ -378,13 +378,37 @@ export async function buildApp(): Promise<FastifyInstance> {
       router: appRouter,
       createContext,
       onError({ path, error }: { path: string | undefined; error: { message: string; code: string; stack?: string } }) {
-        logger.error({
-          type: 'trpc_error',
-          path,
-          error: error.message,
-          code: error.code,
-          stack: error.stack,
-        });
+        const isClientError = [
+          'BAD_REQUEST',
+          'UNAUTHORIZED',
+          'FORBIDDEN',
+          'NOT_FOUND',
+          'TIMEOUT',
+          'CONFLICT',
+          'CLIENT_CLOSED_REQUEST',
+          'PRECONDITION_FAILED',
+          'PAYLOAD_TOO_LARGE',
+          'METHOD_NOT_SUPPORTED',
+          'UNPROCESSABLE_CONTENT',
+          'TOO_MANY_REQUESTS',
+        ].includes(error.code);
+
+        if (isClientError) {
+          logger.warn({
+            type: 'trpc_error',
+            path,
+            error: error.message,
+            code: error.code,
+          });
+        } else {
+          logger.error({
+            type: 'trpc_error',
+            path,
+            error: error.message,
+            code: error.code,
+            stack: error.stack,
+          });
+        }
 
         // Track errors for rate alerting
         errorTracker.track(error.message, error.code);
