@@ -79,7 +79,6 @@
     "pino": "^10.3.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-email": "^5.2.9",
     "resend": "^6.9.1",
     "stripe": "^20.4.1",
     "zod": "^4.3.6",
@@ -107,6 +106,7 @@
     "tsconfig-paths": "^4.2.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "react-email": "^5.2.9"
   }
 }

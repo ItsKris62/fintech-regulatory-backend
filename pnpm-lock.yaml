@@ -116,9 +116,6 @@ importers:
       react-dom:
         specifier: ^19.2.4
         version: 19.2.4(react@19.2.4)
-      react-email:
-        specifier: ^5.2.9
-        version: 5.2.9
       resend:
         specifier: ^6.9.1
         version: 6.9.2(@react-email/render@2.0.4(react-dom@19.2.4(react@19.2.4))(react@19.2.4))
@@ -168,6 +165,9 @@ importers:
       prisma:
         specifier: ^7.4.0
         version: 7.4.1(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.9.3)
+      react-email:
+        specifier: ^5.2.9
+        version: 5.2.9
       tsc-alias:
         specifier: ^1.8.16
         version: 1.8.16
