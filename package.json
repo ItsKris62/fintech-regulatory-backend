@@ -67,7 +67,7 @@
     "dayjs": "^1.11.19",
     "docx": "^9.6.1",
     "dotenv": "^17.2.4",
-    "fastify": "^5.7.4",
+    "fastify": "^5.8.5",
     "fastify-plugin": "^5.1.0",
     "file-type": "^21.3.0",
     "intasend-node": "^1.1.2",
@@ -85,6 +85,11 @@
     "stripe": "^20.4.1",
     "zod": "^4.3.6",
     "zod-to-json-schema": "^3.25.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "fast-uri": ">=3.1.2"
+    }
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
