@@ -350,31 +350,31 @@ model DocumentChunk {
 }
 
 model ComplianceQuery {
-  id               String          @id @default(cuid())
-  userId           String
-  organizationId   String?
-  query            String
-  response         String?
-  citations        Json?
-  regulatoryAreas  Json?
-  confidence       Float?
-  recommendations  Json?
-  processingTimeMs Int?
-  metadata         Json?
-  productCategory  String?
-  summary          String?
-  regulations      Json?
-  requirements     Json?
-  gaps             Json?
-  status           String          @default("processing")
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
-  user             User            @relation(fields: [userId], references: [id])
-  feedbacks        QueryFeedback[]
-  saves            SavedResponse[]
-  citationRecords      Citation[]           @relation("ComplianceQueryCitations")
-  runs                 ComplianceQueryRun[]
-  corpusGapFeedbacks   CorpusGapFeedback[]
+  id                 String               @id @default(cuid())
+  userId             String
+  organizationId     String?
+  query              String
+  response           String?
+  citations          Json?
+  regulatoryAreas    Json?
+  confidence         Float?
+  recommendations    Json?
+  processingTimeMs   Int?
+  metadata           Json?
+  productCategory    String?
+  summary            String?
+  regulations        Json?
+  requirements       Json?
+  gaps               Json?
+  status             String               @default("processing")
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  user               User                 @relation(fields: [userId], references: [id])
+  feedbacks          QueryFeedback[]
+  saves              SavedResponse[]
+  citationRecords    Citation[]           @relation("ComplianceQueryCitations")
+  runs               ComplianceQueryRun[]
+  corpusGapFeedbacks CorpusGapFeedback[]
 
   @@index([userId])
   @@index([createdAt])
@@ -384,36 +384,36 @@ model ComplianceQuery {
 }
 
 model ComplianceQueryRun {
-  id                    String    @id @default(cuid())
+  id                    String              @id @default(cuid())
   complianceQueryId     String
-  shadow                Boolean   @default(false)
-  status                String?   @default("completed")
+  shadow                Boolean             @default(false)
+  status                String?             @default("completed")
   route                 String
   routeConfidence       Float?
   routeDowngraded       Boolean?
   routeDowngradeReason  String?
-  grounded              Boolean   @default(false)
-  ragSources            Int       @default(0)
+  grounded              Boolean             @default(false)
+  ragSources            Int                 @default(0)
   subQuestions          Json?
   retrievalQueries      Json?
-  gradeChunksInspected  Int       @default(0)
+  gradeChunksInspected  Int                 @default(0)
   acceptedChunkIds      Json?
   rejectedChunkCount    Int?
-  tokenBudgetExceeded   Boolean   @default(false)
+  tokenBudgetExceeded   Boolean             @default(false)
   controlTokens         Json?
   inputTokens           Int?
   outputTokens          Int?
-  graderFailed          Boolean   @default(false)
-  routerParseFallback   Boolean   @default(false)
-  verifierParseFallback Boolean   @default(false)
+  graderFailed          Boolean             @default(false)
+  routerParseFallback   Boolean             @default(false)
+  verifierParseFallback Boolean             @default(false)
   verifierVerdict       String?
   unsupportedClaims     Json?
   fallbackReason        String?
   errorMessage          String?
   wallMs                Int
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime? @updatedAt
-  complianceQuery       ComplianceQuery   @relation(fields: [complianceQueryId], references: [id], onDelete: Cascade)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime?           @updatedAt
+  complianceQuery       ComplianceQuery     @relation(fields: [complianceQueryId], references: [id], onDelete: Cascade)
   corpusGapFeedbacks    CorpusGapFeedback[]
 
   @@index([complianceQueryId])
@@ -1917,25 +1917,25 @@ model OrganizationMember {
 // ============================================================================
 
 model CorpusGapFeedback {
-  id                  String    @id @default(cuid())
-  complianceQueryId   String
-  runId               String
-  // onDelete: Restrict — user deletion is blocked if gap feedback rows exist.
+  id                String    @id @default(cuid())
+  complianceQueryId String
+  runId             String
+  // onDelete: Restrict -- user deletion is blocked if gap feedback rows exist.
   // ODPC traceability requirement: compliance gap evidence must not be silently
   // destroyed on user deletion. Deactivate the user account instead.
-  userId              String
-  organizationId      String
-  question            String
-  suggestedDocument   String?
-  notes               String?
-  status              String    @default("open") // "open" | "triaged" | "resolved"
-  statusChangedAt     DateTime? // set when status transitions; used to notify users of resolution
-  createdAt           DateTime  @default(now())
+  userId            String
+  organizationId    String
+  question          String
+  suggestedDocument String?
+  notes             String?
+  status            String    @default("open") // "open" | "triaged" | "resolved"
+  statusChangedAt   DateTime? // set when status transitions; used to notify users of resolution
+  createdAt         DateTime  @default(now())
 
-  complianceQuery     ComplianceQuery    @relation(fields: [complianceQueryId], references: [id], onDelete: Cascade)
-  run                 ComplianceQueryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  user                User               @relation(fields: [userId], references: [id], onDelete: Restrict)
-  organization        Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  complianceQuery ComplianceQuery    @relation(fields: [complianceQueryId], references: [id], onDelete: Cascade)
+  run             ComplianceQueryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  user            User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
 
   @@index([complianceQueryId])
   @@index([runId])
