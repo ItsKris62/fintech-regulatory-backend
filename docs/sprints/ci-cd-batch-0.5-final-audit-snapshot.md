@@ -117,7 +117,7 @@ Severity: 3 low | 26 moderate | 6 high
 | SB-4a | `04a49473` | Remove unused `chromadb` | 0 | 12 | 44 |
 | SB-4b | `0cedc2ab` | Move `react-email` to `devDependencies` | 0 | 12→11 | 44→40 |
 | SB-5 | `e21f6fc0` | pnpm override `@xmldom/xmldom>=0.8.13` (mammoth xmldom fix) | 0 | 11→6 | 40→35 |
-| SB-6 | `PLACEHOLDER` | KNOWN_ISSUES.md entry + this snapshot | 0 | 6 | 35 |
+| SB-6 | `54d72daf` | KNOWN_ISSUES.md entry + this snapshot | 0 | 6 | 35 |
 
 ---
 
