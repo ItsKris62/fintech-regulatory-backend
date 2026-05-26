@@ -347,7 +347,11 @@ export const authRouter = router({
             : 'Registration successful. You can now log in.',
         };
       } catch (error: any) {
-        logger.error({ type: 'auth_register_error', email: maskEmail(input.email), error: error.message, duration: Date.now() - startTime });
+        if (error instanceof TRPCError && error.code !== 'INTERNAL_SERVER_ERROR') {
+          logger.warn({ type: 'auth_register_error', email: maskEmail(input.email), error: error.message, code: error.code, duration: Date.now() - startTime });
+        } else {
+          logger.error({ type: 'auth_register_error', email: maskEmail(input.email), error: error.message, duration: Date.now() - startTime });
+        }
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: getAuthErrorMessage(AUTH_ERROR_CODES.REGISTRATION_FAILED), cause: error });
       }
@@ -575,7 +579,11 @@ export const authRouter = router({
           },
         };
       } catch (error: any) {
-        logger.error({ type: 'auth_login_error', email: maskEmail(input.email), error: error.message, duration: Date.now() - startTime });
+        if (error instanceof TRPCError && error.code !== 'INTERNAL_SERVER_ERROR') {
+          logger.warn({ type: 'auth_login_error', email: maskEmail(input.email), error: error.message, code: error.code, duration: Date.now() - startTime });
+        } else {
+          logger.error({ type: 'auth_login_error', email: maskEmail(input.email), error: error.message, duration: Date.now() - startTime });
+        }
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: getAuthErrorMessage(AUTH_ERROR_CODES.SERVER_ERROR), cause: error });
       }

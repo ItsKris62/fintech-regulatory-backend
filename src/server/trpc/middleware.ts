@@ -45,7 +45,22 @@ export const logged = middleware(async ({ ctx, path, type, next }) => {
       duration,
     });
   } else {
-    logger.error({
+    const isClientError = [
+      'BAD_REQUEST',
+      'UNAUTHORIZED',
+      'FORBIDDEN',
+      'NOT_FOUND',
+      'TIMEOUT',
+      'CONFLICT',
+      'CLIENT_CLOSED_REQUEST',
+      'PRECONDITION_FAILED',
+      'PAYLOAD_TOO_LARGE',
+      'METHOD_NOT_SUPPORTED',
+      'UNPROCESSABLE_CONTENT',
+      'TOO_MANY_REQUESTS',
+    ].includes(result.error.code);
+
+    const logPayload = {
       type: 'trpc_request_error',
       path,
       requestType: type,
@@ -53,7 +68,13 @@ export const logged = middleware(async ({ ctx, path, type, next }) => {
       error: result.error.message,
       code: result.error.code,
       duration,
-    });
+    };
+
+    if (isClientError) {
+      logger.warn(logPayload);
+    } else {
+      logger.error(logPayload);
+    }
   }
 
   return result;
