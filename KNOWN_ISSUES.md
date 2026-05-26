@@ -1415,6 +1415,70 @@ Anthropic transient outage, which is a worse failure mode than the current
 request-time error handling. Prefer an on-demand `/health/anthropic` endpoint
 for operator checks.
 
+---
+
+## CI/CD Sprint -- Batch 0.5 (2026-05-26)
+
+### CI-DEP-001 -- Residual 6 HIGH prod-audit advisories: Prisma dev chain + AWS SDK [DEFERRED -- upstream]
+
+| Field | Value |
+|-------|-------|
+| Severity | High (6 advisories) |
+| Status | **Deferred -- requires upstream releases** |
+| Identified | Batch 0.5 dep-triage audit (2026-05-26) |
+| Planned for | Re-evaluate on next `@prisma/client` major and `@aws-sdk/client-s3` minor upgrades |
+
+**Context:** After completing Batch 0.5 Sub-Batches 1-5 (remove LangChain, remove unused OTel
+SDK, bump fastify, reclassify react-email, xmldom override), `pnpm audit --prod` reports
+35 vulnerabilities: 3 low · 26 moderate · **6 high · 0 critical**. The 6 remaining HIGH
+advisories cannot be resolved by this repo — they originate in two upstream dep chains.
+
+**Group 1 — Prisma 7 dev chain (5 advisories)**
+
+`@prisma/client@7.x` pulls `prisma` (the CLI) and `@prisma/dev` as runtime dependencies,
+which themselves carry `hono`, `@hono/node-server`, `effect`, `lodash` (via
+`@mrleebo/prisma-ast`), and `defu` (via `c12`). These are Prisma's internal tooling
+packages not used by this application at runtime.
+
+| Advisory | Package | GHSA | Dep path |
+|---|---|---|---|
+| Arbitrary file access via serveStatic | `hono` <4.12.4 | GHSA-q5qw-h33p-qvwr | `.>@prisma/client>prisma>@prisma/dev>hono` |
+| Authorization bypass via encoded slashes | `@hono/node-server` <1.19.10 | GHSA-wc8c-qw6v-h7f6 | `.>@prisma/client>prisma>@prisma/dev>@hono/node-server` |
+| AsyncLocalStorage context contamination | `effect` <3.20.0 | GHSA-38f7-945m-qr2g | `.>@prisma/client>prisma>@prisma/config>effect` |
+| Code Injection via `_.template` | `lodash` <=4.17.23 | GHSA-r5fr-rjxr-66jc | `.>@prisma/client>prisma>@prisma/dev>@mrleebo/prisma-ast` |
+| Prototype pollution via `__proto__` key | `defu` <=6.1.4 | GHSA-737v-mqg7-c878 | `.>@prisma/client>prisma>@prisma/config>c12>defu` |
+
+**Runtime exposure:** None. `prisma`, `@prisma/dev`, `effect`, `hono`, `lodash`, and `defu`
+are not imported by any `src/` file and are never loaded in the production Node process.
+The advisories affect Prisma's own CLI tooling, not the application runtime.
+
+**Fix required:** A new `@prisma/client` release that updates its internal `@prisma/dev`
+and `@prisma/config` sub-trees. No pnpm override is safe — overriding `hono` or `effect`
+could break Prisma's internal dependency resolution. Monitor `@prisma/client` release notes.
+
+**Group 2 — AWS SDK transitive (1 advisory)**
+
+| Advisory | Package | GHSA | Dep path |
+|---|---|---|---|
+| Numeric entity expansion bypass (incomplete CVE-2026-26278 fix) | `fast-xml-parser` >=5.0.0 <5.5.6 | GHSA-8gc5-j5rx-235r | `.>@aws-sdk/client-s3>@aws-sdk/core>@aws-sdk/xml-builder>fast-xml-parser` |
+
+**Runtime exposure:** Bounded. `fast-xml-parser` is used by the AWS SDK's XML builder for
+S3 request serialization. An attacker would need to supply a maliciously-crafted XML
+document to the S3 request path. SheriaBot's S3 usage (upload/download/presign) does not
+parse attacker-controlled XML input — the SDK constructs the XML internally.
+
+**Fix required:** An `@aws-sdk/client-s3` patch that bumps `@aws-sdk/xml-builder` to a
+version using `fast-xml-parser >=5.5.6`. No safe pnpm override — the AWS SDK manages its
+internal `xml-builder` dep alignment. Monitor `@aws-sdk/client-s3` release notes.
+
+**Action on next Prisma/AWS SDK upgrade:**
+1. Run `pnpm audit --prod 2>&1 | tail -3` after upgrading and confirm advisory count drops.
+2. Update this entry with the resolving package versions and date.
+3. If the Prisma chain advisories persist after the next `@prisma/client` major, evaluate
+   a `pnpm overrides` approach with Prisma team guidance.
+
+---
+
 ## Next Sprint Priorities (in order)
 
 1. **Automated test coverage** -- Vitest setup, integration tests for
