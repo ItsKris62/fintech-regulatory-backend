@@ -754,6 +754,14 @@ therefore out of scope.
 **Fix (Sprint 4):** Grep full `src/` tree for bytes > 0x7F; replace with ASCII
 equivalents; re-run `pnpm tsc --noEmit` gate.
 
+**Status update (2026-05-26, Phase B Batch 0):** RESOLVED. Byte-level scan on
+2026-05-26 (PowerShell, all bytes > 0x7F) confirmed zero non-ASCII bytes in
+`src/server/trpc/middleware.ts`. The fix was applied in a prior sprint without
+an entry update. The broader non-ASCII scope (113 additional `.ts`/`.tsx` files
+identified in the Phase A audit) is tracked separately and deferred to the
+non-ASCII cleanup pass in Batch 2. This entry is closed for `middleware.ts`
+specifically.
+
 ---
 
 ### BE-A-026 -- getChecklist cross-org read (same-batch discovery and closure) [RESOLVED -- Sprint 2 Batch 2]
