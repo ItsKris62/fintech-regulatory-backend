@@ -103,55 +103,83 @@ model User {
 }
 
 model Organization {
-  id                      String                    @id @default(cuid())
+  id                      String             @id @default(cuid())
   name                    String
   type                    String
-  organizationType        String                    @default("startup") // "regulator" | "startup" | "enterprise"
+  organizationType        String             @default("startup") // "regulator" | "startup" | "enterprise"
   registrationNumber      String?
   cbkLicenseNumber        String?
   website                 String?
   industry                String?
   size                    String?
-  subscriptionTier        String                    @default("starter")
-  subscriptionStatus      SubscriptionStatus        @default(ACTIVE)
+  subscriptionTier        String             @default("starter")
+  subscriptionStatus      SubscriptionStatus @default(ACTIVE)
   trialEndsAt             DateTime?
   gracePeriodEndsAt       DateTime? // set on cancellation; org keeps plan until this passes
   cancelledAt             DateTime? // when the user initiated cancellation
   subscriptionEndsAt      DateTime?
-  verificationStatus      String                    @default("pending") // "pending" | "verified" | "rejected"
+  verificationStatus      String             @default("pending") // "pending" | "verified" | "rejected"
   verifiedAt              DateTime?
   verifiedBy              String?
   // Plan entitlements (new - additive)
-  plan                    SubscriptionPlan          @default(REGULATOR)
+  plan                    SubscriptionPlan   @default(REGULATOR)
   planStartDate           DateTime?
   planEndDate             DateTime?
-  maxSeats                Int                       @default(1)
-  stripeCustomerId        String?                   @unique
-  stripeSubId             String?                   @unique
+  maxSeats                Int                @default(1)
+  stripeCustomerId        String?            @unique
+  stripeSubId             String?            @unique
   customLimits            Json?
   // M-Pesa / IntaSend payment fields
   preferredPaymentMethod  PaymentProvider? // STRIPE | MPESA; null = Stripe default
   mpesaPhoneNumber        String? // stored as 254XXXXXXXXX
   mpesaNextPaymentDueDate DateTime? // set on each successful M-Pesa payment; lazy-evaluated for renewal
+
+  // ---- M-Pesa subscription lifecycle (added 2026-05-26) ----
+  // Rolling 30-day cycle end. Drives renewal cron and access-revocation gate.
+  // Written in parallel with mpesaNextPaymentDueDate during the transition
+  // window. Both fields hold the same value on every successful payment.
+  // mpesaNextPaymentDueDate is retained for backwards compatibility and will
+  // be deprecated in a follow-up cleanup batch after one production cycle.
+  subscriptionCycleEnd DateTime?
+
+  // Consecutive failed renewal attempts. Resets to 0 on every successful
+  // payment. When this reaches 5, the organization is downgraded to REGULATOR
+  // and no further STK pushes are sent.
+  mpesaFailedRenewalAttempts Int @default(0)
+
+  // Timestamp of the most recent renewal STK push attempt (success OR failure).
+  // Used by the cron to enforce the 24-hour retry cadence.
+  mpesaLastRenewalAttemptAt DateTime?
+
+  // Scheduled time of the next renewal STK push attempt. The cron polls
+  // orgs where this timestamp is in the past and subscriptionStatus is
+  // ACTIVE (cycle expired) or PAST_DUE.
+  mpesaNextRenewalRetryAt DateTime?
+
+  // User-initiated cancellation timestamp. Distinct from cancelledAt, which
+  // also fires on auto-downgrade. Set only when an OWNER/ADMIN explicitly
+  // invokes billing.cancelMpesaSubscription. Used for analytics and to
+  // distinguish voluntary churn from involuntary churn.
+  mpesaCancelledByUserAt DateTime?
   // Contact Information - Primary contact for regulatory matters
-  address                 String?
-  contactPerson           String?
-  contactPosition         String?
-  contactEmail            String?
-  contactPhone            String?
-  createdAt               DateTime                  @default(now())
-  updatedAt               DateTime                  @updatedAt
-  users                   User[]
-  policies                Policy[]
-  complianceItems         ComplianceItem[]
-  complianceSnapshots     ComplianceScoreSnapshot[]
-  complianceEvents        ComplianceEvent[]
-  vaultDocuments          VaultDocument[]
-  usageRecords            UsageRecord[]
-  usagePeriods            UsagePeriod[]
-  payments                Payment[]
-  alertSubscription       AlertSubscription?
-  alertNotifications      AlertNotification[]
+  address                String?
+  contactPerson          String?
+  contactPosition        String?
+  contactEmail           String?
+  contactPhone           String?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+  users                  User[]
+  policies               Policy[]
+  complianceItems        ComplianceItem[]
+  complianceSnapshots    ComplianceScoreSnapshot[]
+  complianceEvents       ComplianceEvent[]
+  vaultDocuments         VaultDocument[]
+  usageRecords           UsageRecord[]
+  usagePeriods           UsagePeriod[]
+  payments               Payment[]
+  alertSubscription      AlertSubscription?
+  alertNotifications     AlertNotification[]
 
   // Enterprise AI Policy Generator
   generatedPolicies GeneratedPolicy[]
