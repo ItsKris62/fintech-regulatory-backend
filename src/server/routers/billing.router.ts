@@ -109,6 +109,9 @@ export const billingRouter = router({
                   gracePeriodEndsAt:  true,
                   cancelledAt:        true,
                   subscriptionEndsAt: true,
+                  preferredPaymentMethod: true,
+                  mpesaNextPaymentDueDate: true,
+                  subscriptionCycleEnd: true,
                 },
               })
             : Promise.resolve(null),
@@ -171,6 +174,10 @@ export const billingRouter = router({
             gracePeriodEndsAt:  org?.gracePeriodEndsAt?.toISOString()  ?? null,
             cancelledAt:        org?.cancelledAt?.toISOString()        ?? null,
             subscriptionEndsAt: org?.subscriptionEndsAt?.toISOString() ?? null,
+            // B4.1 (2026-05-27) -- M-Pesa lifecycle fields surfaced for client typed access
+            preferredPaymentMethod: org?.preferredPaymentMethod ?? null,
+            mpesaNextPaymentDueDate: org?.mpesaNextPaymentDueDate?.toISOString() ?? null,
+            subscriptionCycleEnd:    org?.subscriptionCycleEnd?.toISOString()    ?? null,
             catalogPrice,
           },
           trial: trialStatus,

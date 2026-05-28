@@ -249,6 +249,17 @@ class IntaSendWebhookService {
         planStartDate:          now,
         planEndDate:            periodEnd,
         mpesaNextPaymentDueDate: periodEnd,
+
+        // B4 (2026-05-27) -- Parallel writes for the new M-Pesa lifecycle fields.
+        // subscriptionCycleEnd mirrors mpesaNextPaymentDueDate during the
+        // transition window. Failure counter resets on every successful payment.
+        // Retry state is cleared so B6's cron does not fire against a freshly-paid org.
+        // Authoritative access gate remains mpesaNextPaymentDueDate (Option A semantics).
+        subscriptionCycleEnd:       periodEnd,
+        mpesaFailedRenewalAttempts: 0,
+        mpesaLastRenewalAttemptAt:  null,
+        mpesaNextRenewalRetryAt:    null,
+
         // Clear any grace/cancellation state
         cancelledAt:            null,
         gracePeriodEndsAt:      null,
@@ -265,6 +276,7 @@ class IntaSendWebhookService {
       planName,
       periodStart:   periodStart.toISOString(),
       periodEnd:     periodEnd.toISOString(),
+      subscriptionCycleEnd: periodEnd.toISOString(),
     });
 
     // Fire receipt email (non-blocking)

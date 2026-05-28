@@ -43,6 +43,11 @@ type CachedPlanCtx = {
   trialExpiresAt: string | null;
   preferredPaymentMethod: PaymentProvider | null;
   mpesaNextPaymentDueDate: string | null;
+  // B4 (2026-05-27) -- Background lifecycle field, read-only.
+  // Always written in parallel with mpesaNextPaymentDueDate by the IntaSend
+  // webhook. The downgrade gate continues to read mpesaNextPaymentDueDate;
+  // this field is consumed by B6's renewal cron.
+  subscriptionCycleEnd: string | null; // ISO-8601
   isPilot: boolean;
   pilotExpiresAt: string | null;
 };
@@ -64,6 +69,7 @@ function parseCachedPlanCtx(raw: unknown): CachedPlanCtx | null {
     trialExpiresAt: typeof value['trialExpiresAt'] === 'string' ? value['trialExpiresAt'] : null,
     preferredPaymentMethod: (value['preferredPaymentMethod'] ?? null) as PaymentProvider | null,
     mpesaNextPaymentDueDate: typeof value['mpesaNextPaymentDueDate'] === 'string' ? value['mpesaNextPaymentDueDate'] : null,
+    subscriptionCycleEnd: typeof value['subscriptionCycleEnd'] === 'string' ? value['subscriptionCycleEnd'] : null,
     isPilot: value['isPilot'] === true,
     pilotExpiresAt: typeof value['pilotExpiresAt'] === 'string' ? value['pilotExpiresAt'] : null,
   };
@@ -175,6 +181,7 @@ export async function resolveEffectivePlan(input: {
   let trialExpiresAt: string | null = null;
   let preferredPaymentMethod: PaymentProvider | null = null;
   let mpesaNextPaymentDueDate: string | null = null;
+  let subscriptionCycleEnd: string | null = null;
   let isPilot = false;
   let pilotExpiresAt: string | null = null;
   let fromCache = false;
@@ -193,6 +200,7 @@ export async function resolveEffectivePlan(input: {
       trialExpiresAt = cached.trialExpiresAt;
       preferredPaymentMethod = cached.preferredPaymentMethod;
       mpesaNextPaymentDueDate = cached.mpesaNextPaymentDueDate;
+      subscriptionCycleEnd = cached.subscriptionCycleEnd;
       isPilot = cached.isPilot;
       pilotExpiresAt = cached.pilotExpiresAt;
       fromCache = true;
@@ -233,6 +241,7 @@ export async function resolveEffectivePlan(input: {
           gracePeriodEndsAt: true,
           preferredPaymentMethod: true,
           mpesaNextPaymentDueDate: true,
+          subscriptionCycleEnd: true,
         },
       });
 
@@ -242,6 +251,7 @@ export async function resolveEffectivePlan(input: {
       gracePeriodEndsAt = org?.gracePeriodEndsAt?.toISOString() ?? null;
       preferredPaymentMethod = org?.preferredPaymentMethod ?? null;
       mpesaNextPaymentDueDate = org?.mpesaNextPaymentDueDate?.toISOString() ?? null;
+      subscriptionCycleEnd = org?.subscriptionCycleEnd?.toISOString() ?? null;
     }
 
     await input.redis.set(
@@ -255,6 +265,7 @@ export async function resolveEffectivePlan(input: {
         trialExpiresAt,
         preferredPaymentMethod,
         mpesaNextPaymentDueDate,
+        subscriptionCycleEnd,
         isPilot,
         pilotExpiresAt,
       } satisfies CachedPlanCtx),
@@ -314,6 +325,29 @@ export async function resolveEffectivePlan(input: {
   ) {
     const orgId = input.organizationId;
     const dueDate = new Date(mpesaNextPaymentDueDate);
+
+    // B4 (2026-05-27) -- Defensive parity check.
+    // The IntaSend webhook writes both fields to the same value on every
+    // successful payment. If they disagree by more than one second, the
+    // transition window has slipped (manual DB edit, race, or partial write).
+    // Option A semantics: mpesaNextPaymentDueDate remains the authoritative
+    // gate. We log and proceed -- never silently prefer one field over the
+    // other, never block the lazy check.
+    if (subscriptionCycleEnd !== null) {
+      const cycleEndDate = new Date(subscriptionCycleEnd);
+      const diffMs       = Math.abs(dueDate.getTime() - cycleEndDate.getTime());
+      if (diffMs > 1000) {
+        logger.warn({
+          type:                    'mpesa_cycle_field_mismatch',
+          orgId,
+          userId:                  input.userId,
+          mpesaNextPaymentDueDate: dueDate.toISOString(),
+          subscriptionCycleEnd:    cycleEndDate.toISOString(),
+          diffMs,
+        });
+      }
+    }
+
     const msPerDay = 1000 * 60 * 60 * 24;
     const msDiff = dueDate.getTime() - now.getTime();
     const daysPast = msDiff < 0 ? Math.floor(-msDiff / msPerDay) : 0;
