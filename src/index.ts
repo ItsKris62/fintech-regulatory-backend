@@ -1,4 +1,8 @@
 import 'dotenv/config'; // Must be first - populates process.env before any other import reads it
+import { initSentry } from './lib/sentry';
+initSentry();
+
+import * as Sentry from '@sentry/node';
 import { buildApp, parseTrustProxy } from './app';
 import { logger } from './utils/logger';
 import { connectionManager } from './lib/connection-manager';
@@ -12,6 +16,7 @@ import type { FastifyInstance } from 'fastify';
 
 process.on('unhandledRejection', (reason) => {
   logger.error({ type: 'unhandled_rejection', reason });
+  Sentry.captureException(reason);
 });
 
 process.on('uncaughtException', (error) => {
@@ -20,7 +25,11 @@ process.on('uncaughtException', (error) => {
     error: error.message,
     stack: error.stack,
   });
-  process.exit(1);
+  Sentry.captureException(error);
+  // Give Sentry a brief moment to flush the event before exiting
+  Sentry.close(2000).finally(() => {
+    process.exit(1);
+  });
 });
 
 // -- Graceful shutdown --------------------------------------------------------

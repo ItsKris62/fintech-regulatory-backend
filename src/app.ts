@@ -24,6 +24,8 @@ import { registerComplianceStreamRoute } from './routes/compliance-stream.route'
 import { appConfig } from './config/app.config';
 import { verifyIntaSendWebhook, isAllowedIntaSendIp, parseAllowedIps } from './lib/intasend/webhook-verifier';
 import { hashIp } from './utils/request-identifiers';
+import * as Sentry from '@sentry/node';
+import { isClientOrExpectedError } from './lib/sentry';
 
 /**
  * Zod schema for IntaSend webhook payloads.
@@ -408,6 +410,14 @@ export async function buildApp(): Promise<FastifyInstance> {
             code: error.code,
             stack: error.stack,
           });
+
+          // Report internal tRPC errors to Sentry
+          Sentry.captureException(error, {
+            tags: {
+              path: path || 'unknown',
+              trpcCode: error.code,
+            },
+          });
         }
 
         // Track errors for rate alerting
@@ -623,6 +633,21 @@ export async function buildApp(): Promise<FastifyInstance> {
     });
 
     errorTracker.track(error, 'FASTIFY_ERROR');
+
+    // Report unexpected server errors (5xx) to Sentry
+    if (statusCode >= 500 && !isClientOrExpectedError(error)) {
+      Sentry.captureException(error, {
+        tags: {
+          url: request.url,
+          method: request.method,
+          route: request.routeOptions.url || 'unknown',
+        },
+        extra: {
+          ip: request.ip,
+          headers: request.headers,
+        },
+      });
+    }
 
     reply.status(statusCode).send({
       error: 'Internal Server Error',
