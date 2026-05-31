@@ -66,11 +66,13 @@ npx prisma db seed
 The seed script creates the following test users (all with password `Test@123`):
 
 ### Admin
-- **Email:** admin@sheriabot.co.ke
+
+- **Email:** admin@sheriabot.com
 - **Role:** ADMIN
 - **Purpose:** System administration
 
 ### Regulators (CBK)
+
 - **Email:** wanjiru.kamau@centralbank.go.ke
 - **Role:** REGULATOR
 - **Organization:** Central Bank of Kenya
@@ -80,11 +82,13 @@ The seed script creates the following test users (all with password `Test@123`):
 - **Organization:** Central Bank of Kenya
 
 ### Regulator (ODPC)
+
 - **Email:** sarah.muthoni@odpc.go.ke
 - **Role:** REGULATOR
 - **Organization:** Office of the Data Protection Commissioner
 
 ### Startups
+
 - **Email:** james.kiplagat@mpesainnovations.co.ke
 - **Role:** STARTUP
 - **Organization:** Mpesa Innovations Ltd
@@ -98,6 +102,7 @@ The seed script creates the following test users (all with password `Test@123`):
 - **Organization:** Pesa Credit Technologies
 
 ### Enterprise
+
 - **Email:** compliance@kcb.co.ke
 - **Role:** ENTERPRISE
 - **Organization:** KCB Bank Kenya
@@ -105,6 +110,7 @@ The seed script creates the following test users (all with password `Test@123`):
 ## 🔧 Useful Commands
 
 ### View Database in Prisma Studio
+
 ```bash
 npm run prisma:studio
 # or
@@ -112,6 +118,7 @@ npx prisma studio
 ```
 
 ### Reset Database (⚠️ Deletes all data)
+
 ```bash
 npm run db:reset
 # or
@@ -119,12 +126,14 @@ npx prisma migrate reset
 ```
 
 This will:
+
 1. Drop the database
 2. Create a new database
 3. Apply all migrations
 4. Run the seed script
 
 ### Push Schema Without Migration (Development)
+
 ```bash
 npm run db:push
 # or
@@ -134,11 +143,13 @@ npx prisma db push
 Use this for quick prototyping. It syncs your schema without creating migration files.
 
 ### Validate Schema
+
 ```bash
 npx prisma validate
 ```
 
 ### Format Schema
+
 ```bash
 npx prisma format
 ```
@@ -189,6 +200,7 @@ poolTimeout: 20,
 ### Soft Deletes
 
 Soft delete middleware is implemented for:
+
 - User
 - Organization
 - Policy
@@ -258,6 +270,7 @@ The `prisma migrate deploy` command will automatically run pending migrations on
 ## 📞 Support
 
 For Prisma-related issues:
+
 1. Check the [Prisma GitHub Issues](https://github.com/prisma/prisma/issues)
 2. Join the [Prisma Slack Community](https://slack.prisma.io/)
 3. Review Railway PostgreSQL documentation

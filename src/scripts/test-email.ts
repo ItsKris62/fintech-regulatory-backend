@@ -92,7 +92,7 @@ async function testWelcomeTemplate() {
     const params = {
       name: 'John Omondi',
       email: 'john@example.com',
-      verificationUrl: 'https://sheriabot.co.ke/verify?token=abc123',
+      verificationUrl: 'https://sheriabot.com/verify?token=abc123',
       role: 'STARTUP',
       organizationName: 'Fintech Innovations Ltd',
     };
@@ -132,7 +132,7 @@ async function testPasswordResetTemplate() {
     const params = {
       name: 'Jane Wanjiru',
       email: 'jane@example.com',
-      resetUrl: 'https://sheriabot.co.ke/reset?token=xyz789',
+      resetUrl: 'https://sheriabot.com/reset?token=xyz789',
       expiresIn: '1 hour',
       ipAddress: '41.90.22.1',
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
@@ -170,7 +170,7 @@ async function testPolicyReadyTemplate() {
       name: 'David Otieno',
       policyTitle: 'Digital Lending Compliance Framework',
       policyId: 'policy-123',
-      policyUrl: 'https://sheriabot.co.ke/policies/policy-123',
+      policyUrl: 'https://sheriabot.com/policies/policy-123',
       executiveSummary: 'Comprehensive framework for digital credit providers covering licensing, consumer protection, data privacy, and fair debt collection practices.',
       regulatoryAreas: ['Fintech & Digital Lending', 'Data Protection', 'Consumer Protection'],
       generationTime: 45000, // 45 seconds
@@ -214,7 +214,7 @@ async function testComplianceAlertTemplate() {
       affectedAreas: ['Data Protection', 'Fintech & Digital Lending'],
       actionRequired: 'Update your mobile app consent flows and privacy notices to comply with the new requirements before the March 1, 2024 deadline.',
       deadline: 'March 1, 2024',
-      resourceUrl: 'https://sheriabot.co.ke/alerts/alert-456',
+      resourceUrl: 'https://sheriabot.com/alerts/alert-456',
       recommendations: [
         'Review current data collection and consent practices',
         'Update privacy policy and terms of service',

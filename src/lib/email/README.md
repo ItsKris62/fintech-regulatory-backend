@@ -42,68 +42,71 @@ tsx scripts/test-email.ts your@email.com
 ### Send Welcome Email
 
 ```typescript
-import { mailer } from '@/lib/email/mailer.service';
+import { mailer } from "@/lib/email/mailer.service";
 
 await mailer.sendWelcomeEmail({
-  name: 'John Omondi',
-  email: 'john@example.com',
-  verificationUrl: 'https://sheriabot.co.ke/verify?token=abc123',
-  role: 'STARTUP',
-  organizationName: 'Fintech Innovations Ltd',
+  name: "John Omondi",
+  email: "john@example.com",
+  verificationUrl: "https://sheriabot.com/verify?token=abc123",
+  role: "STARTUP",
+  organizationName: "Fintech Innovations Ltd",
 });
 ```
 
 ### Send Password Reset Email
 
 ```typescript
-import { mailer } from '@/lib/email/mailer.service';
+import { mailer } from "@/lib/email/mailer.service";
 
 await mailer.sendPasswordResetEmail({
-  name: 'Jane Wanjiru',
-  email: 'jane@example.com',
-  resetUrl: 'https://sheriabot.co.ke/reset?token=xyz789',
-  expiresIn: '1 hour',
-  ipAddress: '41.90.22.1', // optional
-  userAgent: 'Mozilla/5.0...', // optional
+  name: "Jane Wanjiru",
+  email: "jane@example.com",
+  resetUrl: "https://sheriabot.com/reset?token=xyz789",
+  expiresIn: "1 hour",
+  ipAddress: "41.90.22.1", // optional
+  userAgent: "Mozilla/5.0...", // optional
 });
 ```
 
 ### Send Policy Ready Notification
 
 ```typescript
-import { mailer } from '@/lib/email/mailer.service';
+import { mailer } from "@/lib/email/mailer.service";
 
-await mailer.sendPolicyReadyEmail({
-  name: 'David Otieno',
-  policyTitle: 'Digital Lending Compliance Framework',
-  policyId: 'policy-123',
-  policyUrl: 'https://sheriabot.co.ke/policies/policy-123',
-  executiveSummary: 'Comprehensive framework for...',
-  regulatoryAreas: ['Fintech & Digital Lending', 'Data Protection'],
-  generationTime: 45000, // milliseconds
-  citationCount: 23,
-}, false); // false = queue instead of immediate send
+await mailer.sendPolicyReadyEmail(
+  {
+    name: "David Otieno",
+    policyTitle: "Digital Lending Compliance Framework",
+    policyId: "policy-123",
+    policyUrl: "https://sheriabot.com/policies/policy-123",
+    executiveSummary: "Comprehensive framework for...",
+    regulatoryAreas: ["Fintech & Digital Lending", "Data Protection"],
+    generationTime: 45000, // milliseconds
+    citationCount: 23,
+  },
+  false,
+); // false = queue instead of immediate send
 ```
 
 ### Send Compliance Alert
 
 ```typescript
-import { mailer } from '@/lib/email/mailer.service';
+import { mailer } from "@/lib/email/mailer.service";
 
 await mailer.sendComplianceAlertEmail({
-  name: 'Sarah Muthoni',
-  alertTitle: 'New Data Protection Regulations',
-  alertType: 'REGULATION_CHANGE',
-  severity: 'HIGH',
-  description: 'The ODPC has issued new regulations...',
-  affectedAreas: ['Data Protection', 'Fintech & Digital Lending'],
-  actionRequired: 'Update your consent flows...',
-  deadline: 'March 1, 2024',
-  resourceUrl: 'https://sheriabot.co.ke/alerts/alert-456',
+  name: "Sarah Muthoni",
+  alertTitle: "New Data Protection Regulations",
+  alertType: "REGULATION_CHANGE",
+  severity: "HIGH",
+  description: "The ODPC has issued new regulations...",
+  affectedAreas: ["Data Protection", "Fintech & Digital Lending"],
+  actionRequired: "Update your consent flows...",
+  deadline: "March 1, 2024",
+  resourceUrl: "https://sheriabot.com/alerts/alert-456",
   recommendations: [
-    'Review current practices',
-    'Update privacy policy',
-    'Implement enhanced consent',
+    "Review current practices",
+    "Update privacy policy",
+    "Implement enhanced consent",
   ],
 });
 ```
@@ -111,44 +114,46 @@ await mailer.sendComplianceAlertEmail({
 ### Send Generic Notification
 
 ```typescript
-import { mailer } from '@/lib/email/mailer.service';
+import { mailer } from "@/lib/email/mailer.service";
 
 await mailer.sendNotificationEmail(
-  'user@example.com',
-  'Your report is ready',
-  'Your monthly compliance report is now available for download.',
-  '<p>Your monthly compliance report is now available for download.</p>' // optional HTML
+  "user@example.com",
+  "Your report is ready",
+  "Your monthly compliance report is now available for download.",
+  "<p>Your monthly compliance report is now available for download.</p>", // optional HTML
 );
 ```
 
 ### Low-Level Email Sending
 
 ```typescript
-import { sendEmail } from '@/lib/email/client';
+import { sendEmail } from "@/lib/email/client";
 
 const result = await sendEmail({
-  to: 'user@example.com',
-  subject: 'Custom Email',
-  html: '<h1>Hello</h1><p>Custom email content</p>',
-  text: 'Hello\n\nCustom email content',
-  replyTo: 'support@sheriabot.co.ke', // optional
-  cc: ['manager@company.com'], // optional
-  bcc: ['archive@company.com'], // optional
-  attachments: [ // optional
+  to: "user@example.com",
+  subject: "Custom Email",
+  html: "<h1>Hello</h1><p>Custom email content</p>",
+  text: "Hello\n\nCustom email content",
+  replyTo: "support@sheriabot.com", // optional
+  cc: ["manager@company.com"], // optional
+  bcc: ["archive@company.com"], // optional
+  attachments: [
+    // optional
     {
-      filename: 'document.pdf',
+      filename: "document.pdf",
       content: pdfBuffer,
     },
   ],
-  tags: [ // optional (for tracking in Resend)
-    { name: 'category', value: 'reports' },
+  tags: [
+    // optional (for tracking in Resend)
+    { name: "category", value: "reports" },
   ],
 });
 
 if (result.success) {
-  console.log('Email sent:', result.messageId);
+  console.log("Email sent:", result.messageId);
 } else {
-  console.error('Email failed:', result.error);
+  console.error("Email failed:", result.error);
 }
 ```
 
@@ -157,21 +162,24 @@ if (result.success) {
 ### Queue Email for Later Sending
 
 ```typescript
-import { queueEmail } from '@/lib/email/client';
+import { queueEmail } from "@/lib/email/client";
 
 // Queue with priority (higher = higher priority)
-await queueEmail({
-  to: 'user@example.com',
-  subject: 'Queued Email',
-  html: '<p>This will be sent later</p>',
-  text: 'This will be sent later',
-}, 10); // priority: 10
+await queueEmail(
+  {
+    to: "user@example.com",
+    subject: "Queued Email",
+    html: "<p>This will be sent later</p>",
+    text: "This will be sent later",
+  },
+  10,
+); // priority: 10
 ```
 
 ### Process Email Queue
 
 ```typescript
-import { processEmailQueue } from '@/lib/email/client';
+import { processEmailQueue } from "@/lib/email/client";
 
 // Process up to 10 queued emails
 const processed = await processEmailQueue(10);
@@ -190,7 +198,7 @@ setInterval(async () => {
 ### Check Queue Statistics
 
 ```typescript
-import { getEmailQueueStats } from '@/lib/email/client';
+import { getEmailQueueStats } from "@/lib/email/client";
 
 const stats = await getEmailQueueStats();
 console.log({
@@ -203,11 +211,11 @@ console.log({
 ### View Recent Email Logs
 
 ```typescript
-import { getRecentEmailLogs } from '@/lib/email/client';
+import { getRecentEmailLogs } from "@/lib/email/client";
 
 const logs = await getRecentEmailLogs(20);
-logs.forEach(log => {
-  console.log(`${log.to}: ${log.subject} - ${log.success ? 'Sent' : 'Failed'}`);
+logs.forEach((log) => {
+  console.log(`${log.to}: ${log.subject} - ${log.success ? "Sent" : "Failed"}`);
 });
 ```
 
@@ -218,7 +226,7 @@ logs.forEach(log => {
 Create `src/lib/email/templates/custom-template.ts`:
 
 ```typescript
-import { emailConfig } from '@/config/email.config';
+import { emailConfig } from "@/config/email.config";
 
 export interface CustomTemplateParams {
   name: string;
@@ -253,7 +261,7 @@ export function generateCustomTemplate(params: CustomTemplateParams) {
   return {
     html: generateCustomHTML(params),
     text: generateCustomText(params),
-    subject: 'Custom Email Subject',
+    subject: "Custom Email Subject",
   };
 }
 ```
@@ -268,9 +276,9 @@ import { generateCustomTemplate, CustomTemplateParams } from './templates/custom
 // Add method to MailerService class
 async sendCustomEmail(params: CustomTemplateParams): Promise<void> {
   const { html, text, subject } = generateCustomTemplate(params);
-  
+
   const userEmail = await this.getUserEmail(params.name);
-  
+
   await sendEmail({
     to: userEmail,
     subject,
@@ -346,7 +354,7 @@ This generates HTML previews in `email-previews/` directory that you can open in
 ### Failed Emails in Queue
 
 ```typescript
-import { clearFailedEmails } from '@/lib/email/client';
+import { clearFailedEmails } from "@/lib/email/client";
 
 // Clear failed email queue (use with caution)
 await clearFailedEmails();
@@ -357,6 +365,7 @@ await clearFailedEmails();
 ### Track Email Metrics
 
 Resend provides built-in analytics:
+
 - Delivery rate
 - Open rate (if tracking enabled)
 - Click rate
@@ -370,13 +379,13 @@ Use tags to categorize emails:
 
 ```typescript
 await sendEmail({
-  to: 'user@example.com',
-  subject: 'Test',
-  html: '<p>Test</p>',
+  to: "user@example.com",
+  subject: "Test",
+  html: "<p>Test</p>",
   tags: [
-    { name: 'category', value: 'transactional' },
-    { name: 'template', value: 'welcome' },
-    { name: 'version', value: 'v2' },
+    { name: "category", value: "transactional" },
+    { name: "template", value: "welcome" },
+    { name: "version", value: "v2" },
   ],
 });
 ```
