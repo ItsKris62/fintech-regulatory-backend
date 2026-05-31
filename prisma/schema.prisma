@@ -88,6 +88,7 @@ model User {
 
   // Enterprise AI Policy Generator
   generatedPolicies GeneratedPolicy[]
+  aiJobs            AiJob[]
 
   // Organization membership (multi-member orgs)
   organizationMemberships OrganizationMember[] @relation("OrganizationMemberUser")
@@ -183,6 +184,8 @@ model Organization {
 
   // Enterprise AI Policy Generator
   generatedPolicies GeneratedPolicy[]
+  checklists        Checklist[]
+  aiJobs            AiJob[]
 
   // Organization membership (multi-member orgs)
   members OrganizationMember[] @relation("OrganizationMembers")
@@ -455,7 +458,7 @@ model ComplianceQueryRun {
 model Checklist {
   id                 String          @id @default(cuid())
   userId             String
-  organizationId     String?
+  organizationId     String
   title              String
   productType        String?
   businessStage      String?
@@ -479,6 +482,7 @@ model Checklist {
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
   user               User            @relation(fields: [userId], references: [id])
+  organization       Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   checklistItems     ChecklistItem[]
 
   @@index([userId])
@@ -539,6 +543,7 @@ model GapAnalysis {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
   user                 User      @relation(fields: [userId], references: [id])
+  frameworks           GapAnalysisFramework[]
 
   // Enterprise AI Policy Generator
   generatedPolicies GeneratedPolicy[]
@@ -548,6 +553,25 @@ model GapAnalysis {
   @@index([organizationId])
   @@index([createdAt])
   @@index([deletedAt])
+}
+
+model GapAnalysisFramework {
+  id            String      @id @default(cuid())
+  gapAnalysisId String
+  frameworkId   String?
+  slug          String
+  name          String
+  category      String?
+  tier          String?
+  sortOrder     Int?
+  capturedAt    DateTime    @default(now())
+
+  gapAnalysis GapAnalysis          @relation(fields: [gapAnalysisId], references: [id], onDelete: Cascade)
+  framework   RegulatoryFramework? @relation(fields: [frameworkId], references: [id], onDelete: SetNull)
+
+  @@unique([gapAnalysisId, slug])
+  @@index([gapAnalysisId])
+  @@index([slug])
 }
 
 model Notification {
@@ -1340,6 +1364,58 @@ model RegulatoryFramework {
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  gapAnalysisSnapshots GapAnalysisFramework[]
+}
+
+model AiJob {
+  id               String    @id @default(cuid())
+  type             String
+  status           String    @default("QUEUED")
+  idempotencyKey   String    @unique
+  targetEntityType String
+  targetEntityId   String
+  userId           String?
+  organizationId   String?
+  payload          Json
+  progress         Int       @default(0)
+  attempts         Int       @default(0)
+  maxAttempts      Int       @default(3)
+  priority         Int       @default(0)
+  runAfter         DateTime  @default(now())
+  lockedAt         DateTime?
+  lockedBy         String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  failedAt         DateTime?
+  lastError        String?
+  deadLetteredAt   DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  events       AiJobEvent[]
+
+  @@index([status, runAfter])
+  @@index([targetEntityType, targetEntityId])
+  @@index([organizationId, status])
+  @@index([userId, status])
+  @@index([createdAt])
+}
+
+model AiJobEvent {
+  id        String   @id @default(cuid())
+  jobId     String
+  type      String
+  message   String?
+  progress  Int?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  job AiJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, createdAt])
+  @@index([type])
 }
 
 // ============================================================================
@@ -1861,6 +1937,9 @@ model GeneratedPolicy {
   parent            GeneratedPolicy?          @relation("GeneratedPolicyVersions", fields: [parentId], references: [id])
   versions          GeneratedPolicy[]         @relation("GeneratedPolicyVersions")
   citations         GeneratedPolicyCitation[]
+  sourceSnapshots   GeneratedPolicySourceSnapshot[]
+  exportLogs        GeneratedPolicyExportLog[]
+  generationEvents  GeneratedPolicyGenerationEvent[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1883,12 +1962,75 @@ model GeneratedPolicyCitation {
   verified          Boolean  @default(false)
   citationVerified  Boolean? // post-hoc corpus verification result
   rawSource         Json? // RAG source metadata
+  sourceSnapshotId  String?
+  createdAt         DateTime @default(now())
+
+  generatedPolicy GeneratedPolicy @relation(fields: [generatedPolicyId], references: [id], onDelete: Cascade)
+  sourceSnapshot  GeneratedPolicySourceSnapshot? @relation(fields: [sourceSnapshotId], references: [id], onDelete: SetNull)
+
+  @@index([generatedPolicyId])
+  @@index([sectionId])
+  @@index([sourceSnapshotId])
+}
+
+model GeneratedPolicySourceSnapshot {
+  id                String   @id @default(cuid())
+  generatedPolicyId String
+  sourceType        String
+  title             String
+  slug              String?
+  documentId        String?
+  sourceUrl         String?
+  contentHash       String?
+  excerpt           String?  @db.Text
+  metadata          Json?
+  capturedAt        DateTime @default(now())
+
+  generatedPolicy GeneratedPolicy           @relation(fields: [generatedPolicyId], references: [id], onDelete: Cascade)
+  citations       GeneratedPolicyCitation[]
+
+  @@index([generatedPolicyId])
+  @@index([documentId])
+  @@index([contentHash])
+}
+
+model GeneratedPolicyExportLog {
+  id                String   @id @default(cuid())
+  generatedPolicyId String
+  userId            String
+  organizationId    String
+  format            String
+  storageKey        String?
+  filename          String?
+  metadata          Json?
+  exportedAt        DateTime @default(now())
+
+  generatedPolicy GeneratedPolicy @relation(fields: [generatedPolicyId], references: [id], onDelete: Cascade)
+
+  @@index([generatedPolicyId])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([exportedAt])
+}
+
+model GeneratedPolicyGenerationEvent {
+  id                String   @id @default(cuid())
+  generatedPolicyId String
+  jobId             String?
+  stage             String
+  model             String?
+  inputTokens       Int?
+  outputTokens      Int?
+  costUsd           Float?
+  metadata          Json?
   createdAt         DateTime @default(now())
 
   generatedPolicy GeneratedPolicy @relation(fields: [generatedPolicyId], references: [id], onDelete: Cascade)
 
   @@index([generatedPolicyId])
-  @@index([sectionId])
+  @@index([jobId])
+  @@index([stage])
+  @@index([createdAt])
 }
 
 enum GeneratedPolicyStatus {

@@ -25,6 +25,7 @@ import { NotFoundError, ForbiddenError } from '@/utils/error';
 import { MemberRole, MemberStatus, OrganizationMember, Prisma, UserRole } from '@prisma/client';
 import { notificationModule } from '@/modules/notification';
 import { incrementTrialUsage } from '@/modules/trial';
+import { aiJobRunner } from '@/modules/ai-jobs/ai-job-runner';
 import { complianceScorer } from './compliance-scorer';
 import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
@@ -261,7 +262,7 @@ interface GapAnalysisPipelineParams {
  * Runs after the HTTP response is sent. Manages its own lifecycle via DB status
  * updates. The top-level try/catch guarantees FAILED is set on any unhandled error.
  */
-async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Promise<void> {
+export async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Promise<void> {
   const {
     analysisId, userId, trialUserId, fileName, fileContent, fileType,
     regulatoryFrameworks, analysisDepth, focusAreas, ipAddress, userAgent,
@@ -503,6 +504,7 @@ async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Pr
       : 'Analysis failed due to an unexpected error. Please try again.';
 
     await updateAnalysisStatus(analysisId, { status: 'FAILED', progress: currentProgress, errorMessage });
+    throw err;
   }
 }
 
@@ -2420,26 +2422,31 @@ Follow-up Question: ${followUp}
         link: `/startup/gap-analysis/${record.id}`,
       }).catch(() => { /* non-blocking */ });
 
-      // Fire background pipeline  -  do NOT await
-      void executeGapAnalysisPipeline({
-        analysisId: record.id,
+      const job = await aiJobRunner.enqueue({
+        type: 'GAP_ANALYSIS_PIPELINE',
+        idempotencyKey: `gap-analysis:${record.id}`,
+        targetEntityType: 'GapAnalysis',
+        targetEntityId: record.id,
         userId,
-        trialUserId: params.trialUserId,
-        fileName: params.fileName,
-        fileContent: params.fileContent,
-        fileType: ext,
-        regulatoryFrameworks: params.regulatoryFrameworks,
-        analysisDepth: params.analysisDepth,
-        focusAreas: params.focusAreas,
-        ipAddress: params.ipAddress,
-        userAgent: params.userAgent,
-      }).catch((err: unknown) => {
-        // Safety net  -  executeGapAnalysisPipeline has its own try/catch, so this
-        // should never fire. Log it as a critical error if it does.
-        logger.error({ type: 'gap_analysis_pipeline_unhandled_error', analysisId: record.id, error: (err as Error).message });
+        organizationId: params.organizationId,
+        payload: {
+          analysisId: record.id,
+          userId,
+          trialUserId: params.trialUserId,
+          fileName: params.fileName,
+          fileContent: params.fileContent,
+          fileType: ext,
+          regulatoryFrameworks: params.regulatoryFrameworks,
+          analysisDepth: params.analysisDepth,
+          focusAreas: params.focusAreas,
+          ipAddress: params.ipAddress,
+          userAgent: params.userAgent,
+        },
+        maxAttempts: 3,
+        priority: 7,
       });
 
-      logger.info({ type: 'gap_analysis_queued', userId, analysisId: record.id });
+      logger.info({ type: 'gap_analysis_queued', userId, analysisId: record.id, jobId: job.id });
 
       return { id: record.id, status: 'QUEUED', progress: 5 };
     } catch (error: unknown) {

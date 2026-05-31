@@ -120,3 +120,9 @@ export const deletePolicySchema = z.object({
   policyId: z.string().cuid(),
 });
 export type DeletePolicyInput = z.infer<typeof deletePolicySchema>;
+
+export const exportGeneratedPolicySchema = z.object({
+  policyId: z.string().cuid(),
+  format: z.enum(['DOCX', 'PDF']),
+});
+export type ExportGeneratedPolicyInput = z.infer<typeof exportGeneratedPolicySchema>;

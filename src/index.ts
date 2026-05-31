@@ -9,6 +9,7 @@ import { connectionManager } from './lib/connection-manager';
 import { errorTracker } from './lib/error-tracker';
 import { warmCaches } from './lib/cache-warming';
 import { storageConfig } from './config/storage.config';
+import { aiJobRunner } from './modules/ai-jobs/ai-job-runner';
 import type { FastifyInstance } from 'fastify';
 
 // -- Process-level error traps ------------------------------------------------
@@ -39,6 +40,7 @@ function registerShutdownHandlers(app: FastifyInstance): void {
     logger.info({ type: 'server_shutting_down', signal });
     try {
       errorTracker.stop();
+      await aiJobRunner.stop();
       await app.close();
       await connectionManager.disconnectAll();
       logger.info({ type: 'server_shutdown_complete' });
@@ -82,6 +84,7 @@ const start = async () => {
 
     // 3. Start error tracker background cleanup
     errorTracker.start();
+    aiJobRunner.start();
 
     // 4. Build the Fastify app (registers all plugins inside an async function)
     const app = await buildApp();

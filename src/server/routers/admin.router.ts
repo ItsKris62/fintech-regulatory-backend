@@ -743,6 +743,84 @@ export const adminRouter = router({
   }),
 
   /**
+   * Admin-visible durable AI job status.
+   *
+   * Shows queued/running/retrying/completed/dead-lettered work across the
+   * generated policy pipeline and future AI/compliance jobs using AiJob.
+   */
+  listAIJobs: adminProcedure
+    .input(
+      z.object({
+        status: z.enum(['QUEUED', 'RUNNING', 'RETRYING', 'COMPLETED', 'DEAD_LETTERED']).optional(),
+        type: z.string().max(100).optional(),
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().min(1).max(100).default(50),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const skip = (input.page - 1) * input.limit;
+      const where = {
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.type ? { type: input.type } : {}),
+      };
+
+      const [jobs, total] = await Promise.all([
+        ctx.prisma.aiJob.findMany({
+          where,
+          skip,
+          take: input.limit,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            type: true,
+            status: true,
+            targetEntityType: true,
+            targetEntityId: true,
+            userId: true,
+            organizationId: true,
+            progress: true,
+            attempts: true,
+            maxAttempts: true,
+            runAfter: true,
+            lockedAt: true,
+            lockedBy: true,
+            startedAt: true,
+            completedAt: true,
+            failedAt: true,
+            deadLetteredAt: true,
+            lastError: true,
+            createdAt: true,
+            updatedAt: true,
+            events: {
+              orderBy: { createdAt: 'desc' },
+              take: 3,
+              select: { type: true, message: true, progress: true, createdAt: true },
+            },
+          },
+        }),
+        ctx.prisma.aiJob.count({ where }),
+      ]);
+
+      logger.info({
+        type: 'admin_ai_jobs_listed',
+        adminId: ctx.user!.id,
+        status: input.status,
+        jobType: input.type,
+        count: jobs.length,
+      });
+
+      return {
+        jobs,
+        pagination: {
+          page: input.page,
+          limit: input.limit,
+          total,
+          pages: Math.ceil(total / input.limit),
+        },
+      };
+    }),
+
+  /**
    * Get organization stats summary (admin only)
    *
    * @admin

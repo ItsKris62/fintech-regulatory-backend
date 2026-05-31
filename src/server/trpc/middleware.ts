@@ -22,7 +22,7 @@ import { resolveEffectivePlan } from '@/modules/billing/resolve-effective-plan';
  * tRPC intercepts procedure errors, so we must check `result.ok` 
  * instead of relying on a try/catch block.
  */
-export const logged = middleware(async ({ ctx, path, type, next }) => {
+export const loggedMiddlewareHandler = async ({ ctx, path, type, next }: any) => {
   const start = Date.now();
   
   logger.info({
@@ -78,7 +78,9 @@ export const logged = middleware(async ({ ctx, path, type, next }) => {
   }
 
   return result;
-});
+};
+
+export const logged = middleware(loggedMiddlewareHandler);
 
 /**
  * Authentication Middleware

@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { createHash } from 'crypto';
 import { router, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric } from '@prisma/client';
 import {
@@ -9,6 +10,7 @@ import {
 } from '../trpc/middleware';
 import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
+import { aiJobRunner } from '@/modules/ai-jobs/ai-job-runner';
 import {
   createDraftSchema,
   getPolicySchema,
@@ -16,6 +18,7 @@ import {
   updateSectionContentSchema,
   getStatusSchema,
   deletePolicySchema,
+  exportGeneratedPolicySchema,
 } from '../schemas/enterprise-policy.schema';
 
 // =============================================================================
@@ -92,17 +95,40 @@ export const enterprisePolicyRouter = router({
         },
       });
 
+      const idempotencyKey = createHash('sha256')
+        .update([
+          'generated-policy',
+          policy.id,
+          organizationId,
+          userId,
+          input.policyType,
+          input.title,
+          input.sourceGapAnalysisId ?? '',
+          input.sourceGapId ?? '',
+        ].join(':'))
+        .digest('hex');
+
+      const job = await aiJobRunner.enqueue({
+        type: 'GENERATED_POLICY_PIPELINE',
+        idempotencyKey,
+        targetEntityType: 'GeneratedPolicy',
+        targetEntityId: policy.id,
+        userId,
+        organizationId,
+        payload: input,
+        maxAttempts: 3,
+        priority: 10,
+      });
+
       logger.info({
         type: 'enterprise_policy_draft_created',
         policyId: policy.id,
+        jobId: job.id,
         userId,
         organizationId,
         policyType: input.policyType,
         hasSourceGap: !!input.sourceGapAnalysisId,
       });
-
-      // TODO Phase 2: Fire async generation pipeline
-      // setImmediate(() => executePolicyPipeline(policy.id, input));
 
       // Commit the deferred usage increment
       if (ctx.incrementUsage) {
@@ -114,6 +140,7 @@ export const enterprisePolicyRouter = router({
         status: policy.status,
         title: policy.title,
         policyType: policy.policyType,
+        jobId: job.id,
         createdAt: policy.createdAt,
       };
     }),
@@ -139,6 +166,7 @@ export const enterprisePolicyRouter = router({
           progress: true,
           title: true,
           errorMessage: true,
+          generationMetadata: true,
           updatedAt: true,
         },
       });
@@ -157,6 +185,24 @@ export const enterprisePolicyRouter = router({
         });
       }
 
+      const job = await prisma.aiJob.findFirst({
+        where: { targetEntityType: 'GeneratedPolicy', targetEntityId: policy.id },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          status: true,
+          attempts: true,
+          maxAttempts: true,
+          lastError: true,
+          updatedAt: true,
+          events: {
+            orderBy: { createdAt: 'desc' },
+            take: 5,
+            select: { type: true, message: true, progress: true, createdAt: true },
+          },
+        },
+      });
+
       const stageLabels: Record<string, string> = {
         INITIALIZING: 'Initializing',
         OUTLINING: 'Generating Table of Contents',
@@ -169,6 +215,8 @@ export const enterprisePolicyRouter = router({
 
       return {
         policyId: policy.id,
+        job,
+        jobId: (policy.generationMetadata as Record<string, unknown> | null)?.jobId ?? null,
         status: policy.status,
         progress: policy.progress,
         title: policy.title,
@@ -431,5 +479,83 @@ export const enterprisePolicyRouter = router({
       });
 
       return { success: true };
+    }),
+
+  exportPolicy: orgMemberProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
+    .input(exportGeneratedPolicySchema)
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
+
+      const policy = await prisma.generatedPolicy.findUnique({
+        where: { id: input.policyId },
+        select: {
+          id: true,
+          title: true,
+          userId: true,
+          organizationId: true,
+          deletedAt: true,
+          status: true,
+        },
+      });
+
+      if (!policy || policy.deletedAt) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Generated policy not found.' });
+      }
+
+      if (policy.userId !== userId && policy.organizationId !== organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this policy.' });
+      }
+
+      if (policy.status !== 'COMPLETED') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Policy can only be exported after generation completes.' });
+      }
+
+      const timestamp = Date.now();
+      const extension = input.format.toLowerCase();
+      const filename = `generated-policy-${policy.id}-${timestamp}.${extension}`;
+      const storageKey = `policy-exports/${filename}`;
+      const uploadResult = await ctx.storageService.getUploadUrl(storageKey, 'application/octet-stream');
+
+      await prisma.$transaction([
+        prisma.generatedPolicyExportLog.create({
+          data: {
+            generatedPolicyId: policy.id,
+            userId,
+            organizationId,
+            format: input.format,
+            storageKey,
+            filename,
+            metadata: {
+              title: policy.title,
+              status: policy.status,
+              placeholderExport: true,
+            },
+          },
+        }),
+        prisma.generatedPolicy.update({
+          where: { id: policy.id },
+          data: {
+            lastExportedAt: new Date(),
+            lastExportFormat: input.format,
+          },
+        }),
+      ]);
+
+      logger.info({
+        type: 'enterprise_policy_export_logged',
+        policyId: policy.id,
+        userId,
+        organizationId,
+        format: input.format,
+      });
+
+      return {
+        downloadUrl: uploadResult.url,
+        filename,
+        expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+      };
     }),
 });

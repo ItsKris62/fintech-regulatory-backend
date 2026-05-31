@@ -115,7 +115,7 @@ export const gapAnalysisRouter = router({
 
         const dbFrameworks = await prisma.regulatoryFramework.findMany({
           where: { slug: { in: input.regulatoryFrameworks }, isActive: true },
-          select: { slug: true, name: true, tier: true },
+          select: { id: true, slug: true, name: true, category: true, tier: true, sortOrder: true },
         });
 
         const foundSlugs = new Set(dbFrameworks.map((f) => f.slug));
@@ -177,6 +177,19 @@ export const gapAnalysisRouter = router({
           ipAddress:            ctx.req.ip,
           userAgent:            ctx.req.headers['user-agent'] as string | undefined,
           trialUserId:          ctx.plan === 'FREE_TRIAL' ? userId : undefined,
+        });
+
+        await prisma.gapAnalysisFramework.createMany({
+          data: dbFrameworks.map((framework) => ({
+            gapAnalysisId: result.id,
+            frameworkId: framework.id,
+            slug: framework.slug,
+            name: framework.name,
+            category: framework.category,
+            tier: framework.tier,
+            sortOrder: framework.sortOrder,
+          })),
+          skipDuplicates: true,
         });
 
         await redis.set(dedupKey, result.id, { ex: 900 });

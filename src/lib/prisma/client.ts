@@ -101,7 +101,7 @@ const base = new PrismaClient({
           const duration = Date.now() - startTime;
 
           logDatabaseQuery(operation, model ?? 'unknown', duration, {
-            args: databaseConfig.logging.queries ? args : undefined,
+            args: databaseConfig.logging.queries ? '[query args enabled]' : undefined,
           });
 
           return result;
