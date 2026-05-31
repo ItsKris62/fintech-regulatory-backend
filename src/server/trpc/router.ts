@@ -26,6 +26,7 @@ import { alertRouter } from '../routers/alert.router';
 import { adminMarketingRouter } from '../routers/adminMarketing.router';
 import { publicMarketingRouter } from '../routers/publicMarketing.router';
 import { enterprisePolicyRouter } from '../routers/enterprise-policy.router';
+import { applicationRouter } from '../routers/application.router';
 
 /**
  * Root Application Router
@@ -79,6 +80,7 @@ export const appRouter = router({
   adminMarketing:   adminMarketingRouter,
   publicMarketing:  publicMarketingRouter,
   enterprisePolicy: enterprisePolicyRouter,
+  application: applicationRouter,
 });
 
 /**

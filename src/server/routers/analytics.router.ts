@@ -595,4 +595,71 @@ export const analyticsRouter = router({
         });
       }
     }),
+
+  getWorkflowEventSummary: adminProcedure
+    .input(z.object({
+      days: z.number().int().min(1).max(365).default(30),
+      page: z.number().int().min(1).default(1),
+      pageSize: z.number().int().min(1).max(100).default(20),
+    }))
+    .query(async ({ input, ctx }) => {
+      const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
+      const actions = [
+        'SUGGESTED_QUERY_CLICKED',
+        'COMPLIANCE_QUERY_EXPORTED',
+        'POLICY_EXPORT',
+        'GAP_ANALYSIS_EXPORTED',
+        'CHECKLIST_EXPORTED',
+      ];
+      const where = {
+        action: { in: actions },
+        createdAt: { gte: since },
+      };
+
+      const [rows, totalRows, grouped] = await Promise.all([
+        ctx.prisma.auditLog.findMany({
+          where,
+          skip: (input.page - 1) * input.pageSize,
+          take: input.pageSize,
+          orderBy: { createdAt: 'desc' },
+          include: { user: { select: { email: true, fullName: true } } },
+        }),
+        ctx.prisma.auditLog.count({ where }),
+        ctx.prisma.auditLog.groupBy({
+          by: ['action'],
+          where,
+          _count: { _all: true },
+        }),
+      ]);
+
+      logger.info({
+        type: 'analytics_workflow_event_summary',
+        adminId: ctx.user!.id,
+        days: input.days,
+        totalRows,
+      });
+
+      return {
+        aggregate: Object.fromEntries(actions.map((action) => [
+          action,
+          grouped.find((item) => item.action === action)?._count._all ?? 0,
+        ])),
+        rows: rows.map((row) => ({
+          id: row.id,
+          action: row.action,
+          entityType: row.entityType,
+          entityId: row.entityId,
+          metadata: row.metadata,
+          createdAt: row.createdAt,
+          userEmail: row.user?.email ?? null,
+          userName: row.user?.fullName ?? null,
+        })),
+        pagination: {
+          page: input.page,
+          pageSize: input.pageSize,
+          totalRows,
+          totalPages: Math.max(1, Math.ceil(totalRows / input.pageSize)),
+        },
+      };
+    }),
 });

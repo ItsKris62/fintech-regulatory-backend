@@ -1,4 +1,4 @@
-import { z } from 'zod';
+  import { z } from 'zod';
 
 /**
  * Compliance Schemas
@@ -95,6 +95,8 @@ export type GetSuggestedQueriesInput = z.infer<typeof getSuggestedQueriesSchema>
  */
 export const recordSuggestionClickSchema = z.object({
   suggestionId: z.string().min(1),
+  suggestionText: z.string().min(1).max(500).optional(),
+  surface: z.enum(['empty_state', 'sidebar', 'dashboard', 'other']).default('other'),
 });
 
 export type RecordSuggestionClickInput = z.infer<typeof recordSuggestionClickSchema>;

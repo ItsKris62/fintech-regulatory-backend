@@ -78,7 +78,7 @@ export type DeletePolicyInput = z.infer<typeof deletePolicySchema>;
  */
 export const exportPolicySchema = z.object({
   id: z.string(),
-  format: z.enum(['PDF', 'DOCX', 'MD']).default('PDF'),
+  format: z.enum(['PDF', 'DOCX', 'MD']).default('DOCX'),
 });
 
 export type ExportPolicyInput = z.infer<typeof exportPolicySchema>;

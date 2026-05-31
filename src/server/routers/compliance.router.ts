@@ -573,6 +573,48 @@ export const complianceRouter = router({
       }
     }),
 
+  getFollowUps: orgMemberProcedure
+    .input(z.object({ originalQueryId: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
+
+      const originalQuery = await ctx.prisma.complianceQuery.findUnique({
+        where: { id: input.originalQueryId },
+        select: { id: true, userId: true, organizationId: true },
+      });
+
+      if (!originalQuery) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Original query not found' });
+      }
+
+      if (
+        ctx.user!.role !== 'ADMIN' &&
+        (originalQuery.userId !== userId || originalQuery.organizationId !== organizationId)
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this query' });
+      }
+
+      const followUps = await (ctx.prisma.complianceQuery.findMany as any)({
+        where: {
+          userId,
+          organizationId,
+          metadata: { path: ['followUpTo'], equals: input.originalQueryId },
+        },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          query: true,
+          response: true,
+          citations: true,
+          confidence: true,
+          createdAt: true,
+        },
+      });
+
+      return { followUps };
+    }),
+
   /**
    * Quick compliance check
    *
@@ -956,6 +998,30 @@ export const complianceRouter = router({
         type: 'suggested_query_clicked',
         userId,
         suggestionId: input.suggestionId,
+        suggestionText: input.suggestionText,
+        surface: input.surface,
+      });
+
+      ctx.prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'SUGGESTED_QUERY_CLICKED',
+          entityType: 'ComplianceQuerySuggestion',
+          entityId: input.suggestionId,
+          metadata: {
+            suggestionText: input.suggestionText ?? null,
+            surface: input.surface,
+          },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: (ctx.req.headers['user-agent'] as string | undefined) ?? null,
+        },
+      }).catch((err: unknown) => {
+        logger.error({
+          type: 'suggested_query_click_audit_log_failed',
+          userId,
+          suggestionId: input.suggestionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
 
       return { success: true };
@@ -1602,6 +1668,25 @@ export const complianceRouter = router({
       // 9. Generate signed URL with 1-hour expiry (3600 seconds)
       const downloadUrl = await storageService.getVaultDownloadUrl(uploadResult.key, 3600, filename);
       const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
+
+      prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'COMPLIANCE_QUERY_EXPORTED',
+          entityType: 'ComplianceQuery',
+          entityId: queryRecord.id,
+          metadata: { format: 'docx', filename, r2Key: uploadResult.key },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: (ctx.req.headers['user-agent'] as string | undefined) ?? null,
+        },
+      }).catch((err: unknown) => {
+        logger.error({
+          type: 'compliance_query_export_audit_log_failed',
+          userId,
+          queryId: input.queryId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
 
       logger.info({
         type: 'compliance_query_docx_exported',

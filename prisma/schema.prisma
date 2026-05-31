@@ -51,6 +51,11 @@ model User {
   corpusGapFeedbacks      CorpusGapFeedback[]
   supportTickets          SupportTicket[]
   ticketComments          TicketComment[]
+  regulatoryApplications  RegulatoryApplication[]
+  applicationTimelineEvents ApplicationTimelineEvent[]
+  applicationDocuments    ApplicationDocument[]
+  applicationFees         ApplicationFee[]
+  applicationFeedback     ApplicationRegulatorFeedback[]
 
   // Free trial fields (one-time, user-scoped -- not org-scoped)
   freeTrialActivatedAt DateTime?
@@ -181,6 +186,7 @@ model Organization {
   payments               Payment[]
   alertSubscription      AlertSubscription?
   alertNotifications     AlertNotification[]
+  regulatoryApplications RegulatoryApplication[]
 
   // Enterprise AI Policy Generator
   generatedPolicies GeneratedPolicy[]
@@ -453,6 +459,105 @@ model ComplianceQueryRun {
   @@index([verifierVerdict])
   @@index([createdAt])
   @@index([status])
+}
+
+model RegulatoryApplication {
+  id                 String                         @id @default(cuid())
+  organizationId     String
+  userId             String
+  title              String
+  regulator          String
+  licenseType        String
+  status             String                         @default("DRAFT")
+  progress           Int                            @default(0)
+  referenceNumber    String?
+  nextAction         String?
+  dueDate            DateTime?
+  submittedAt        DateTime?
+  decidedAt          DateTime?
+  deletedAt          DateTime?
+  createdAt          DateTime                       @default(now())
+  updatedAt          DateTime                       @updatedAt
+  organization       Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user               User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timelineEvents     ApplicationTimelineEvent[]
+  documents          ApplicationDocument[]
+  fees               ApplicationFee[]
+  regulatorFeedback  ApplicationRegulatorFeedback[]
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
+
+model ApplicationTimelineEvent {
+  id            String                @id @default(cuid())
+  applicationId String
+  userId        String
+  title         String
+  description   String?
+  eventDate     DateTime              @default(now())
+  completed     Boolean               @default(false)
+  createdAt     DateTime              @default(now())
+  application   RegulatoryApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@index([eventDate])
+}
+
+model ApplicationDocument {
+  id            String                @id @default(cuid())
+  applicationId String
+  userId        String
+  name          String
+  status        String                @default("REQUIRED")
+  vaultDocumentId String?
+  notes         String?
+  uploadedAt    DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  application   RegulatoryApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@index([status])
+}
+
+model ApplicationFee {
+  id            String                @id @default(cuid())
+  applicationId String
+  userId        String
+  description   String
+  amount        Int
+  status        String                @default("PENDING")
+  paidAt        DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  application   RegulatoryApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@index([status])
+}
+
+model ApplicationRegulatorFeedback {
+  id            String                @id @default(cuid())
+  applicationId String
+  userId        String
+  fromName      String?
+  message       String
+  actionRequired Boolean              @default(false)
+  dueDate       DateTime?
+  receivedAt    DateTime              @default(now())
+  createdAt     DateTime              @default(now())
+  application   RegulatoryApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@index([receivedAt])
 }
 
 model Checklist {
