@@ -50,6 +50,9 @@ import { applicationRouter } from '../routers/application.router';
  * - /trpc/support.*       - User support ticket submission and tracking
  * - /trpc/adminSupport.*  - Admin ticket management (ADMIN role only)
  * - /trpc/pilot.*         - Pilot Programme dashboard (ADMIN role only)
+ * - /trpc/checklist.*     - AI checklist generation, status polling, retry and progress tracking
+ * - /trpc/complianceDashboard.* - Startup dashboard compliance score and category checklist data
+ * - /trpc/gapAnalysis.*   - Policy gap analysis upload, polling and result retrieval
  * - /trpc/enterprisePolicy.* - Enterprise AI Policy Generator (ENTERPRISE tier only)
  */
 export const appRouter = router({
