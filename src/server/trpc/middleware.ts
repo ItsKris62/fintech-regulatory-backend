@@ -697,7 +697,8 @@ export const checkUsageLimit = (
       : new Date().toISOString().slice(0, 7); // 'YYYY-MM'
     const usageKey  = `sheriabot:usage:${scopeId}:${metric}:${periodKey}`;
 
-    // Read current count to give an accurate error message before touching Redis
+    // Read current count for user-facing diagnostics. Enforcement happens at
+    // increment time below so concurrent requests cannot all pass this precheck.
     const currentRaw = await redis.get<number>(usageKey);
     const current    = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw ?? 0);
 
@@ -725,6 +726,27 @@ export const checkUsageLimit = (
     // -----------------------------------------------------------------
     const doIncrement = async (): Promise<void> => {
       const newCount = await redis.incr(usageKey);
+      if (newCount > limit) {
+        await redis.decr(usageKey);
+
+        logger.warn({
+          type:    'usage_limit_reached_atomic',
+          userId:  user.id,
+          orgId:   scopeId,
+          metric,
+          attempted: newCount,
+          limit,
+          period,
+          plan,
+        });
+
+        const limitLabel = period === 'lifetime' ? 'Lifetime' : 'Monthly';
+        throw new TRPCError({
+          code:    'TOO_MANY_REQUESTS',
+          message: `${limitLabel} limit reached (${limit}/${limit}). Upgrade your plan for more.`,
+        });
+      }
+
       // Set TTL only for monthly keys (lifetime keys never expire)
       if (newCount === 1 && period === 'month') {
         await redis.expire(usageKey, USAGE_TTL);

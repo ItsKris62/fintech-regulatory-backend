@@ -1,4 +1,5 @@
 import type { FastifyRequest } from 'fastify';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IntaSendWebhookPayload } from '../../modules/intasend/intasend.types';
 
 export type WebhookVerifyResult =
@@ -8,6 +9,29 @@ export type WebhookVerifyResult =
 export interface WebhookVerifyInput {
   payload: IntaSendWebhookPayload;
   expectedChallenge: string;
+}
+
+const MIN_CHALLENGE_LENGTH = 32;
+const PLACEHOLDER_CHALLENGE_VALUES = new Set([
+  'generate_a_long_random_webhook_challenge',
+  'change_me',
+  'changeme',
+  'secret',
+  'webhook_secret',
+]);
+
+function constantTimeEqual(a: string, b: string): boolean {
+  const left = createHash('sha256').update(a, 'utf8').digest();
+  const right = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(left, right);
+}
+
+export function isStrongIntaSendWebhookChallenge(value: string | undefined): boolean {
+  const trimmed = value?.trim() ?? '';
+  return (
+    trimmed.length >= MIN_CHALLENGE_LENGTH &&
+    !PLACEHOLDER_CHALLENGE_VALUES.has(trimmed.toLowerCase())
+  );
 }
 
 /**
@@ -26,7 +50,7 @@ export function verifyIntaSendWebhook(input: WebhookVerifyInput): WebhookVerifyR
   if (!received || typeof received !== 'string') {
     return { ok: false, reason: 'missing_challenge' };
   }
-  return received === input.expectedChallenge
+  return constantTimeEqual(received, input.expectedChallenge)
     ? { ok: true, mode: 'challenge' }
     : { ok: false, reason: 'invalid_challenge' };
 }

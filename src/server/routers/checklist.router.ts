@@ -41,14 +41,6 @@ export const checklistRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       try {
-        // RBAC: Regulators cannot generate checklists (they issue them)
-        if (ctx.user!.role === 'REGULATOR') {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Regulators cannot generate compliance checklists',
-          });
-        }
-
         // orgId is always session-derived -- never client-supplied (IDOR closed)
         const orgId  = ctx.orgMembership!.organizationId;
         const userId = ctx.user!.id;
@@ -219,17 +211,11 @@ export const checklistRouter = router({
   generateChecklistAsync: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
     .use(withPlanContext)
-    // deferIncrement: true -- usage counter committed only after DB placeholder written
-    .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS, { deferIncrement: true }))
+    // Reserve quota before queuing background AI work. The middleware increment
+    // is atomic, so concurrent regulator/free-trial requests cannot all pass.
+    .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS))
     .input(generateChecklistAsyncInputSchema)
     .mutation(async ({ input, ctx }) => {
-      if (ctx.user!.role === 'REGULATOR') {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Regulators cannot generate compliance checklists',
-        });
-      }
-
       const orgId = ctx.orgMembership!.organizationId;
 
       // B7.3 (TD-009): Redis dedup lock -- prevents double-submit from starting two
@@ -260,8 +246,6 @@ export const checklistRouter = router({
           input,
           ctx.plan === 'FREE_TRIAL' ? ctx.user!.id : undefined,
         );
-
-        await ctx.incrementUsage?.();
 
         // Release lock after the pipeline is queued (not after it completes --
         // the pipeline runs in the background after this response is sent).

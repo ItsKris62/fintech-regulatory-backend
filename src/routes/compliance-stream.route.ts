@@ -131,12 +131,12 @@ interface UsageCheck {
 
 export async function checkAndPrepareUsage(auth: AuthContext): Promise<UsageCheck> {
   if (auth.plan === 'FREE_TRIAL') {
-    const queryCheck = await checkTrialLimit(auth.userId, 'complianceQueries');
-    if (!queryCheck.allowed) {
+    const queryIncrement = await incrementTrialUsageAtomic(auth.userId, 'complianceQueries', 1);
+    if (!queryIncrement.allowed) {
       return {
         allowed: false,
         statusCode: 403,
-        message: `Trial limit reached (${queryCheck.current}/${queryCheck.limit}). Upgrade to continue.`,
+        message: `Trial limit reached (${queryIncrement.newCount}/${queryIncrement.limit}). Upgrade to continue.`,
         increment: async () => {},
       };
     }
@@ -156,18 +156,6 @@ export async function checkAndPrepareUsage(auth: AuthContext): Promise<UsageChec
       statusCode: 429,
       message: '',
       increment: async (tokensUsed?: number) => {
-        const queryIncrement = await incrementTrialUsageAtomic(auth.userId, 'complianceQueries', 1);
-        if (!queryIncrement.allowed) {
-          logger.warn({
-            type: 'compliance_stream_trial_usage_increment_blocked',
-            userId: auth.userId,
-            feature: 'complianceQueries',
-            current: queryIncrement.newCount,
-            limit: queryIncrement.limit,
-          });
-          return;
-        }
-
         if (tokensUsed !== undefined && tokensUsed > 0) {
           const tokenIncrement = await incrementTrialUsageAtomic(auth.userId, 'totalTokensUsed', tokensUsed);
           if (!tokenIncrement.allowed) {

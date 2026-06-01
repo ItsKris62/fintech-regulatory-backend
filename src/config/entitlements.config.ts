@@ -122,11 +122,12 @@ export type PlanEntitlements = Record<EffectivePlan, PlanEntitlementConfig>;
 export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   /**
    * REGULATOR -- Free tier for CBK/CMA/CA officials.
-   * Read-only knowledge base, limited queries, no generative features.
+   * Read-only knowledge base, limited queries, and a tightly capped checklist
+   * allowance for evaluation/audit history.
    */
   REGULATOR: {
     complianceQueries:     { limit: 50,  period: 'month' },
-    checklistGenerations:  { limit: 1,   period: 'lifetime' }, // 1 lifetime checklist for free tier
+    checklistGenerations:  { limit: 1,   period: 'month' }, // resets monthly; generated history is retained
     apiAccess:             false,
     gapAnalysis:           { limit: 0,  period: 'month' }, // not available on free tier
     policyGeneration:      false,

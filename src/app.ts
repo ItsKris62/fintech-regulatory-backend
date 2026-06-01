@@ -22,7 +22,12 @@ import { alertPubSub } from './lib/redis/pubsub';
 import { consumeAlertStreamToken } from './lib/alerts/stream-token';
 import { registerComplianceStreamRoute } from './routes/compliance-stream.route';
 import { appConfig } from './config/app.config';
-import { verifyIntaSendWebhook, isAllowedIntaSendIp, parseAllowedIps } from './lib/intasend/webhook-verifier';
+import {
+  verifyIntaSendWebhook,
+  isAllowedIntaSendIp,
+  parseAllowedIps,
+  isStrongIntaSendWebhookChallenge,
+} from './lib/intasend/webhook-verifier';
 import { hashIp } from './utils/request-identifiers';
 import * as Sentry from '@sentry/node';
 import { isClientOrExpectedError } from './lib/sentry';
@@ -113,9 +118,10 @@ export async function buildApp(): Promise<FastifyInstance> {
         'Production startup blocked: INTASEND_WEBHOOK_ALLOWED_IPS must contain at least one IP.',
       );
     }
-    if (!process.env.INTASEND_WEBHOOK_CHALLENGE && !appConfig.intasend?.webhookChallenge) {
+    const intasendChallenge = process.env.INTASEND_WEBHOOK_CHALLENGE || appConfig.intasend?.webhookChallenge;
+    if (!isStrongIntaSendWebhookChallenge(intasendChallenge)) {
       throw new Error(
-        'Production startup blocked: INTASEND_WEBHOOK_CHALLENGE must be set.',
+        'Production startup blocked: INTASEND_WEBHOOK_CHALLENGE must be at least 32 characters and not a placeholder.',
       );
     }
   }
@@ -261,6 +267,14 @@ export async function buildApp(): Promise<FastifyInstance> {
         if (!expectedChallenge) {
           logger.error({
             type: 'intasend_webhook_misconfigured_no_challenge',
+            ip: request.ip,
+          });
+          return reply.code(500).send({ error: 'misconfigured' });
+        }
+
+        if (process.env.NODE_ENV === 'production' && !isStrongIntaSendWebhookChallenge(expectedChallenge)) {
+          logger.error({
+            type: 'intasend_webhook_misconfigured_weak_challenge',
             ip: request.ip,
           });
           return reply.code(500).send({ error: 'misconfigured' });
