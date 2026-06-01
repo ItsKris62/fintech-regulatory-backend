@@ -765,6 +765,7 @@ export const userRouter = router({
           documentIngestionComplete: true,
           // In-App Notifications
           realTimeAlerts: true,
+          inAppSoundsEnabled: true,
           // Email Digest
           emailDigestEnabled: false,
           digestFrequency: 'weekly' as const,
@@ -784,6 +785,7 @@ export const userRouter = router({
         documentIngestionComplete: prefs.documentIngestionComplete,
         // In-App Notifications
         realTimeAlerts: prefs.realTimeAlerts,
+        inAppSoundsEnabled: (prefs as any).inAppSoundsEnabled ?? true,
         // Email Digest
         emailDigestEnabled: prefs.emailDigestEnabled,
         digestFrequency: prefs.digestFrequency,
@@ -878,8 +880,8 @@ export const userRouter = router({
           create: {
             userId: ctx.user.id,
             ...input,
-          },
-          update: input,
+          } as any,
+          update: input as any,
         });
 
         logger.info({
@@ -901,6 +903,7 @@ export const userRouter = router({
           documentIngestionComplete: prefs.documentIngestionComplete,
           // In-App Notifications
           realTimeAlerts: prefs.realTimeAlerts,
+          inAppSoundsEnabled: (prefs as any).inAppSoundsEnabled ?? true,
           // Email Digest
           emailDigestEnabled: prefs.emailDigestEnabled,
           digestFrequency: prefs.digestFrequency,

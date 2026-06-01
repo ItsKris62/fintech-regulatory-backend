@@ -142,6 +142,7 @@ export const updateAllNotificationPreferencesSchema = z.object({
   documentIngestionComplete: z.boolean().optional(),
   // In-App Notifications
   realTimeAlerts: z.boolean().optional(),
+  inAppSoundsEnabled: z.boolean().optional(),
   // Email Digest
   emailDigestEnabled: z.boolean().optional(),
   digestFrequency: z.enum(['daily', 'weekly', 'monthly']).optional(),

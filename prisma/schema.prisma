@@ -867,7 +867,8 @@ model NotificationPreference {
   supportResponses  Boolean @default(true)
 
   // In-App Notifications
-  realTimeAlerts Boolean @default(true)
+  realTimeAlerts     Boolean @default(true)
+  inAppSoundsEnabled Boolean @default(true)
 
   // Email Digest
   emailDigestEnabled Boolean @default(false)
