@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 import { emailConfig, getSenderAddress } from '@/config/email.config';
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
+import { prisma } from '@/lib/prisma/client';
 import { EmailServiceError } from '@/utils/error';
 
 /**
@@ -107,6 +108,28 @@ async function checkGlobalRateLimit(): Promise<boolean> {
   }
 }
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+async function findSuppressedRecipients(recipients: string[]): Promise<Set<string>> {
+  const normalized = recipients.map(normalizeEmail);
+  const suppressed = await prisma.suppressionList.findMany({
+    where: { email: { in: normalized } },
+    select: { email: true, reason: true },
+  });
+
+  if (suppressed.length > 0) {
+    logger.warn({
+      type: 'email_suppressed_recipients_blocked',
+      recipients: suppressed.map((entry) => entry.email),
+      reasons: suppressed.map((entry) => entry.reason),
+    });
+  }
+
+  return new Set(suppressed.map((entry) => normalizeEmail(entry.email)));
+}
+
 /**
  * Log email send attempt
  * @param to Recipient email
@@ -162,6 +185,45 @@ async function logEmailSend(
   }
 }
 
+function isCriticalEmail(options: EmailOptions): boolean {
+  const tags = new Map((options.tags ?? []).map((tag) => [tag.name, tag.value]));
+  return (
+    tags.get('category') === 'auth' ||
+    tags.get('category') === 'authentication' ||
+    tags.get('category') === 'billing' ||
+    tags.get('type') === 'compliance_alert' ||
+    tags.get('type') === 'policy_ready'
+  );
+}
+
+async function writeCriticalEmailAudit(args: {
+  options: EmailOptions;
+  to: string | string[];
+  success: boolean;
+  messageId?: string;
+  error?: string;
+}): Promise<void> {
+  if (!isCriticalEmail(args.options)) return;
+  await prisma.auditLog.create({
+    data: {
+      action: args.success ? 'critical_email_sent' : 'critical_email_failed',
+      entityType: 'Email',
+      entityId: args.messageId ?? args.options.subject,
+      metadata: {
+        to: args.to,
+        subject: args.options.subject,
+        tags: args.options.tags ?? [],
+        error: args.error ?? null,
+      },
+    },
+  }).catch((error: unknown) => {
+    logger.warn({
+      type: 'critical_email_audit_failed',
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 /**
  * Send email using Resend
  * @param options Email options
@@ -186,8 +248,15 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
       throw new Error('No recipients specified');
     }
 
+    const suppressed = await findSuppressedRecipients(recipients);
+    const allowedRecipients = recipients.filter((recipient) => !suppressed.has(normalizeEmail(recipient)));
+    if (allowedRecipients.length === 0) {
+      throw new Error('All recipients are suppressed');
+    }
+    const effectiveTo = Array.isArray(options.to) ? allowedRecipients : allowedRecipients[0];
+
     // Check rate limits
-    for (const recipient of recipients) {
+    for (const recipient of allowedRecipients) {
       // Check per-user rate limits
       const minuteExceeded = await checkEmailRateLimit(recipient, 'minute');
       if (minuteExceeded) {
@@ -214,7 +283,7 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
     // Send email via Resend
     const response = await resend.emails.send({
       from: options.from ?? getSenderAddress(),
-      to: options.to,
+      to: effectiveTo,
       subject: options.subject,
       html: options.html,
       text: options.text,
@@ -231,11 +300,17 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
     const duration = Date.now() - startTime;
 
     // Log success
-    await logEmailSend(options.to, options.subject, true, response.data?.id);
+    await logEmailSend(effectiveTo, options.subject, true, response.data?.id);
+    await writeCriticalEmailAudit({
+      options,
+      to: effectiveTo,
+      success: true,
+      messageId: response.data?.id,
+    });
 
     logger.info({
       type: 'email_sent_success',
-      to: options.to,
+      to: effectiveTo,
       subject: options.subject,
       messageId: response.data?.id,
       duration,
@@ -251,6 +326,12 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
 
     // Log failure
     await logEmailSend(options.to, options.subject, false, undefined, errorMessage);
+    await writeCriticalEmailAudit({
+      options,
+      to: options.to,
+      success: false,
+      error: errorMessage,
+    });
 
     logger.error({
       type: 'email_send_error',

@@ -5,6 +5,7 @@ import { generatePolicyReadyEmail, PolicyReadyEmailParams } from './templates/po
 import { generateComplianceAlertEmail, ComplianceAlertEmailParams } from './templates/compliance-alert';
 import { logger } from '@/utils/logger';
 import { appConfig } from '@/config/app.config';
+import { prisma } from '@/lib/prisma/client';
 
 /**
  * High-level mailer service
@@ -105,9 +106,13 @@ export class MailerService {
   ): Promise<void> {
     const { html, text, subject } = generatePolicyReadyEmail(params);
 
-    // Get user email from database if not provided
-    // This is a placeholder - you'll implement this based on your user lookup
-    const userEmail = await this.getUserEmail(params.name);
+    const userEmail = await this.resolveRecipientEmail({
+      to: params.to,
+      email: params.email,
+      userId: params.userId,
+      nameOrEmail: params.name,
+      policyId: params.policyId,
+    });
 
     const options: EmailOptions = {
       to: userEmail,
@@ -149,8 +154,12 @@ export class MailerService {
   async sendComplianceAlertEmail(params: ComplianceAlertEmailParams): Promise<void> {
     const { html, text, subject } = generateComplianceAlertEmail(params);
 
-    // Get user email from database if not provided
-    const userEmail = await this.getUserEmail(params.name);
+    const userEmail = await this.resolveRecipientEmail({
+      to: params.to,
+      email: params.email,
+      userId: params.userId,
+      nameOrEmail: params.name,
+    });
 
     const options: EmailOptions = {
       to: userEmail,
@@ -321,24 +330,51 @@ export class MailerService {
   }
 
   /**
-   * Get user email from database
-   * Placeholder - implement based on your user lookup logic
-   * @param nameOrId User name or ID
-   * @returns User email
+   * Resolve the intended recipient without falling back to placeholder addresses.
    */
-  private async getUserEmail(nameOrId: string): Promise<string> {
-    // TODO: Implement actual user lookup from database
-    // For now, return a placeholder
-    // In production, you would:
-    // const user = await prisma.user.findFirst({ where: { name: nameOrId } });
-    // return user.email;
-    
-    logger.warn({
-      type: 'getUserEmail_not_implemented',
-      nameOrId,
+  private async resolveRecipientEmail(args: {
+    to?: string;
+    email?: string;
+    userId?: string;
+    nameOrEmail?: string;
+    policyId?: string;
+  }): Promise<string> {
+    const direct = args.to ?? args.email;
+    if (direct && direct.trim().length > 0) return direct.trim().toLowerCase();
+
+    if (args.userId) {
+      const user = await prisma.user.findUnique({
+        where: { id: args.userId },
+        select: { email: true, accountStatus: true },
+      });
+      if (user?.email && user.accountStatus !== 'cancelled') return user.email;
+    }
+
+    if (args.policyId) {
+      const policy = await prisma.policy.findUnique({
+        where: { id: args.policyId },
+        select: { user: { select: { email: true, accountStatus: true } } },
+      });
+      if (policy?.user?.email && policy.user.accountStatus !== 'cancelled') {
+        return policy.user.email;
+      }
+    }
+
+    if (args.nameOrEmail?.includes('@')) {
+      const user = await prisma.user.findUnique({
+        where: { email: args.nameOrEmail.trim().toLowerCase() },
+        select: { email: true, accountStatus: true },
+      });
+      if (user?.email && user.accountStatus !== 'cancelled') return user.email;
+    }
+
+    logger.error({
+      type: 'email_recipient_resolution_failed',
+      userId: args.userId,
+      policyId: args.policyId,
+      hasDirectRecipient: Boolean(direct),
     });
-    
-    return 'user@example.com'; // Placeholder
+    throw new Error('Unable to resolve intended email recipient');
   }
 }
 

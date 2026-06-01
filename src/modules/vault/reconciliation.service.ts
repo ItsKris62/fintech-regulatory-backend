@@ -10,6 +10,7 @@ import { logger } from '@/utils/logger';
 import { vaultS3Client, vaultStorageConfig } from '@/lib/storage/client';
 import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { acquireLock } from '@/lib/redis-lock';
+import { computeObjectContentHash } from '@/lib/storage/content-hash';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -33,6 +34,8 @@ export interface ReconciliationStats {
   r2OrphansDeleted: number;
   r2OrphansSkippedYoung: number;
   dbOrphans: number;
+  hashMismatches: number;
+  hashesVerified: number;
   errors: number;
   durationMs: number;
   dryRun: boolean;
@@ -58,6 +61,10 @@ interface DbScanParams {
 function isDryRun(): boolean {
   // Default ON: process must explicitly set VAULT_RECONCILIATION_DRY_RUN=false
   return process.env.VAULT_RECONCILIATION_DRY_RUN !== 'false';
+}
+
+function shouldVerifyHashes(): boolean {
+  return process.env.VAULT_RECONCILIATION_VERIFY_HASHES === 'true';
 }
 
 function isR2NotFound(err: unknown): boolean {
@@ -179,6 +186,8 @@ interface DbScanRow {
   storageKey: string;
   r2Bucket: string | null;
   organizationId: string;
+  contentHash: string | null;
+  fileSize: number;
   createdAt: Date;
 }
 
@@ -197,6 +206,8 @@ async function scanDbAndIdentifyOrphans(params: DbScanParams): Promise<void> {
         storageKey: true,
         r2Bucket: true,
         organizationId: true,
+        contentHash: true,
+        fileSize: true,
         createdAt: true,
       },
       orderBy: { id: 'asc' },
@@ -219,7 +230,31 @@ async function scanDbAndIdentifyOrphans(params: DbScanParams): Promise<void> {
                 Key: row.storageKey,
               }),
             );
-            // Object present -- healthy
+            if (shouldVerifyHashes() && row.contentHash) {
+              const hashResult = await computeObjectContentHash({
+                s3Client: vaultS3Client,
+                bucket: row.r2Bucket ?? bucket,
+                key: row.storageKey,
+                expectedSize: row.fileSize,
+                context: {
+                  organizationId: row.organizationId,
+                  documentId: row.id,
+                },
+              });
+              stats.hashesVerified++;
+              if (hashResult.hash !== row.contentHash) {
+                stats.hashMismatches++;
+                logger.error({
+                  type: 'vault.reconciliation.hash_mismatch',
+                  runId,
+                  documentId: row.id,
+                  storageKey: row.storageKey,
+                  organizationId: row.organizationId,
+                  expectedHash: row.contentHash,
+                  actualHash: hashResult.hash,
+                });
+              }
+            }
           } catch (err: unknown) {
             if (isR2NotFound(err)) {
               stats.dbOrphans++;
@@ -282,6 +317,8 @@ export async function runVaultReconciliation(): Promise<ReconciliationStats> {
     r2OrphansDeleted: 0,
     r2OrphansSkippedYoung: 0,
     dbOrphans: 0,
+    hashMismatches: 0,
+    hashesVerified: 0,
     errors: 0,
     durationMs: 0,
     dryRun,

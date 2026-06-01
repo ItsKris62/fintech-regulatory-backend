@@ -74,6 +74,10 @@ const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().min(1, 'R2_SECRET_ACCESS_KEY is required'),
   R2_BUCKET_NAME: z.string().default('sheriabot-documents'),
   R2_PUBLIC_URL: z.string().url('R2_PUBLIC_URL must be a valid URL'),
+  MALWARE_SCAN_ENABLED: z.coerce.boolean().default(false),
+  CLAMAV_HOST: z.string().optional(),
+  CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
+  CLAMAV_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
 
   // -- Rate Limiting --------------------------------------------------------
   RATE_LIMIT_MAX: z.string().default('100').transform(Number).pipe(z.number().positive()),
@@ -87,6 +91,8 @@ const envSchema = z.object({
   // When true (default), the nightly cron logs orphans but does not delete.
   // Flip to false after reviewing 2 nights of dry-run logs.
   VAULT_RECONCILIATION_DRY_RUN: z.coerce.boolean().default(true).optional(),
+  VAULT_RECONCILIATION_VERIFY_HASHES: z.coerce.boolean().default(false).optional(),
+  VAULT_DELETED_RETENTION_DAYS: z.coerce.number().int().positive().default(30).optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

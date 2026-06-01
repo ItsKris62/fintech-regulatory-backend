@@ -481,6 +481,18 @@ export const authRouter = router({
               message: getAuthErrorMessage(AUTH_ERROR_CODES.ACCOUNT_PENDING_APPROVAL),
             });
           }
+          if (status === 'suspended') {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Your account has been suspended.',
+            });
+          }
+          if (status === 'cancelled') {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'This account has been cancelled.',
+            });
+          }
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: getAuthErrorMessage(AUTH_ERROR_CODES.ACCOUNT_NOT_ACTIVE),

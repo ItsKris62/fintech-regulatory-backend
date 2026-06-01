@@ -338,7 +338,7 @@ class AdminModule {
 
     await prisma.user.update({
       where: { id: userId },
-      data: { status: 'SUSPENDED' },
+      data: { status: 'SUSPENDED', accountStatus: 'suspended' },
     });
 
     // Invalidate all sessions
@@ -356,7 +356,7 @@ class AdminModule {
 
     await prisma.user.update({
       where: { id: userId },
-      data: { status: 'ACTIVE' },
+      data: { status: 'ACTIVE', accountStatus: 'active' },
     });
 
     await this.writeAuditLog(adminId, 'admin_reactivate_user', 'User', userId, {});
@@ -371,7 +371,12 @@ class AdminModule {
     // Soft delete  -  anonymize after 30 days
     await prisma.user.update({
       where: { id: userId },
-      data: { status: 'SUSPENDED', email: `deleted_${userId}@sheriabot.internal` },
+      data: {
+        status: 'SUSPENDED',
+        accountStatus: 'cancelled',
+        email: `deleted_${userId}@sheriabot.internal`,
+        deletedAt: new Date(),
+      },
     });
 
     await this.writeAuditLog(adminId, 'admin_delete_user', 'User', userId, { reason });
@@ -600,7 +605,7 @@ class AdminModule {
     // Suspend all org members
     await prisma.user.updateMany({
       where: { organizationId: orgId },
-      data: { status: 'SUSPENDED' },
+      data: { status: 'SUSPENDED', accountStatus: 'suspended' },
     });
 
     await this.writeAuditLog(adminId, 'admin_suspend_org', 'Organization', orgId, { reason });
@@ -621,8 +626,8 @@ class AdminModule {
     });
 
     await prisma.user.updateMany({
-      where: { organizationId: orgId, status: 'SUSPENDED' },
-      data: { status: 'ACTIVE' },
+      where: { organizationId: orgId, status: 'SUSPENDED', accountStatus: 'suspended' },
+      data: { status: 'ACTIVE', accountStatus: 'active' },
     });
 
     await this.writeAuditLog(adminId, 'admin_reactivate_org', 'Organization', orgId, {});

@@ -55,6 +55,9 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  CLAMAV_HOST: z.string().optional(),
+  CLAMAV_PORT: z.string().default('3310').transform(Number).pipe(z.number().int().min(1).max(65535)),
+  CLAMAV_TIMEOUT_MS: z.string().default('30000').transform(Number).pipe(z.number().int().positive()),
 
   // Feature flags
   // Set to 'true' to route compliance queries through the agentic orchestrator
@@ -137,6 +140,11 @@ export const appConfig = {
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
   malwareScanEnabled: env.MALWARE_SCAN_ENABLED,
+  clamav: {
+    host: env.CLAMAV_HOST,
+    port: env.CLAMAV_PORT,
+    timeoutMs: env.CLAMAV_TIMEOUT_MS,
+  },
 
   // Feature flags
   features: {

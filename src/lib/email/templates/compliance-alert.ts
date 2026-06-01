@@ -4,6 +4,9 @@ import { emailConfig } from '@/config/email.config';
  * Compliance alert email template parameters
  */
 export interface ComplianceAlertEmailParams {
+  to?: string;
+  email?: string;
+  userId?: string;
   name: string;
   alertTitle: string;
   alertType: 'NEW_REGULATION' | 'REGULATION_CHANGE' | 'DEADLINE' | 'VIOLATION_RISK';

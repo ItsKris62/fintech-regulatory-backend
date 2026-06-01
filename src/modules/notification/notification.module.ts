@@ -453,6 +453,8 @@ class NotificationModule {
 
     for (const user of users) {
       await mailer.sendPolicyReadyEmail({
+        email: user.email,
+        userId: user.id,
         name: user.fullName,
         policyTitle: policyData.policyTitle,
         policyId: '',

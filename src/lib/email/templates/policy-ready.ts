@@ -4,6 +4,9 @@ import { emailConfig } from '@/config/email.config';
  * Policy ready email template parameters
  */
 export interface PolicyReadyEmailParams {
+  to?: string;
+  email?: string;
+  userId?: string;
   name: string;
   policyTitle: string;
   policyId: string;

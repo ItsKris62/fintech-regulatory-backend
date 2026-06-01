@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
@@ -7,6 +8,10 @@ import { redis } from '@/lib/redis/client';
 import { storageService } from '@/lib/storage/storage.service';
 import { vaultS3Client, vaultStorageConfig } from '@/lib/storage/client';
 import { computeObjectContentHash } from '@/lib/storage/content-hash';
+import {
+  assertVaultUploadScanningConfigured,
+  scanVaultObjectForMalware,
+} from '@/lib/security/malware-scanner';
 import {
   ALLOWED_VAULT_MIME_TYPES,
   MIME_TO_EXTENSION,
@@ -316,6 +321,59 @@ async function deletePendingUpload(documentId: string): Promise<void> {
   }
 }
 
+async function writeVaultAuditLog(args: {
+  userId: string;
+  action: string;
+  documentId: string;
+  organizationId: string;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        userId: args.userId,
+        action: args.action,
+        entityType: 'VaultDocument',
+        entityId: args.documentId,
+        metadata: {
+          organizationId: args.organizationId,
+          ...(args.metadata ?? {}),
+        },
+      },
+    });
+  } catch (error: unknown) {
+    logger.warn({
+      type: 'vault.audit_log_failed',
+      action: args.action,
+      documentId: args.documentId,
+      error: sanitizeErrorMessage(error),
+    });
+  }
+}
+
+async function deleteRejectedVaultObject(args: {
+  key: string;
+  bucket: string;
+  documentId: string;
+}): Promise<void> {
+  try {
+    await vaultS3Client.send(new DeleteObjectCommand({ Bucket: args.bucket, Key: args.key }));
+    logger.warn({
+      type: 'vault.rejected_object.deleted',
+      documentId: args.documentId,
+      key: args.key,
+      bucket: args.bucket,
+    });
+  } catch (error: unknown) {
+    logger.error({
+      type: 'vault.rejected_object.delete_failed',
+      documentId: args.documentId,
+      key: args.key,
+      error: sanitizeErrorMessage(error),
+    });
+  }
+}
+
 async function verifyVaultObjectBeforeConfirm(pendingUpload: PendingVaultUpload): Promise<{
   verifiedSize: number;
   verifiedMime: string;
@@ -510,6 +568,7 @@ class VaultModule {
       });
     }
     const uploadRequest = parsed.data;
+    assertVaultUploadScanningConfigured();
 
     // Enforce per-tier single-file limits first (cheap, synchronous)
     assertTierUploadLimits(params.plan, params.declaredMimeType, params.declaredSize);
@@ -627,6 +686,39 @@ class VaultModule {
       });
     }
 
+    const scanResult = await scanVaultObjectForMalware({
+      key: pendingUpload.storageKey,
+      bucket: pendingUpload.bucket,
+      organizationId: pendingUpload.organizationId,
+      documentId: pendingUpload.documentId,
+    });
+
+    if (scanResult.status === 'infected') {
+      await deletePendingUpload(pendingUpload.documentId);
+      await deleteRejectedVaultObject({
+        key: pendingUpload.storageKey,
+        bucket: pendingUpload.bucket,
+        documentId: pendingUpload.documentId,
+      });
+      await prisma.auditLog.create({
+        data: {
+          userId: pendingUpload.uploaderId,
+          action: 'vault_upload_quarantined_malware',
+          entityType: 'VaultDocument',
+          entityId: pendingUpload.documentId,
+          metadata: {
+            organizationId: pendingUpload.organizationId,
+            storageKey: pendingUpload.storageKey,
+            signature: scanResult.signature ?? null,
+          },
+        },
+      }).catch(() => undefined);
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Upload rejected by malware scanning.',
+      });
+    }
+
     const doc = await prisma.vaultDocument.create({
       data: {
         id: pendingUpload.documentId,
@@ -651,6 +743,21 @@ class VaultModule {
     });
 
     await deletePendingUpload(pendingUpload.documentId);
+    await writeVaultAuditLog({
+      userId: pendingUpload.uploaderId,
+      action: 'vault_upload_confirmed',
+      documentId: doc.id,
+      organizationId: pendingUpload.organizationId,
+      metadata: {
+        storageKey: pendingUpload.storageKey,
+        bucket: pendingUpload.bucket,
+        contentHash,
+        scanStatus: scanResult.status,
+        scanEngine: scanResult.engine,
+        fileSize: verified.verifiedSize,
+        fileType: verified.verifiedMime,
+      },
+    });
 
     logger.info({
       type: 'vault.upload.confirmed',
@@ -924,6 +1031,13 @@ class VaultModule {
     await prisma.vaultDocument.update({
       where: { id: params.documentId },
       data: { isArchived: true, deletedAt: new Date(), uploadStatus: 'DELETED' },
+    });
+    await writeVaultAuditLog({
+      userId: params.userId,
+      action: 'vault_document_deleted',
+      documentId: params.documentId,
+      organizationId: orgId,
+      metadata: { storageKey: existing.storageKey },
     });
 
     logger.info({
@@ -1254,6 +1368,35 @@ class VaultModule {
       });
     }
 
+    const scanResult = await scanVaultObjectForMalware({
+      key: replacementPending.storageKey,
+      bucket: replacementPending.bucket,
+      organizationId: replacementPending.organizationId,
+      documentId: replacementPending.documentId,
+    });
+
+    if (scanResult.status === 'infected') {
+      await deleteRejectedVaultObject({
+        key: replacementPending.storageKey,
+        bucket: replacementPending.bucket,
+        documentId: replacementPending.documentId,
+      });
+      await writeVaultAuditLog({
+        userId: params.userId,
+        action: 'vault_replacement_quarantined_malware',
+        documentId: params.documentId,
+        organizationId: orgId,
+        metadata: {
+          storageKey: replacementPending.storageKey,
+          signature: scanResult.signature ?? null,
+        },
+      });
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Replacement rejected by malware scanning.',
+      });
+    }
+
     const updated = await prisma.vaultDocument.update({
       where: { id: params.documentId },
       data: {
@@ -1271,6 +1414,19 @@ class VaultModule {
         uploadStatus: 'VERIFIED',
       },
       select: VAULT_DOCUMENT_SELECT,
+    });
+    await writeVaultAuditLog({
+      userId: params.userId,
+      action: 'vault_document_replaced',
+      documentId: params.documentId,
+      organizationId: orgId,
+      metadata: {
+        storageKey: params.storageKey,
+        contentHash,
+        scanStatus: scanResult.status,
+        scanEngine: scanResult.engine,
+        fileSize: verified.verifiedSize,
+      },
     });
 
     logger.info({
