@@ -625,6 +625,19 @@ class VaultModule {
       declaredSize: uploadRequest.declaredSize,
       declaredMimeType: uploadRequest.declaredMimeType,
     });
+    await writeVaultAuditLog({
+      userId: params.userId,
+      action: 'vault_upload_url_issued',
+      documentId,
+      organizationId: orgId,
+      metadata: {
+        storageKey,
+        bucket,
+        declaredSize: uploadRequest.declaredSize,
+        declaredMimeType: uploadRequest.declaredMimeType,
+        expiresInSeconds: uploadExpirySeconds,
+      },
+    });
 
     return {
       uploadUrl: url,
@@ -700,19 +713,16 @@ class VaultModule {
         bucket: pendingUpload.bucket,
         documentId: pendingUpload.documentId,
       });
-      await prisma.auditLog.create({
-        data: {
-          userId: pendingUpload.uploaderId,
-          action: 'vault_upload_quarantined_malware',
-          entityType: 'VaultDocument',
-          entityId: pendingUpload.documentId,
-          metadata: {
-            organizationId: pendingUpload.organizationId,
-            storageKey: pendingUpload.storageKey,
-            signature: scanResult.signature ?? null,
-          },
+      await writeVaultAuditLog({
+        userId: pendingUpload.uploaderId,
+        action: 'vault_upload_quarantined_malware',
+        documentId: pendingUpload.documentId,
+        organizationId: pendingUpload.organizationId,
+        metadata: {
+          storageKey: pendingUpload.storageKey,
+          signature: scanResult.signature ?? null,
         },
-      }).catch(() => undefined);
+      });
       throw new TRPCError({
         code: 'BAD_REQUEST',
         message: 'Upload rejected by malware scanning.',
@@ -908,6 +918,17 @@ class VaultModule {
       documentId: params.documentId,
       bucket,
       key: doc.storageKey,
+    });
+    await writeVaultAuditLog({
+      userId: params.userId,
+      action: 'vault_download_url_issued',
+      documentId: params.documentId,
+      organizationId: doc.organizationId,
+      metadata: {
+        storageKey: doc.storageKey,
+        bucket,
+        expiresInSeconds: downloadExpirySeconds,
+      },
     });
 
     return {
@@ -1270,6 +1291,19 @@ class VaultModule {
       userId: params.userId,
       organizationId: orgId,
       documentId: params.documentId,
+    });
+    await writeVaultAuditLog({
+      userId: params.userId,
+      action: 'vault_replacement_upload_url_issued',
+      documentId: params.documentId,
+      organizationId: orgId,
+      metadata: {
+        storageKey,
+        previousStorageKey: existing.storageKey,
+        declaredSize: params.fileSize,
+        declaredMimeType: params.fileType,
+        expiresInSeconds: uploadExpirySeconds,
+      },
     });
 
     return {

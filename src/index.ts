@@ -9,6 +9,7 @@ import { connectionManager } from './lib/connection-manager';
 import { errorTracker } from './lib/error-tracker';
 import { warmCaches } from './lib/cache-warming';
 import { storageConfig } from './config/storage.config';
+import { appConfig } from './config/app.config';
 import { aiJobRunner } from './modules/ai-jobs/ai-job-runner';
 import type { FastifyInstance } from 'fastify';
 
@@ -47,6 +48,8 @@ function registerShutdownHandlers(app: FastifyInstance): void {
       process.exit(0);
     } catch (error) {
       logger.error({ type: 'server_shutdown_error', error });
+      Sentry.captureException(error);
+      await Sentry.close(2000);
       process.exit(1);
     }
   };
@@ -99,11 +102,10 @@ const start = async () => {
     logger.warn({
       type: 'malware_scan_startup_state',
       enabled: storageConfig.security.malwareScan,
-      scannerWired: false,
+      scannerWired: Boolean(appConfig.clamav.host),
       effectivePolicy: storageConfig.security.malwareScan
-        ? 'enabled_no_scanner_will_fail_uploads'
+        ? 'enabled_vault_uploads_scan_with_clamav'
         : 'disabled_uploads_will_skip_scanning',
-      note: 'Pilot phase: real scanner (ClamAV) scheduled for Sprint 2',
     });
 
     await app.listen({ port, host });
@@ -142,6 +144,8 @@ const start = async () => {
       error: error.message,
       stack: error.stack,
     });
+    Sentry.captureException(error);
+    await Sentry.close(2000);
     console.error('Failed to start server:', error.message);
     process.exit(1);
   }

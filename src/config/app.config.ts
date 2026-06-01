@@ -129,6 +129,16 @@ function validateEnv() {
 
 const env = validateEnv();
 
+if (
+  env.NODE_ENV !== 'development' &&
+  env.NODE_ENV !== 'test' &&
+  (!env.MALWARE_SCAN_ENABLED || !env.CLAMAV_HOST)
+) {
+  throw new Error(
+    'Startup blocked: vault malware scanning must be enabled with CLAMAV_HOST outside development/test.',
+  );
+}
+
 /**
  * Application configuration object
  * All app settings centralized and typed

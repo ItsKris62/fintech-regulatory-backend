@@ -271,16 +271,6 @@ export const requireMemberRole = (allowedRoles: MemberRole[]) =>
   });
 
 /**
- * Fraction of successful grants to write to AuditLog.
- * Env var: AUDIT_GRANT_SAMPLE_RATE  (float 0-1, default 0.10 for pilot).
- * Drop to 0.01 post-pilot by setting the env var; no code change required.
- */
-const AUDIT_GRANT_SAMPLE_RATE = Math.min(
-  1,
-  Math.max(0, parseFloat(process.env['AUDIT_GRANT_SAMPLE_RATE'] ?? '0.10')),
-);
-
-/**
  * Verifies the authenticated user holds an ACTIVE OrganizationMember row for
  * their session-scoped organization (ctx.user.organizationId). Attaches the
  * membership record to ctx.orgMembership for downstream handlers and role checks.
@@ -289,7 +279,7 @@ const AUDIT_GRANT_SAMPLE_RATE = Math.min(
  *   - Caches the DB check in Redis with a 60-second TTL
  *   - Rate-limits repeated authorization denials (10 per 60s, fail-closed)
  *   - Uses structured authorization event logging
- *   - Writes every denial to AuditLog (100%); samples grants at AUDIT_GRANT_SAMPLE_RATE
+ *   - Writes every denial and grant to AuditLog (100%)
  *   - Attaches ctx.orgMembership typed as OrgMembershipEntry
  *
  * Security: failures always throw FORBIDDEN, never NOT_FOUND, so callers
@@ -394,21 +384,18 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
     });
   }
 
-  // Sampled grant logging - rate controlled by AUDIT_GRANT_SAMPLE_RATE env var.
-  if (Math.random() < AUDIT_GRANT_SAMPLE_RATE) {
-    logger.info({ type: 'authorization.granted', userId, organizationId, role: entry.role });
-    void prisma.auditLog.create({
-      data: {
-        userId,
-        action:     'authorization.granted',
-        entityType: 'Organization',
-        entityId:   organizationId,
-        metadata:   { role: entry.role },
-        ipAddress:  ipAddr,
-        userAgent:  ua,
-      },
-    }).catch(() => {});
-  }
+  logger.info({ type: 'authorization.granted', userId, organizationId, role: entry.role });
+  void prisma.auditLog.create({
+    data: {
+      userId,
+      action:     'authorization.granted',
+      entityType: 'Organization',
+      entityId:   organizationId,
+      metadata:   { role: entry.role },
+      ipAddress:  ipAddr,
+      userAgent:  ua,
+    },
+  }).catch(() => {});
 
   return next({ ctx: { ...ctx, orgMembership: entry } });
 });

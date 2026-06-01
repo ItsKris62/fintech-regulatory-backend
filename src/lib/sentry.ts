@@ -62,6 +62,24 @@ export function isClientOrExpectedError(error: unknown): boolean {
   return false;
 }
 
+export function sanitizeHeadersForSentry(headers: Record<string, unknown>): Record<string, unknown> {
+  const redactedHeaders = new Set([
+    'authorization',
+    'cookie',
+    'set-cookie',
+    'x-api-key',
+    'x-supabase-auth',
+    'x-forwarded-for',
+  ]);
+
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [
+      key,
+      redactedHeaders.has(key.toLowerCase()) ? '[Redacted]' : value,
+    ]),
+  );
+}
+
 /**
  * Initialize Sentry for the Fastify/Node backend server.
  * Should be imported and invoked at the absolute top of index.ts (immediately after dotenv/config).

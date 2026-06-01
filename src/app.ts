@@ -30,7 +30,7 @@ import {
 } from './lib/intasend/webhook-verifier';
 import { hashIp } from './utils/request-identifiers';
 import * as Sentry from '@sentry/node';
-import { isClientOrExpectedError } from './lib/sentry';
+import { isClientOrExpectedError, sanitizeHeadersForSentry } from './lib/sentry';
 
 /**
  * Zod schema for IntaSend webhook payloads.
@@ -658,7 +658,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         },
         extra: {
           ip: request.ip,
-          headers: request.headers,
+          headers: sanitizeHeadersForSentry(request.headers),
         },
       });
     }
