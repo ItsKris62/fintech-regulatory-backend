@@ -42,6 +42,12 @@ export const GapItemSchema = z.object({
   regulatoryDeadline: z.string().optional(),
   /** Post-hoc verification: true if regulatoryBasis was found in the legal corpus. */
   citationVerified: z.boolean().optional(),
+  verificationStatus: z.enum(['verified', 'unverified', 'not_checked']).optional(),
+  sourceDocumentTitle: z.string().optional(),
+  sourceSection: z.string().optional(),
+  sourceSnippet: z.string().optional(),
+  authorityStatus: z.string().optional(),
+  isBinding: z.boolean().optional(),
 });
 
 export const FrameworkResultSchema = z.object({

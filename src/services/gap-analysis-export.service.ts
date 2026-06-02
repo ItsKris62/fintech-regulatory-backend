@@ -130,6 +130,12 @@ function s(v: string | undefined | null): string {
   return v ?? '';
 }
 
+function verificationLabel(gap: GapItem): string {
+  if (gap.verificationStatus === 'verified') return '[✓ Verified]';
+  if (gap.verificationStatus === 'unverified') return '[⚠ Unverified]';
+  return '[? Not checked]';
+}
+
 /** Heading 1 paragraph using the override style. */
 function h1(text: string): Paragraph {
   return new Paragraph({ text, heading: HeadingLevel.HEADING_1 });
@@ -567,7 +573,7 @@ function buildMainSection(params: DocxExportParams): object {
               cell(String(gi + 1),                    GAP_COL_WIDTHS[0], { bg, centered: true }),
               cell(gap.title,                         GAP_COL_WIDTHS[1], { bg, bold: true, size: 18 }),
               cell(gap.severity,                      GAP_COL_WIDTHS[2], { bg: severityBg(gap.severity), bold: true, color: severityColor(gap.severity), centered: true }),
-              cell(`${gap.regulatoryBasis}${(gap as Record<string, unknown>).citationVerified === true ? ' [\u2713 Verified]' : ' [\u26A0 Unverified]'}`, GAP_COL_WIDTHS[3], { bg }),
+              cell(`${gap.regulatoryBasis} ${verificationLabel(gap)}`, GAP_COL_WIDTHS[3], { bg }),
               cell(gap.policyCurrentState,            GAP_COL_WIDTHS[4], { bg }),
               cell(gap.recommendation,                GAP_COL_WIDTHS[5], { bg }),
               evidenceCell(gap.evidenceRequired ?? [], GAP_COL_WIDTHS[6]),
@@ -894,7 +900,6 @@ class GapAnalysisExportService {
       sections: [
         buildCoverSection(params),
         buildMainSection(params),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ] as unknown as any,
     });
 

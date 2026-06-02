@@ -13,8 +13,9 @@ import {
   getSuggestedQueriesSchema,
   recordSuggestionClickSchema,
 } from '../schemas/compliance.schema';
-import { searchAndGetContext } from '@/lib/rag/rag.service';
+import { searchAndGetContext, type SearchResult } from '@/lib/rag/rag.service';
 import { complianceModule } from '@/modules/compliance';
+import type { AcceptedChunkRef } from '@/modules/compliance/orchestrator/types';
 import { logger } from '@/utils/logger';
 import { incrementTrialUsage } from '@/modules/trial';
 import { prisma } from '@/lib/prisma/client';
@@ -27,6 +28,77 @@ import { checklistExportService } from '@/services/checklist-export.service';
 import { complianceQueryExportService } from '@/services/complianceQueryExport.service';
 import { storageService } from '@/lib/storage/storage.service';
 import { GapAnalysisResultSchema } from '@/lib/ai/prompts/gap-analysis';
+
+type CitationVerificationStatus = 'verified' | 'unverified' | 'not_checked';
+
+type ComplianceCitation = {
+  documentId: string | null;
+  documentTitle: string;
+  section: string;
+  textSnippet: string;
+  score: number;
+  citation: string | null;
+  authorityStatus: string;
+  isBinding: boolean;
+  source: string | null;
+  version: string | null;
+  verified: boolean;
+  verificationStatus: CitationVerificationStatus;
+};
+
+function buildCitationFromSearchResult(
+  source: SearchResult,
+  verificationStatus: CitationVerificationStatus = 'not_checked',
+): ComplianceCitation {
+  return {
+    documentId: source.documentId ?? null,
+    documentTitle: source.documentTitle || 'Unknown',
+    section: source.section || '',
+    textSnippet: (source.chunkText || '').slice(0, 500),
+    score: source.score ?? 0,
+    citation: source.citation ?? null,
+    authorityStatus: source.authorityStatus ?? 'IN_FORCE',
+    isBinding: source.isBinding ?? true,
+    source: source.source ?? null,
+    version: source.version ?? null,
+    verified: verificationStatus === 'verified',
+    verificationStatus,
+  };
+}
+
+function buildAcceptedCitations(
+  acceptedChunkIds: unknown,
+  ragResults: SearchResult[],
+): ComplianceCitation[] {
+  const acceptedRefs = Array.isArray(acceptedChunkIds)
+    ? (acceptedChunkIds as AcceptedChunkRef[])
+    : [];
+
+  return acceptedRefs.map((ref) => {
+    const match =
+      ragResults.find(
+        (r) => r.documentId === ref.documentId && (r.section ?? '') === (ref.section ?? ''),
+      ) ??
+      ragResults.find((r) => r.documentId === ref.documentId);
+
+    return match
+      ? buildCitationFromSearchResult(match, 'verified')
+      : {
+          documentId: ref.documentId,
+          documentTitle: ref.documentTitle || 'Unknown',
+          section: ref.section ?? '',
+          textSnippet: '',
+          score: 0,
+          citation: null,
+          authorityStatus: 'IN_FORCE',
+          isBinding: true,
+          source: null,
+          version: null,
+          verified: true,
+          verificationStatus: 'verified' as const,
+        };
+  });
+}
 
 /**
  * Compliance Router
@@ -80,22 +152,12 @@ export const complianceRouter = router({
         // Correct pattern for now: store RAG source references as JSON directly on
         // ComplianceQuery.citations (Json? column). This preserves full
         // auditability and AI explainability without FK dependencies.
-        const queryCitations = ragContext.results.map((source: any) => ({
-          documentId: source.documentId ?? null,
-          documentTitle: source.documentTitle || 'Unknown',
-          section: source.section || '',
-          textSnippet: (source.chunkText || '').slice(0, 500),
-          score: source.score ?? 0,
-          citation: source.citation ?? null,
-          authorityStatus: source.authorityStatus ?? 'IN_FORCE',
-          isBinding: source.isBinding ?? true,
-          source: source.source ?? null,
-          version: source.version ?? null,
-        }));
+        const queryCitations = ragContext.results.map((source: SearchResult) =>
+          buildCitationFromSearchResult(source, 'not_checked')
+        );
 
         // Guard: warn if RAG chunks are missing documentIds (ingestion gap)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const missingDocIds = queryCitations.filter((c: any) => !c.documentId).length;
+        const missingDocIds = queryCitations.filter((c: ComplianceCitation) => !c.documentId).length;
         if (missingDocIds > 0) {
           logger.warn({
             type: 'compliance_query_citations_missing_doc_ids',
@@ -163,6 +225,12 @@ export const complianceRouter = router({
             run?.verifierVerdict === 'PASS' ? 0.9 :
               run?.verifierVerdict === 'PARTIAL' ? 0.7 :
                 null;
+          const acceptedCitations = buildAcceptedCitations(run?.acceptedChunkIds, ragContext.results);
+
+          await ctx.prisma.complianceQuery.update({
+            where: { id: query.id },
+            data: { citations: acceptedCitations },
+          });
 
           logger.info({
             type: 'compliance_query_success',
@@ -170,7 +238,7 @@ export const complianceRouter = router({
             queryId: query.id,
             duration,
             tokensUsed: answer.inputTokens + answer.outputTokens,
-            citationsCount: queryCitations.length,
+            citationsCount: acceptedCitations.length,
             route,
             grounded,
             abstained,
@@ -181,7 +249,7 @@ export const complianceRouter = router({
           return {
             queryId: query.id,
             answer: answer.content,
-            citations: queryCitations,
+            citations: acceptedCitations,
             confidence,
             suggestedFollowUps: [],
             route,
@@ -304,18 +372,9 @@ export const complianceRouter = router({
         // Same citation pattern as the primary query mutation:
         // store RAG source references as JSON on ComplianceQuery, not in
         // the Citation table (which has a FK constraint to Policy.id).
-        const queryCitations = ragContext.results.map((source: any) => ({
-          documentId: source.documentId ?? null,
-          documentTitle: source.documentTitle || 'Unknown',
-          section: source.section || '',
-          textSnippet: (source.chunkText || '').slice(0, 500),
-          score: source.score ?? 0,
-          citation: source.citation ?? null,
-          authorityStatus: source.authorityStatus ?? 'IN_FORCE',
-          isBinding: source.isBinding ?? true,
-          source: source.source ?? null,
-          version: source.version ?? null,
-        }));
+        const queryCitations = ragContext.results.map((source: SearchResult) =>
+          buildCitationFromSearchResult(source, 'not_checked')
+        );
 
         // Save follow-up query with citations as JSON
         const query = await (ctx.prisma.complianceQuery.create as any)({
@@ -1615,6 +1674,7 @@ export const complianceRouter = router({
           userId: true,
           organizationId: true,
           createdAt: true,
+          citations: true,
         },
       });
 
@@ -1650,6 +1710,7 @@ export const complianceRouter = router({
         response: queryRecord.response,
         createdAt: queryRecord.createdAt,
         organizationName: orgName,
+        citations: Array.isArray(queryRecord.citations) ? queryRecord.citations : [],
       });
 
       // 6. Build sanitised filename

@@ -87,7 +87,17 @@ Example (note the blank lines surrounding the table):
 - Only cite laws that are actually in force in Kenya
 - If uncertain about a specific clause, state the uncertainty explicitly rather than guessing
 - Note where regulations are recently amended, pending, or under consultation
-- Distinguish obligations that apply to banks, MFBs, PSPs, and digital lenders respectively`;
+- Distinguish obligations that apply to banks, MFBs, PSPs, and digital lenders respectively
+
+## SOURCE ATTRIBUTION
+- Use ONLY the provided regulatory context for legal claims. Do not invent citations to documents not in the provided context.
+- Cite the document title and section for every substantive legal claim.
+- If the provided context is insufficient to fully answer the question, state this clearly: "The available regulatory corpus does not contain sufficient information on [topic]."
+- Distinguish between:
+  - Corpus-supported answers: claims backed by the retrieved regulatory evidence.
+  - Partial answers: where the context addresses some but not all aspects of the question.
+  - Unsupported claims: where no retrieved evidence supports the assertion — do not make these.
+- Never fabricate section numbers, clause references, or document titles.`;
 }
 
 /**
@@ -104,7 +114,7 @@ export function generateComplianceUserPrompt(params: ComplianceQueryParams): str
   if (context)          prompt += `\n\n**Additional Context:**\n${context}`;
 
   if (ragContext) {
-    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive claim. If a claim cannot be supported by the evidence below, say so explicitly rather than drawing on general knowledge.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every citation to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}\n`;
+    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive legal claim. If a claim cannot be supported by the evidence below, explicitly state that the corpus does not contain relevant provisions rather than drawing on general knowledge or fabricating citations.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every citation to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}\n`;
   }
 
   prompt += `
@@ -178,7 +188,7 @@ ${originalQuestion}
 ${originalAnswer}`;
 
   if (ragContext) {
-    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive claim. If a claim cannot be supported by the evidence below, say so explicitly rather than drawing on general knowledge.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every citation to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}`;
+    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive legal claim. If a claim cannot be supported by the evidence below, explicitly state that the corpus does not contain relevant provisions rather than drawing on general knowledge or fabricating citations.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every citation to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}`;
   }
 
   prompt += `\n\n## Follow-up Question\n${followUpQuestion}

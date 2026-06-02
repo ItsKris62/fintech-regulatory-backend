@@ -108,8 +108,6 @@ export const adminRouter = router({
         totalUsers,
         activeUsers,
         totalOrganizations,
-        totalPolicies,
-        completedPolicies,
         totalQueries,
         totalDocuments,
         storageUsed,
@@ -123,9 +121,6 @@ export const adminRouter = router({
           } as any,
         }),
         ctx.prisma.organization.count(),
-        // Policy and ComplianceQuery don't support soft delete  -  they use status fields instead
-        ctx.prisma.policy.count(),
-        ctx.prisma.policy.count({ where: { status: 'COMPLETED' } }),
         ctx.prisma.complianceQuery.count(),
         ctx.prisma.legalDocument.count({ where: { deletedAt: null } }),
         ctx.prisma.legalDocument.aggregate({
@@ -134,20 +129,43 @@ export const adminRouter = router({
         }),
       ]);
 
-      // Get recent activity
-      const recentPolicies = await ctx.prisma.policy.findMany({
-        take: 5,
-        orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          title: true,
-          status: true,
-          createdAt: true,
-          user: {
-            select: { fullName: true, email: true },
+      // Policy counts are wrapped in a separate try/catch to guard against
+      // schema drift (e.g. a missing column in the deployed DB). If the Policy
+      // table is unavailable the rest of the stats still return successfully.
+      let totalPolicies = 0;
+      let completedPolicies = 0;
+      try {
+        [totalPolicies, completedPolicies] = await Promise.all([
+          ctx.prisma.policy.count(),
+          ctx.prisma.policy.count({ where: { status: 'COMPLETED' } }),
+        ]);
+      } catch (policyErr: any) {
+        logger.warn({
+          type: 'admin_stats_policy_count_skipped',
+          userId: ctx.user!.id,
+          error: policyErr?.message ?? String(policyErr),
+        });
+      }
+
+      // Get recent activity — also guarded so a schema drift never crashes the whole endpoint.
+      let recentPolicies: any[] = [];
+      try {
+        recentPolicies = await ctx.prisma.policy.findMany({
+          take: 5,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            createdAt: true,
+            user: {
+              select: { fullName: true, email: true },
+            },
           },
-        },
-      });
+        });
+      } catch {
+        // schema drift — return empty array rather than crashing
+      }
 
       const recentQueries = await ctx.prisma.complianceQuery.findMany({
         take: 5,
@@ -178,7 +196,7 @@ export const adminRouter = router({
         policies: {
           total: totalPolicies,
           completed: completedPolicies,
-          generating: totalPolicies - completedPolicies,
+          generating: Math.max(0, totalPolicies - completedPolicies),
         },
         queries: {
           total: totalQueries,
@@ -1244,50 +1262,65 @@ export const adminRouter = router({
   getDetailedHealth: adminProcedure.query(async ({ ctx }) => {
     // All external probes must complete within this window.
     // If Upstash or Supabase hangs rather than throwing, the race rejects
-    // and the catch block returns a TRPCError immediately instead of hanging.
+    // and the catch block returns a degraded status instead of an unhandled 500.
     const HEALTH_PROBE_TIMEOUT_MS = 5000;
-    try {
-      const probeDeadline = new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error('Health check timed out after 5 s')),
-          HEALTH_PROBE_TIMEOUT_MS,
-        )
-      );
 
-      const [health, cacheStats, storageStats, connections] = await Promise.race([
-        Promise.all([
-          adminModule.getSystemHealth(),
-          adminModule.getCacheStats(),
-          adminModule.getStorageStats(),
-          adminModule.getActiveConnections(),
-        ]),
-        probeDeadline,
-      ]);
+    const safeProbe = async <T>(
+      name: string,
+      fn: () => Promise<T>,
+      fallback: T,
+    ): Promise<T> => {
+      try {
+        return await Promise.race([
+          fn(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`${name} probe timed out`)), HEALTH_PROBE_TIMEOUT_MS)
+          ),
+        ]);
+      } catch (err: any) {
+        logger.warn({
+          type: 'admin_health_probe_failed',
+          probe: name,
+          adminId: ctx.user!.id,
+          error: err?.message ?? String(err),
+        });
+        return fallback;
+      }
+    };
 
-      logger.info({
-        type: 'admin_detailed_health_check',
-        adminId: ctx.user!.id,
-      });
+    const fallbackHealth = {
+      status: 'degraded' as const,
+      services: {
+        database: { status: 'degraded' as const },
+        redis:    { status: 'degraded' as const },
+        pinecone: { status: 'degraded' as const },
+        storage:  { status: 'degraded' as const },
+      },
+      uptime: process.uptime(),
+      version: process.env.npm_package_version ?? '0.0.0',
+      checkedAt: new Date(),
+    };
 
-      return {
-        ...health,
-        cache: cacheStats,
-        storage: storageStats,
-        connections,
-      };
-    } catch (error: any) {
-      logger.error({
-        type: 'admin_detailed_health_error',
-        userId: ctx.user!.id,
-        error: error.message,
-      });
+    const [health, cacheStats, storageStats, connections] = await Promise.all([
+      safeProbe('systemHealth',      () => adminModule.getSystemHealth(),      fallbackHealth),
+      safeProbe('cacheStats',        () => adminModule.getCacheStats(),        null),
+      safeProbe('storageStats',      () => adminModule.getStorageStats(),      null),
+      safeProbe('activeConnections', () => adminModule.getActiveConnections(), null),
+    ]);
 
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: 'Failed to get system health details',
-        cause: error,
-      });
-    }
+    logger.info({
+      type: 'admin_detailed_health_check',
+      adminId: ctx.user!.id,
+      status: health.status,
+    });
+
+    // Always return OK or DEGRADED — never throw an unhandled 500 from this endpoint.
+    return {
+      ...health,
+      cache: cacheStats,
+      storage: storageStats,
+      connections,
+    };
   }),
 
   // --- INVITATION MANAGEMENT ------------------------------------------------

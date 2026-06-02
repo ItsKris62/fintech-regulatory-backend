@@ -43,6 +43,10 @@ export interface ComplianceSource {
   isBinding?: boolean;
   source?: string;
   version?: string;
+  /** Whether this source was confirmed from the RAG regulatory corpus. */
+  verified: boolean;
+  /** Verification status: "verified" = confirmed in corpus, "unverified" = not found, "not_checked" = verification not attempted. */
+  verificationStatus: 'verified' | 'unverified' | 'not_checked';
 }
 
 export interface EnhancedComplianceQueryOptions {
@@ -381,6 +385,8 @@ export async function enhancedComplianceQuery(
     isBinding: r.isBinding,
     source: r.source,
     version: r.version,
+    verified: true,
+    verificationStatus: 'verified' as const,
   }));
 
   const documentsFound = [...new Set(searchResults.map(r => r.documentTitle))];

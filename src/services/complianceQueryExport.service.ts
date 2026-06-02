@@ -47,6 +47,68 @@ function s(v: string | null | undefined): string {
     return v ?? '';
 }
 
+type VerificationStatus = 'verified' | 'unverified' | 'not_checked';
+
+type StoredCitation = {
+    documentTitle?: string | null;
+    title?: string | null;
+    source?: string | null;
+    section?: string | null;
+    textSnippet?: string | null;
+    content?: string | null;
+    score?: number | null;
+    relevanceScore?: number | null;
+    authorityStatus?: string | null;
+    isBinding?: boolean | null;
+    version?: string | null;
+    verificationStatus?: VerificationStatus | string | null;
+};
+
+type NormalizedCitation = {
+    documentTitle: string;
+    section: string;
+    textSnippet: string;
+    score: number;
+    authorityStatus: string;
+    isBinding: boolean;
+    version: string;
+    verificationStatus: VerificationStatus;
+};
+
+function normalizeCitation(raw: unknown): NormalizedCitation | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const citation = raw as StoredCitation;
+    const documentTitle = s(citation.documentTitle) || s(citation.title) || s(citation.source);
+    if (!documentTitle) return null;
+
+    const status = citation.verificationStatus === 'verified' ||
+        citation.verificationStatus === 'unverified' ||
+        citation.verificationStatus === 'not_checked'
+        ? citation.verificationStatus
+        : 'not_checked';
+
+    return {
+        documentTitle,
+        section: s(citation.section),
+        textSnippet: (s(citation.textSnippet) || s(citation.content)).slice(0, 500),
+        score: typeof citation.score === 'number'
+            ? citation.score
+            : typeof citation.relevanceScore === 'number'
+                ? citation.relevanceScore
+                : 0,
+        authorityStatus: s(citation.authorityStatus) || 'IN_FORCE',
+        isBinding: citation.isBinding ?? true,
+        version: s(citation.version),
+        verificationStatus: status,
+    };
+}
+
+function verificationLabel(status: VerificationStatus): string {
+    if (status === 'verified') return 'Verified';
+    if (status === 'unverified') return 'Unverified';
+    return 'Not checked';
+}
+
 function formatDate(d: Date): string {
     return d.toLocaleDateString('en-GB', {
         day: 'numeric',
@@ -343,6 +405,53 @@ function buildResponseSection(response: string): Paragraph[] {
     ];
 }
 
+function buildSourcesSection(citations: unknown[]): Paragraph[] {
+    const sources = citations
+        .map(normalizeCitation)
+        .filter((citation): citation is NormalizedCitation => citation !== null);
+
+    if (sources.length === 0) {
+        return [
+            pageBreak(),
+            h1('Sources / Citations'),
+            rule(C.emerald),
+            body('No source citations were stored for this query.', { italic: true }),
+        ];
+    }
+
+    const nodes: Paragraph[] = [
+        pageBreak(),
+        h1('Sources / Citations'),
+        rule(C.emerald),
+    ];
+
+    sources.forEach((citation, index) => {
+        const authorityParts = [
+            `Authority status: ${citation.authorityStatus.replace(/_/g, ' ')}`,
+            `Binding status: ${citation.isBinding ? 'Binding' : 'Non-binding'}`,
+        ];
+        if (citation.score > 0) {
+            authorityParts.push(`Relevance: ${Math.round(citation.score * 100)}%`);
+        }
+
+        nodes.push(
+            boldBody(`${index + 1}. ${citation.documentTitle}${citation.version ? ` (${citation.version})` : ''}`),
+            body(`Verification: ${verificationLabel(citation.verificationStatus)}`),
+            body(authorityParts.join(' | ')),
+        );
+
+        if (citation.section) {
+            nodes.push(body(`Section: ${citation.section}`));
+        }
+        if (citation.textSnippet) {
+            nodes.push(body(`Snippet: ${citation.textSnippet}`, { italic: true }));
+        }
+        nodes.push(new Paragraph({ spacing: { after: 120 } }));
+    });
+
+    return nodes;
+}
+
 function buildDisclaimerSection(): Paragraph[] {
     return [
         pageBreak(),
@@ -393,6 +502,7 @@ export interface ComplianceQueryExportParams {
     createdAt: Date;
     organizationName?: string;
     userName?: string;
+    citations?: unknown[];
 }
 
 // --- Main Export Function -----------------------------------------------------
@@ -407,9 +517,10 @@ class ComplianceQueryExportService {
         const coverNodes = buildCoverSection(params);
         const questionNodes = buildQuestionSection(params.question);
         const responseNodes = buildResponseSection(params.response);
+        const sourcesNodes = buildSourcesSection(params.citations ?? []);
         const disclaimerNodes = buildDisclaimerSection();
 
-        const allChildren = [...coverNodes, ...questionNodes, ...responseNodes, ...disclaimerNodes];
+        const allChildren = [...coverNodes, ...questionNodes, ...responseNodes, ...sourcesNodes, ...disclaimerNodes];
 
         const doc = new Document({
             styles: {
@@ -445,7 +556,6 @@ class ComplianceQueryExportService {
                     footers: {
                         default: buildFooter(),
                     },
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     children: allChildren as unknown as any[],
                 },
             ],

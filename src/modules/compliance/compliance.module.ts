@@ -31,11 +31,10 @@ import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
 import type { GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
 import type { GapAnalysisResult } from '@/lib/ai/prompts/gap-analysis';
+import type { SearchResult } from '@/lib/rag/rag.service';
 import { sanitizePolicyText, chunkPolicyText } from '@/lib/ai/prompts/gap-analysis';
 // pdf-parse and mammoth are CommonJS modules
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
 import {
   toComplianceQueryResult,
@@ -215,29 +214,48 @@ async function verifyCitationsAgainstCorpus(gapResults: GapAnalysisResult): Prom
     allGaps.map(async ({ citation }) => {
       try {
         const results = await ragService.search(citation, { topK: 3, minScore: 0.65 });
-        // Consider verified if at least one result is a strong match
-        return results.length > 0;
+        // Semantic retrieval is useful attribution context, but not exact legal provision verification.
+        return results[0] ?? null;
       } catch {
-        // Graceful failure: if search fails or times out, default to unverified
-        return false;
+        // Graceful failure: if search fails or times out, mark verification as not checked.
+        return undefined;
       }
     })
   );
 
   // Apply verification results back to the gap objects
   let verifiedCount = 0;
+  let notCheckedCount = 0;
   for (let i = 0; i < allGaps.length; i++) {
     const { frameworkIdx, gapIdx } = allGaps[i];
-    const verified = verificationResults[i];
-    gapResults.frameworks[frameworkIdx].gaps[gapIdx].citationVerified = verified;
-    if (verified) verifiedCount++;
+    const topResult = verificationResults[i] as SearchResult | null | undefined;
+    const gap = gapResults.frameworks[frameworkIdx].gaps[gapIdx];
+
+    if (topResult) {
+      gap.citationVerified = false;
+      gap.verificationStatus = 'not_checked';
+      gap.sourceDocumentTitle = topResult.documentTitle;
+      gap.sourceSection = topResult.section;
+      gap.sourceSnippet = topResult.chunkText?.slice(0, 300);
+      gap.authorityStatus = topResult.authorityStatus;
+      gap.isBinding = topResult.isBinding;
+      notCheckedCount++;
+    } else if (topResult === null) {
+      gap.citationVerified = false;
+      gap.verificationStatus = 'unverified';
+    } else {
+      gap.citationVerified = false;
+      gap.verificationStatus = 'not_checked';
+      notCheckedCount++;
+    }
   }
 
   logger.info({
     type: 'gap_analysis_citation_verification_complete',
     totalCitations: allGaps.length,
     verifiedCount,
-    unverifiedCount: allGaps.length - verifiedCount,
+    unverifiedCount: allGaps.length - verifiedCount - notCheckedCount,
+    notCheckedCount,
   });
 
   return gapResults;
@@ -1680,14 +1698,19 @@ Follow-up Question: ${followUp}
    */
   private extractCitationsFromRag(ragResults: any[]): any[] {
     return ragResults.map((result, index) => ({
-      id: `citation-${index}`,
-      source: result.source || 'Unknown',
-      title: result.title || '',
+      documentId: result.documentId ?? `citation-${index}`,
+      documentTitle: result.documentTitle || result.title || result.source || 'Unknown',
       section: result.section || '',
-      content: result.content?.slice(0, 500) || '',
-      url: result.url,
-      relevanceScore: result.score || 0.8,
+      textSnippet: (result.chunkText || result.content || '').slice(0, 500),
+      score: result.score || result.relevanceScore || 0,
+      citation: result.citation ?? null,
+      authorityStatus: result.authorityStatus ?? 'IN_FORCE',
+      isBinding: result.isBinding ?? true,
+      source: result.source ?? null,
+      version: result.version ?? null,
       regulatoryArea: result.regulatoryArea || 'CBK',
+      verified: false,
+      verificationStatus: 'not_checked' as const,
     }));
   }
 

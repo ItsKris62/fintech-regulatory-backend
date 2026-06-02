@@ -21,6 +21,7 @@ import {
   generateComplianceUserPrompt,
 } from '@/lib/ai/prompts/compliance-query';
 import type { OrgMembershipEntry } from '@/server/trpc/context';
+import type { AcceptedChunkRef } from '@/modules/compliance/orchestrator/types';
 
 // Constants
 const RATE_LIMIT_MAX     = 100; // same window as tRPC rateLimited('complianceQuery')
@@ -30,6 +31,77 @@ const USAGE_TTL_SECONDS  = 35 * 24 * 60 * 60; // 35 days (matches middleware)
 
 // Redis metric key segment; matches BillingMetric.COMPLIANCE_QUERIES enum value
 const METRIC_KEY = 'COMPLIANCE_QUERIES';
+
+type CitationVerificationStatus = 'verified' | 'unverified' | 'not_checked';
+
+type CitationRow = {
+  documentId:    string | null;
+  documentTitle: string;
+  section:       string;
+  textSnippet:   string;
+  score:         number;
+  citation:      string | null;
+  authorityStatus: string;
+  isBinding:     boolean;
+  source:        string | null;
+  version:       string | null;
+  verified:      boolean;
+  verificationStatus: CitationVerificationStatus;
+};
+
+function citationFromSearchResult(
+  source: SearchResult,
+  verificationStatus: CitationVerificationStatus = 'not_checked',
+): CitationRow {
+  return {
+    documentId:    source.documentId ?? null,
+    documentTitle: source.documentTitle || 'Unknown',
+    section:       source.section || '',
+    textSnippet:   (source.chunkText || '').slice(0, 500),
+    score:         source.score ?? 0,
+    citation:      source.citation ?? null,
+    authorityStatus: source.authorityStatus ?? 'IN_FORCE',
+    isBinding:     source.isBinding ?? true,
+    source:        source.source ?? null,
+    version:       source.version ?? null,
+    verified:      verificationStatus === 'verified',
+    verificationStatus,
+  };
+}
+
+function acceptedCitationsFromRun(
+  acceptedChunkIds: unknown,
+  ragResults: SearchResult[],
+): CitationRow[] {
+  const acceptedRefs = Array.isArray(acceptedChunkIds)
+    ? (acceptedChunkIds as AcceptedChunkRef[])
+    : [];
+
+  return acceptedRefs.map((ref): CitationRow => {
+    const match =
+      ragResults.find(
+        (r) => r.documentId === ref.documentId && (r.section ?? '') === (ref.section ?? ''),
+      ) ??
+      ragResults.find((r) => r.documentId === ref.documentId);
+
+    return match
+      ? citationFromSearchResult(match, 'verified')
+      : {
+          documentId:    ref.documentId,
+          documentTitle: ref.documentTitle || 'Unknown',
+          section:       ref.section ?? '',
+          textSnippet:   '',
+          score:         0,
+          citation:      null,
+          authorityStatus: 'IN_FORCE',
+          isBinding:     true,
+          source:        null,
+          version:       null,
+          verified:      true,
+          verificationStatus: 'verified',
+        };
+  });
+}
 
 // Input schema
 const inputSchema = z.object({
@@ -407,26 +479,6 @@ export async function registerComplianceStreamRoute(
         const agenticComplexityLevel =
           PLAN_ENTITLEMENTS[auth.plan as keyof typeof PLAN_ENTITLEMENTS]?.agenticComplexityLevel ?? 'simple';
 
-        // Citation shape mirrors the tRPC compliance.query mutation (queryCitations)
-        type CitationRow = {
-          documentId:    string | null;
-          documentTitle: string;
-          section:       string;
-          textSnippet:   string;
-          score:         number;
-          citation:      string | null;
-          authorityStatus: string;
-          isBinding:     boolean;
-          source:        string | null;
-          version:       string | null;
-        };
-        type AcceptedChunkRef = {
-          documentId: string;
-          documentTitle: string;
-          section?: string;
-          rank: number;
-        };
-
         let route: string             = 'simple';
         let grounded                  = ragContext.results.length > 0;
         let abstained                 = false;
@@ -464,45 +516,12 @@ export async function registerComplianceStreamRoute(
             abstained = route === 'abstain' || accepted === 0 || run.verifierVerdict === 'FAIL_ABSTAIN';
 
             // Build citations from verifier-accepted chunks only.
-            // Join AcceptedChunkRef with ragContext.results to recover text snippets.
-            const acceptedRefs = Array.isArray(run.acceptedChunkIds)
-              ? (run.acceptedChunkIds as unknown as AcceptedChunkRef[])
-              : [];
-            citations = acceptedRefs.map((ref): CitationRow => {
-              const match =
-                ragContext.results.find(
-                  (r) => r.documentId === ref.documentId && (r.section ?? '') === (ref.section ?? ''),
-                ) ??
-                ragContext.results.find((r) => r.documentId === ref.documentId);
-              return {
-                documentId:    ref.documentId,
-                documentTitle: ref.documentTitle,
-                section:       ref.section ?? '',
-                textSnippet:   match ? match.chunkText.slice(0, 500) : '',
-                score:         match?.score ?? 0,
-                citation:      match?.citation ?? null,
-                authorityStatus: match?.authorityStatus ?? 'IN_FORCE',
-                isBinding:     match?.isBinding ?? true,
-                source:        match?.source ?? null,
-                version:       match?.version ?? null,
-              };
-            });
+            citations = acceptedCitationsFromRun(run.acceptedChunkIds, ragContext.results);
           }
         } else {
-          // Legacy shadow path: include all RAG sources as citations (mirrors tRPC legacy path).
+          // Legacy shadow path: include RAG sources, but do not mark them verified.
           // Fire-and-forget; runId remains null, so frontend must disable "Tell us what's missing".
-          citations = ragContext.results.map((source: SearchResult): CitationRow => ({
-            documentId:    source.documentId ?? null,
-            documentTitle: source.documentTitle || 'Unknown',
-            section:       source.section || '',
-            textSnippet:   (source.chunkText || '').slice(0, 500),
-            score:         source.score ?? 0,
-            citation:      source.citation ?? null,
-            authorityStatus: source.authorityStatus ?? 'IN_FORCE',
-            isBinding:     source.isBinding ?? true,
-            source:        source.source ?? null,
-            version:       source.version ?? null,
-          }));
+          citations = ragContext.results.map((source) => citationFromSearchResult(source, 'not_checked'));
           runOrchestrator({
             complianceQueryId:      query.id,
             question:               input.question,
@@ -512,6 +531,11 @@ export async function registerComplianceStreamRoute(
             shadow:                 true,
           }).catch(() => {});
         }
+
+        await prisma.complianceQuery.update({
+          where: { id: query.id },
+          data:  { citations },
+        });
 
         write({ type: 'done', queryId: query.id, route, grounded, abstained, runId, citations, confidence });
 

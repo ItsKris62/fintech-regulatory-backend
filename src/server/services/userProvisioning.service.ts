@@ -1,7 +1,8 @@
-import { Prisma, SubscriptionPlan, SubscriptionStatus, UserRole } from '@prisma/client';
+import { MemberRole, MemberStatus, Prisma, SubscriptionPlan, SubscriptionStatus, UserRole } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma/client';
+import { redis } from '@/lib/redis/client';
 import { BadRequestError, OrganizationNotFoundError } from '@/utils/error';
 import { isPrismaForeignKeyError, sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { logger } from '@/utils/logger';
@@ -69,7 +70,7 @@ export interface CreateUserWithOrganizationResult {
   organization: ProvisionedOrganization | null;
 }
 
-type ProvisioningTransaction = Pick<typeof prisma, 'organization' | 'user' | 'auditLog' | 'pilotEvent'>;
+type ProvisioningTransaction = Pick<typeof prisma, 'organization' | 'user' | 'auditLog' | 'pilotEvent' | 'organizationMember'>;
 
 function getSubscriptionTier(input: CreateUserWithOrganizationInput): 'REGULATOR' | 'STARTUP' | 'BUSINESS' | 'ENTERPRISE' {
   if (input.subscriptionTier) {
@@ -171,6 +172,29 @@ export async function createUserWithOrganization(
         include: provisionedUserInclude,
       });
 
+      // -----------------------------------------------------------------------
+      // CRITICAL: Create OrganizationMember row so requireOrgMembership passes.
+      // Without this row every orgMemberProcedure call returns FORBIDDEN/no_membership.
+      // -----------------------------------------------------------------------
+      if (organization) {
+        await tx.organizationMember.upsert({
+          where: {
+            userId_organizationId: { userId: user.id, organizationId: organization.id },
+          },
+          create: {
+            userId: user.id,
+            organizationId: organization.id,
+            role: MemberRole.OWNER,
+            status: MemberStatus.ACTIVE,
+            invitedBy: input.adminId,
+          },
+          update: {
+            status: MemberStatus.ACTIVE,
+            role: MemberRole.OWNER,
+          },
+        });
+      }
+
       await tx.auditLog.create({
         data: {
           userId: input.adminId,
@@ -204,6 +228,13 @@ export async function createUserWithOrganization(
 
       return { user, organization: user.organization };
     });
+
+    // Invalidate Redis membership cache so the new row is visible immediately.
+    if (result.organization) {
+      await redis
+        .del(`sheriabot:orgmem:${result.user.id}:${result.organization.id}`)
+        .catch(() => {});
+    }
 
     createUserWithOrganizationOutputSchema.parse({
       user: result.user,
