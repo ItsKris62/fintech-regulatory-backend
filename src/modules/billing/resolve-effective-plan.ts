@@ -50,6 +50,7 @@ type CachedPlanCtx = {
   subscriptionCycleEnd: string | null; // ISO-8601
   isPilot: boolean;
   pilotExpiresAt: string | null;
+  pilotAccessStatus: string | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -72,6 +73,7 @@ function parseCachedPlanCtx(raw: unknown): CachedPlanCtx | null {
     subscriptionCycleEnd: typeof value['subscriptionCycleEnd'] === 'string' ? value['subscriptionCycleEnd'] : null,
     isPilot: value['isPilot'] === true,
     pilotExpiresAt: typeof value['pilotExpiresAt'] === 'string' ? value['pilotExpiresAt'] : null,
+    pilotAccessStatus: typeof value['pilotAccessStatus'] === 'string' ? value['pilotAccessStatus'] : null,
   };
 }
 
@@ -184,6 +186,7 @@ export async function resolveEffectivePlan(input: {
   let subscriptionCycleEnd: string | null = null;
   let isPilot = false;
   let pilotExpiresAt: string | null = null;
+  let pilotAccessStatus: string | null = null;
   let fromCache = false;
   let userFullName = '';
   let userEmail = input.userEmail ?? '';
@@ -203,6 +206,7 @@ export async function resolveEffectivePlan(input: {
       subscriptionCycleEnd = cached.subscriptionCycleEnd;
       isPilot = cached.isPilot;
       pilotExpiresAt = cached.pilotExpiresAt;
+      pilotAccessStatus = cached.pilotAccessStatus;
       fromCache = true;
     }
   } catch {
@@ -220,6 +224,7 @@ export async function resolveEffectivePlan(input: {
         fullName: true,
         isPilot: true,
         pilotExpiresAt: true,
+        pilotAccessStatus: true,
       },
     });
 
@@ -230,6 +235,7 @@ export async function resolveEffectivePlan(input: {
     trialExpiresAt = userRow?.freeTrialExpiresAt?.toISOString() ?? null;
     isPilot = userRow?.isPilot ?? false;
     pilotExpiresAt = userRow?.pilotExpiresAt?.toISOString() ?? null;
+    pilotAccessStatus = (userRow as any)?.pilotAccessStatus ?? null;
 
     if (input.organizationId) {
       const org = await input.prisma.organization.findUnique({
@@ -268,6 +274,7 @@ export async function resolveEffectivePlan(input: {
         subscriptionCycleEnd,
         isPilot,
         pilotExpiresAt,
+        pilotAccessStatus,
       } satisfies CachedPlanCtx),
       { ex: PLAN_CACHE_TTL },
     ).catch(() => { /* non-fatal */ });
@@ -424,8 +431,14 @@ export async function resolveEffectivePlan(input: {
 
   let pilotEffectivePlan: EffectivePlan | null = null;
   let pilotState: PilotContextState | null = null;
-  if (isPilot && pilotExpiresAt !== null) {
-    if (new Date(pilotExpiresAt) <= now) {
+  if (isPilot && pilotExpiresAt !== null && pilotAccessStatus !== 'REVOKED' && pilotAccessStatus !== 'CONVERTED') {
+    if (new Date(pilotExpiresAt) <= now || pilotAccessStatus === 'EXPIRED') {
+      if (pilotAccessStatus !== 'EXPIRED') {
+        await input.prisma.user.update({
+          where: { id: input.userId },
+          data: { pilotAccessStatus: 'EXPIRED' } as any,
+        }).catch(() => {});
+      }
       try { await input.redis.del(cacheKey); } catch { /* non-fatal */ }
       logger.info({
         type: 'PILOT_EXPIRED_GATE',

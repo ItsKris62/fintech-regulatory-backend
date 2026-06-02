@@ -48,11 +48,28 @@ const systemAvailable = middleware(async ({ ctx, next }) => {
   return next();
 });
 
+const PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
+  'auth.me',
+  'auth.logout',
+  'auth.changeTemporaryPassword',
+]);
+
+const passwordChangeComplete = middleware(async ({ ctx, path, next }) => {
+  if (!ctx.user?.mustChangePassword || PASSWORD_CHANGE_ALLOWED_PATHS.has(path)) {
+    return next();
+  }
+
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: 'Password change required before accessing SheriaBot.',
+  });
+});
+
 /**
  * Protected Procedure
  * Requires a valid JWT. Guarantees ctx.user is User (non-null) in downstream handlers.
  */
-export const protectedProcedure = publicProcedure.use(isAuthenticated).use(systemAvailable);
+export const protectedProcedure = publicProcedure.use(isAuthenticated).use(passwordChangeComplete).use(systemAvailable);
 
 // --- Role-Specific Procedures ---
 

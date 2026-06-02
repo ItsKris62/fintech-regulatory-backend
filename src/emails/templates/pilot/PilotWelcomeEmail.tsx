@@ -9,6 +9,8 @@ export interface PilotWelcomeEmailProps {
   organization:    string;
   pilotExpiresAt:  string; // ISO date string
   dashboardUrl:    string;
+  temporaryPassword?: string;
+  temporaryPasswordExpiresAt?: string;
 }
 
 export function PilotWelcomeEmail({
@@ -16,10 +18,17 @@ export function PilotWelcomeEmail({
   organization,
   pilotExpiresAt,
   dashboardUrl,
+  temporaryPassword,
+  temporaryPasswordExpiresAt,
 }: PilotWelcomeEmailProps) {
   const expiryDate = new Date(pilotExpiresAt).toLocaleDateString('en-KE', {
     year: 'numeric', month: 'long', day: 'numeric',
   });
+  const temporaryPasswordExpiry = temporaryPasswordExpiresAt
+    ? new Date(temporaryPasswordExpiresAt).toLocaleString('en-KE', {
+        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      })
+    : null;
 
   const features: Array<{ label: string; description: string }> = [
     { label: 'Compliance Checklist Generator', description: 'Generate a tailored regulatory checklist in minutes' },
@@ -42,6 +51,20 @@ export function PilotWelcomeEmail({
         Your <strong>full Enterprise-tier access</strong> is active until{' '}
         <strong>{expiryDate}</strong>. Here's what to explore first:
       </Text>
+
+      {temporaryPassword && (
+        <Section style={styles.credentialBox}>
+          <Text style={styles.credentialLabel}>Temporary password</Text>
+          <Text style={styles.credentialValue}>{temporaryPassword}</Text>
+          <Text style={styles.securityNote}>
+            This temporary password expires in 1 hour{temporaryPasswordExpiry ? ` (${temporaryPasswordExpiry})` : ''}.
+            You will be required to change your password immediately after login.
+          </Text>
+          <Text style={styles.securityNote}>
+            Do not share this password. If it expires, contact your SheriaBot administrator for a new invitation.
+          </Text>
+        </Section>
+      )}
 
       <Section style={styles.featureBox}>
         {features.map(({ label, description }) => (
@@ -69,7 +92,7 @@ export function PilotWelcomeEmail({
   );
 }
 
-export const PilotWelcomeEmailSubject = 'Welcome to the SheriaBot Pilot — your access is live';
+export const PilotWelcomeEmailSubject = 'Your SheriaBot AI Pilot Access';
 
 const styles: Record<string, React.CSSProperties> = {
   greeting: {
@@ -122,5 +145,33 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: '1.5',
     textAlign: 'center',
     margin: '0',
+  },
+  credentialBox: {
+    backgroundColor: EMAIL_THEME.colors.warningBg,
+    border: `1px solid ${EMAIL_THEME.colors.border}`,
+    borderRadius: '6px',
+    padding: '16px 18px',
+    margin: '0 0 20px',
+  },
+  credentialLabel: {
+    color: EMAIL_THEME.colors.textSecondary,
+    fontSize: '12px',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    margin: '0 0 8px',
+  },
+  credentialValue: {
+    color: EMAIL_THEME.colors.text,
+    fontFamily: 'monospace',
+    fontSize: '18px',
+    fontWeight: '700',
+    letterSpacing: '0',
+    margin: '0 0 10px',
+  },
+  securityNote: {
+    color: EMAIL_THEME.colors.textSecondary,
+    fontSize: '13px',
+    lineHeight: '1.5',
+    margin: '0 0 8px',
   },
 };

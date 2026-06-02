@@ -15,7 +15,7 @@ import {
 
 import { appConfig } from '@/config/app.config';
 import { redis } from '@/lib/redis/client';
-import { hashPassword } from '@/utils/helpers';
+import { hashPassword, verifyPassword } from '@/utils/helpers';
 import { authRateLimiter, rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { hashIp, revokedBearerTokenKey } from '@/utils/request-identifiers';
@@ -499,6 +499,33 @@ export const authRouter = router({
           });
         }
 
+        if ((user as any).mustChangePassword) {
+          const temporaryPasswordExpiresAt = (user as any).temporaryPasswordExpiresAt as Date | null | undefined;
+          if (temporaryPasswordExpiresAt && temporaryPasswordExpiresAt <= new Date()) {
+            await supabaseAdmin.auth.admin.signOut(authData.user.id).catch(() => {});
+            await ctx.prisma.auditLog.create({
+              data: {
+                userId: user.id,
+                action: 'PILOT_TEMP_PASSWORD_EXPIRED_LOGIN_ATTEMPT',
+                entityType: 'User',
+                entityId: user.id,
+                ipAddress: ctx.req.ip || undefined,
+                userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
+                metadata: { temporaryPasswordExpiresAt: temporaryPasswordExpiresAt.toISOString() },
+              },
+            }).catch(() => {});
+            logger.warn({
+              type: 'pilot_temp_password_expired_login_attempt',
+              userId: user.id,
+              email: maskEmail(user.email),
+            });
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Your temporary password has expired. Please contact the administrator for a new invitation.',
+            });
+          }
+        }
+
         let dbSessionId: string | undefined;
         try {
           const session = await ctx.prisma.session.create({
@@ -528,6 +555,7 @@ export const authRouter = router({
           role: user.role,
           organizationId: user.organizationId ?? undefined,
           supabaseAuthId: authData.user.id,
+          mustChangePassword: (user as any).mustChangePassword === true,
           sessionId: dbSessionId,
           sessionExpiresAt,
         };
@@ -586,6 +614,7 @@ export const authRouter = router({
             name: user.fullName,
             role: user.role,
             emailVerified: user.emailVerified,
+            mustChangePassword: (user as any).mustChangePassword === true,
             organization: user.organization,
             createdAt: user.createdAt,
           },
@@ -720,12 +749,123 @@ export const authRouter = router({
         preferences: (user as any).preferences,
         createdAt: user.createdAt,
         lastLoginAt: user.lastLoginAt,
+        mustChangePassword: (user as any).mustChangePassword === true,
       };
     } catch (error: any) {
       if (error instanceof TRPCError) throw error;
       throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to fetch user data', cause: error });
     }
   }),
+
+  changeTemporaryPassword: protectedProcedure
+    .input(z.object({
+      currentPassword: z.string().min(1, 'Current temporary password is required'),
+      newPassword: z.string().min(1, 'New password is required'),
+      confirmPassword: z.string().min(1, 'Please confirm your new password'),
+    }).refine((data) => data.newPassword === data.confirmPassword, {
+      message: 'New password and confirmation do not match',
+      path: ['confirmPassword'],
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const rateCheck = await rateLimiter.check(ctx.user!.id, 'change-temporary-password', 5, 900, { failClosed: true });
+      enforceRateLimit(rateCheck, 'Too many password change attempts. Please try again later.');
+
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: ctx.user!.id },
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          password: true,
+          supabaseAuthId: true,
+          mustChangePassword: true,
+          temporaryPasswordExpiresAt: true,
+        },
+      });
+
+      if (!user) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
+      }
+
+      if (!(user as any).mustChangePassword) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Temporary password change is not required for this account.' });
+      }
+
+      const expiresAt = (user as any).temporaryPasswordExpiresAt as Date | null;
+      if (expiresAt && expiresAt <= new Date()) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Your temporary password has expired. Please contact the administrator for a new invitation.',
+        });
+      }
+
+      if (!user.password || !(await verifyPassword(input.currentPassword, user.password))) {
+        throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Current temporary password is incorrect.' });
+      }
+
+      if (input.currentPassword === input.newPassword) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'New password must be different from the temporary password.' });
+      }
+
+      const systemConfig = await loadSystemConfig();
+      const pwValidation = validatePassword(input.newPassword, user.email, {
+        minLength: Number(systemConfig.passwordMinLength ?? 10),
+      });
+      if (!pwValidation.isValid) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: pwValidation.errors[0] });
+      }
+
+      const hashed = await hashPassword(input.newPassword);
+      await ctx.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          password: hashed,
+          mustChangePassword: false,
+          temporaryPasswordUsedAt: new Date(),
+          temporaryPasswordDeliveryStatus: 'USED',
+          updatedAt: new Date(),
+        } as any,
+      });
+
+      if ((user as any).supabaseAuthId) {
+        const { error: supabaseUpdateError } = await supabaseAdmin.auth.admin.updateUserById(
+          (user as any).supabaseAuthId,
+          { password: input.newPassword },
+        );
+        if (supabaseUpdateError) {
+          logger.error({
+            type: 'pilot_temp_password_supabase_update_failed',
+            userId: user.id,
+            error: supabaseUpdateError.message,
+          });
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update password. Please try again.' });
+        }
+
+        await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch(() => {});
+      }
+      await redis.del(lastSeenKey(user.id)).catch(() => {});
+      await redis.del(sessionStartKey(user.id)).catch(() => {});
+
+      await ctx.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'PILOT_TEMP_PASSWORD_CHANGE_COMPLETED',
+          entityType: 'User',
+          entityId: user.id,
+          ipAddress: ctx.req.ip || undefined,
+          userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
+          metadata: { completedAt: new Date().toISOString() },
+        },
+      }).catch(() => {});
+
+      reactMailer.sendPasswordChangedEmail(user.email, {
+        userName: user.fullName || user.email,
+        loginUrl: `${appConfig.frontendUrl}/login`,
+      }).catch(() => {});
+
+      logger.info({ type: 'pilot_temp_password_change_completed', userId: user.id });
+      return { success: true, message: 'Password changed successfully.' };
+    }),
 
   /**
    * Request password reset  -  F4.2 (complete rewrite).

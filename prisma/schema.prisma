@@ -23,6 +23,13 @@ model User {
   emailVerificationExpiry DateTime?
   passwordResetToken      String?                          @unique
   passwordResetExpiry     DateTime?
+  mustChangePassword      Boolean                          @default(false)
+  temporaryPasswordExpiresAt DateTime?
+  temporaryPasswordIssuedAt DateTime?
+  temporaryPasswordUsedAt DateTime?
+  temporaryPasswordCreatedByAdminId String?
+  temporaryPasswordDeliveryStatus String?
+  temporaryPasswordVersion Int                              @default(0)
   organizationId          String?
   lastLoginAt             DateTime?
   lastLoginIp             String?
@@ -67,6 +74,12 @@ model User {
   pilotCohort        String? // e.g. "PILOT_COHORT_001"
   pilotStartedAt     DateTime?
   pilotExpiresAt     DateTime?
+  pilotAccessStatus  String              @default("ACTIVE") // ACTIVE | EXPIRED | CONVERTED | REVOKED
+  pilotFirstExtensionGrantedAt DateTime?
+  pilotSecondExtensionGrantedAt DateTime?
+  pilotExtensionCount Int                @default(0)
+  pilotCreatedByAdminId String?
+  pilotLastExtendedByAdminId String?
   postPilotTier      String              @default("REGULATOR") // tier to revert to after pilot expires
   pilotConvertedAt   DateTime? // set when pilot converts to a paid plan
   pilotEvents        PilotEvent[]

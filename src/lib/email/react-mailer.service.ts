@@ -173,6 +173,7 @@ async function sendReactEmail(opts: {
   element: React.ReactElement;
   tags?: Array<{ name: string; value: string }>;
   logType: string;
+  throwOnFailure?: boolean;
 }): Promise<void> {
   try {
     const [html, text] = await Promise.all([
@@ -194,6 +195,9 @@ async function sendReactEmail(opts: {
         to: opts.to,
         error: result.error,
       });
+      if (opts.throwOnFailure) {
+        throw new Error(result.error ?? `${opts.logType} failed`);
+      }
     }
   } catch (error: unknown) {
     // Email failures must never crash the application
@@ -203,6 +207,9 @@ async function sendReactEmail(opts: {
       to: opts.to,
       error: errorMessage,
     });
+    if (opts.throwOnFailure) {
+      throw error;
+    }
   }
 }
 
@@ -550,6 +557,7 @@ class ReactMailerService {
       element: React.createElement(PilotWelcomeEmail, props),
       tags: [{ name: 'category', value: 'pilot' }, { name: 'type', value: 'pilot_welcome' }],
       logType: 'pilot_welcome_email',
+      throwOnFailure: true,
     });
   }
 

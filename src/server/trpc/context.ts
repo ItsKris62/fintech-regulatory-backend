@@ -36,6 +36,7 @@ export interface User {
   organizationId?: string;
   sessionId?: string;
   supabaseAuthId: string; // Supabase auth.users UUID (= JWT sub)
+  mustChangePassword?: boolean;
   /** Unix ms timestamp of Session.expiresAt  -  enforced on every request (B6). */
   sessionExpiresAt?: number;
 }
@@ -201,6 +202,7 @@ export async function createContext({
             role: true,
             organizationId: true,
             supabaseAuthId: true,
+            mustChangePassword: true,
           },
         });
 
@@ -217,6 +219,7 @@ export async function createContext({
             role: dbUser.role,
             organizationId: dbUser.organizationId ?? undefined,
             supabaseAuthId: dbUser.supabaseAuthId,
+            mustChangePassword: dbUser.mustChangePassword,
             sessionId: activeSession?.id,
             sessionExpiresAt: activeSession?.expiresAt.getTime(),
           };

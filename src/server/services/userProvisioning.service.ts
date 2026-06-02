@@ -41,9 +41,32 @@ export const createUserWithOrganizationInputSchema = z.object({
   supabaseAuthId: z.string().trim().min(1),
   adminId: z.string().trim().min(1),
   requestId: z.string().trim().min(1),
+  passwordHash: z.string().trim().min(1).optional(),
+  mustChangePassword: z.boolean().default(false),
+  temporaryPasswordExpiresAt: z.date().optional(),
+  temporaryPasswordIssuedAt: z.date().optional(),
+  temporaryPasswordDeliveryStatus: z.string().trim().min(1).optional(),
 });
 
-export type CreateUserWithOrganizationInput = z.infer<typeof createUserWithOrganizationInputSchema>;
+export interface CreateUserWithOrganizationInput {
+  email: string;
+  fullName: string;
+  role?: 'REGULATOR' | 'STARTUP' | 'ENTERPRISE' | 'ADMIN';
+  subscriptionTier?: 'REGULATOR' | 'STARTUP' | 'BUSINESS' | 'ENTERPRISE';
+  isPilot?: boolean;
+  organizationId?: string;
+  organizationName?: string;
+  supabaseAuthId: string;
+  adminId: string;
+  requestId: string;
+  passwordHash?: string;
+  mustChangePassword?: boolean;
+  temporaryPasswordExpiresAt?: Date;
+  temporaryPasswordIssuedAt?: Date;
+  temporaryPasswordDeliveryStatus?: string;
+}
+
+type ParsedCreateUserWithOrganizationInput = z.infer<typeof createUserWithOrganizationInputSchema>;
 
 const provisionedUserInclude = {
   organization: { select: { id: true, name: true, subscriptionTier: true, plan: true } },
@@ -72,7 +95,7 @@ export interface CreateUserWithOrganizationResult {
 
 type ProvisioningTransaction = Pick<typeof prisma, 'organization' | 'user' | 'auditLog' | 'pilotEvent' | 'organizationMember'>;
 
-function getSubscriptionTier(input: CreateUserWithOrganizationInput): 'REGULATOR' | 'STARTUP' | 'BUSINESS' | 'ENTERPRISE' {
+function getSubscriptionTier(input: ParsedCreateUserWithOrganizationInput): 'REGULATOR' | 'STARTUP' | 'BUSINESS' | 'ENTERPRISE' {
   if (input.subscriptionTier) {
     return input.subscriptionTier;
   }
@@ -86,7 +109,7 @@ function getPilotExpiresAt(now: Date): Date {
 
 async function resolveOrganization(
   tx: ProvisioningTransaction,
-  input: CreateUserWithOrganizationInput,
+  input: ParsedCreateUserWithOrganizationInput,
 ): Promise<ProvisionedOrganization | null> {
   if (input.organizationId) {
     const organization = await tx.organization.findUnique({
@@ -159,12 +182,21 @@ export async function createUserWithOrganization(
           accountStatus: 'active',
           status: 'ACTIVE',
           organizationId: organization?.id ?? null,
+          password: input.passwordHash,
+          mustChangePassword: input.mustChangePassword,
+          temporaryPasswordExpiresAt: input.temporaryPasswordExpiresAt,
+          temporaryPasswordIssuedAt: input.temporaryPasswordIssuedAt,
+          temporaryPasswordCreatedByAdminId: input.temporaryPasswordIssuedAt ? input.adminId : undefined,
+          temporaryPasswordDeliveryStatus: input.temporaryPasswordDeliveryStatus,
           isPilot: input.isPilot,
           ...(input.isPilot
             ? {
                 pilotCohort: DEFAULT_PILOT_COHORT,
                 pilotStartedAt: now,
                 pilotExpiresAt: getPilotExpiresAt(now),
+                pilotAccessStatus: 'ACTIVE',
+                pilotExtensionCount: 0,
+                pilotCreatedByAdminId: input.adminId,
                 postPilotTier: 'REGULATOR',
               }
             : {}),
@@ -206,6 +238,8 @@ export async function createUserWithOrganization(
             role: user.role,
             organizationId: user.organizationId,
             isPilot: user.isPilot,
+            mustChangePassword: input.mustChangePassword,
+            temporaryPasswordExpiresAt: input.temporaryPasswordExpiresAt?.toISOString() ?? null,
           },
         },
       });
