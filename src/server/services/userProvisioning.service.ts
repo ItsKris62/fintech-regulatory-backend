@@ -227,6 +227,26 @@ export async function createUserWithOrganization(
         });
       }
 
+      if (input.isPilot && organization) {
+        await (tx as any).pilotAccess.create({
+          data: {
+            userId: user.id,
+            organizationId: organization.id,
+            status: 'ACTIVE',
+            entitlementProfile: 'PILOT_FULL',
+            startsAt: now,
+            expiresAt: user.pilotExpiresAt ?? getPilotExpiresAt(now),
+            extensionCount: 0,
+            createdByAdminId: input.adminId,
+            metadata: {
+              source: 'userProvisioning.service',
+              requestId: input.requestId,
+              legacyUserPilotFieldsSynced: true,
+            },
+          },
+        });
+      }
+
       await tx.auditLog.create({
         data: {
           userId: input.adminId,

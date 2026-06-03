@@ -1,7 +1,12 @@
 import { PaymentProvider, Prisma, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import type { Redis } from '@upstash/redis';
 import type { prisma as prismaSingleton } from '@/lib/prisma/client';
-import type { EffectivePlan } from '@/types/plan.types';
+import type {
+  EffectivePlan,
+  EffectivePlanSource,
+  PilotEntitlementProfile,
+  PilotPlanState,
+} from '@/types/plan.types';
 import type { TrialContextState } from '@/modules/trial/trial.types';
 import { logger } from '@/utils/logger';
 import { appConfig } from '@/config/app.config';
@@ -15,12 +20,16 @@ import {
   EMPTY_TRIAL_USAGE,
   TrialUsageSchema,
 } from '@/modules/trial/trial.types';
+import { resolvePilotEntitlementProfile } from '@/config/entitlements.config';
 
 const PLAN_CACHE_TTL = 300;
 
 export interface PilotContextState {
   isPilot: boolean;
   expiresAt: string | null;
+  status?: PilotPlanState['status'];
+  entitlementProfile?: PilotEntitlementProfile;
+  extensionCount?: number;
 }
 
 export interface ResolvedEffectivePlan {
@@ -31,6 +40,8 @@ export interface ResolvedEffectivePlan {
   gracePeriodEndsAt: string | null;
   trialState: TrialContextState | undefined;
   pilotState: PilotContextState | null;
+  source: EffectivePlanSource;
+  entitlementProfile: PilotEntitlementProfile | null;
   fromCache: boolean;
 }
 
@@ -51,6 +62,11 @@ type CachedPlanCtx = {
   isPilot: boolean;
   pilotExpiresAt: string | null;
   pilotAccessStatus: string | null;
+  pilotAccessId: string | null;
+  pilotAccessExpiresAt: string | null;
+  pilotAccessStatusModel: string | null;
+  pilotEntitlementProfile: string | null;
+  pilotExtensionCount: number | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -74,6 +90,11 @@ function parseCachedPlanCtx(raw: unknown): CachedPlanCtx | null {
     isPilot: value['isPilot'] === true,
     pilotExpiresAt: typeof value['pilotExpiresAt'] === 'string' ? value['pilotExpiresAt'] : null,
     pilotAccessStatus: typeof value['pilotAccessStatus'] === 'string' ? value['pilotAccessStatus'] : null,
+    pilotAccessId: typeof value['pilotAccessId'] === 'string' ? value['pilotAccessId'] : null,
+    pilotAccessExpiresAt: typeof value['pilotAccessExpiresAt'] === 'string' ? value['pilotAccessExpiresAt'] : null,
+    pilotAccessStatusModel: typeof value['pilotAccessStatusModel'] === 'string' ? value['pilotAccessStatusModel'] : null,
+    pilotEntitlementProfile: typeof value['pilotEntitlementProfile'] === 'string' ? value['pilotEntitlementProfile'] : null,
+    pilotExtensionCount: typeof value['pilotExtensionCount'] === 'number' ? value['pilotExtensionCount'] : null,
   };
 }
 
@@ -187,6 +208,11 @@ export async function resolveEffectivePlan(input: {
   let isPilot = false;
   let pilotExpiresAt: string | null = null;
   let pilotAccessStatus: string | null = null;
+  let pilotAccessId: string | null = null;
+  let pilotAccessExpiresAt: string | null = null;
+  let pilotAccessStatusModel: string | null = null;
+  let pilotEntitlementProfile: string | null = null;
+  let pilotExtensionCount: number | null = null;
   let fromCache = false;
   let userFullName = '';
   let userEmail = input.userEmail ?? '';
@@ -207,6 +233,11 @@ export async function resolveEffectivePlan(input: {
       isPilot = cached.isPilot;
       pilotExpiresAt = cached.pilotExpiresAt;
       pilotAccessStatus = cached.pilotAccessStatus;
+      pilotAccessId = cached.pilotAccessId;
+      pilotAccessExpiresAt = cached.pilotAccessExpiresAt;
+      pilotAccessStatusModel = cached.pilotAccessStatusModel;
+      pilotEntitlementProfile = cached.pilotEntitlementProfile;
+      pilotExtensionCount = cached.pilotExtensionCount;
       fromCache = true;
     }
   } catch {
@@ -238,18 +269,35 @@ export async function resolveEffectivePlan(input: {
     pilotAccessStatus = (userRow as any)?.pilotAccessStatus ?? null;
 
     if (input.organizationId) {
-      const org = await input.prisma.organization.findUnique({
-        where: { id: input.organizationId },
-        select: {
-          plan: true,
-          customLimits: true,
-          subscriptionStatus: true,
-          gracePeriodEndsAt: true,
-          preferredPaymentMethod: true,
-          mpesaNextPaymentDueDate: true,
-          subscriptionCycleEnd: true,
-        },
-      });
+      const [org, access] = await Promise.all([
+        input.prisma.organization.findUnique({
+          where: { id: input.organizationId },
+          select: {
+            plan: true,
+            customLimits: true,
+            subscriptionStatus: true,
+            gracePeriodEndsAt: true,
+            preferredPaymentMethod: true,
+            mpesaNextPaymentDueDate: true,
+            subscriptionCycleEnd: true,
+          },
+        }),
+        (input.prisma as any).pilotAccess.findFirst({
+          where: {
+            userId: input.userId,
+            organizationId: input.organizationId,
+            status: 'ACTIVE',
+          },
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            status: true,
+            entitlementProfile: true,
+            expiresAt: true,
+            extensionCount: true,
+          },
+        }).catch(() => null),
+      ]);
 
       orgPlan = org?.plan ?? SubscriptionPlan.REGULATOR;
       customLimits = org?.customLimits ?? null;
@@ -258,6 +306,11 @@ export async function resolveEffectivePlan(input: {
       preferredPaymentMethod = org?.preferredPaymentMethod ?? null;
       mpesaNextPaymentDueDate = org?.mpesaNextPaymentDueDate?.toISOString() ?? null;
       subscriptionCycleEnd = org?.subscriptionCycleEnd?.toISOString() ?? null;
+      pilotAccessId = access?.id ?? null;
+      pilotAccessExpiresAt = access?.expiresAt?.toISOString() ?? null;
+      pilotAccessStatusModel = access?.status ?? null;
+      pilotEntitlementProfile = access?.entitlementProfile ?? null;
+      pilotExtensionCount = access?.extensionCount ?? null;
     }
 
     await input.redis.set(
@@ -275,6 +328,11 @@ export async function resolveEffectivePlan(input: {
         isPilot,
         pilotExpiresAt,
         pilotAccessStatus,
+        pilotAccessId,
+        pilotAccessExpiresAt,
+        pilotAccessStatusModel,
+        pilotEntitlementProfile,
+        pilotExtensionCount,
       } satisfies CachedPlanCtx),
       { ex: PLAN_CACHE_TTL },
     ).catch(() => { /* non-fatal */ });
@@ -429,51 +487,11 @@ export async function resolveEffectivePlan(input: {
     }
   }
 
-  let pilotEffectivePlan: EffectivePlan | null = null;
-  let pilotState: PilotContextState | null = null;
-  if (isPilot && pilotExpiresAt !== null && pilotAccessStatus !== 'REVOKED' && pilotAccessStatus !== 'CONVERTED') {
-    if (new Date(pilotExpiresAt) <= now || pilotAccessStatus === 'EXPIRED') {
-      if (pilotAccessStatus !== 'EXPIRED') {
-        await input.prisma.user.update({
-          where: { id: input.userId },
-          data: { pilotAccessStatus: 'EXPIRED' } as any,
-        }).catch(() => {});
-      }
-      try { await input.redis.del(cacheKey); } catch { /* non-fatal */ }
-      logger.info({
-        type: 'PILOT_EXPIRED_GATE',
-        userId: input.userId,
-        pilotExpiresAt,
-      });
-      pilotEffectivePlan = SubscriptionPlan.REGULATOR;
-      logger.info({
-        type: 'effective_plan_resolved_regulator',
-        userId: input.userId,
-        orgId: input.organizationId,
-        reason: 'pilot_expired',
-      });
-    } else {
-      const msRemaining = new Date(pilotExpiresAt).getTime() - now.getTime();
-      const daysRemaining = Math.max(0, Math.floor(msRemaining / (1000 * 60 * 60 * 24)));
-      logger.debug({
-        type: 'PILOT_ACTIVE_GATE',
-        userId: input.userId,
-        daysRemaining,
-        pilotExpiresAt,
-      });
-      pilotEffectivePlan = SubscriptionPlan.ENTERPRISE;
-      pilotState = { isPilot: true, expiresAt: pilotExpiresAt };
-      logger.info({
-        type: 'effective_plan_resolved_pilot',
-        userId: input.userId,
-        orgId: input.organizationId,
-        pilotExpiresAt,
-      });
-    }
-  }
-
   let effectivePlan: EffectivePlan = SubscriptionPlan.REGULATOR;
   let trialState: TrialContextState | undefined;
+  let pilotState: PilotContextState | null = null;
+  let source: EffectivePlanSource = 'FALLBACK';
+  let entitlementProfile: PilotEntitlementProfile | null = null;
 
   const hasPaidPlan =
     orgPlan !== SubscriptionPlan.REGULATOR &&
@@ -496,8 +514,54 @@ export async function resolveEffectivePlan(input: {
     });
   }
 
-  if (pilotEffectivePlan === null) {
-    if (subscriptionStatus === SubscriptionStatus.SUSPENDED) {
+  const hasActivePilotAccessRow =
+    pilotAccessStatusModel === 'ACTIVE' &&
+    pilotAccessExpiresAt !== null &&
+    new Date(pilotAccessExpiresAt) > now;
+
+  const hasLegacyActivePilotAccess =
+    pilotAccessId === null &&
+    isPilot &&
+    pilotExpiresAt !== null &&
+    pilotAccessStatus !== 'REVOKED' &&
+    pilotAccessStatus !== 'CONVERTED' &&
+    pilotAccessStatus !== 'EXPIRED' &&
+    new Date(pilotExpiresAt) > now;
+
+  if (
+    pilotAccessId !== null &&
+    pilotAccessStatusModel === 'ACTIVE' &&
+    pilotAccessExpiresAt !== null &&
+    new Date(pilotAccessExpiresAt) <= now
+  ) {
+    await (input.prisma as any).pilotAccess.update({
+      where: { id: pilotAccessId },
+      data: { status: 'EXPIRED' },
+    }).catch(() => {});
+    try { await input.redis.del(cacheKey); } catch { /* non-fatal */ }
+    logger.info({
+      type: 'pilot_access_expired',
+      userId: input.userId,
+      orgId: input.organizationId,
+      pilotAccessId,
+      pilotAccessExpiresAt,
+    });
+  }
+
+  if (
+    isPilot &&
+    pilotExpiresAt !== null &&
+    (new Date(pilotExpiresAt) <= now || pilotAccessStatus === 'EXPIRED') &&
+    pilotAccessStatus !== 'EXPIRED'
+  ) {
+    await input.prisma.user.update({
+      where: { id: input.userId },
+      data: { pilotAccessStatus: 'EXPIRED' } as any,
+    }).catch(() => {});
+    try { await input.redis.del(cacheKey); } catch { /* non-fatal */ }
+  }
+
+  if (subscriptionStatus === SubscriptionStatus.SUSPENDED) {
       // Admin-suspended orgs are denied all paid entitlements and FREE_TRIAL access.
       // Design choice (CC-C-039 Batch 5): FREE_TRIAL is also blocked for SUSPENDED orgs —
       // an admin-suspended user must not be able to fall through to trial access.
@@ -514,24 +578,50 @@ export async function resolveEffectivePlan(input: {
         orgId: input.organizationId,
         reason: 'admin_suspended',
       });
+      source = 'SUSPENDED';
       // effectivePlan remains SubscriptionPlan.REGULATOR (the initialized default above)
     } else if (hasPaidPlan) {
       effectivePlan = orgPlan;
+      source = 'SUBSCRIPTION';
       logger.info({
         type: 'effective_plan_resolved_paid',
         userId: input.userId,
         orgId: input.organizationId,
         orgPlan,
         subscriptionStatus,
+        pilotMetadataIgnored: hasActivePilotAccessRow || hasLegacyActivePilotAccess,
       });
     } else if (graceStillActive) {
       effectivePlan = orgPlan;
+      source = 'GRACE_PERIOD';
       logger.info({
         type: 'effective_plan_resolved_grace',
         userId: input.userId,
         orgId: input.organizationId,
         orgPlan,
         gracePeriodEndsAt,
+        pilotMetadataIgnored: hasActivePilotAccessRow || hasLegacyActivePilotAccess,
+      });
+    } else if (hasActivePilotAccessRow || hasLegacyActivePilotAccess) {
+      const profile = resolvePilotEntitlementProfile(pilotEntitlementProfile);
+      const expiresAt = pilotAccessExpiresAt ?? pilotExpiresAt;
+      effectivePlan = SubscriptionPlan.ENTERPRISE;
+      source = 'PILOT';
+      entitlementProfile = profile;
+      pilotState = {
+        isPilot: true,
+        status: 'ACTIVE',
+        entitlementProfile: profile,
+        expiresAt,
+        extensionCount: pilotExtensionCount ?? 0,
+      };
+      logger.info({
+        type: 'effective_plan_resolved_pilot',
+        userId: input.userId,
+        orgId: input.organizationId,
+        pilotAccessId,
+        pilotExpiresAt: expiresAt,
+        entitlementProfile: profile,
       });
     } else if (
       trialActivatedAt !== null &&
@@ -539,6 +629,7 @@ export async function resolveEffectivePlan(input: {
       new Date(trialExpiresAt) > now
     ) {
       effectivePlan = 'FREE_TRIAL';
+      source = 'FREE_TRIAL';
       const msRemaining = new Date(trialExpiresAt).getTime() - now.getTime();
       const daysRemaining = Math.max(0, Math.floor(msRemaining / (1000 * 60 * 60 * 24)));
       trialState = { isActive: true, daysRemaining };
@@ -549,6 +640,7 @@ export async function resolveEffectivePlan(input: {
         trialExpiresAt,
       });
     } else {
+      source = 'FALLBACK';
       logger.info({
         type: 'effective_plan_resolved_regulator',
         userId: input.userId,
@@ -556,28 +648,29 @@ export async function resolveEffectivePlan(input: {
         reason: 'fallback',
       });
     }
-  }
-
-  const finalPlan = pilotEffectivePlan ?? effectivePlan;
 
   logger.debug({
     type: 'plan_context_loaded',
     userId: input.userId,
     orgId: input.organizationId,
-    effectivePlan: finalPlan,
+    effectivePlan,
+    source,
+    entitlementProfile,
     subscriptionStatus,
     fromCache,
     isPilot,
   });
 
   return {
-    plan: finalPlan,
+    plan: effectivePlan,
     orgPlan,
-    customLimits: pilotEffectivePlan !== null ? null : customLimits,
+    customLimits: source === 'PILOT' ? null : customLimits,
     subscriptionStatus,
     gracePeriodEndsAt,
-    trialState: pilotEffectivePlan !== null ? undefined : trialState,
+    trialState: source === 'PILOT' ? undefined : trialState,
     pilotState,
+    source,
+    entitlementProfile,
     fromCache,
   };
 }

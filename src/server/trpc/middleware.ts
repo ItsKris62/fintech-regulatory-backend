@@ -7,7 +7,13 @@ import { rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
-import { getQuota, requireFeature } from '@/utils/entitlements';
+import {
+  getPilotEntitlements,
+  getQuota,
+  getQuotaFromEntitlements,
+  requireEntitlementFeature,
+  requireFeature,
+} from '@/utils/entitlements';
 import type { FeatureKey } from '@/config/entitlements.config';
 import type { TrialFeature } from '@/types/plan.types';
 import { FREE_TRIAL_LIMITS } from '@/types/plan.types';
@@ -480,12 +486,26 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
   const customLimits = typeof resolved.customLimits === 'object' && !Array.isArray(resolved.customLimits)
     ? resolved.customLimits as Record<string, unknown> | null
     : null;
+  const entitlements = resolved.source === 'PILOT' && resolved.entitlementProfile
+    ? getPilotEntitlements(resolved.entitlementProfile)
+    : undefined;
 
   return next({
     ctx: {
       ...ctx,
       user: ctx.user,
       plan: resolved.plan,
+      effectivePlanSource: resolved.source,
+      entitlementProfile: resolved.entitlementProfile,
+      entitlements,
+      pilotState: resolved.pilotState
+        ? {
+            status: resolved.pilotState.status ?? 'ACTIVE',
+            entitlementProfile: resolved.pilotState.entitlementProfile ?? resolved.entitlementProfile ?? 'PILOT_FULL',
+            expiresAt: resolved.pilotState.expiresAt,
+            extensionCount: resolved.pilotState.extensionCount ?? 0,
+          }
+        : null,
       customLimits,
       trialState: resolved.trialState,
     },
@@ -506,7 +526,11 @@ export const requirePlanFeature = (feature: FeatureKey) =>
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required.' });
     }
     const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
-    requireFeature(plan, feature); // throws TRPCError FORBIDDEN if not allowed
+    if (ctx.entitlements) {
+      requireEntitlementFeature(ctx.entitlements, feature);
+    } else {
+      requireFeature(plan, feature); // throws TRPCError FORBIDDEN if not allowed
+    }
     // Re-narrow user so handlers downstream receive user: User (non-null)
     return next({ ctx: { ...ctx, user: ctx.user } });
   });
@@ -659,7 +683,9 @@ export const checkUsageLimit = (
 
     // -- Standard Redis monthly / lifetime quota path (paid plans + REGULATOR) -
     const featureKey = METRIC_FEATURE_MAP[metric];
-    const { limit, period } = getQuota(plan, featureKey);
+    const { limit, period } = ctx.entitlements
+      ? getQuotaFromEntitlements(ctx.entitlements, featureKey)
+      : getQuota(plan, featureKey);
 
     // Unlimited: skip all Redis I/O
     if (limit === -1) {

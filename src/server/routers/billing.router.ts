@@ -72,7 +72,7 @@ export const billingRouter = router({
         const plan = ctx.plan!;
         const orgId = ctx.orgMembership!.organizationId;
         const scopeId = orgId;
-        const entitlements = PLAN_ENTITLEMENTS[plan];
+        const entitlements = ctx.entitlements ?? PLAN_ENTITLEMENTS[plan];
 
         // -- Usage counts (Redis, parallel reads) --------------------------
         const [
@@ -181,6 +181,22 @@ export const billingRouter = router({
             catalogPrice,
           },
           trial: trialStatus,
+          effectivePlanSource: ctx.effectivePlanSource ?? 'FALLBACK',
+          pilot: ctx.pilotState
+            ? {
+                isPilot: true,
+                pilotStatus: ctx.pilotState.status,
+                pilotExpiresAt: ctx.pilotState.expiresAt,
+                pilotExtensionCount: ctx.pilotState.extensionCount,
+                entitlementProfile: ctx.pilotState.entitlementProfile,
+              }
+            : {
+                isPilot: false,
+                pilotStatus: null,
+                pilotExpiresAt: null,
+                pilotExtensionCount: 0,
+                entitlementProfile: null,
+              },
         };
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'Unknown error';

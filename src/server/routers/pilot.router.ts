@@ -174,6 +174,26 @@ export const pilotRouter = router({
           } as any,
         });
 
+        if (organization?.id) {
+          await (ctx.prisma as any).pilotAccess.updateMany({
+            where: {
+              userId: user.id,
+              organizationId: organization.id,
+              status: 'ACTIVE',
+            },
+            data: {
+              expiresAt: pilotExpiresAt,
+              entitlementProfile: 'PILOT_FULL',
+              extensionCount: 0,
+              metadata: {
+                source: 'pilot.createPilotTester',
+                requestedDurationDays: input.pilotDurationDays,
+                legacyUserPilotFieldsSynced: true,
+              },
+            },
+          });
+        }
+
         const deliveryStatus = await sendPilotAccessEmail({
           email: normalizedEmail,
           userName: input.fullName,
@@ -388,6 +408,49 @@ export const pilotRouter = router({
         } as any,
       });
 
+      if (user.organizationId) {
+        const existingAccess = await (ctx.prisma as any).pilotAccess.findFirst({
+          where: { userId: user.id, organizationId: user.organizationId, status: 'ACTIVE' },
+          select: { id: true },
+        }).catch(() => null);
+
+        if (existingAccess) {
+          await (ctx.prisma as any).pilotAccess.update({
+            where: { id: existingAccess.id },
+            data: {
+              status: 'ACTIVE',
+              expiresAt: nextExpiresAt,
+              extensionCount: nextExtensionCount,
+              lastExtendedByAdminId: ctx.user!.id,
+              metadata: {
+                source: 'pilot.extendPilotAccess',
+                reason: input.reason ?? null,
+                legacyUserPilotFieldsSynced: true,
+              },
+            },
+          });
+        } else {
+          await (ctx.prisma as any).pilotAccess.create({
+            data: {
+              userId: user.id,
+              organizationId: user.organizationId,
+              status: 'ACTIVE',
+              entitlementProfile: 'PILOT_FULL',
+              startsAt: new Date(),
+              expiresAt: nextExpiresAt,
+              extensionCount: nextExtensionCount,
+              createdByAdminId: ctx.user!.id,
+              lastExtendedByAdminId: ctx.user!.id,
+              metadata: {
+                source: 'pilot.extendPilotAccess.backfill',
+                reason: input.reason ?? null,
+                legacyUserPilotFieldsSynced: true,
+              },
+            },
+          });
+        }
+      }
+
       await invalidatePilotUserCaches({
         userId: user.id,
         supabaseAuthId: (user as any).supabaseAuthId,
@@ -441,6 +504,26 @@ export const pilotRouter = router({
           pilotExpiresAt: new Date(),
         },
       });
+
+      if (user.organizationId) {
+        await (ctx.prisma as any).pilotAccess.updateMany({
+          where: {
+            userId: user.id,
+            organizationId: user.organizationId,
+            status: 'ACTIVE',
+          },
+          data: {
+            status: 'REVOKED',
+            revokedAt: new Date(),
+            revokedByAdminId: ctx.user!.id,
+            metadata: {
+              source: 'pilot.revokePilotAccess',
+              reason: input.reason ?? null,
+              legacyUserPilotFieldsSynced: true,
+            },
+          },
+        });
+      }
 
       await ctx.prisma.session.deleteMany({ where: { userId: user.id } });
       if (user.supabaseAuthId) {

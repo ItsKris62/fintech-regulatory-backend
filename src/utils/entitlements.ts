@@ -3,9 +3,11 @@ import { SubscriptionPlan } from '@prisma/client';
 import type { EffectivePlan } from '@/types/plan.types';
 import {
   PLAN_ENTITLEMENTS,
+  PILOT_ENTITLEMENT_PROFILES,
   type FeatureKey,
   type PlanEntitlementConfig,
 } from '@/config/entitlements.config';
+import type { PilotEntitlementProfile } from '@/types/plan.types';
 
 // ============================================================================
 // Internal helpers
@@ -31,21 +33,10 @@ const PLAN_DISPLAY_NAMES: Record<EffectivePlan, string> = {
 // hasFeature
 // ============================================================================
 
-/**
- * Returns true if the given plan grants access to a feature.
- *
- * Rules per value type:
- *  - boolean           -> the boolean itself
- *  - QuotaEntitlement  -> limit !== 0  (-1 = unlimited = true, 0 = unavailable = false)
- *  - StorageEntitlement-> limitMB !== 0
- *  - ApiAccessEntitlement -> false means no access; object means access
- *  - number (maxSeats) -> > 0 or unlimited (-1)
- *  - AnalyticsTier     -> 'none' means no access
- *  - other strings     -> always true (different tiers of the same feature)
- *  - undefined         -> false (optional Enterprise-only flags on lower plans)
- */
-export function hasFeature(plan: EffectivePlan, feature: FeatureKey): boolean {
-  const entitlements = PLAN_ENTITLEMENTS[plan];
+function hasFeatureFromEntitlements(
+  entitlements: PlanEntitlementConfig,
+  feature: FeatureKey,
+): boolean {
   const value: PlanEntitlementConfig[typeof feature] = entitlements[feature];
 
   if (value === undefined) return false;
@@ -63,6 +54,23 @@ export function hasFeature(plan: EffectivePlan, feature: FeatureKey): boolean {
   return false;
 }
 
+/**
+ * Returns true if the given plan grants access to a feature.
+ *
+ * Rules per value type:
+ *  - boolean           -> the boolean itself
+ *  - QuotaEntitlement  -> limit !== 0  (-1 = unlimited = true, 0 = unavailable = false)
+ *  - StorageEntitlement-> limitMB !== 0
+ *  - ApiAccessEntitlement -> false means no access; object means access
+ *  - number (maxSeats) -> > 0 or unlimited (-1)
+ *  - AnalyticsTier     -> 'none' means no access
+ *  - other strings     -> always true (different tiers of the same feature)
+ *  - undefined         -> false (optional Enterprise-only flags on lower plans)
+ */
+export function hasFeature(plan: EffectivePlan, feature: FeatureKey): boolean {
+  return hasFeatureFromEntitlements(PLAN_ENTITLEMENTS[plan], feature);
+}
+
 // ============================================================================
 // getLimit
 // ============================================================================
@@ -78,7 +86,13 @@ export function hasFeature(plan: EffectivePlan, feature: FeatureKey): boolean {
  * For maxSeats returns the seat count directly.
  */
 export function getLimit(plan: EffectivePlan, feature: FeatureKey): number {
-  const entitlements = PLAN_ENTITLEMENTS[plan];
+  return getLimitFromEntitlements(PLAN_ENTITLEMENTS[plan], feature);
+}
+
+export function getLimitFromEntitlements(
+  entitlements: PlanEntitlementConfig,
+  feature: FeatureKey,
+): number {
   const value: PlanEntitlementConfig[typeof feature] = entitlements[feature];
 
   if (value === undefined || value === false) return 0;
@@ -109,7 +123,13 @@ export function getQuota(
   plan: EffectivePlan,
   feature: FeatureKey,
 ): { limit: number; period: 'month' | 'lifetime' } {
-  const entitlements = PLAN_ENTITLEMENTS[plan];
+  return getQuotaFromEntitlements(PLAN_ENTITLEMENTS[plan], feature);
+}
+
+export function getQuotaFromEntitlements(
+  entitlements: PlanEntitlementConfig,
+  feature: FeatureKey,
+): { limit: number; period: 'month' | 'lifetime' } {
   const value: PlanEntitlementConfig[typeof feature] = entitlements[feature];
 
   if (typeof value === 'object' && value !== null && 'limit' in value) {
@@ -132,7 +152,14 @@ export function getQuota(
  * @throws TRPCError { code: 'FORBIDDEN' }
  */
 export function requireFeature(plan: EffectivePlan, feature: FeatureKey): void {
-  if (!hasFeature(plan, feature)) {
+  requireEntitlementFeature(PLAN_ENTITLEMENTS[plan], feature);
+}
+
+export function requireEntitlementFeature(
+  entitlements: PlanEntitlementConfig,
+  feature: FeatureKey,
+): void {
+  if (!hasFeatureFromEntitlements(entitlements, feature)) {
     const minimumPlan = getMinimumPlan(feature);
     const requiredPlanName = minimumPlan
       ? PLAN_DISPLAY_NAMES[minimumPlan]
@@ -143,6 +170,12 @@ export function requireFeature(plan: EffectivePlan, feature: FeatureKey): void {
       message: `This feature requires the ${requiredPlanName} plan or higher. Please upgrade your subscription.`,
     });
   }
+}
+
+export function getPilotEntitlements(
+  profile: PilotEntitlementProfile,
+): PlanEntitlementConfig {
+  return PILOT_ENTITLEMENT_PROFILES[profile] ?? PILOT_ENTITLEMENT_PROFILES.PILOT_FULL;
 }
 
 // ============================================================================

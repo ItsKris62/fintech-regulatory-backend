@@ -2,7 +2,9 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { createHash } from 'crypto';
 import type { MemberRole, MemberStatus, OrganizationMember } from '@prisma/client';
 import type { EffectivePlan } from '@/types/plan.types';
+import type { EffectivePlanSource, PilotEntitlementProfile, PilotPlanState } from '@/types/plan.types';
 import type { TrialContextState } from '@/modules/trial/trial.types';
+import type { PlanEntitlementConfig } from '@/config/entitlements.config';
 import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
@@ -52,6 +54,10 @@ export interface Context {
   res: FastifyReply;
   // Populated by withPlanContext middleware (optional -- only present after that middleware runs)
   plan?: EffectivePlan;
+  effectivePlanSource?: EffectivePlanSource;
+  entitlementProfile?: PilotEntitlementProfile | null;
+  entitlements?: PlanEntitlementConfig;
+  pilotState?: PilotPlanState | null;
   customLimits?: Record<string, unknown> | null;
   usageInfo?: { metric: string; current: number; limit: number };
   /** Present when plan === 'FREE_TRIAL'. Lightweight trial state for middleware consumers. */

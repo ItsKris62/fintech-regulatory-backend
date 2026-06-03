@@ -103,6 +103,22 @@ async function processPilot(user: PilotUser, now: Date): Promise<StageResult[]> 
   // -- Expired ----------------------------------------------------------------
   if (isExpired && user.pilotConvertedAt === null) {
     try {
+      await (prisma as any).pilotAccess.updateMany({
+        where: { userId: user.id, status: 'ACTIVE' },
+        data: {
+          status: 'EXPIRED',
+          metadata: {
+            source: 'pilot-lifecycle-cron',
+            legacyUserPilotFieldsSynced: true,
+          },
+        },
+      }).catch(() => undefined);
+      await (prisma as any).user.update({
+        where: { id: user.id },
+        data: { pilotAccessStatus: 'EXPIRED' },
+      }).catch(() => undefined);
+      await redis.del(`sheriabot:planctx:${user.id}`).catch(() => undefined);
+
       const claimed = await claimSentinel(user.id, 'expired');
       if (claimed) {
         await reactMailer.sendPilotExpiredEmail(user.email, {
@@ -110,8 +126,6 @@ async function processPilot(user: PilotUser, now: Date): Promise<StageResult[]> 
           organization: orgName,
           dashboardUrl: FRONTEND_URL,
         });
-        // Invalidate plan cache so the REGULATOR downgrade is immediate.
-        await redis.del(`sheriabot:planctx:${user.id}`).catch(() => undefined);
         logger.info({ type: 'PILOT_EXPIRED_EMAIL_SENT', userId: user.id, email: user.email });
         results.push({ userId: user.id, stage: 'expired', sent: true });
       } else {

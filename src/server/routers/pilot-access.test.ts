@@ -67,6 +67,166 @@ describe('userProvisioning.service — pilot OrganizationMember creation', () =>
   });
 });
 
+// -- 10. PilotAccess model and migration - first-class audit history ----------
+
+describe('PilotAccess schema and migration - audit-preserving active uniqueness', () => {
+  const schemaSrc = srcFromRoot('fintech-regulatory-backend/prisma/schema.prisma');
+  const migrationSrc = srcFromRoot(
+    'fintech-regulatory-backend/prisma/migrations/20260602_add_pilot_access_model/migration.sql',
+  );
+
+  it('adds a PilotAccess model with status history fields', () => {
+    expect(schemaSrc).toContain('model PilotAccess');
+    expect(schemaSrc).toContain('enum PilotAccessStatus');
+    expect(schemaSrc).toContain('extensionCount');
+    expect(schemaSrc).toContain('revokedAt');
+    expect(schemaSrc).toContain('convertedAt');
+  });
+
+  it('does not add a permanent Prisma unique constraint that blocks history', () => {
+    const modelIdx = schemaSrc.indexOf('model PilotAccess');
+    const modelEndIdx = schemaSrc.indexOf('\n}\n', modelIdx);
+    const modelBody = schemaSrc.slice(modelIdx, modelEndIdx);
+    expect(modelBody).not.toContain('@@unique');
+  });
+
+  it('uses a partial unique index for one ACTIVE row per user/org', () => {
+    expect(migrationSrc).toContain('PilotAccess_one_active_per_user_org_idx');
+    expect(migrationSrc).toContain('ON "PilotAccess"("userId", "organizationId")');
+    expect(migrationSrc).toContain('WHERE "status" = \'ACTIVE\'');
+  });
+});
+
+// -- 11. effective plan resolver - source metadata and paid precedence --------
+
+describe('resolveEffectivePlan - pilot metadata and paid precedence', () => {
+  const resolverSrc = srcFromRoot(
+    'fintech-regulatory-backend/src/modules/billing/resolve-effective-plan.ts',
+  );
+  const typeSrc = srcFromRoot('fintech-regulatory-backend/src/types/plan.types.ts');
+
+  it('returns source metadata and pilot entitlement profile metadata', () => {
+    expect(typeSrc).toContain('export type EffectivePlanSource');
+    expect(resolverSrc).toContain('source: EffectivePlanSource');
+    expect(resolverSrc).toContain('entitlementProfile: PilotEntitlementProfile | null');
+    expect(resolverSrc).toContain('pilotState');
+  });
+
+  it('resolves active PilotAccess through source=PILOT with profile metadata', () => {
+    const pilotIdx = resolverSrc.indexOf("source = 'PILOT'");
+    expect(pilotIdx).toBeGreaterThan(-1);
+    const pilotBody = resolverSrc.slice(pilotIdx - 500, pilotIdx + 900);
+    expect(pilotBody).toContain('effectivePlan = SubscriptionPlan.ENTERPRISE');
+    expect(pilotBody).toContain('entitlementProfile = profile');
+    expect(pilotBody).toContain('resolvePilotEntitlementProfile');
+    expect(pilotBody).toContain("status: 'ACTIVE'");
+  });
+
+  it('lets suspension win before paid, trial, or pilot access', () => {
+    const suspendedIdx = resolverSrc.indexOf('subscriptionStatus === SubscriptionStatus.SUSPENDED');
+    const paidIdx = resolverSrc.indexOf('} else if (hasPaidPlan)');
+    const pilotIdx = resolverSrc.indexOf("source = 'PILOT'");
+    expect(suspendedIdx).toBeGreaterThan(-1);
+    expect(paidIdx).toBeGreaterThan(suspendedIdx);
+    expect(pilotIdx).toBeGreaterThan(paidIdx);
+  });
+
+  it('does not relabel or downgrade paid users who also have pilot metadata', () => {
+    const paidIdx = resolverSrc.indexOf('} else if (hasPaidPlan)');
+    const pilotIdx = resolverSrc.indexOf("source = 'PILOT'");
+    const paidBody = resolverSrc.slice(paidIdx, pilotIdx);
+    expect(paidBody).toContain("source = 'SUBSCRIPTION'");
+    expect(paidBody).toContain('effectivePlan = orgPlan');
+    expect(paidBody).toContain('pilotMetadataIgnored');
+  });
+});
+
+// -- 12. Pilot entitlement profiles and middleware gates ----------------------
+
+describe('pilot entitlement profiles - policy generation is explicit opt-in', () => {
+  const entitlementsSrc = srcFromRoot(
+    'fintech-regulatory-backend/src/config/entitlements.config.ts',
+  );
+  const middlewareSrc = srcFromRoot('fintech-regulatory-backend/src/server/trpc/middleware.ts');
+
+  it('defaults PILOT_FULL policyGeneration to false', () => {
+    const profileIdx = entitlementsSrc.indexOf('const pilotFullBase');
+    const profileBody = entitlementsSrc.slice(profileIdx, profileIdx + 1200);
+    expect(profileBody).toContain('policyGeneration: false');
+  });
+
+  it('has a separate profile that explicitly enables policyGeneration', () => {
+    expect(entitlementsSrc).toContain('PILOT_FULL_WITH_POLICY_GENERATION');
+    expect(entitlementsSrc).toContain('policyGeneration: true');
+  });
+
+  it('feature and quota middleware use pilot entitlements, not only ENTERPRISE plan', () => {
+    expect(middlewareSrc).toContain('ctx.entitlements');
+    expect(middlewareSrc).toContain('requireEntitlementFeature');
+    expect(middlewareSrc).toContain('getQuotaFromEntitlements');
+  });
+});
+
+// -- 13. Backfill and lifecycle cache invalidation ----------------------------
+
+describe('pilot lifecycle and backfill - mandatory planctx invalidation', () => {
+  const repairSrc = srcFromRoot('fintech-regulatory-backend/scripts/repair-pilot-access.ts');
+  const backfillSrc = srcFromRoot(
+    'fintech-regulatory-backend/src/scripts/backfill-pilot-access.ts',
+  );
+  const pilotRouterSrc = src('pilot.router.ts');
+  const cronSrc = srcFromRoot(
+    'fintech-regulatory-backend/src/scripts/pilot-lifecycle-cron.ts',
+  );
+
+  it('repair flow invalidates sheriabot:planctx:{userId}', () => {
+    expect(repairSrc).toContain('sheriabot:planctx:');
+    expect(repairSrc).toContain('redis.del');
+  });
+
+  it('backfill flow invalidates sheriabot:planctx:{userId}', () => {
+    expect(backfillSrc).toContain('sheriabot:planctx:');
+    expect(backfillSrc).toContain('redis.del');
+  });
+
+  it('admin pilot create/extend/revoke flows reuse cache invalidation including planctx', () => {
+    expect(pilotRouterSrc).toContain('planCtxCacheKey');
+    expect(pilotRouterSrc).toContain('invalidatePilotUserCaches');
+  });
+
+  it('lifecycle cron invalidates planctx when expiring pilots', () => {
+    expect(cronSrc).toContain('sheriabot:planctx:');
+    expect(cronSrc).toContain('redis.del');
+  });
+});
+
+// -- 14. Backfill eligibility guardrails --------------------------------------
+
+describe('backfill-pilot-access script - eligibility guardrails', () => {
+  const backfillSrc = srcFromRoot(
+    'fintech-regulatory-backend/src/scripts/backfill-pilot-access.ts',
+  );
+
+  it('validates organization and ACTIVE membership before granting PilotAccess', () => {
+    expect(backfillSrc).toContain('organization:');
+    expect(backfillSrc).toContain('organizationMember');
+    expect(backfillSrc).toContain('MemberStatus.ACTIVE');
+  });
+
+  it('rejects suspended organizations and revoked/converted/expired pilot states', () => {
+    expect(backfillSrc).toContain('SubscriptionStatus.SUSPENDED');
+    expect(backfillSrc).toContain("pilotAccessStatus === 'REVOKED'");
+    expect(backfillSrc).toContain("pilotAccessStatus === 'CONVERTED'");
+    expect(backfillSrc).toContain('pilotExpiresAt && user.pilotExpiresAt <= now');
+  });
+
+  it('preserves paid subscription behavior instead of downgrading or relabeling users', () => {
+    expect(backfillSrc).toContain('paidSubscriptionPreserved');
+    expect(backfillSrc).toContain('organizationPlanAtBackfill');
+    expect(backfillSrc).not.toContain('plan: SubscriptionPlan.ENTERPRISE');
+  });
+});
+
 // ── 2. checklist router — orgMemberProcedure guards listChecklists ────────────
 
 describe('checklist router — orgMemberProcedure guards listChecklists', () => {
@@ -288,7 +448,7 @@ describe('repair-pilot-access script — idempotency and correctness', () => {
   });
 
   it('logs before/after counts', () => {
-    expect(scriptSrc).toContain('Pilot users with an organizationId');
+    expect(scriptSrc).toContain('Pilot users scanned');
     expect(scriptSrc).toContain('Users needing repair');
     expect(scriptSrc).toContain('Users repaired');
   });

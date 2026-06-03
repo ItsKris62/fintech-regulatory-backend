@@ -22,6 +22,7 @@ import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
+import { getLimit } from '@/utils/entitlements';
 
 // -- Constants ------------------------------------------------------------------
 
@@ -194,8 +195,8 @@ function resolvePlanLimits(plan: SubscriptionPlan): PeriodLimits {
     checklistGenerationLimit: e.checklistGenerations.limit,
     apiCallLimit:             e.apiAccess === false ? 0 : e.apiAccess.limit,
     documentStorageMbLimit:   e.documentRepository.limitMB,
-    gapAnalysisLimit:         e.gapAnalysis    ? -1 : 0,
-    policyGenerationLimit:    e.policyGeneration ? -1 : 0,
+    gapAnalysisLimit:         getLimit(plan, 'gapAnalysis'),
+    policyGenerationLimit:    getLimit(plan, 'policyGeneration') === 0 ? 0 : -1,
   };
 }
 

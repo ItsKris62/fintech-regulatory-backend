@@ -7,6 +7,7 @@ import { stream } from '@/lib/ai/client';
 import { searchAndGetContext, type SearchResult } from '@/lib/rag/rag.service';
 import { runOrchestrator } from '@/modules/compliance/orchestrator';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
+import { getPilotEntitlements } from '@/utils/entitlements';
 import { appConfig } from '@/config/app.config';
 import { logger } from '@/utils/logger';
 import { isTokenRevoked } from '@/utils/token-revocation';
@@ -16,6 +17,8 @@ import { resolveEffectivePlan } from '@/modules/billing/resolve-effective-plan';
 import { checkTrialLimit, incrementTrialUsageAtomic } from '@/modules/trial';
 import type { TrialContextState } from '@/modules/trial/trial.types';
 import type { EffectivePlan } from '@/types/plan.types';
+import type { EffectivePlanSource, PilotEntitlementProfile } from '@/types/plan.types';
+import type { PlanEntitlementConfig } from '@/config/entitlements.config';
 import {
   generateComplianceSystemPrompt,
   generateComplianceUserPrompt,
@@ -116,6 +119,9 @@ interface AuthContext {
   userId:         string;
   organizationId: string;
   plan:           EffectivePlan;
+  effectivePlanSource: EffectivePlanSource;
+  entitlementProfile: PilotEntitlementProfile | null;
+  entitlements: PlanEntitlementConfig;
   trialState:     TrialContextState | undefined;
   orgMembership:  OrgMembershipEntry;
 }
@@ -179,6 +185,11 @@ export async function resolveAuth(authHeader: string | undefined): Promise<AuthC
       userId:         dbUser.id,
       organizationId: dbUser.organizationId,
       plan:           resolved.plan,
+      effectivePlanSource: resolved.source,
+      entitlementProfile: resolved.entitlementProfile,
+      entitlements: resolved.source === 'PILOT' && resolved.entitlementProfile
+        ? getPilotEntitlements(resolved.entitlementProfile)
+        : PLAN_ENTITLEMENTS[resolved.plan],
       trialState:     resolved.trialState,
       orgMembership:  entry,
     };
@@ -245,9 +256,7 @@ export async function checkAndPrepareUsage(auth: AuthContext): Promise<UsageChec
     };
   }
 
-  const planKey = auth.plan as keyof typeof PLAN_ENTITLEMENTS;
-  const entitlements = PLAN_ENTITLEMENTS[planKey] ?? PLAN_ENTITLEMENTS['REGULATOR'];
-  const quota = entitlements.complianceQueries;
+  const quota = auth.entitlements.complianceQueries;
 
   // Unlimited (-1): skip all Redis I/O
   if (quota.limit === -1) {
@@ -477,7 +486,7 @@ export async function registerComplianceStreamRoute(
 
         // Orchestrator
         const agenticComplexityLevel =
-          PLAN_ENTITLEMENTS[auth.plan as keyof typeof PLAN_ENTITLEMENTS]?.agenticComplexityLevel ?? 'simple';
+          auth.entitlements.agenticComplexityLevel ?? 'simple';
 
         let route: string             = 'simple';
         let grounded                  = ragContext.results.length > 0;

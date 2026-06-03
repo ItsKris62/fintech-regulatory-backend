@@ -83,6 +83,7 @@ model User {
   postPilotTier      String              @default("REGULATOR") // tier to revert to after pilot expires
   pilotConvertedAt   DateTime? // set when pilot converts to a paid plan
   pilotEvents        PilotEvent[]
+  pilotAccesses      PilotAccess[]
   publishedAlerts    RegulatoryAlert[]
   alertNotifications AlertNotification[]
 
@@ -209,6 +210,7 @@ model Organization {
   // Organization membership (multi-member orgs)
   members OrganizationMember[] @relation("OrganizationMembers")
 
+  pilotAccesses PilotAccess[]
   corpusGapFeedbacks CorpusGapFeedback[]
 
   @@index([name])
@@ -1280,6 +1282,13 @@ enum SubscriptionPlan {
   ENTERPRISE
 }
 
+enum PilotAccessStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+  CONVERTED
+}
+
 enum BillingMetric {
   COMPLIANCE_QUERIES
   CHECKLIST_GENERATIONS
@@ -1302,6 +1311,35 @@ model UsageRecord {
 
   @@unique([organizationId, metric, periodStart])
   @@index([organizationId, metric])
+}
+
+model PilotAccess {
+  id                    String            @id @default(cuid())
+  userId                String
+  organizationId        String
+  status                PilotAccessStatus @default(ACTIVE)
+  entitlementProfile    String            @default("PILOT_FULL")
+  startsAt              DateTime          @default(now())
+  expiresAt             DateTime
+  extensionCount        Int               @default(0)
+  createdByAdminId      String?
+  lastExtendedByAdminId String?
+  revokedAt             DateTime?
+  revokedByAdminId      String?
+  convertedAt           DateTime?
+  convertedPlan         String?
+  metadata              Json?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([userId, organizationId, status])
 }
 
 // ============================================================================

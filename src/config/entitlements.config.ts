@@ -1,6 +1,6 @@
 import { SubscriptionPlan } from '@prisma/client';
 import { VAULT_MIME_TYPES } from '@/lib/storage/mime';
-import type { EffectivePlan } from '@/types/plan.types';
+import type { EffectivePlan, PilotEntitlementProfile } from '@/types/plan.types';
 
 // ============================================================================
 // Value shape types
@@ -114,6 +114,7 @@ export type FeatureKey = keyof PlanEntitlementConfig;
 
 /** The full entitlements map -- covers all EffectivePlan values (DB plans + FREE_TRIAL). */
 export type PlanEntitlements = Record<EffectivePlan, PlanEntitlementConfig>;
+export type PilotEntitlementProfiles = Record<PilotEntitlementProfile, PlanEntitlementConfig>;
 
 // ============================================================================
 // Single source of truth
@@ -268,6 +269,33 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     agenticComplexityLevel: 'simple',
   },
 };
+
+const pilotFullBase: PlanEntitlementConfig = {
+  ...PLAN_ENTITLEMENTS.ENTERPRISE,
+  policyGeneration: false,
+  customIntegrations: false,
+  sso: false,
+  onPremise: false,
+  slaGuarantee: undefined,
+  legalCorpusManagement: false,
+  dedicatedAccountManager: false,
+};
+
+export const PILOT_ENTITLEMENT_PROFILES: PilotEntitlementProfiles = {
+  PILOT_FULL: pilotFullBase,
+  PILOT_FULL_WITH_POLICY_GENERATION: {
+    ...pilotFullBase,
+    policyGeneration: true,
+  },
+};
+
+export function resolvePilotEntitlementProfile(
+  value: string | null | undefined,
+): PilotEntitlementProfile {
+  return value === 'PILOT_FULL_WITH_POLICY_GENERATION'
+    ? 'PILOT_FULL_WITH_POLICY_GENERATION'
+    : 'PILOT_FULL';
+}
 
 // Re-export SubscriptionPlan from Prisma so consumers only need one import
 export { SubscriptionPlan };
