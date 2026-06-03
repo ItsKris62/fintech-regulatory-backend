@@ -190,12 +190,11 @@ export async function extractText(
 
     if (mimeType === 'application/pdf') {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const pdfParse = require('pdf-parse') as (b: Buffer) => Promise<{ text: string }>;
-        const result = await pdfParse(buffer);
-        return result.text;
+        const { extractPdfText } = await import('@/lib/pdf/extract-text');
+        const text = await extractPdfText(buffer);
+        return text;
       } catch {
-        // pdf-parse not installed  -  log warning and continue without text
+        // pdf-parse not installed or extraction failed — continue without text
         return null;
       }
     }
@@ -205,7 +204,6 @@ export async function extractText(
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     ) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const mammoth = require('mammoth') as {
           extractRawText: (o: { buffer: Buffer }) => Promise<{ value: string }>;
         };

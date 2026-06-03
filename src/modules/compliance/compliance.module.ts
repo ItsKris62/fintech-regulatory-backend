@@ -33,8 +33,8 @@ import type { GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
 import type { GapAnalysisResult } from '@/lib/ai/prompts/gap-analysis';
 import type { SearchResult } from '@/lib/rag/rag.service';
 import { sanitizePolicyText, chunkPolicyText } from '@/lib/ai/prompts/gap-analysis';
-// pdf-parse and mammoth are CommonJS modules
-const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+import { extractPdfText } from '@/lib/pdf/extract-text';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
 import {
   toComplianceQueryResult,
@@ -299,8 +299,7 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
 
     let policyText: string;
     if (ext === 'pdf') {
-      const r = await pdfParse(fileBuffer);
-      policyText = r.text;
+      policyText = await extractPdfText(fileBuffer);
     } else if (ext === 'docx' || ext === 'doc') {
       const r = await mammoth.extractRawText({ buffer: fileBuffer });
       policyText = r.value;

@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import mammoth from 'mammoth'
-import { PDFParse } from 'pdf-parse'
+import { extractPdfText } from '@/lib/pdf/extract-text'
 
 import { prisma } from '@/lib/prisma/client'
 import { logger } from '@/utils/logger'
@@ -182,9 +182,8 @@ async function withRetry<T>(
 
 async function extractFromPdf(buffer: Buffer): Promise<string> {
   try {
-    const parser = new PDFParse({ data: buffer })
-    const result = await parser.getText()
-    return normaliseText(result?.text ?? '')
+    const text = await extractPdfText(buffer)
+    return normaliseText(text)
   } catch (err: any) {
     throw new DocumentParsingError(
       `PDF parsing failed: ${err?.message ?? 'Unknown error'}`
