@@ -2,16 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ragService } from '@/lib/rag/rag.service';
 import { prisma } from '@/lib/prisma/client';
 import { extractPdfText } from '@/lib/pdf/extract-text';
+import { aiService } from '@/lib/ai/ai.service';
 import { executeGapAnalysisPipeline } from './compliance.module';
 
-// --- External Service Mocks ---
 vi.mock('@/lib/rag/rag.service', () => ({
   ragService: {
     search: vi.fn().mockResolvedValue([
       {
         documentId: 'bench-doc-1',
-        documentTitle: 'Mocked Benchmark Policy',
-        chunkText: 'This is a mocked retrieved chunk from the benchmark document.',
+        documentTitle: 'Data Protection Act 2019',
+        chunkText: 'DPA context about privacy rights, breach notification, consent, and data subject access.',
+        frameworkSlug: 'dpa_2019',
         score: 0.95,
         rank: 1,
       },
@@ -28,30 +29,88 @@ vi.mock('@/lib/prisma/client', () => ({
     gapAnalysis: {
       update: vi.fn().mockResolvedValue({}),
     },
+    auditLog: {
+      create: vi.fn().mockResolvedValue({}),
+    },
   },
 }));
 
-// Mock AI Service to prevent actual Anthropic API calls during the test
 vi.mock('@/lib/ai/ai.service', () => ({
   aiService: {
     performGapAnalysis: vi.fn().mockResolvedValue({
-      overallScore: 85,
-      executiveSummary: 'Mock summary',
-      frameworks: [],
-      crossCuttingStrengths: [],
-      actionPlan: [],
-      metadata: {
-        documentName: 'test.pdf',
-        analysisDepth: 'standard',
-        frameworksAnalysed: [],
-        totalGaps: 0,
-        criticalGaps: 0,
-        highGaps: 0,
-        analysisDate: new Date().toISOString(),
+      result: {
+        overallScore: 85,
+        executiveSummary: 'Mock summary',
+        frameworks: [
+          {
+            id: 'DPA_2019',
+            name: 'Data Protection Act 2019',
+            score: 85,
+            gaps: [],
+            strengths: ['Privacy controls are documented'],
+            summary: 'DPA controls are mostly present.',
+          },
+        ],
+        crossCuttingStrengths: [],
+        actionPlan: [],
+        metadata: {
+          documentName: 'test.pdf',
+          analysisDepth: 'standard',
+          frameworksAnalysed: ['Data Protection Act 2019'],
+          totalGaps: 0,
+          criticalGaps: 0,
+          highGaps: 0,
+          analysisDate: new Date().toISOString(),
+        },
       },
+      inputTokens: 100,
+      outputTokens: 50,
     }),
+    performMultiChunkGapAnalysis: vi.fn(),
   },
 }));
+
+vi.mock('@/lib/redis/client', () => ({
+  redis: {
+    del: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('@/modules/notification', () => ({
+  notificationModule: {
+    createCategorizedNotification: vi.fn().mockResolvedValue({}),
+  },
+}));
+
+vi.mock('@/modules/trial', () => ({
+  incrementTrialUsage: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/utils/logger', () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+const basePipelineParams = {
+  analysisId: 'gap-analysis-test',
+  userId: 'user-1',
+  fileName: 'policy.pdf',
+  fileContent: Buffer.from('%PDF test content').toString('base64'),
+  fileType: 'pdf',
+  regulatoryFrameworks: ['Data Protection Act 2019'],
+  regulatoryFrameworkSlugs: ['dpa_2019'],
+  analysisDepth: 'standard' as const,
+};
+
+function completedUpdate() {
+  return vi.mocked(prisma.gapAnalysis.update).mock.calls.find(([arg]) => (
+    arg.data?.status === 'COMPLETED'
+  ))?.[0];
+}
 
 describe('Gap Analysis Pipeline Integration', () => {
   beforeEach(() => {
@@ -59,59 +118,102 @@ describe('Gap Analysis Pipeline Integration', () => {
   });
 
   it('fails early and updates DB status to FAILED if extraction yields empty or insufficient text', async () => {
-    // Arrange: Mock the extractor to return a string below the 100 char threshold (or empty)
     vi.mocked(extractPdfText).mockResolvedValueOnce('   \n  Tiny snippet.  ');
 
-    // Act
-    await executeGapAnalysisPipeline({
+    await expect(executeGapAnalysisPipeline({
+      ...basePipelineParams,
       analysisId: 'gap-fail-test',
-      documentUrl: 'https://fake-storage-url.com/doc.pdf',
-      documentType: 'pdf',
-      documentName: 'ScannedDoc.pdf',
-      regulatoryFrameworks: ['DPA_2019'],
-      analysisDepth: 'standard',
-    });
+      fileName: 'ScannedDoc.pdf',
+    })).rejects.toThrow('Could not extract meaningful text');
 
-    // Assert: Pipeline should have aborted and updated the DB
     expect(extractPdfText).toHaveBeenCalled();
     expect(prisma.gapAnalysis.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'gap-fail-test' },
         data: expect.objectContaining({
           status: 'FAILED',
-          errorMessage: expect.stringContaining('insufficient readable text'),
+          errorMessage: expect.stringContaining('Could not extract meaningful text'),
         }),
       })
     );
-    
-    // Ensure RAG and AI pipelines were completely skipped
     expect(ragService.search).not.toHaveBeenCalled();
+    expect(aiService.performGapAnalysis).not.toHaveBeenCalled();
   });
 
-  it('constructs correct RAG filters using benchmarkDocumentIds and regulatoryFrameworks', async () => {
-    // Arrange: Provide valid long text to bypass the extraction guard
-    vi.mocked(extractPdfText).mockResolvedValueOnce('Valid substantive text that safely surpasses the 100 character guard threshold. '.repeat(10));
+  it('uses strict frameworkSlug and selected benchmarkDocumentIds filters for each RAG retrieval', async () => {
+    vi.mocked(extractPdfText).mockResolvedValueOnce(
+      'Valid substantive text that safely surpasses the readable text guard threshold. '.repeat(10)
+    );
 
-    // Act
     await executeGapAnalysisPipeline({
+      ...basePipelineParams,
       analysisId: 'gap-success-test',
-      documentUrl: 'https://fake-storage-url.com/doc.pdf',
-      documentType: 'pdf',
-      documentName: 'ValidPolicy.pdf',
-      regulatoryFrameworks: ['DPA_2019', 'CBK_PG'],
-      benchmarkDocumentIds: ['corp-policy-id-1', 'corp-policy-id-2'],
-      analysisDepth: 'standard',
+      fileName: 'ValidPolicy.pdf',
+      regulatoryFrameworks: ['Data Protection Act 2019', 'CBK Prudential Guidelines'],
+      regulatoryFrameworkSlugs: ['dpa_2019', 'cbk_pg'],
+      benchmarkDocumentIds: ['bench-doc-1', 'bench-doc-2'],
     });
 
-    // Assert: Pinecone filter must combine frameworks and document IDs using an $or operator
     expect(ragService.search).toHaveBeenCalledWith(
+      expect.stringContaining('Data Protection Act 2019'),
       expect.objectContaining({
         filter: {
-          $or: [
-            { framework: { $in: ['DPA_2019', 'CBK_PG'] } },
-            { documentId: { $in: ['corp-policy-id-1', 'corp-policy-id-2'] } },
-          ],
+          frameworkSlug: 'dpa_2019',
+          documentId: { $in: ['bench-doc-1', 'bench-doc-2'] },
         },
+        fallbackIfTooFew: {
+          minResults: 3,
+          relaxedFilter: { frameworkSlug: 'dpa_2019' },
+        },
+      })
+    );
+    expect(ragService.search).toHaveBeenCalledWith(
+      expect.stringContaining('CBK Prudential Guidelines'),
+      expect.objectContaining({
+        filter: {
+          frameworkSlug: 'cbk_pg',
+          documentId: { $in: ['bench-doc-1', 'bench-doc-2'] },
+        },
+        fallbackIfTooFew: {
+          minResults: 3,
+          relaxedFilter: { frameworkSlug: 'cbk_pg' },
+        },
+      })
+    );
+  });
+
+  it('passes selected benchmark document metadata into the completed result', async () => {
+    vi.mocked(extractPdfText).mockResolvedValueOnce(
+      'Valid substantive text that safely surpasses the readable text guard threshold. '.repeat(10)
+    );
+
+    await executeGapAnalysisPipeline({
+      ...basePipelineParams,
+      benchmarkDocumentIds: ['bench-doc-1'],
+      benchmarkDocuments: [
+        {
+          id: 'bench-doc-1',
+          title: 'Data Protection Act 2019',
+          documentType: 'ACT',
+          regulatoryBody: 'ODPC',
+        },
+      ],
+    });
+
+    const update = completedUpdate();
+    expect(update).toBeDefined();
+    expect(update?.data?.results).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          selectedBenchmarkDocuments: [
+            {
+              id: 'bench-doc-1',
+              title: 'Data Protection Act 2019',
+              documentType: 'ACT',
+              regulatoryBody: 'ODPC',
+            },
+          ],
+        }),
       })
     );
   });
