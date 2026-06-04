@@ -83,6 +83,12 @@ export interface DocxExportParams {
   createdAt: Date;
   organizationName?: string;
   userName?: string;
+  selectedBenchmarkDocuments?: Array<{
+    id: string;
+    title: string;
+    documentType?: string | null;
+    regulatoryBody?: string | null;
+  }>;
 }
 
 // --- Helpers ------------------------------------------------------------------
@@ -425,6 +431,10 @@ function buildMainSection(params: DocxExportParams): object {
   const { executiveSummary, frameworks, actionPlan, metadata } = result;
   const displayName = organizationName ?? userName ?? 'Your Organisation';
   const dateStr = formatDate(createdAt);
+  const allGaps = result.frameworks.flatMap((fw) => fw.gaps);
+  const verifiedGapCount = allGaps.filter((gap) => gap.verificationStatus === 'verified').length;
+  const unverifiedGapCount = allGaps.filter((gap) => gap.verificationStatus === 'unverified').length;
+  const notCheckedGapCount = allGaps.length - verifiedGapCount - unverifiedGapCount;
 
   const children: Paragraph[] = [];
 
@@ -483,6 +493,11 @@ function buildMainSection(params: DocxExportParams): object {
         ]}),
       ],
     }) as unknown as Paragraph,
+    new Paragraph({
+      spacing: { before: 180, after: 80 },
+      children: [new TextRun({ text: 'Citation Verification', font: 'Arial', size: 22, bold: true, color: C.navy })],
+    }),
+    body(`${verifiedGapCount} verified; ${unverifiedGapCount} unverified; ${notCheckedGapCount} not checked.`),
     pageBreak(),
   );
 
@@ -495,6 +510,12 @@ function buildMainSection(params: DocxExportParams): object {
     methodRow('Analysis Depth',          formatDepth(analysisDepth)),
     methodRow('Chunks Processed',        `${chunksProcessed} ${chunksProcessed > 1 ? '(Full document multi-pass)' : '(Single-pass)'}`),
     methodRow('Frameworks Assessed',     frameworks.map((f) => f.name).join(', ')),
+    methodRow(
+      'Benchmark Documents',
+      params.selectedBenchmarkDocuments && params.selectedBenchmarkDocuments.length > 0
+        ? params.selectedBenchmarkDocuments.map((doc) => `${doc.title}${doc.regulatoryBody ? ` (${doc.regulatoryBody})` : ''}`).join(', ')
+        : 'All available corpus documents',
+    ),
     methodRow('Regulatory Grounding',    ragGrounded ? 'Grounded in SheriaBot regulatory document database' : 'Warning: Limited grounding - AI knowledge only'),
     methodRow('Report ID',               analysisId),
   ];

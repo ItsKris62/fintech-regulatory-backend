@@ -1433,6 +1433,7 @@ export const complianceRouter = router({
         createdAt: analysis.createdAt,
         organizationName: orgName ?? undefined,
         userName: userName ?? undefined,
+        selectedBenchmarkDocuments: parsed.data.metadata.selectedBenchmarkDocuments ?? [],
       });
 
       // 6. Build a sanitised filename

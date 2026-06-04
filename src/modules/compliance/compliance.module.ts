@@ -30,7 +30,7 @@ import { complianceScorer } from './compliance-scorer';
 import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
 import type { GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
-import type { GapAnalysisResult } from '@/lib/ai/prompts/gap-analysis';
+import type { BenchmarkDocumentSummary, GapAnalysisResult } from '@/lib/ai/prompts/gap-analysis';
 import type { SearchResult } from '@/lib/rag/rag.service';
 import { sanitizePolicyText, chunkPolicyText } from '@/lib/ai/prompts/gap-analysis';
 import { extractPdfText } from '@/lib/pdf/extract-text';
@@ -269,10 +269,18 @@ interface GapAnalysisPipelineParams {
   fileContent: string;  // base64-encoded
   fileType: string;     // extension without dot: pdf | docx | doc | txt
   regulatoryFrameworks: string[];
+  regulatoryFrameworkSlugs?: string[];
+  benchmarkDocumentIds?: string[];
+  benchmarkDocuments?: BenchmarkDocumentSummary[];
   analysisDepth: 'quick' | 'standard' | 'deep';
   focusAreas?: string[];
   ipAddress?: string;
   userAgent?: string;
+}
+
+function pineconeInFilter(values: string[]): string | { $in: string[] } | undefined {
+  if (values.length === 0) return undefined;
+  return values.length === 1 ? values[0] : { $in: values };
 }
 
 /**
@@ -283,7 +291,8 @@ interface GapAnalysisPipelineParams {
 export async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Promise<void> {
   const {
     analysisId, userId, trialUserId, fileName, fileContent, fileType,
-    regulatoryFrameworks, analysisDepth, focusAreas, ipAddress, userAgent,
+    regulatoryFrameworks, regulatoryFrameworkSlugs = [], benchmarkDocumentIds = [],
+    benchmarkDocuments = [], analysisDepth, focusAreas, ipAddress, userAgent,
   } = params;
 
   const startTime = Date.now();
@@ -319,14 +328,31 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
     const policyKeywords = extractPolicyKeywords(policyText);
     const keywordSuffix = policyKeywords.length > 0 ? ` ${policyKeywords.join(' ')}` : '';
 
-    const ragPromises = regulatoryFrameworks.map((framework) =>
-      ragService
-        .search(`${framework} Kenya regulatory compliance obligations${keywordSuffix}`, { topK: 8, minScore: 0.6 })
+    const ragPromises = regulatoryFrameworks.map((framework, index) => {
+      const frameworkSlug = regulatoryFrameworkSlugs[index];
+      const strictFilter = {
+        ...(frameworkSlug ? { frameworkSlug } : {}),
+        ...(benchmarkDocumentIds.length > 0
+          ? { documentId: pineconeInFilter(benchmarkDocumentIds) }
+          : {}),
+      };
+      const relaxedFilter = frameworkSlug ? { frameworkSlug } : undefined;
+
+      return ragService
+        .search(`${framework} Kenya regulatory compliance obligations${keywordSuffix}`, {
+          topK: 8,
+          minScore: 0.6,
+          filter: Object.keys(strictFilter).length > 0 ? strictFilter : undefined,
+          fallbackIfTooFew: {
+            minResults: 3,
+            relaxedFilter,
+          },
+        })
         .catch((err: unknown) => {
           logger.warn({ type: 'gap_analysis_rag_framework_failed', userId, analysisId, framework, error: (err as Error).message });
           return [] as Awaited<ReturnType<typeof ragService.search>>;
-        })
-    );
+        });
+    });
 
     const ragResultsByFramework = await Promise.all(ragPromises);
 
@@ -398,6 +424,7 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
         ragContext,
       });
       gapResults = gapAiResult.result;
+      gapResults.metadata.selectedBenchmarkDocuments = benchmarkDocuments;
       gapInputTokens = gapAiResult.inputTokens;
       gapOutputTokens = gapAiResult.outputTokens;
       await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 80 });
@@ -415,6 +442,7 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
         ragContext,
       });
       gapResults = multiResult.result;
+      gapResults.metadata.selectedBenchmarkDocuments = benchmarkDocuments;
       gapInputTokens = multiResult.totalInputTokens;
       gapOutputTokens = multiResult.totalOutputTokens;
       chunksProcessed = multiResult.chunksProcessed;
@@ -499,6 +527,7 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
           overallScore: gapResults.overallScore,
           ragGrounded,
           chunksProcessed,
+          benchmarkDocumentIds,
           tokenCost: gapResults.metadata.tokenCost ?? null,
         },
         ipAddress: ipAddress ?? null,
@@ -2363,6 +2392,9 @@ Follow-up Question: ${followUp}
       fileType: string;
       fileContent: string; // base64-encoded file content
       regulatoryFrameworks: string[];
+      regulatoryFrameworkSlugs?: string[];
+      benchmarkDocumentIds?: string[];
+      benchmarkDocuments?: BenchmarkDocumentSummary[];
       analysisDepth: 'quick' | 'standard' | 'deep';
       focusAreas?: string[];
       organizationId?: string;
@@ -2444,6 +2476,23 @@ Follow-up Question: ${followUp}
         link: `/startup/gap-analysis/${record.id}`,
       }).catch(() => { /* non-blocking */ });
 
+      const pipelinePayload = JSON.parse(JSON.stringify({
+        analysisId: record.id,
+        userId,
+        trialUserId: params.trialUserId,
+        fileName: params.fileName,
+        fileContent: params.fileContent,
+        fileType: ext,
+        regulatoryFrameworks: params.regulatoryFrameworks,
+        regulatoryFrameworkSlugs: params.regulatoryFrameworkSlugs,
+        benchmarkDocumentIds: params.benchmarkDocumentIds,
+        benchmarkDocuments: params.benchmarkDocuments,
+        analysisDepth: params.analysisDepth,
+        focusAreas: params.focusAreas,
+        ipAddress: params.ipAddress,
+        userAgent: params.userAgent,
+      })) as Prisma.InputJsonValue;
+
       const job = await aiJobRunner.enqueue({
         type: 'GAP_ANALYSIS_PIPELINE',
         idempotencyKey: `gap-analysis:${record.id}`,
@@ -2451,19 +2500,7 @@ Follow-up Question: ${followUp}
         targetEntityId: record.id,
         userId,
         organizationId: params.organizationId,
-        payload: {
-          analysisId: record.id,
-          userId,
-          trialUserId: params.trialUserId,
-          fileName: params.fileName,
-          fileContent: params.fileContent,
-          fileType: ext,
-          regulatoryFrameworks: params.regulatoryFrameworks,
-          analysisDepth: params.analysisDepth,
-          focusAreas: params.focusAreas,
-          ipAddress: params.ipAddress,
-          userAgent: params.userAgent,
-        },
+        payload: pipelinePayload,
         maxAttempts: 3,
         priority: 7,
       });

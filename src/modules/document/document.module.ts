@@ -223,21 +223,22 @@ class DocumentModule {
       const fullText = await extractText(fileBuffer, doc.mimeType, doc.originalFilename);
 
       if (!fullText || fullText.trim().length === 0) {
-        // Still mark as indexed but with no full text (binary files)
+        const error = 'No extractable text found in document. The file may be encrypted, image-only, or empty.';
         await prisma.legalDocument.update({
           where: { id: documentId },
           data: {
-            status: 'INDEXED',
-            processedAt: new Date(),
+            status: 'FAILED',
             totalChunks: 0,
           },
         });
+        await redis.del(`${REDIS_KEYS.PROCESSING}${documentId}`);
 
         return {
           documentId,
-          status: 'completed',
+          status: 'failed',
           chunksIndexed: 0,
           processingTimeMs: Date.now() - startTime,
+          error,
         };
       }
 
@@ -250,10 +251,13 @@ class DocumentModule {
           documentType: doc.documentType,
           actName: doc.actName,
           regulatoryArea: doc.regulatoryBody ?? undefined,
+          framework: doc.actName ?? doc.category ?? undefined,
           metadata: {
             organizationId: doc.organizationId,
             contentType: doc.contentType,
             category: doc.category,
+            frameworkSlug: doc.category,
+            legalDocumentId: doc.id,
           },
         },
         {

@@ -292,7 +292,9 @@ export const documentRouter = router({
             select: {
               id: true,
               title: true,
+              actName: true,
               documentType: true,
+              regulatoryBody: true,
               fileSize: true,
               createdAt: true,
               author: {

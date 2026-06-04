@@ -74,6 +74,45 @@ function makeMinimalPdf(): Buffer {
   return Buffer.concat([bodyBuf, xrefBuf]);
 }
 
+// ---------- Valid PDF with no text (e.g. Scanned / Image-based) -----------
+function makeEmptyTextPdf(): Buffer {
+  const lines = [
+    '%PDF-1.4',
+    '1 0 obj',
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    'endobj',
+    '2 0 obj',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    'endobj',
+    '3 0 obj',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>',
+    'endobj',
+    '4 0 obj',
+    '<< /Length 0 >>',
+    'stream',
+    'endstream',
+    'endobj',
+  ];
+
+  const bodyStr = lines.join('\n') + '\n';
+  const bodyBuf = Buffer.from(bodyStr, 'ascii');
+
+  const objOffsets: number[] = [];
+  let pos = 0;
+  for (const line of lines) {
+    if (/^\d+ 0 obj$/.test(line)) objOffsets.push(pos);
+    pos += Buffer.byteLength(line + '\n', 'ascii');
+  }
+
+  const xrefStart = bodyBuf.length;
+  const xrefLines = ['xref', `0 ${objOffsets.length + 1}`, '0000000000 65535 f '];
+  for (const off of objOffsets) xrefLines.push(`${String(off).padStart(10, '0')} 00000 n `);
+  xrefLines.push('trailer', `<< /Size ${objOffsets.length + 1} /Root 1 0 R >>`, 'startxref', `${xrefStart}`, '%%EOF');
+
+  const xrefBuf = Buffer.from(xrefLines.join('\n') + '\n', 'ascii');
+  return Buffer.concat([bodyBuf, xrefBuf]);
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('extractPdfText (pdf-parse v2.x interop)', () => {
@@ -101,5 +140,12 @@ describe('extractPdfText (pdf-parse v2.x interop)', () => {
   it('throws on non-PDF garbage data', async () => {
     const garbage = Buffer.from('this is not a PDF file at all');
     await expect(extractPdfText(garbage)).rejects.toThrow();
+  });
+
+  it('throws on valid PDF with no readable text (e.g., scanned document)', async () => {
+    const emptyTextPdf = makeEmptyTextPdf();
+    await expect(extractPdfText(emptyTextPdf)).rejects.toThrow(
+      'Extraction failed: Document contains no readable text'
+    );
   });
 });

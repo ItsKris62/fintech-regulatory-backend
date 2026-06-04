@@ -36,6 +36,7 @@ import {
   generateMergeUserPrompt,
   parseGapAnalysisOutput,
   parseChunkAnalysisOutput,
+  GapAnalysisResultSchema,
 } from './prompts/gap-analysis';
 import { aiConfig } from '@/config/ai.config';
 import { logger } from '@/utils/logger';
@@ -91,8 +92,10 @@ export interface ChecklistProgressUpdate {
  * Attempts brace/bracket balancing on a truncated response so parseGapAnalysisOutput
  * can still recover a partial result.  Returns null when repair fails.
  */
-function repairTruncatedJson<T>(content: string): T | null {
-  try { return JSON.parse(content) as T; } catch { /* fall through */ }
+function repairTruncatedGapAnalysisJson(content: string): GapAnalysisResult | null {
+  try {
+    return parseGapAnalysisOutput(content);
+  } catch { /* fall through */ }
 
   let braces = 0, brackets = 0;
   for (const char of content) {
@@ -107,7 +110,10 @@ function repairTruncatedJson<T>(content: string): T | null {
   while (braces   > 0) { repaired += '}'; braces--;   }
 
   try {
-    return JSON.parse(repaired) as T;
+    const parsed = JSON.parse(repaired);
+    const result = GapAnalysisResultSchema.safeParse(parsed);
+    if (!result.success) return null;
+    return parseGapAnalysisOutput(JSON.stringify(result.data));
   } catch {
     return null;
   }
@@ -702,7 +708,7 @@ export class AIService {
         outputTokens: result.outputTokens,
         maxTokens,
       });
-      const partial = repairTruncatedJson<GapAnalysisResult>(result.content);
+      const partial = repairTruncatedGapAnalysisJson(result.content);
       if (partial) {
         logger.info({ type: 'gap_analysis_partial_recovered', outputTokens: result.outputTokens });
         return { result: partial, inputTokens: result.inputTokens, outputTokens: result.outputTokens };

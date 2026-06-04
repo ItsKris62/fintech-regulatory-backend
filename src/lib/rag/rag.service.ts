@@ -22,6 +22,7 @@ export interface DocumentToIndex {
   source?: string;
   version?: string;
   metadata?: Record<string, any>;
+  framework?: string;
 }
 
 /**
@@ -40,6 +41,9 @@ export interface SearchResult {
   source?: string;
   version?: string;
   corpusStatus?: string;
+  framework?: string;
+  frameworkSlug?: string;
+  legalDocumentId?: string;
 }
 
 /**
@@ -51,6 +55,10 @@ export interface SearchOptions {
   filter?: Record<string, any>;
   namespace?: string;
   includeMetadata?: boolean;
+  fallbackIfTooFew?: {
+    minResults: number;
+    relaxedFilter?: Record<string, any>;
+  };
 }
 
 /**
@@ -110,6 +118,9 @@ export class RAGService {
         isBinding: document.isBinding ?? document.metadata?.isBinding,
         source: document.source ?? document.metadata?.source,
         version: document.version ?? document.metadata?.version,
+        framework: document.framework ?? document.metadata?.framework,
+        frameworkSlug: document.metadata?.frameworkSlug,
+        legalDocumentId: document.metadata?.legalDocumentId ?? document.id,
       }));
 
       // Upsert to Pinecone
@@ -182,6 +193,7 @@ export class RAGService {
       filter,
       namespace,
       includeMetadata: _includeMetadata = true,
+      fallbackIfTooFew,
     } = options;
 
     const startTime = Date.now();
@@ -195,12 +207,32 @@ export class RAGService {
 
     try {
       // Search Pinecone (integrated embeddings  -  query string passed directly)
-      const results = await queryVectors(
+      let results = await queryVectors(
         query,
         topK,
         namespace,
         filter
       );
+
+      const hasStrictFilter = !!filter && Object.keys(filter).length > 0;
+      if (
+        fallbackIfTooFew &&
+        hasStrictFilter &&
+        results.filter((result) => result.score >= minScore).length < fallbackIfTooFew.minResults
+      ) {
+        logger.info({
+          type: 'rag_search_relaxed_filter',
+          strictResultsCount: results.length,
+          minResults: fallbackIfTooFew.minResults,
+          hasRelaxedFilter: !!fallbackIfTooFew.relaxedFilter,
+        });
+        results = await queryVectors(
+          query,
+          topK,
+          namespace,
+          fallbackIfTooFew.relaxedFilter,
+        );
+      }
 
       // Filter by minimum score and format results
       const searchResults: SearchResult[] = results
@@ -218,6 +250,9 @@ export class RAGService {
           source: result.metadata.source,
           version: result.metadata.version,
           corpusStatus: result.metadata.corpusStatus,
+          framework: result.metadata.framework,
+          frameworkSlug: result.metadata.frameworkSlug,
+          legalDocumentId: result.metadata.legalDocumentId,
         }));
 
       const duration = Date.now() - startTime;
@@ -464,7 +499,13 @@ export async function searchAndGetContext(
   citations: string[];
 }> {
   const { topK = 10, minScore = 0.7 } = options;
-  const cacheKey = `sheriabot:rag:ctx:v2:${hashString(`${query}|${topK}|${minScore}`)}`;
+  const cacheKey = `sheriabot:rag:ctx:v3:${hashString(JSON.stringify({
+    query,
+    topK,
+    minScore,
+    filter: options.filter ?? null,
+    namespace: options.namespace ?? null,
+  }))}`;
 
   try {
     const cached = await redis.get<string>(cacheKey);
@@ -511,5 +552,6 @@ export async function indexKenyanLegalAct(
     actName,
     year,
     regulatoryArea,
+    framework: actName,
   });
 }

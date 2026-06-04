@@ -76,6 +76,7 @@ export const gapAnalysisRouter = router({
         fileType: z.enum(['pdf', 'docx', 'doc', 'txt']),
         fileContent: z.string().min(1).max(GAP_ANALYSIS_MAX_BASE64_CHARS),
         regulatoryFrameworks: z.array(z.string()).min(1).max(10),
+        benchmarkDocumentIds: z.array(z.string().min(1)).max(10).optional(),
         analysisDepth: z.enum(['quick', 'standard', 'deep']).default('standard'),
         focusAreas: z.array(z.string()).max(10).optional(),
       })
@@ -126,8 +127,10 @@ export const gapAnalysisRouter = router({
             message: `Invalid framework slug(s): ${invalidSlugs.join(', ')}`,
           });
         }
+        const frameworksBySlug = new Map(dbFrameworks.map((framework) => [framework.slug, framework]));
+        const orderedFrameworks = input.regulatoryFrameworks.map((slug) => frameworksBySlug.get(slug)!);
 
-        const lockedFrameworks = dbFrameworks.filter(
+        const lockedFrameworks = orderedFrameworks.filter(
           (f) => userLevel < (frameworkTierLevel[f.tier] ?? 1)
         );
         if (lockedFrameworks.length > 0) {
@@ -140,11 +143,20 @@ export const gapAnalysisRouter = router({
         // orgId is always session-derived -- never client-supplied (IDOR closed)
         const orgId   = ctx.orgMembership!.organizationId;
         const userId  = ctx.user!.id;
+        const benchmarkDocumentIds = [...new Set(input.benchmarkDocumentIds ?? [])];
 
         // Idempotency: v2 key scoped to submitting user, preventing cross-tenant
         // cache poisoning via identical file hash submitted with a different orgId.
-        const fileHash = createHash('sha256').update(input.fileContent).digest('hex');
-        const dedupKey = `sheriabot:gapanalysis:dedup:v2:${userId}:${fileHash}`;
+        const fileHash = createHash('sha256')
+          .update(input.fileContent)
+          .update(JSON.stringify({
+            frameworks: [...input.regulatoryFrameworks].sort(),
+            benchmarkDocumentIds: [...benchmarkDocumentIds].sort(),
+            analysisDepth: input.analysisDepth,
+            focusAreas: [...(input.focusAreas ?? [])].sort(),
+          }))
+          .digest('hex');
+        const dedupKey = `sheriabot:gapanalysis:dedup:v3:${userId}:${fileHash}`;
 
         const existing = await redis.get<string>(dedupKey);
         if (existing) {
@@ -155,22 +167,65 @@ export const gapAnalysisRouter = router({
           }
         }
 
+        const frameworkNames = orderedFrameworks.map((f) => f.name);
+        const frameworkSlugs = orderedFrameworks.map((f) => f.slug);
+
+        const benchmarkDocuments = benchmarkDocumentIds.length > 0
+          ? await prisma.legalDocument.findMany({
+              where: {
+                id: { in: benchmarkDocumentIds },
+                deletedAt: null,
+                contentType: 'REGULATORY_DOCUMENT',
+                OR: [
+                  { userId },
+                  { organizationId: orgId },
+                  { organizationId: null },
+                ],
+              },
+              select: {
+                id: true,
+                title: true,
+                actName: true,
+                documentType: true,
+                regulatoryBody: true,
+              },
+            })
+          : [];
+
+        if (benchmarkDocuments.length !== benchmarkDocumentIds.length) {
+          const foundIds = new Set(benchmarkDocuments.map((doc) => doc.id));
+          const invalidIds = benchmarkDocumentIds.filter((id) => !foundIds.has(id));
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Invalid benchmark document ID(s): ${invalidIds.join(', ')}`,
+          });
+        }
+
+        const selectedBenchmarkDocuments = benchmarkDocuments.map((doc) => ({
+          id: doc.id,
+          title: doc.title ?? doc.actName,
+          documentType: doc.documentType,
+          regulatoryBody: doc.regulatoryBody,
+        }));
+
         logger.info({
           type:       'gap_analysis_request',
           userId,
           orgId,
           fileName:   input.fileName,
           frameworks: input.regulatoryFrameworks,
+          benchmarkDocumentIds,
           depth:      input.analysisDepth,
         });
-
-        const frameworkNames = dbFrameworks.map((f) => f.name);
 
         const result = await complianceModule.runGapAnalysis(userId, {
           fileName:             input.fileName,
           fileType:             input.fileType,
           fileContent:          input.fileContent,
           regulatoryFrameworks: frameworkNames,
+          regulatoryFrameworkSlugs: frameworkSlugs,
+          benchmarkDocumentIds,
+          benchmarkDocuments: selectedBenchmarkDocuments,
           analysisDepth:        input.analysisDepth,
           focusAreas:           input.focusAreas,
           organizationId:       orgId,
@@ -180,7 +235,7 @@ export const gapAnalysisRouter = router({
         });
 
         await prisma.gapAnalysisFramework.createMany({
-          data: dbFrameworks.map((framework) => ({
+          data: orderedFrameworks.map((framework) => ({
             gapAnalysisId: result.id,
             frameworkId: framework.id,
             slug: framework.slug,

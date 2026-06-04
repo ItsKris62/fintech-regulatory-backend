@@ -13,9 +13,17 @@ export interface GapAnalysisParams {
   documentName: string;
   documentType: string;
   regulatoryFrameworks: string[];
+  benchmarkDocumentIds?: string[];
   analysisDepth: 'quick' | 'standard' | 'deep';
   focusAreas?: string[];
   ragContext?: string; // Retrieved regulatory passages from Pinecone
+}
+
+export interface BenchmarkDocumentSummary {
+  id: string;
+  title: string;
+  documentType?: string | null;
+  regulatoryBody?: string | null;
 }
 
 // --- Zod Validation Schemas + Inferred Types ---------------------------------
@@ -87,6 +95,12 @@ export const GapAnalysisResultSchema = z.object({
     mediumGaps: z.number().int().min(0).optional(),
     lowGaps: z.number().int().min(0).optional(),
     analysisDate: z.string(),
+    selectedBenchmarkDocuments: z.array(z.object({
+      id: z.string(),
+      title: z.string(),
+      documentType: z.string().nullable().optional(),
+      regulatoryBody: z.string().nullable().optional(),
+    })).default([]),
     chunksProcessed: z.number().int().positive().optional(),
     tokenCost: z.object({
       inputTokens: z.number().int().min(0),
@@ -316,6 +330,7 @@ function buildRequiredJsonSchema(params: {
     "totalGaps": 0,
     "criticalGaps": 0,
     "highGaps": 0,
+    "selectedBenchmarkDocuments": [],
     "analysisDate": "${new Date().toISOString()}"
   }
 }`;
@@ -543,7 +558,29 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
     if (!jsonMatch) {
       throw new Error('AI response does not contain valid JSON');
     }
-    parsed = JSON.parse(jsonMatch[0]);
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      // Attempt brace/bracket balancing for truncated responses
+      let braces = 0;
+      let brackets = 0;
+      for (const char of jsonMatch[0]) {
+        if      (char === '{') braces++;
+        else if (char === '}') braces--;
+        else if (char === '[') brackets++;
+        else if (char === ']') brackets--;
+      }
+
+      let repaired = jsonMatch[0].trim().replace(/,\s*$/, '');
+      while (brackets > 0) { repaired += ']'; brackets--; }
+      while (braces   > 0) { repaired += '}'; braces--;   }
+
+      try {
+        parsed = JSON.parse(repaired);
+      } catch (repairErr: unknown) {
+        throw new Error(`AI response contains malformed JSON that could not be repaired: ${repairErr instanceof Error ? repairErr.message : String(repairErr)}`);
+      }
+    }
   }
 
   // Zod validation  -  coerces defaults (evidenceRequired: [], dependsOn: [])
@@ -611,7 +648,29 @@ export function parseChunkAnalysisOutput(rawContent: string, chunkIndex: number)
     if (!arrayMatch) {
       throw new Error(`Chunk ${chunkIndex}: AI response contains no valid JSON array`);
     }
-    parsed = JSON.parse(arrayMatch[0]);
+    try {
+      parsed = JSON.parse(arrayMatch[0]);
+    } catch {
+      // Attempt brace/bracket balancing for truncated responses
+      let braces = 0;
+      let brackets = 0;
+      for (const char of arrayMatch[0]) {
+        if      (char === '{') braces++;
+        else if (char === '}') braces--;
+        else if (char === '[') brackets++;
+        else if (char === ']') brackets--;
+      }
+
+      let repaired = arrayMatch[0].trim().replace(/,\s*$/, '');
+      while (brackets > 0) { repaired += ']'; brackets--; }
+      while (braces   > 0) { repaired += '}'; braces--;   }
+
+      try {
+        parsed = JSON.parse(repaired);
+      } catch (repairErr: unknown) {
+        throw new Error(`Chunk ${chunkIndex} AI response contains malformed JSON that could not be repaired: ${repairErr instanceof Error ? repairErr.message : String(repairErr)}`);
+      }
+    }
   }
 
   const result = ChunkOutputSchema.safeParse(parsed);

@@ -44,6 +44,12 @@ function resolvePDFParse(): new (opts: { data: Buffer }) => { getText: () => Pro
 /** Resolved once at module load; throws immediately if misconfigured. */
 const PDFParseClass = resolvePDFParse();
 
+function stripPdfParsePageMarkers(text: string): string {
+  return text
+    .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '')
+    .trim();
+}
+
 /**
  * Extract plain text from a PDF buffer.
  *
@@ -57,5 +63,12 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
   }
   const parser = new PDFParseClass({ data: buffer });
   const result = await parser.getText();
-  return result?.text ?? '';
+  const extractedText = result?.text ?? '';
+  const meaningfulText = stripPdfParsePageMarkers(extractedText);
+
+  if (!meaningfulText) {
+    throw new Error('Extraction failed: Document contains no readable text. It may be an image-based scanned document or an empty file.');
+  }
+
+  return extractedText;
 }

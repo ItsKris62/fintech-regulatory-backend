@@ -31,6 +31,12 @@ export interface VectorMetadata {
   version?: string;
   /** Corpus lifecycle status, e.g. ACTIVE or SUPERSEDED */
   corpusStatus?: string;
+  /** Human framework label captured during indexing. */
+  framework?: string;
+  /** Regulatory framework slug attached by ingestion or gap-analysis retrieval filters. */
+  frameworkSlug?: string;
+  /** Original LegalDocument ID when this vector came from the legal corpus. */
+  legalDocumentId?: string;
 }
 
 /**
