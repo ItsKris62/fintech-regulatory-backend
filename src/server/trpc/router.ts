@@ -22,6 +22,7 @@ import { pilotRouter } from '../routers/pilot.router';
 import { checklistRouter } from '../routers/checklist.router';
 import { complianceDashboardRouter } from '../routers/compliance-dashboard.router';
 import { gapAnalysisRouter } from '../routers/gap-analysis.router';
+import { frameworkRouter } from '../routers/framework.router';
 import { alertRouter } from '../routers/alert.router';
 import { adminMarketingRouter } from '../routers/adminMarketing.router';
 import { publicMarketingRouter } from '../routers/publicMarketing.router';
@@ -53,6 +54,7 @@ import { applicationRouter } from '../routers/application.router';
  * - /trpc/checklist.*     - AI checklist generation, status polling, retry and progress tracking
  * - /trpc/complianceDashboard.* - Startup dashboard compliance score and category checklist data
  * - /trpc/gapAnalysis.*   - Policy gap analysis upload, polling and result retrieval
+ * - /trpc/framework.*     - Regulatory framework library metadata
  * - /trpc/enterprisePolicy.* - Enterprise AI Policy Generator (ENTERPRISE tier only)
  */
 export const appRouter = router({
@@ -79,6 +81,7 @@ export const appRouter = router({
   checklist: checklistRouter,
   complianceDashboard: complianceDashboardRouter,
   gapAnalysis: gapAnalysisRouter,
+  framework: frameworkRouter,
   alert: alertRouter,
   adminMarketing:   adminMarketingRouter,
   publicMarketing:  publicMarketingRouter,

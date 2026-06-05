@@ -3,6 +3,7 @@ import { z } from 'zod';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { router, adminProcedure, orgMemberProcedure } from '../trpc/trpc';
+import { withPlanContext, requirePlanFeature } from '../trpc/middleware';
 import {
   getUploadUrlSchema,
   confirmUploadSchema,
@@ -17,6 +18,7 @@ import { validateFileMagicBytes } from '@/utils/file-validation';
 import { storageConfig } from '@/config/storage.config';
 import { logger } from '@/utils/logger';
 import { getSystemConfigNumber } from '@/lib/system-config';
+import { listAuthorizedBenchmarkDocuments } from '../services/benchmark-document.service';
 
 /**
  * Document Router
@@ -328,6 +330,54 @@ export const documentRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to list documents',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * List benchmark documents the current organization may use for Gap Analysis.
+   *
+   * Returns metadata only. Contents and download URLs are intentionally excluded.
+   */
+  listBenchmarkDocuments: orgMemberProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('gapAnalysis'))
+    .use(requirePlanFeature('benchmarkDocuments'))
+    .input(
+      z.object({
+        search: z.string().max(200).optional(),
+      }).optional(),
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const documents = await listAuthorizedBenchmarkDocuments({
+          prisma: ctx.prisma as any,
+          userId: ctx.user!.id,
+          organizationId: ctx.orgMembership!.organizationId,
+          search: input?.search,
+        });
+
+        logger.info({
+          type: 'benchmark_documents_listed',
+          userId: ctx.user!.id,
+          organizationId: ctx.orgMembership!.organizationId,
+          count: documents.length,
+        });
+
+        return { documents };
+      } catch (error: any) {
+        logger.error({
+          type: 'benchmark_documents_list_error',
+          userId: ctx.user!.id,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to list benchmark documents',
           cause: error,
         });
       }

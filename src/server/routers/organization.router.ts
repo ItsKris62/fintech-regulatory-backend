@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { MemberRole, MemberStatus } from '@prisma/client';
+import { MemberRole, MemberStatus, SubscriptionPlan } from '@prisma/client';
 import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
 import {
   createOrganizationSchema,
@@ -16,6 +16,13 @@ import {
 import { userCache } from '@/lib/redis/cache.service';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
+import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
+import {
+  buildSeatLimitMessage,
+  getSeatUsageForOrganization,
+  hasSeatCapacity,
+} from '../services/organization-seat.service';
+import { assertCanCreateOrJoinOrganization } from '../services/organization-plan-limit.service';
 import type { Context } from '../trpc/context';
 
 async function assertActiveOrganizationMember(
@@ -35,6 +42,61 @@ async function assertActiveOrganizationMember(
       message: 'Access denied to this organization',
     });
   }
+}
+
+async function assertOrganizationManager(
+  ctx: Pick<Context, 'prisma' | 'user'> & { user: NonNullable<Context['user']> },
+  organizationId: string,
+) {
+  if (ctx.user.role === 'ADMIN') return null;
+
+  const member = await ctx.prisma.organizationMember.findUnique({
+    where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
+    select: { status: true, role: true },
+  });
+
+  if (
+    !member ||
+    member.status !== MemberStatus.ACTIVE ||
+    (member.role !== MemberRole.OWNER && member.role !== MemberRole.ADMIN)
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Only organization owners and admins can manage members',
+    });
+  }
+
+  return member;
+}
+
+async function assertOrganizationCanUseTeamSeats(ctx: Context, organizationId: string) {
+  const organization = await ctx.prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { id: true, plan: true, deletedAt: true } as any,
+  });
+
+  if (!organization || (organization as any).deletedAt) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this organization' });
+  }
+
+  const entitlements = PLAN_ENTITLEMENTS[(organization as any).plan as SubscriptionPlan];
+  if (!entitlements?.teamCollaboration && ctx.user!.role !== 'ADMIN') {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Team member management requires the Business plan or higher.',
+    });
+  }
+}
+
+async function assertCanConsumeSeat(ctx: Context, organizationId: string) {
+  const usage = await getSeatUsageForOrganization(ctx.prisma as any, organizationId);
+  if (!hasSeatCapacity(usage)) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: buildSeatLimitMessage(usage),
+    });
+  }
+  return usage;
 }
 
 /**
@@ -210,9 +272,52 @@ export const organizationRouter = router({
     .input(createOrganizationSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const organization = await ctx.prisma.organization.create({
-          data: input,
+        await assertCanCreateOrJoinOrganization({
+          prisma: ctx.prisma as any,
+          userId: ctx.user.id,
+          actorContext: {
+            actorUserId: ctx.user.id,
+            actorRole: ctx.user.role,
+            sourceProcedure: 'organization.create',
+            platformAdminOverride: ctx.user.role === 'ADMIN',
+          },
         });
+
+        const organization = await ctx.prisma.$transaction(async (tx) => {
+          const org = await tx.organization.create({
+            data: input,
+          });
+
+          if (ctx.user.role !== 'ADMIN') {
+            await tx.organizationMember.upsert({
+              where: { userId_organizationId: { userId: ctx.user.id, organizationId: org.id } },
+              create: {
+                userId: ctx.user.id,
+                organizationId: org.id,
+                role: MemberRole.OWNER,
+                status: MemberStatus.ACTIVE,
+              },
+              update: {
+                role: MemberRole.OWNER,
+                status: MemberStatus.ACTIVE,
+              },
+            });
+
+            if (!ctx.user.organizationId) {
+              await tx.user.update({
+                where: { id: ctx.user.id },
+                data: { organizationId: org.id, updatedAt: new Date() },
+              });
+            }
+          }
+
+          return org;
+        });
+
+        if (ctx.user.role !== 'ADMIN') {
+          await redis.del(`sheriabot:orgmem:${ctx.user.id}:${organization.id}`).catch(() => {});
+          await userCache.delete(ctx.user.id).catch(() => {});
+        }
 
         logger.info({
           type: 'organization_created',
@@ -355,7 +460,36 @@ export const organizationRouter = router({
       try {
         const { organizationId, userId, role } = input;
 
-        await assertActiveOrganizationMember(ctx, organizationId);
+        await assertOrganizationManager(ctx, organizationId);
+        await assertOrganizationCanUseTeamSeats(ctx, organizationId);
+        await assertCanCreateOrJoinOrganization({
+          prisma: ctx.prisma as any,
+          userId,
+          targetOrganizationId: organizationId,
+          actorContext: {
+            actorUserId: ctx.user.id,
+            actorRole: ctx.user.role,
+            sourceProcedure: 'organization.addMember',
+            platformAdminOverride: ctx.user.role === 'ADMIN',
+          },
+        });
+
+        const existingActiveMember = await ctx.prisma.organizationMember.findUnique({
+          where: { userId_organizationId: { userId, organizationId } },
+          select: { status: true },
+        });
+
+        if (
+          existingActiveMember?.status === MemberStatus.ACTIVE ||
+          existingActiveMember?.status === MemberStatus.SUSPENDED
+        ) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This user is already a member of the organization',
+          });
+        }
+
+        await assertCanConsumeSeat(ctx, organizationId);
 
         // Update user's organization foreign key
         await ctx.prisma.user.update({
@@ -422,7 +556,14 @@ export const organizationRouter = router({
       try {
         const { organizationId, userId } = input;
 
-        await assertActiveOrganizationMember(ctx, organizationId);
+        await assertOrganizationManager(ctx, organizationId);
+
+        if (ctx.user.role !== 'ADMIN' && userId === ctx.user.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Organization admins cannot remove themselves',
+          });
+        }
 
         // Clear user's organization foreign key
         await ctx.prisma.user.update({
@@ -536,8 +677,8 @@ export const organizationRouter = router({
   /**
    * Update a member's role within the organization
    *
-   * Admin or org owner can change a user's role. The user must already belong
-   * to this organization. Updates the global `role` field on the User record.
+   * Platform admins or org OWNER/ADMIN can change a user's organization role.
+   * Updates OrganizationMember.role, not the platform-level User.role.
    *
    * @protected  -  must be ADMIN, or a member of the same organization
    */
@@ -545,90 +686,85 @@ export const organizationRouter = router({
     .input(
       z.object({
         userId: z.string().min(1),
-        role: z.enum(['REGULATOR', 'STARTUP', 'ENTERPRISE', 'ADMIN']),
+        organizationId: z.string().optional(),
+        role: z.enum(['ADMIN', 'MEMBER', 'VIEWER']),
       })
     )
     .mutation(async ({ input, ctx }) => {
       try {
-        // Only admins or active org members can update roles
-        const callerOrgId = ctx.user!.organizationId;
+        const callerOrgId = input.organizationId ?? ctx.user!.organizationId;
 
-        // Fetch target user
-        const targetUser = await ctx.prisma.user.findUnique({
-          where: { id: input.userId },
-          select: {
-            id: true,
-            organizationId: true,
-            role: true,
-            email: true,
-            fullName: true,
-            supabaseAuthId: true,
-          },
-        });
-
-        if (!targetUser) {
+        if (!callerOrgId) {
           throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: 'User not found',
+            code: 'FORBIDDEN',
+            message: 'You are not a member of any organization',
           });
         }
 
-        // Non-admins may only update members within their own org
-        if (ctx.user!.role !== 'ADMIN') {
-          if (!callerOrgId || targetUser.organizationId !== callerOrgId) {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: 'You can only update roles for members of your organization',
-            });
-          }
-          await assertActiveOrganizationMember(ctx, callerOrgId);
+        await assertOrganizationManager(ctx, callerOrgId);
 
-          // Non-admins cannot grant ADMIN role
-          if (input.role === 'ADMIN') {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: 'Only platform admins can grant the ADMIN role',
-            });
-          }
-        }
-
-        const updatedUser = await ctx.prisma.user.update({
-          where: { id: input.userId },
-          data: { role: input.role as any },
+        // Fetch target user
+        const targetMember = await ctx.prisma.organizationMember.findUnique({
+          where: { userId_organizationId: { userId: input.userId, organizationId: callerOrgId } },
           select: {
             id: true,
-            email: true,
-            fullName: true,
             role: true,
+            status: true,
             organizationId: true,
+            user: {
+              select: {
+                id: true,
+                email: true,
+                fullName: true,
+                supabaseAuthId: true,
+              },
+            },
           },
         });
 
-        // Invalidate caches so the new role is visible on the target user's next request.
-        // user:session cache holds the full Prisma User (including .role) for up to 1 h.
-        if (targetUser.supabaseAuthId) {
-          await redis.del(`user:session:${targetUser.supabaseAuthId}`).catch(() => {});
+        if (!targetMember || targetMember.status !== MemberStatus.ACTIVE) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Organization member not found',
+          });
         }
-        // Org-membership cache is keyed by Prisma userId; evict defensively.
-        if (targetUser.organizationId) {
-          await redis.del(
-            `sheriabot:orgmem:${input.userId}:${targetUser.organizationId}`
-          ).catch(() => {});
+
+        if (targetMember.role === MemberRole.OWNER) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Owner role changes require ownership transfer',
+          });
         }
+
+        const updatedMember = await ctx.prisma.organizationMember.update({
+          where: { userId_organizationId: { userId: input.userId, organizationId: callerOrgId } },
+          data: { role: input.role as MemberRole },
+          select: {
+            id: true,
+            userId: true,
+            organizationId: true,
+            role: true,
+            status: true,
+            user: { select: { email: true, fullName: true } },
+          },
+        });
+
+        await redis.del(`sheriabot:orgmem:${input.userId}:${callerOrgId}`).catch(() => {});
 
         logger.info({
           type: 'org_member_role_updated',
           updatedBy: ctx.user!.id,
           targetUserId: input.userId,
-          previousRole: targetUser.role,
+          previousRole: targetMember.role,
           newRole: input.role,
-          orgId: targetUser.organizationId,
+          orgId: callerOrgId,
+          platformAdminOverride: ctx.user.role === 'ADMIN',
         });
 
         return {
           success: true,
-          user: updatedUser,
-          message: `${updatedUser.fullName || updatedUser.email}'s role updated to ${input.role}`,
+          member: updatedMember,
+          message: `${updatedMember.user.fullName || updatedMember.user.email}'s organization role updated to ${input.role}`,
         };
       } catch (error: any) {
         logger.error({
@@ -710,6 +846,40 @@ export const organizationRouter = router({
       });
     }
   }),
+
+  getSeatUsage: protectedProcedure
+    .input(z.void())
+    .query(async ({ ctx }) => {
+      const { organizationId } = ctx.user;
+
+      if (!organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You are not a member of any organization',
+        });
+      }
+
+      const member = await ctx.prisma.organizationMember.findUnique({
+        where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
+        select: { status: true, role: true },
+      });
+
+      if (!member || member.status !== MemberStatus.ACTIVE) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Access denied to this organization',
+        });
+      }
+
+      const usage = await getSeatUsageForOrganization(ctx.prisma as any, organizationId);
+      return {
+        ...usage,
+        canManageMembers:
+          ctx.user.role === 'ADMIN' ||
+          member.role === MemberRole.OWNER ||
+          member.role === MemberRole.ADMIN,
+      };
+    }),
 
   /**
    * Update the current user's organization settings

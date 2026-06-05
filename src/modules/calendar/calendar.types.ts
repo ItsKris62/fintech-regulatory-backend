@@ -51,6 +51,8 @@ export interface GetEventParams {
 export interface UpdateEventParams {
   id:             string;
   organizationId: string;
+  actorUserId:    string;
+  actorRole:      string;
   title?:         string;
   description?:   string;
   dueDate?:       string;

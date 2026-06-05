@@ -19,6 +19,7 @@ import {
   getRuntimePlan,
   resolvePlanPriceForInterval,
 } from '@/lib/runtime-billing-plans';
+import { assertCanCreateOrJoinOrganization } from '../services/organization-plan-limit.service';
 
 /** Redis key for enterprise inquiry rate-limiting (max 3 per org per day) */
 const enterpriseInquiryKey = (orgId: string) => {
@@ -273,6 +274,18 @@ export const billingRouter = router({
       if (!org) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization not found.' });
       }
+
+      await assertCanCreateOrJoinOrganization({
+        prisma: prisma as any,
+        userId: user.id,
+        targetOrganizationId: orgId,
+        requestedPlan: input.plan as SubscriptionPlan,
+        actorContext: {
+          actorUserId: user.id,
+          actorRole: user.role,
+          sourceProcedure: 'billing.createCheckoutSession',
+        },
+      });
 
       // REGULATOR and ENTERPRISE are not self-serve via Stripe
       if (org.plan === SubscriptionPlan.ENTERPRISE) {

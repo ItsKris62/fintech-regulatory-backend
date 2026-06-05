@@ -10,6 +10,8 @@ import { NotFoundError, ForbiddenError } from '@/utils/error';
 import { redis } from '@/lib/redis/client';
 import { prisma } from '@/lib/prisma/client';
 import { GAP_ANALYSIS_UPLOAD_LIMITS, GAP_ANALYSIS_MAX_BASE64_CHARS } from '@/config/upload-limits.config';
+import { validateAuthorizedBenchmarkDocumentIds } from '../services/benchmark-document.service';
+import { canAccessFrameworkTier } from '../services/framework-access.service';
 
 export const gapAnalysisRouter = router({
   /**
@@ -25,19 +27,6 @@ export const gapAnalysisRouter = router({
     .query(async ({ ctx }) => {
       const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
 
-      const tierLevel: Record<string, number> = {
-        REGULATOR: 3,
-        STARTUP: 1,
-        BUSINESS: 2,
-        ENTERPRISE: 3,
-      };
-      const frameworkTierLevel: Record<string, number> = {
-        STARTUP: 1,
-        BUSINESS: 2,
-        ENTERPRISE: 3,
-      };
-      const userLevel = tierLevel[plan] ?? 0;
-
       const frameworks = await prisma.regulatoryFramework.findMany({
         where: { isActive: true },
         orderBy: { sortOrder: 'asc' },
@@ -50,7 +39,7 @@ export const gapAnalysisRouter = router({
         category: fw.category,
         description: fw.description,
         tier: fw.tier,
-        locked: userLevel < (frameworkTierLevel[fw.tier] ?? 1),
+        locked: !canAccessFrameworkTier(plan, fw.tier),
       }));
     }),
 
@@ -69,6 +58,7 @@ export const gapAnalysisRouter = router({
     .use(rateLimited('gapAnalysis', 5))
     .use(withPlanContext)
     .use(requirePlanFeature('gapAnalysis'))
+    .use(requirePlanFeature('benchmarkDocuments'))
     .use(checkUsageLimit(BillingMetric.GAP_ANALYSES, { deferIncrement: true }))
     .input(
       z.object({
@@ -110,10 +100,6 @@ export const gapAnalysisRouter = router({
 
         // Validate framework slugs and enforce tier access
         const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
-        const frameworkTierLevel: Record<string, number> = { STARTUP: 1, BUSINESS: 2, ENTERPRISE: 3 };
-        const tierLevel: Record<string, number> = { REGULATOR: 3, STARTUP: 1, BUSINESS: 2, ENTERPRISE: 3 };
-        const userLevel = tierLevel[plan] ?? 0;
-
         const dbFrameworks = await prisma.regulatoryFramework.findMany({
           where: { slug: { in: input.regulatoryFrameworks }, isActive: true },
           select: { id: true, slug: true, name: true, category: true, tier: true, sortOrder: true },
@@ -130,9 +116,7 @@ export const gapAnalysisRouter = router({
         const frameworksBySlug = new Map(dbFrameworks.map((framework) => [framework.slug, framework]));
         const orderedFrameworks = input.regulatoryFrameworks.map((slug) => frameworksBySlug.get(slug)!);
 
-        const lockedFrameworks = orderedFrameworks.filter(
-          (f) => userLevel < (frameworkTierLevel[f.tier] ?? 1)
-        );
+        const lockedFrameworks = orderedFrameworks.filter((f) => !canAccessFrameworkTier(plan, f.tier));
         if (lockedFrameworks.length > 0) {
           throw new TRPCError({
             code: 'FORBIDDEN',
@@ -170,42 +154,21 @@ export const gapAnalysisRouter = router({
         const frameworkNames = orderedFrameworks.map((f) => f.name);
         const frameworkSlugs = orderedFrameworks.map((f) => f.slug);
 
-        const benchmarkDocuments = benchmarkDocumentIds.length > 0
-          ? await prisma.legalDocument.findMany({
-              where: {
-                id: { in: benchmarkDocumentIds },
-                deletedAt: null,
-                contentType: 'REGULATORY_DOCUMENT',
-                OR: [
-                  { userId },
-                  { organizationId: orgId },
-                  { organizationId: null },
-                ],
-              },
-              select: {
-                id: true,
-                title: true,
-                actName: true,
-                documentType: true,
-                regulatoryBody: true,
-              },
-            })
-          : [];
-
-        if (benchmarkDocuments.length !== benchmarkDocumentIds.length) {
-          const foundIds = new Set(benchmarkDocuments.map((doc) => doc.id));
-          const invalidIds = benchmarkDocumentIds.filter((id) => !foundIds.has(id));
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: `Invalid benchmark document ID(s): ${invalidIds.join(', ')}`,
-          });
-        }
+        const benchmarkDocuments = await validateAuthorizedBenchmarkDocumentIds({
+          prisma: ctx.prisma as any,
+          userId,
+          organizationId: orgId,
+          benchmarkDocumentIds,
+        });
 
         const selectedBenchmarkDocuments = benchmarkDocuments.map((doc) => ({
           id: doc.id,
-          title: doc.title ?? doc.actName,
+          title: doc.title,
           documentType: doc.documentType,
-          regulatoryBody: doc.regulatoryBody,
+          regulatoryBody: doc.regulatoryBody ?? doc.source,
+          authorityStatus: doc.authorityStatus,
+          version: doc.version,
+          isGlobal: doc.isGlobal,
         }));
 
         logger.info({

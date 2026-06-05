@@ -128,7 +128,7 @@ export const PLANS: Record<SubscriptionPlan, PlanConfig> = {
       { text: 'API access (10,000 calls/month)', included: true },
       { text: 'Advanced analytics & reporting', included: true },
       { text: 'Priority support (24hr response)', included: true },
-      { text: 'Team collaboration (5 seats)', included: true },
+      { text: 'Team collaboration (6 seats)', included: true },
       { text: 'Document repository (10 GB)', included: true },
     ],
     entitlements: PLAN_ENTITLEMENTS.BUSINESS,
@@ -197,7 +197,7 @@ export const PLAN_COMPARISON_ROWS: ComparisonRow[] = [
     feature: 'Team Seats',
     regulator: '1',
     startup: '1',
-    business: '5',
+    business: '6',
     enterprise: 'Unlimited',
   },
   {

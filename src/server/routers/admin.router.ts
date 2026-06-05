@@ -10,6 +10,12 @@ import { getStats as getChecklistStats } from '@/lib/metrics/checklist-metrics';
 import { BadRequestError, OrganizationNotFoundError } from '@/utils/error';
 import { isPrismaForeignKeyError, sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { optionalOrganizationIdSchema } from '@/server/services/userProvisioning.service';
+import {
+  buildSeatLimitMessage,
+  findPendingOrganizationInvite,
+  getSeatUsageForOrganization,
+  hasSeatCapacity,
+} from '../services/organization-seat.service';
 
 const billingPlanCatalogUpdateItemSchema = z.object({
   id: z.enum(['STARTUP', 'BUSINESS']),
@@ -1345,6 +1351,42 @@ export const adminRouter = router({
         const token = randomBytes(32).toString('hex');
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + input.expiresInDays);
+
+        if (input.organizationId) {
+          const [existingMember, existingInvite, seatUsage] = await Promise.all([
+            ctx.prisma.organizationMember.findFirst({
+              where: {
+                organizationId: input.organizationId,
+                user: { email: input.email.toLowerCase() },
+                status: { in: ['ACTIVE', 'SUSPENDED'] },
+              },
+              select: { id: true },
+            }),
+            findPendingOrganizationInvite(ctx.prisma as any, input.organizationId, input.email),
+            getSeatUsageForOrganization(ctx.prisma as any, input.organizationId),
+          ]);
+
+          if (existingMember) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'This email is already an active member of the organization',
+            });
+          }
+
+          if (existingInvite) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'A pending invite already exists for this email',
+            });
+          }
+
+          if (!hasSeatCapacity(seatUsage)) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: buildSeatLimitMessage(seatUsage),
+            });
+          }
+        }
 
         const invitation = await ctx.prisma.invitation.create({
           data: {

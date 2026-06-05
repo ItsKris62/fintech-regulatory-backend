@@ -74,7 +74,9 @@ export interface PlanEntitlementConfig {
 
   // Metered boolean features (QuotaEntitlement: limit=0 -> unavailable, -1 -> unlimited)
   gapAnalysis: QuotaEntitlement;
+  benchmarkDocuments: boolean;
   policyGeneration: boolean;
+  customFrameworks: boolean;
   customIntegrations: boolean;
   teamCollaboration: boolean;
   regulatoryDashboard: boolean;
@@ -131,7 +133,9 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     checklistGenerations:  { limit: 1,   period: 'month' }, // resets monthly; generated history is retained
     apiAccess:             false,
     gapAnalysis:           { limit: 0,  period: 'month' }, // not available on free tier
+    benchmarkDocuments:    false,
     policyGeneration:      false,
+    customFrameworks:      false,
     customIntegrations:    false,
     teamCollaboration:     false,
     regulatoryDashboard:   true,
@@ -159,13 +163,15 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     checklistGenerations:  { limit: 5,  period: 'month' },
     apiAccess:             false,
     gapAnalysis:           { limit: 0,  period: 'month' }, // blocked -- upsell to Business tier
+    benchmarkDocuments:    false,
     policyGeneration:      false,
+    customFrameworks:      false,
     customIntegrations:    false,
     teamCollaboration:     false,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
     alerts:                { historyDays: 90, emailFrequency: 'WEEKLY', customFilters: false, aiSummary: false },
-    complianceCalendar:    true,
+    complianceCalendar:    false,
     documentRepository:    { limitMB: 1024 }, // 1 GB
     vaultDocumentMaxBytes:  10 * 1024 * 1024,
     vaultTotalQuotaBytes:   1024 * 1024 * 1024,
@@ -180,14 +186,16 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   /**
    * BUSINESS -- KES 44,999/month. "Most Popular".
    * Unlimited queries + checklists, gap analysis, API (10k calls/month),
-   * 5 seats, 10 GB storage.
+   * 6 seats, 10 GB storage.
    */
   BUSINESS: {
     complianceQueries:     { limit: -1,    period: 'month' },
     checklistGenerations:  { limit: -1,    period: 'month' },
     apiAccess:             { limit: 10000, period: 'month' },
     gapAnalysis:           { limit: 20,   period: 'month' }, // 20 analyses/month -- full framework access
+    benchmarkDocuments:    true,
     policyGeneration:      false, // Enterprise only
+    customFrameworks:      false, // Enterprise only
     customIntegrations:    false, // Enterprise only
     teamCollaboration:     true,
     regulatoryDashboard:   true,
@@ -198,7 +206,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     vaultDocumentMaxBytes:  25 * 1024 * 1024,
     vaultTotalQuotaBytes:   10240 * 1024 * 1024,
     vaultAllowedMimeTypes:  VAULT_BUSINESS_MIME_TYPES,
-    maxSeats:              5,
+    maxSeats:              6,
     supportTier:           'priority-24hr',
     analytics:             'advanced',
     knowledgeBaseAccess:   'full',
@@ -215,7 +223,9 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     checklistGenerations:  { limit: -1, period: 'month' },
     apiAccess:             { limit: -1, period: 'month' }, // unlimited
     gapAnalysis:           { limit: -1, period: 'month' }, // unlimited
+    benchmarkDocuments:    true,
     policyGeneration:      true,
+    customFrameworks:      true,
     customIntegrations:    true,
     teamCollaboration:     true,
     regulatoryDashboard:   true,
@@ -251,13 +261,15 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     checklistGenerations:  { limit: -1, period: 'month' }, // cap enforced via FREE_TRIAL_LIMITS
     apiAccess:             false,
     gapAnalysis:           { limit: -1, period: 'month' }, // cap enforced via FREE_TRIAL_LIMITS
+    benchmarkDocuments:    false,
     policyGeneration:      false,
+    customFrameworks:      false,
     customIntegrations:    false,
     teamCollaboration:     false,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
     alerts:                { historyDays: 7, emailFrequency: null, customFilters: false, aiSummary: false },
-    complianceCalendar:    true,
+    complianceCalendar:    false,
     documentRepository:    { limitMB: 1024 }, // same as STARTUP -- 1 GB
     vaultDocumentMaxBytes:  5 * 1024 * 1024,
     vaultTotalQuotaBytes:   100 * 1024 * 1024,
@@ -273,6 +285,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
 const pilotFullBase: PlanEntitlementConfig = {
   ...PLAN_ENTITLEMENTS.ENTERPRISE,
   policyGeneration: false,
+  customFrameworks: false,
   customIntegrations: false,
   sso: false,
   onPremise: false,

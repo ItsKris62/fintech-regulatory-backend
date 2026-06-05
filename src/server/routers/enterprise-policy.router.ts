@@ -58,10 +58,10 @@ export const enterprisePolicyRouter = router({
       if (input.sourceGapAnalysisId) {
         const gap = await prisma.gapAnalysis.findUnique({
           where: { id: input.sourceGapAnalysisId },
-          select: { userId: true, organizationId: true },
+          select: { organizationId: true },
         });
 
-        if (!gap || (gap.userId !== userId && gap.organizationId !== organizationId)) {
+        if (!gap || gap.organizationId !== organizationId) {
           throw new TRPCError({
             code: 'NOT_FOUND',
             message: 'Source gap analysis not found or does not belong to your organization.',
@@ -154,6 +154,7 @@ export const enterprisePolicyRouter = router({
    */
   getStatus: orgMemberProcedure
     .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
     .input(getStatusSchema)
     .query(async ({ input, ctx }) => {
       const policy = await prisma.generatedPolicy.findUnique({
@@ -178,7 +179,7 @@ export const enterprisePolicyRouter = router({
         });
       }
 
-      if (policy.organizationId !== ctx.orgMembership!.organizationId && policy.userId !== ctx.user!.id) {
+      if (policy.organizationId !== ctx.orgMembership!.organizationId) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'You do not have access to this policy.',
@@ -240,7 +241,6 @@ export const enterprisePolicyRouter = router({
     .use(requirePlanFeature('policyGeneration'))
     .input(getPolicySchema)
     .query(async ({ input, ctx }) => {
-      const userId = ctx.user!.id;
       const organizationId = ctx.orgMembership!.organizationId;
 
       const policy = await prisma.generatedPolicy.findUnique({
@@ -267,8 +267,8 @@ export const enterprisePolicyRouter = router({
         });
       }
 
-      // Verify ownership (user or org)
-      if (policy.userId !== userId && policy.organizationId !== organizationId) {
+      // Verify organization ownership.
+      if (policy.organizationId !== organizationId) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'You do not have access to this policy.',
@@ -290,15 +290,11 @@ export const enterprisePolicyRouter = router({
     .use(requirePlanFeature('policyGeneration'))
     .input(listPoliciesSchema)
     .query(async ({ input, ctx }) => {
-      const userId = ctx.user!.id;
       const organizationId = ctx.orgMembership!.organizationId;
 
       const where: any = {
         deletedAt: null,
-        OR: [
-          { userId },
-          { organizationId },
-        ],
+        organizationId,
       };
 
       if (input.status) {
@@ -376,7 +372,7 @@ export const enterprisePolicyRouter = router({
         },
       });
 
-      if (!policy || policy.userId !== userId && policy.organizationId !== organizationId) {
+      if (!policy || policy.organizationId !== organizationId) {
         throw new TRPCError({
           code: 'NOT_FOUND',
           message: 'Generated policy not found.',
@@ -457,7 +453,7 @@ export const enterprisePolicyRouter = router({
         });
       }
 
-      if (policy.userId !== userId && policy.organizationId !== organizationId) {
+      if (policy.organizationId !== organizationId) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'You do not have permission to delete this policy.',
@@ -505,7 +501,7 @@ export const enterprisePolicyRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Generated policy not found.' });
       }
 
-      if (policy.userId !== userId && policy.organizationId !== organizationId) {
+      if (policy.organizationId !== organizationId) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this policy.' });
       }
 

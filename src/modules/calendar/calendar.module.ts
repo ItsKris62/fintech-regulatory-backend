@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { Prisma } from '@prisma/client';
+import { MemberRole, MemberStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
@@ -51,7 +51,34 @@ function reminderCheckKey(organizationId: string): string {
 // 15-minute TTL for the reminder evaluation throttle
 const REMINDER_THROTTLE_SECONDS = 900;
 
+const CALENDAR_MANAGER_ROLES = new Set<string>([MemberRole.OWNER, MemberRole.ADMIN]);
+
+function isCalendarManager(role: string): boolean {
+  return CALENDAR_MANAGER_ROLES.has(role);
+}
+
+function isAssignedCompletionUpdate(input: UpdateEventParams): boolean {
+  const allowedKeys = new Set(['id', 'organizationId', 'actorUserId', 'actorRole', 'status']);
+  return input.status === 'COMPLETED' && Object.keys(input).every((key) => allowedKeys.has(key));
+}
+
 class CalendarModule {
+  private async assertAssignableMember(organizationId: string, assigneeId: string | undefined): Promise<void> {
+    if (!assigneeId) return;
+
+    const member = await prisma.organizationMember.findUnique({
+      where: { userId_organizationId: { userId: assigneeId, organizationId } },
+      select: { status: true },
+    });
+
+    if (!member || member.status !== MemberStatus.ACTIVE) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Assigned user must be an active member of this organization.',
+      });
+    }
+  }
+
   // --- createEvent -----------------------------------------------------------
 
   async createEvent(params: CreateEventParams): Promise<CalendarEventRecord> {
@@ -64,6 +91,8 @@ class CalendarModule {
     // the duplicate guard works regardless of what time-of-day is submitted.
     const normalizedDate = new Date(dueDate);
     normalizedDate.setUTCHours(0, 0, 0, 0);
+
+    await this.assertAssignableMember(organizationId, assigneeId);
 
     // -- Duplicate guard (Task 2) ---------------------------------------------
     // Use a same-day window in case legacy records predate the unique constraint.
@@ -205,19 +234,35 @@ class CalendarModule {
   // --- updateEvent ----------------------------------------------------------
 
   async updateEvent(params: UpdateEventParams): Promise<CalendarEventRecord> {
-    const { id, organizationId, dueDate, status, ...rest } = params;
+    const { id, organizationId, actorUserId, actorRole, dueDate, status, assigneeId, ...rest } = params;
 
     // Ensure the event belongs to the caller's org before mutating
     const existing = await prisma.complianceEvent.findFirst({
       where:  { id, organizationId },
-      select: { id: true },
+      select: { id: true, assigneeId: true },
     });
 
     if (!existing) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Event not found.' });
     }
 
+    const manager = isCalendarManager(actorRole);
+    if (!manager) {
+      if (!isAssignedCompletionUpdate(params) || existing.assigneeId !== actorUserId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only organization owners and admins can manage compliance calendar events.',
+        });
+      }
+    }
+
+    await this.assertAssignableMember(organizationId, assigneeId);
+
     const updateData: Record<string, unknown> = { ...rest };
+
+    if (assigneeId !== undefined) {
+      updateData['assigneeId'] = assigneeId;
+    }
 
     if (dueDate !== undefined) {
       const normalized = new Date(dueDate);

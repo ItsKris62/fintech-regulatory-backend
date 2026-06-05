@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
+import { MemberRole } from '@prisma/client';
 import { router, orgMemberProcedure } from '../trpc/trpc';
-import { withPlanContext, requirePlanFeature } from '../trpc/middleware';
+import { withPlanContext, requirePlanFeature, requireOrgMembershipRole } from '../trpc/middleware';
 import { calendarModule } from '@/modules/calendar';
 import {
   createComplianceEventSchema,
@@ -29,6 +30,7 @@ export const calendarRouter = router({
   create: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('complianceCalendar'))
+    .use(requireOrgMembershipRole([MemberRole.ADMIN, MemberRole.OWNER]))
     .input(createComplianceEventSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -108,6 +110,8 @@ export const calendarRouter = router({
         return await calendarModule.updateEvent({
           id,
           organizationId: ctx.orgMembership!.organizationId,
+          actorUserId:    ctx.user!.id,
+          actorRole:      ctx.orgMembership!.role,
           ...rest,
         });
       } catch (error: unknown) {
@@ -123,6 +127,7 @@ export const calendarRouter = router({
   delete: orgMemberProcedure
     .use(withPlanContext)
     .use(requirePlanFeature('complianceCalendar'))
+    .use(requireOrgMembershipRole([MemberRole.ADMIN, MemberRole.OWNER]))
     .input(deleteComplianceEventSchema)
     .mutation(async ({ input, ctx }) => {
       try {

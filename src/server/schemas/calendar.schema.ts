@@ -4,7 +4,16 @@ import { z } from 'zod';
 
 export const EVENT_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
 export const EVENT_STATUSES   = ['UPCOMING', 'IN_PROGRESS', 'COMPLETED', 'OVERDUE'] as const;
-export const EVENT_CATEGORIES = ['CUSTOM', 'FILING', 'AUDIT', 'RENEWAL', 'REVIEW'] as const;
+export const EVENT_CATEGORIES = [
+  'CUSTOM',
+  'FILING',
+  'AUDIT',
+  'RENEWAL',
+  'REVIEW',
+  'REGULATORY_DEADLINE',
+  'DOCUMENT_EXPIRY',
+  'COMPLIANCE_TASK',
+] as const;
 export const EVENT_RECURRENCES = ['NONE', 'MONTHLY', 'QUARTERLY', 'ANNUALLY'] as const;
 
 export type EventPriority   = typeof EVENT_PRIORITIES[number];
@@ -15,7 +24,7 @@ export type EventRecurrence = typeof EVENT_RECURRENCES[number];
 // --- Create -------------------------------------------------------------------
 
 export const createComplianceEventSchema = z.object({
-  title:       z.string().min(1, 'Title is required').max(200),
+  title:       z.string().trim().min(1, 'Title is required').max(200),
   description: z.string().max(2000).optional(),
   dueDate:     z.string().datetime({ message: 'Invalid date format  -  use ISO 8601' }),
   priority:    z.enum(EVENT_PRIORITIES).default('MEDIUM'),
@@ -31,7 +40,7 @@ export type CreateComplianceEventInput = z.infer<typeof createComplianceEventSch
 
 export const updateComplianceEventSchema = z.object({
   id:          z.string().cuid(),
-  title:       z.string().min(1).max(200).optional(),
+  title:       z.string().trim().min(1).max(200).optional(),
   description: z.string().max(2000).optional(),
   dueDate:     z.string().datetime().optional(),
   priority:    z.enum(EVENT_PRIORITIES).optional(),

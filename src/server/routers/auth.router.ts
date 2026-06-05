@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { MemberRole, MemberStatus } from '@prisma/client';
 import { createHash, randomBytes } from 'crypto';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -40,6 +41,10 @@ import {
   AUTH_ERROR_CODES,
   getAuthErrorMessage,
 } from '@/shared/errors/auth-error-messages';
+import {
+  buildSeatLimitMessage,
+  getSeatUsageForOrganization,
+} from '../services/organization-seat.service';
 
 // -- helpers ---------------------------------------------------------------
 
@@ -193,6 +198,19 @@ export const authRouter = router({
           if (!org) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid organization ID' });
         }
 
+        if (invitation?.organizationId) {
+          const seatUsage = await getSeatUsageForOrganization(ctx.prisma as any, invitation.organizationId);
+          const usedSeatsAfterConsumingThisInvite = Math.max(0, seatUsage.usedSeats - 1);
+          const canAcceptInvite = seatUsage.seatLimit === -1
+            || usedSeatsAfterConsumingThisInvite < seatUsage.seatLimit;
+          if (!canAcceptInvite) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: buildSeatLimitMessage(seatUsage),
+            });
+          }
+        }
+
         const resolvedRole = invitation
           ? (invitation.role as 'REGULATOR' | 'STARTUP' | 'ENTERPRISE')
           : input.role;
@@ -296,6 +314,30 @@ export const authRouter = router({
         }
 
         if (invitation) {
+          if (invitation.organizationId) {
+            await ctx.prisma.organizationMember.upsert({
+              where: {
+                userId_organizationId: {
+                  userId: user.id,
+                  organizationId: invitation.organizationId,
+                },
+              },
+              create: {
+                userId: user.id,
+                organizationId: invitation.organizationId,
+                role: MemberRole.MEMBER,
+                status: MemberStatus.ACTIVE,
+                invitedBy: invitation.invitedBy,
+                invitedAt: new Date(),
+              },
+              update: {
+                role: MemberRole.MEMBER,
+                status: MemberStatus.ACTIVE,
+              },
+            });
+            await redis.del(`sheriabot:orgmem:${user.id}:${invitation.organizationId}`).catch(() => {});
+          }
+
           await consumeInvitation(invitation.id).catch((err: any) =>
             logger.warn({ type: 'invitation_consume_failed', invitationId: invitation.id, error: err.message })
           );

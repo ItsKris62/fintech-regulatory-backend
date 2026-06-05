@@ -6,6 +6,7 @@ import { redis } from '@/lib/redis/client';
 import { BadRequestError, OrganizationNotFoundError } from '@/utils/error';
 import { isPrismaForeignKeyError, sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { logger } from '@/utils/logger';
+import { assertCanCreateOrJoinOrganization } from './organization-plan-limit.service';
 
 const PILOT_DURATION_DAYS = 14;
 const DEFAULT_PILOT_COHORT = 'PILOT_COHORT_ADMIN';
@@ -209,6 +210,18 @@ export async function createUserWithOrganization(
       // Without this row every orgMemberProcedure call returns FORBIDDEN/no_membership.
       // -----------------------------------------------------------------------
       if (organization) {
+        await assertCanCreateOrJoinOrganization({
+          prisma: tx as any,
+          userId: user.id,
+          targetOrganizationId: organization.id,
+          actorContext: {
+            actorUserId: input.adminId,
+            actorRole: UserRole.ADMIN,
+            sourceProcedure: 'userProvisioning.createUserWithOrganization',
+            platformAdminOverride: true,
+          },
+        });
+
         await tx.organizationMember.upsert({
           where: {
             userId_organizationId: { userId: user.id, organizationId: organization.id },
