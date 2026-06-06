@@ -2,6 +2,8 @@ import { TRPCError } from '@trpc/server';
 import { createHash } from 'crypto';
 import { router, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric } from '@prisma/client';
+import { storageConfig } from '@/config/storage.config';
+import { generatedPolicyExportService } from '@/services/generated-policy-export.service';
 import {
   rateLimited,
   withPlanContext,
@@ -16,10 +18,35 @@ import {
   getPolicySchema,
   listPoliciesSchema,
   updateSectionContentSchema,
+  updateSectionStatusSchema,
+  getVersionHistorySchema,
   getStatusSchema,
   deletePolicySchema,
   exportGeneratedPolicySchema,
 } from '../schemas/enterprise-policy.schema';
+
+type PolicySection = {
+  id: string;
+  title?: string;
+  content?: unknown;
+  contentMarkdown?: string;
+  status?: string;
+  wordCount?: number;
+  editedAt?: string;
+  editedByUserId?: string;
+};
+
+const EDITABLE_POLICY_STATUSES = new Set(['COMPLETED']);
+const EXPORTABLE_POLICY_STATUSES = new Set(['COMPLETED']);
+
+function getPolicySections(value: unknown): PolicySection[] {
+  return Array.isArray(value) ? (value as PolicySection[]) : [];
+}
+
+function nextSectionVersion(existing: Array<{ version: number }>): number {
+  const latest = existing.reduce((max, row) => Math.max(max, row.version), 0);
+  return latest + 1;
+}
 
 // =============================================================================
 // Enterprise AI Policy Generator — tRPC Router
@@ -365,30 +392,36 @@ export const enterprisePolicyRouter = router({
         where: { id: input.policyId },
         select: {
           id: true,
-          userId: true,
           organizationId: true,
           sections: true,
           status: true,
+          deletedAt: true,
         },
       });
 
-      if (!policy || policy.organizationId !== organizationId) {
+      if (!policy || policy.deletedAt) {
         throw new TRPCError({
           code: 'NOT_FOUND',
           message: 'Generated policy not found.',
         });
       }
 
-      if (policy.status !== 'COMPLETED') {
+      if (policy.organizationId !== organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have access to this policy.',
+        });
+      }
+
+      if (!EDITABLE_POLICY_STATUSES.has(policy.status)) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Policy sections can only be edited after generation is complete.',
         });
       }
 
-      // Parse existing sections, find the target section, update it
-      const sections = (policy.sections as any[]) ?? [];
-      const sectionIndex = sections.findIndex((s: any) => s.id === input.sectionId);
+      const sections = getPolicySections(policy.sections);
+      const sectionIndex = sections.findIndex((s) => s.id === input.sectionId);
 
       if (sectionIndex === -1) {
         throw new TRPCError({
@@ -397,34 +430,227 @@ export const enterprisePolicyRouter = router({
         });
       }
 
-      // Update the section content
+      const previousSection = sections[sectionIndex];
+      const previousStatus = previousSection.status ?? 'DRAFT';
+      const previousContent = previousSection.contentMarkdown ?? previousSection.content ?? null;
+      const nextContent = input.contentMarkdown ?? input.content ?? null;
+      const existingVersions = await prisma.generatedPolicySectionVersion.findMany({
+        where: { generatedPolicyId: policy.id, sectionId: input.sectionId },
+        select: { version: true },
+      });
+      const version = nextSectionVersion(existingVersions);
+      const editedAt = new Date();
+
       sections[sectionIndex] = {
-        ...sections[sectionIndex],
+        ...previousSection,
         content: input.content,
-        contentMarkdown: input.contentMarkdown ?? sections[sectionIndex].contentMarkdown,
-        status: 'edited',
-        editedAt: new Date().toISOString(),
+        contentMarkdown: input.contentMarkdown ?? previousSection.contentMarkdown,
+        status: previousStatus,
+        editedAt: editedAt.toISOString(),
+        editedByUserId: userId,
       };
 
-      await prisma.generatedPolicy.update({
-        where: { id: input.policyId },
-        data: {
-          sections: sections,
-        },
-      });
+      const [, updatedPolicy] = await prisma.$transaction([
+        prisma.generatedPolicySectionVersion.create({
+          data: {
+            generatedPolicyId: policy.id,
+            sectionId: input.sectionId,
+            version,
+            previousContent: previousContent === null ? undefined : previousContent as any,
+            newContent: nextContent === null ? undefined : nextContent as any,
+            previousStatus,
+            newStatus: previousStatus,
+            editedByUserId: userId,
+          },
+        }),
+        prisma.generatedPolicy.update({
+          where: { id: input.policyId },
+          data: { sections },
+          select: { id: true, sections: true, updatedAt: true },
+        }),
+      ]);
 
       logger.info({
         type: 'enterprise_policy_section_updated',
         policyId: input.policyId,
         sectionId: input.sectionId,
         userId,
+        organizationId,
+        version,
       });
+
+      logger.info({
+        type: 'enterprise_policy_section_version_created',
+        policyId: input.policyId,
+        sectionId: input.sectionId,
+        userId,
+        organizationId,
+        version,
+      });
+
+      const updatedSection = getPolicySections(updatedPolicy.sections).find((section) => section.id === input.sectionId);
 
       return {
         success: true,
-        sectionId: input.sectionId,
-        updatedAt: new Date().toISOString(),
+        section: updatedSection,
+        version,
+        updatedAt: updatedPolicy.updatedAt,
       };
+    }),
+
+  updateSectionStatus: orgMemberProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
+    .input(updateSectionStatusSchema)
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
+      const organizationId = ctx.orgMembership!.organizationId;
+
+      const policy = await prisma.generatedPolicy.findUnique({
+        where: { id: input.policyId },
+        select: {
+          id: true,
+          organizationId: true,
+          sections: true,
+          status: true,
+          deletedAt: true,
+        },
+      });
+
+      if (!policy || policy.deletedAt) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Generated policy not found.' });
+      }
+
+      if (policy.organizationId !== organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this policy.' });
+      }
+
+      if (!EDITABLE_POLICY_STATUSES.has(policy.status)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Policy section status can only be updated after generation is complete.',
+        });
+      }
+
+      const sections = getPolicySections(policy.sections);
+      const sectionIndex = sections.findIndex((s) => s.id === input.sectionId);
+
+      if (sectionIndex === -1) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Section "${input.sectionId}" not found in this policy.` });
+      }
+
+      const previousSection = sections[sectionIndex];
+      const previousStatus = previousSection.status ?? 'DRAFT';
+      const existingVersions = await prisma.generatedPolicySectionVersion.findMany({
+        where: { generatedPolicyId: policy.id, sectionId: input.sectionId },
+        select: { version: true },
+      });
+      const version = nextSectionVersion(existingVersions);
+      const editedAt = new Date();
+
+      sections[sectionIndex] = {
+        ...previousSection,
+        status: input.status,
+        editedAt: editedAt.toISOString(),
+        editedByUserId: userId,
+      };
+
+      const [, updatedPolicy] = await prisma.$transaction([
+        prisma.generatedPolicySectionVersion.create({
+          data: {
+            generatedPolicyId: policy.id,
+            sectionId: input.sectionId,
+            version,
+            previousContent: (previousSection.contentMarkdown ?? previousSection.content ?? undefined) as any,
+            newContent: (previousSection.contentMarkdown ?? previousSection.content ?? undefined) as any,
+            previousStatus,
+            newStatus: input.status,
+            editedByUserId: userId,
+          },
+        }),
+        prisma.generatedPolicy.update({
+          where: { id: input.policyId },
+          data: { sections },
+          select: { id: true, sections: true, updatedAt: true },
+        }),
+      ]);
+
+      logger.info({
+        type: 'enterprise_policy_section_status_changed',
+        policyId: input.policyId,
+        sectionId: input.sectionId,
+        userId,
+        organizationId,
+        previousStatus,
+        newStatus: input.status,
+        version,
+      });
+
+      const updatedSection = getPolicySections(updatedPolicy.sections).find((section) => section.id === input.sectionId);
+
+      return {
+        success: true,
+        section: updatedSection,
+        version,
+        updatedAt: updatedPolicy.updatedAt,
+      };
+    }),
+
+  getVersionHistory: orgMemberProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
+    .input(getVersionHistorySchema)
+    .query(async ({ input, ctx }) => {
+      const organizationId = ctx.orgMembership!.organizationId;
+
+      const policy = await prisma.generatedPolicy.findUnique({
+        where: { id: input.policyId },
+        select: {
+          id: true,
+          organizationId: true,
+          sections: true,
+          deletedAt: true,
+        },
+      });
+
+      if (!policy || policy.deletedAt) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Generated policy not found.' });
+      }
+
+      if (policy.organizationId !== organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this policy.' });
+      }
+
+      const sectionTitles = new Map(
+        getPolicySections(policy.sections).map((section) => [section.id, section.title ?? section.id]),
+      );
+
+      const rows = await prisma.generatedPolicySectionVersion.findMany({
+        where: { generatedPolicyId: policy.id },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+        select: {
+          id: true,
+          sectionId: true,
+          version: true,
+          previousStatus: true,
+          newStatus: true,
+          editedByUserId: true,
+          createdAt: true,
+        },
+      });
+
+      const users = await prisma.user.findMany({
+        where: { id: { in: [...new Set(rows.map((row) => row.editedByUserId))] } },
+        select: { id: true, fullName: true, email: true },
+      });
+      const userNames = new Map(users.map((user) => [user.id, user.fullName || user.email]));
+
+      return rows.map((row) => ({
+        ...row,
+        sectionTitle: sectionTitles.get(row.sectionId) ?? row.sectionId,
+        editedByName: userNames.get(row.editedByUserId) ?? 'Unknown user',
+      }));
     }),
 
   // ---------------------------------------------------------------------------
@@ -487,13 +713,10 @@ export const enterprisePolicyRouter = router({
 
       const policy = await prisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
-        select: {
-          id: true,
-          title: true,
-          userId: true,
-          organizationId: true,
-          deletedAt: true,
-          status: true,
+        include: {
+          user: { select: { fullName: true, email: true } },
+          organization: { select: { name: true } },
+          citations: { orderBy: { createdAt: 'asc' } },
         },
       });
 
@@ -505,53 +728,126 @@ export const enterprisePolicyRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this policy.' });
       }
 
-      if (policy.status !== 'COMPLETED') {
+      if (!EXPORTABLE_POLICY_STATUSES.has(policy.status)) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Policy can only be exported after generation completes.' });
       }
 
-      const timestamp = Date.now();
-      const extension = input.format.toLowerCase();
-      const filename = `generated-policy-${policy.id}-${timestamp}.${extension}`;
-      const storageKey = `policy-exports/${filename}`;
-      const uploadResult = await ctx.storageService.getUploadUrl(storageKey, 'application/octet-stream');
+      if (input.format === 'PDF') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'PDF export is not available yet. Please export DOCX.',
+        });
+      }
 
-      await prisma.$transaction([
-        prisma.generatedPolicyExportLog.create({
-          data: {
-            generatedPolicyId: policy.id,
-            userId,
-            organizationId,
-            format: input.format,
-            storageKey,
-            filename,
-            metadata: {
-              title: policy.title,
-              status: policy.status,
-              placeholderExport: true,
-            },
-          },
-        }),
-        prisma.generatedPolicy.update({
-          where: { id: policy.id },
-          data: {
-            lastExportedAt: new Date(),
-            lastExportFormat: input.format,
-          },
-        }),
-      ]);
-
+      const startedAt = Date.now();
       logger.info({
-        type: 'enterprise_policy_export_logged',
+        type: 'enterprise_policy_export_requested',
         policyId: policy.id,
         userId,
         organizationId,
         format: input.format,
       });
 
-      return {
-        downloadUrl: uploadResult.url,
-        filename,
-        expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
-      };
+      try {
+        const exportedAt = new Date();
+        const sections = getPolicySections(policy.sections);
+        if (!sections.length) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This policy has no generated sections to export.',
+          });
+        }
+
+        const buffer = await generatedPolicyExportService.generateDocx({
+          policyId: policy.id,
+          title: policy.title,
+          policyType: policy.policyType,
+          jurisdiction: policy.jurisdiction,
+          organizationName: policy.organization.name,
+          version: policy.version,
+          createdAt: policy.createdAt,
+          completedAt: policy.completedAt,
+          exportedAt,
+          exportedBy: policy.user.fullName || policy.user.email,
+          executiveSummary: policy.executiveSummary,
+          tableOfContents: policy.tableOfContents,
+          sections,
+          citations: policy.citations,
+          reviewNotes: policy.reviewNotes,
+        });
+
+        const dateStamp = exportedAt.toISOString().slice(0, 10).replace(/-/g, '');
+        const org = generatedPolicyExportService.sanitiseFilename(policy.organization.name);
+        const title = generatedPolicyExportService.sanitiseFilename(policy.title);
+        const filename = `SheriaBot-${org}-${title}-v${policy.version}-${dateStamp}.docx`;
+        const uploadResult = await ctx.storageService.uploadPolicyExport(buffer, filename, policy.id, userId);
+        const downloadUrl = await ctx.storageService.getDownloadUrl(
+          uploadResult.key,
+          storageConfig.presignedUrls.expiry.download,
+          false,
+          filename,
+        );
+
+        await prisma.$transaction([
+          prisma.generatedPolicyExportLog.create({
+            data: {
+              generatedPolicyId: policy.id,
+              userId,
+              organizationId,
+              format: input.format,
+              storageKey: uploadResult.key,
+              filename,
+              metadata: {
+                title: policy.title,
+                status: policy.status,
+                sizeBytes: uploadResult.size,
+                contentType: uploadResult.contentType,
+                sectionCount: sections.length,
+                citationCount: policy.citations.length,
+                durationMs: Date.now() - startedAt,
+              },
+            },
+          }),
+          prisma.generatedPolicy.update({
+            where: { id: policy.id },
+            data: {
+              lastExportedAt: exportedAt,
+              lastExportFormat: input.format,
+            },
+          }),
+        ]);
+
+        logger.info({
+          type: 'enterprise_policy_export_succeeded',
+          policyId: policy.id,
+          userId,
+          organizationId,
+          format: input.format,
+          storageKey: uploadResult.key,
+          durationMs: Date.now() - startedAt,
+        });
+
+        return {
+          downloadUrl,
+          filename,
+          expiresAt: new Date(Date.now() + storageConfig.presignedUrls.expiry.download * 1000).toISOString(),
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+
+        logger.error({
+          type: 'enterprise_policy_export_failed',
+          policyId: policy.id,
+          userId,
+          organizationId,
+          format: input.format,
+          error: error instanceof Error ? error.message : 'Unknown export error',
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to generate policy export. Please try again.',
+        });
+      }
     }),
 });

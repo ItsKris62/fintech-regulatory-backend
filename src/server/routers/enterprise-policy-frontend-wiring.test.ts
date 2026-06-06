@@ -50,11 +50,15 @@ describe('Batch 6 enterprise policy frontend wiring invariants', () => {
     expect(source).toContain('No generated policies yet. Create your first Enterprise policy draft to get started.');
   });
 
-  it('export is not presented as a completed Enterprise policy download', () => {
+  it('detail page presents real DOCX export and section editing workflow', () => {
     const detailSource = readFrontend(detailPage);
     const historySource = readFrontend(historyPage);
-    expect(detailSource).toContain('Export coming soon');
-    expect(detailSource).not.toContain('enterprisePolicy.exportPolicy.useMutation');
+    expect(detailSource).not.toContain('Export coming soon');
+    expect(detailSource).toContain('Export DOCX');
+    expect(detailSource).toContain('useEnterprisePolicyVersionHistory');
+    expect(detailSource).toContain('updateSectionContent');
+    expect(detailSource).toContain('updateSectionStatus');
+    expect(detailSource).toContain('Version History');
     expect(historySource).not.toContain('Download');
   });
 
@@ -76,7 +80,7 @@ describe('Batch 6 enterprise policy backend safety invariants', () => {
   });
 
   it('enterprise policy read and mutation procedures enforce policyGeneration', () => {
-    for (const procedure of ['getStatus', 'getPolicy', 'listPolicies', 'updateSectionContent', 'deletePolicy', 'exportPolicy']) {
+    for (const procedure of ['getStatus', 'getPolicy', 'listPolicies', 'updateSectionContent', 'updateSectionStatus', 'getVersionHistory', 'deletePolicy', 'exportPolicy']) {
       const procedureIndex = routerSource.indexOf(`${procedure}: orgMemberProcedure`);
       expect(procedureIndex, `${procedure} should exist`).toBeGreaterThan(-1);
       const nextProcedureMatch = /[\w]+:\s+orgMemberProcedure/g;
@@ -92,5 +96,23 @@ describe('Batch 6 enterprise policy backend safety invariants', () => {
     expect(routerSource).toContain('organizationId,');
     expect(routerSource).toContain('policy.organizationId !== organizationId');
     expect(routerSource).not.toContain('policy.userId !== userId && policy.organizationId !== organizationId');
+  });
+
+  it('enterprise policy export generates DOCX server-side and rejects PDF', () => {
+    expect(routerSource).toContain('generatedPolicyExportService.generateDocx');
+    expect(routerSource).toContain('uploadPolicyExport(buffer, filename, policy.id, userId)');
+    expect(routerSource).toContain('getDownloadUrl(');
+    expect(routerSource).toContain("input.format === 'PDF'");
+    expect(routerSource).toContain('PDF export is not available yet. Please export DOCX.');
+    expect(routerSource).not.toContain('placeholderExport: true');
+  });
+
+  it('section edits preserve citations through section-only JSON updates and version rows', () => {
+    expect(routerSource).toContain('prisma.generatedPolicySectionVersion.create');
+    expect(routerSource).toContain('previousContent');
+    expect(routerSource).toContain('newContent');
+    expect(routerSource).toContain('previousStatus');
+    expect(routerSource).toContain('newStatus');
+    expect(routerSource).toContain('data: { sections }');
   });
 });

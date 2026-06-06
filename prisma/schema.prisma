@@ -2096,6 +2096,7 @@ model GeneratedPolicy {
   citations         GeneratedPolicyCitation[]
   sourceSnapshots   GeneratedPolicySourceSnapshot[]
   exportLogs        GeneratedPolicyExportLog[]
+  sectionVersions   GeneratedPolicySectionVersion[]
   generationEvents  GeneratedPolicyGenerationEvent[]
 
   @@index([userId])
@@ -2168,6 +2169,26 @@ model GeneratedPolicyExportLog {
   @@index([userId])
   @@index([organizationId])
   @@index([exportedAt])
+}
+
+model GeneratedPolicySectionVersion {
+  id                String   @id @default(cuid())
+  generatedPolicyId String
+  sectionId         String
+  version           Int
+  previousContent   Json?
+  newContent        Json?
+  previousStatus    String?
+  newStatus         String?
+  editedByUserId    String
+  createdAt         DateTime @default(now())
+
+  generatedPolicy GeneratedPolicy @relation(fields: [generatedPolicyId], references: [id], onDelete: Cascade)
+
+  @@index([generatedPolicyId])
+  @@index([sectionId])
+  @@index([editedByUserId])
+  @@index([createdAt])
 }
 
 model GeneratedPolicyGenerationEvent {

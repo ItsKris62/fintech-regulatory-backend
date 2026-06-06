@@ -101,9 +101,24 @@ export const updateSectionContentSchema = z.object({
   content: z.any(), // TipTap JSON — runtime-validated but schema is opaque
 
   /** Optional markdown fallback for export */
-  contentMarkdown: z.string().optional(),
+  contentMarkdown: z.string().max(100_000).optional(),
 });
 export type UpdateSectionContentInput = z.infer<typeof updateSectionContentSchema>;
+
+export const SectionStatusEnum = z.enum(['DRAFT', 'REVIEWED', 'APPROVED', 'NEEDS_REVISION']);
+export type SectionStatus = z.infer<typeof SectionStatusEnum>;
+
+export const updateSectionStatusSchema = z.object({
+  policyId: z.string().cuid(),
+  sectionId: z.string().min(1).max(50),
+  status: SectionStatusEnum,
+});
+export type UpdateSectionStatusInput = z.infer<typeof updateSectionStatusSchema>;
+
+export const getVersionHistorySchema = z.object({
+  policyId: z.string().cuid(),
+});
+export type GetVersionHistoryInput = z.infer<typeof getVersionHistorySchema>;
 
 /**
  * Input schema for getting pipeline status (polling).
