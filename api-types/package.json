@@ -1,0 +1,16 @@
+{
+  "name": "@sheriabot/api-types",
+  "version": "1.0.0",
+  "description": "Declaration-only tRPC API types for SheriaBot frontend clients.",
+  "private": false,
+  "type": "commonjs",
+  "types": "index.d.ts",
+  "files": [
+    "index.d.ts",
+    "dist/**/*.d.ts"
+  ],
+  "peerDependencies": {
+    "@prisma/client": "^7.4.0",
+    "@trpc/server": "^11.9.0"
+  }
+}
