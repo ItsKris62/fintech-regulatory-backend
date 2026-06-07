@@ -5,6 +5,7 @@ import type { EffectivePlan } from '@/types/plan.types';
 import type { EffectivePlanSource, PilotEntitlementProfile, PilotPlanState } from '@/types/plan.types';
 import type { TrialContextState } from '@/modules/trial/trial.types';
 import type { PlanEntitlementConfig } from '@/config/entitlements.config';
+import type { AppliedEnterpriseOverride } from '@/modules/billing/enterprise-contract-overrides';
 import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
@@ -57,6 +58,7 @@ export interface Context {
   effectivePlanSource?: EffectivePlanSource;
   entitlementProfile?: PilotEntitlementProfile | null;
   entitlements?: PlanEntitlementConfig;
+  appliedPlanOverrides?: AppliedEnterpriseOverride[];
   pilotState?: PilotPlanState | null;
   customLimits?: Record<string, unknown> | null;
   usageInfo?: { metric: string; current: number; limit: number };

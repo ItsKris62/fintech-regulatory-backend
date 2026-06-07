@@ -183,6 +183,7 @@ export const billingRouter = router({
           },
           trial: trialStatus,
           effectivePlanSource: ctx.effectivePlanSource ?? 'FALLBACK',
+          appliedOverrides: ctx.appliedPlanOverrides ?? [],
           pilot: ctx.pilotState
             ? {
                 isPilot: true,

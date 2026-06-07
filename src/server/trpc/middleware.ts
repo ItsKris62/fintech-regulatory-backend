@@ -8,7 +8,6 @@ import { logger } from '@/utils/logger';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import {
-  getPilotEntitlements,
   getQuota,
   getQuotaFromEntitlements,
   requireEntitlementFeature,
@@ -486,9 +485,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
   const customLimits = typeof resolved.customLimits === 'object' && !Array.isArray(resolved.customLimits)
     ? resolved.customLimits as Record<string, unknown> | null
     : null;
-  const entitlements = resolved.source === 'PILOT' && resolved.entitlementProfile
-    ? getPilotEntitlements(resolved.entitlementProfile)
-    : undefined;
+  const entitlements = resolved.entitlements;
 
   return next({
     ctx: {
@@ -498,6 +495,7 @@ export const withPlanContext = middleware(async ({ ctx, next }) => {
       effectivePlanSource: resolved.source,
       entitlementProfile: resolved.entitlementProfile,
       entitlements,
+      appliedPlanOverrides: resolved.appliedOverrides,
       pilotState: resolved.pilotState
         ? {
             status: resolved.pilotState.status ?? 'ACTIVE',

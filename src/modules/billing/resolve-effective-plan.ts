@@ -20,7 +20,12 @@ import {
   EMPTY_TRIAL_USAGE,
   TrialUsageSchema,
 } from '@/modules/trial/trial.types';
-import { resolvePilotEntitlementProfile } from '@/config/entitlements.config';
+import { PILOT_ENTITLEMENT_PROFILES, PLAN_ENTITLEMENTS, resolvePilotEntitlementProfile } from '@/config/entitlements.config';
+import type { PlanEntitlementConfig } from '@/config/entitlements.config';
+import {
+  applyEnterpriseContractOverrides,
+  type AppliedEnterpriseOverride,
+} from './enterprise-contract-overrides';
 
 const PLAN_CACHE_TTL = 300;
 
@@ -35,6 +40,8 @@ export interface PilotContextState {
 export interface ResolvedEffectivePlan {
   plan: EffectivePlan;
   orgPlan: SubscriptionPlan;
+  entitlements: PlanEntitlementConfig;
+  appliedOverrides: AppliedEnterpriseOverride[];
   customLimits: Prisma.JsonValue | null;
   subscriptionStatus: SubscriptionStatus | null;
   gracePeriodEndsAt: string | null;
@@ -183,6 +190,39 @@ async function sendPlanDowngradeEmail(input: {
     reactivateUrl: `${base}/settings/billing`,
     dashboardUrl: `${base}/startup`,
   });
+}
+
+async function loadActiveEnterpriseOverrides(input: {
+  prisma: typeof prismaSingleton;
+  organizationId: string | null;
+  now: Date;
+}): Promise<Array<{ id: string; contractId: string; key: string; value: unknown }>> {
+  if (!input.organizationId) return [];
+
+  const overrides = await (input.prisma as any).enterprisePlanOverride.findMany({
+    where: {
+      organizationId: input.organizationId,
+      isActive: true,
+      OR: [{ startsAt: null }, { startsAt: { lte: input.now } }],
+      AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: input.now } }] }],
+      contract: {
+        organizationId: input.organizationId,
+        status: 'ACTIVE',
+        deletedAt: null,
+        OR: [{ startsAt: null }, { startsAt: { lte: input.now } }],
+        AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: input.now } }] }],
+      },
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { id: true, contractId: true, key: true, value: true },
+  }).catch(() => []);
+
+  return overrides.map((override: { id: string; contractId: string; key: string; value: unknown }) => ({
+    id: override.id,
+    contractId: override.contractId,
+    key: override.key,
+    value: override.value,
+  }));
 }
 
 export async function resolveEffectivePlan(input: {
@@ -661,9 +701,23 @@ export async function resolveEffectivePlan(input: {
     isPilot,
   });
 
+  const baseEntitlements = source === 'PILOT' && entitlementProfile
+    ? PILOT_ENTITLEMENT_PROFILES[entitlementProfile]
+    : PLAN_ENTITLEMENTS[effectivePlan];
+  const activeOverrides = source === 'SUSPENDED'
+    ? []
+    : await loadActiveEnterpriseOverrides({
+        prisma: input.prisma,
+        organizationId: input.organizationId,
+        now,
+      });
+  const { entitlements, appliedOverrides } = applyEnterpriseContractOverrides(baseEntitlements, activeOverrides);
+
   return {
     plan: effectivePlan,
     orgPlan,
+    entitlements,
+    appliedOverrides,
     customLimits: source === 'PILOT' ? null : customLimits,
     subscriptionStatus,
     gracePeriodEndsAt,

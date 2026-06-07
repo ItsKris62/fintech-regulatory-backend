@@ -65,9 +65,7 @@ export const frameworkRouter = router({
         select: frameworkSelect,
       });
 
-      if (frameworks.length === 0) return [];
-
-      const documentCounts = await ctx.prisma.legalDocument.groupBy({
+      const documentCounts = frameworks.length === 0 ? [] : await ctx.prisma.legalDocument.groupBy({
         by: ['category'],
         where: {
           category: { in: frameworks.map((framework) => framework.slug) },
@@ -77,12 +75,47 @@ export const frameworkRouter = router({
       });
       const countBySlug = new Map(documentCounts.map((row) => [row.category, row._count._all]));
 
-      return frameworks.map((framework) =>
+      const platformFrameworks = frameworks.map((framework) =>
         toFrameworkMetadata({
           ...framework,
           documentCount: countBySlug.get(framework.slug) ?? 0,
         }),
       );
+
+      const organizationId = ctx.user!.organizationId ?? null;
+      const canUseCustomFrameworks = ctx.entitlements?.customFrameworks === true;
+      if (!organizationId || !canUseCustomFrameworks) return platformFrameworks;
+
+      const customFrameworks = await (ctx.prisma as any).customFramework.findMany({
+        where: {
+          organizationId,
+          deletedAt: null,
+          status: { in: ['DRAFT', 'PUBLISHED'] },
+        },
+        include: { _count: { select: { sections: true, controls: true } } },
+        orderBy: [{ updatedAt: 'desc' }],
+      });
+
+      return [
+        ...platformFrameworks,
+        ...customFrameworks.map((framework: any) => ({
+          id: framework.id,
+          slug: `custom:${framework.id}`,
+          name: framework.name,
+          description: framework.description,
+          category: framework.category ?? 'custom',
+          tier: 'ENTERPRISE',
+          isActive: framework.status !== 'ARCHIVED',
+          version: String(framework.version),
+          documentCount: 0,
+          sectionCount: framework._count?.sections ?? 0,
+          controlCount: framework._count?.controls ?? 0,
+          isCustom: true,
+          organizationId: framework.organizationId,
+          createdAt: framework.createdAt,
+          updatedAt: framework.updatedAt,
+        })),
+      ];
     }),
 
   getBySlug: protectedProcedure

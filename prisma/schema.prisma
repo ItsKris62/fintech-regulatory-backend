@@ -223,8 +223,10 @@ model Organization {
   // Organization membership (multi-member orgs)
   members OrganizationMember[] @relation("OrganizationMembers")
 
-  pilotAccesses      PilotAccess[]
-  corpusGapFeedbacks CorpusGapFeedback[]
+  pilotAccesses       PilotAccess[]
+  corpusGapFeedbacks  CorpusGapFeedback[]
+  customFrameworks    CustomFramework[]
+  enterpriseContracts EnterpriseContract[]
 
   @@index([name])
   @@index([verificationStatus])
@@ -1307,6 +1309,21 @@ enum SubscriptionPlan {
   ENTERPRISE
 }
 
+enum CustomFrameworkStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum EnterpriseContractStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+  CANCELLED
+  ARCHIVED
+}
+
 enum PilotAccessStatus {
   ACTIVE
   EXPIRED
@@ -1365,6 +1382,153 @@ model PilotAccess {
   @@index([status])
   @@index([expiresAt])
   @@index([userId, organizationId, status])
+}
+
+model CustomFramework {
+  id              String                @id @default(cuid())
+  organizationId  String
+  name            String
+  slug            String
+  description     String?               @db.Text
+  jurisdiction    String?
+  regulator       String?
+  category        String?
+  status          CustomFrameworkStatus @default(DRAFT)
+  version         Int                   @default(1)
+  publishedAt     DateTime?
+  archivedAt      DateTime?
+  createdByUserId String
+  updatedByUserId String?
+  deletedAt       DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sections     CustomFrameworkSection[]
+  controls     CustomFrameworkControl[]
+  versions     CustomFrameworkVersion[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@index([status])
+  @@index([deletedAt])
+  @@index([createdAt])
+}
+
+model CustomFrameworkSection {
+  id             String   @id @default(cuid())
+  frameworkId    String
+  organizationId String
+  title          String
+  description    String?  @db.Text
+  order          Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  framework CustomFramework @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+
+  @@index([frameworkId])
+  @@index([organizationId])
+  @@index([order])
+}
+
+model CustomFrameworkControl {
+  id                 String   @id @default(cuid())
+  frameworkId        String
+  sectionId          String?
+  organizationId     String
+  code               String?
+  title              String
+  requirement        String   @db.Text
+  guidance           String?  @db.Text
+  evidenceRequired   Json?
+  severity           String?
+  frequency          String?
+  regulatorReference String?
+  sourceDocumentId   String?
+  order              Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  framework CustomFramework @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+
+  @@index([frameworkId])
+  @@index([sectionId])
+  @@index([organizationId])
+  @@index([severity])
+}
+
+model CustomFrameworkVersion {
+  id              String   @id @default(cuid())
+  frameworkId     String
+  organizationId  String
+  version         Int
+  snapshot        Json
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  framework CustomFramework @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+
+  @@unique([frameworkId, version])
+  @@index([frameworkId])
+  @@index([organizationId])
+  @@index([createdAt])
+}
+
+model EnterpriseContract {
+  id               String                   @id @default(cuid())
+  organizationId   String
+  status           EnterpriseContractStatus @default(DRAFT)
+  contractName     String?
+  contractNumber   String?
+  startsAt         DateTime?
+  endsAt           DateTime?
+  renewalDate      DateTime?
+  billingCycle     String?
+  currency         String?                  @default("KES")
+  monthlyAmount    Decimal?                 @db.Decimal(12, 2)
+  annualAmount     Decimal?                 @db.Decimal(12, 2)
+  notes            String?                  @db.Text
+  createdByUserId  String
+  updatedByUserId  String?
+  approvedByUserId String?
+  deletedAt        DateTime?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  overrides    EnterprisePlanOverride[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([startsAt])
+  @@index([endsAt])
+  @@index([deletedAt])
+}
+
+model EnterprisePlanOverride {
+  id              String    @id @default(cuid())
+  contractId      String
+  organizationId  String
+  key             String
+  value           Json
+  reason          String    @db.Text
+  startsAt        DateTime?
+  endsAt          DateTime?
+  isActive        Boolean   @default(true)
+  createdByUserId String
+  updatedByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  contract EnterpriseContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([contractId])
+  @@index([organizationId])
+  @@index([key])
+  @@index([isActive])
+  @@index([startsAt])
+  @@index([endsAt])
 }
 
 // ============================================================================
