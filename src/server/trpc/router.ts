@@ -28,6 +28,7 @@ import { adminMarketingRouter } from '../routers/adminMarketing.router';
 import { publicMarketingRouter } from '../routers/publicMarketing.router';
 import { enterprisePolicyRouter } from '../routers/enterprise-policy.router';
 import { applicationRouter } from '../routers/application.router';
+import { licenseRouter } from '../routers/license.router';
 
 /**
  * Root Application Router
@@ -87,6 +88,7 @@ export const appRouter = router({
   publicMarketing:  publicMarketingRouter,
   enterprisePolicy: enterprisePolicyRouter,
   application: applicationRouter,
+  license: licenseRouter,
 });
 
 /**

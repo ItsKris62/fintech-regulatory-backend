@@ -7,62 +7,71 @@ datasource db {
 }
 
 model User {
-  id                      String                           @id @default(cuid())
-  supabaseAuthId          String?                          @unique
-  email                   String                           @unique
-  password                String? // nullable - Supabase is the authoritative credential store
-  fullName                String
-  phone                   String?
-  avatar                  String?
-  role                    UserRole
-  status                  UserStatus                       @default(PENDING_VERIFICATION)
-  accountStatus           String                           @default("pending") // "pending" | "active" | "suspended" | "rejected" | "pending_approval"
-  emailVerified           Boolean                          @default(false)
-  emailVerifiedAt         DateTime?
-  emailVerificationToken  String?                          @unique
-  emailVerificationExpiry DateTime?
-  passwordResetToken      String?                          @unique
-  passwordResetExpiry     DateTime?
-  mustChangePassword      Boolean                          @default(false)
-  temporaryPasswordExpiresAt DateTime?
-  temporaryPasswordIssuedAt DateTime?
-  temporaryPasswordUsedAt DateTime?
+  id                                String                           @id @default(cuid())
+  supabaseAuthId                    String?                          @unique
+  email                             String                           @unique
+  password                          String? // nullable - Supabase is the authoritative credential store
+  fullName                          String
+  phone                             String?
+  avatar                            String?
+  role                              UserRole
+  status                            UserStatus                       @default(PENDING_VERIFICATION)
+  accountStatus                     String                           @default("pending") // "pending" | "active" | "suspended" | "rejected" | "pending_approval"
+  emailVerified                     Boolean                          @default(false)
+  emailVerifiedAt                   DateTime?
+  emailVerificationToken            String?                          @unique
+  emailVerificationExpiry           DateTime?
+  passwordResetToken                String?                          @unique
+  passwordResetExpiry               DateTime?
+  mustChangePassword                Boolean                          @default(false)
+  temporaryPasswordExpiresAt        DateTime?
+  temporaryPasswordIssuedAt         DateTime?
+  temporaryPasswordUsedAt           DateTime?
   temporaryPasswordCreatedByAdminId String?
-  temporaryPasswordDeliveryStatus String?
-  temporaryPasswordVersion Int                              @default(0)
-  organizationId          String?
-  lastLoginAt             DateTime?
-  lastLoginIp             String?
-  createdAt               DateTime                         @default(now())
-  updatedAt               DateTime                         @updatedAt
-  deletedAt               DateTime? // Soft delete timestamp - null means active
-  preferences             Json?
-  totpEnabled             Boolean                          @default(false)
-  totpSecret              String?
-  apiKeys                 ApiKey[]
-  auditLogs               AuditLog[]
-  checklists              Checklist[]
-  gapAnalyses             GapAnalysis[]
-  complianceQueries       ComplianceQuery[]
-  authoredDocuments       LegalDocument[]                  @relation("DocumentAuthor")
-  publishedDocuments      LegalDocument[]                  @relation("DocumentPublisher")
-  vaultDocuments          VaultDocument[]
-  notifications           Notification[]
-  notificationPreferences NotificationPreference?
-  categoryPreferences     NotificationCategoryPreference[]
-  policies                Policy[]
-  sessions                Session[]
-  organization            Organization?                    @relation(fields: [organizationId], references: [id])
-  queryFeedbacks          QueryFeedback[]
-  savedResponses          SavedResponse[]
-  corpusGapFeedbacks      CorpusGapFeedback[]
-  supportTickets          SupportTicket[]
-  ticketComments          TicketComment[]
-  regulatoryApplications  RegulatoryApplication[]
-  applicationTimelineEvents ApplicationTimelineEvent[]
-  applicationDocuments    ApplicationDocument[]
-  applicationFees         ApplicationFee[]
-  applicationFeedback     ApplicationRegulatorFeedback[]
+  temporaryPasswordDeliveryStatus   String?
+  temporaryPasswordVersion          Int                              @default(0)
+  organizationId                    String?
+  lastLoginAt                       DateTime?
+  lastLoginIp                       String?
+  createdAt                         DateTime                         @default(now())
+  updatedAt                         DateTime                         @updatedAt
+  deletedAt                         DateTime? // Soft delete timestamp - null means active
+  preferences                       Json?
+  totpEnabled                       Boolean                          @default(false)
+  totpSecret                        String?
+  apiKeys                           ApiKey[]
+  auditLogs                         AuditLog[]
+  checklists                        Checklist[]
+  gapAnalyses                       GapAnalysis[]
+  complianceQueries                 ComplianceQuery[]
+  authoredDocuments                 LegalDocument[]                  @relation("DocumentAuthor")
+  publishedDocuments                LegalDocument[]                  @relation("DocumentPublisher")
+  vaultDocuments                    VaultDocument[]
+  notifications                     Notification[]
+  notificationPreferences           NotificationPreference?
+  categoryPreferences               NotificationCategoryPreference[]
+  policies                          Policy[]
+  sessions                          Session[]
+  organization                      Organization?                    @relation(fields: [organizationId], references: [id])
+  queryFeedbacks                    QueryFeedback[]
+  savedResponses                    SavedResponse[]
+  corpusGapFeedbacks                CorpusGapFeedback[]
+  supportTickets                    SupportTicket[]
+  ticketComments                    TicketComment[]
+  regulatoryApplications            RegulatoryApplication[]
+  licensesAssigned                  License[]                        @relation("LicenseAssignedOwner")
+  licensesCreated                   License[]                        @relation("LicenseCreatedBy")
+  licensesUpdated                   License[]                        @relation("LicenseUpdatedBy")
+  licenseTimelineAssigned           LicenseTimelineEvent[]           @relation("LicenseTimelineAssignedTo")
+  licenseTimelineCreated            LicenseTimelineEvent[]           @relation("LicenseTimelineCreatedBy")
+  licenseTimelineUpdated            LicenseTimelineEvent[]           @relation("LicenseTimelineUpdatedBy")
+  licenseDocumentsCreated           LicenseDocument[]                @relation("LicenseDocumentCreatedBy")
+  licenseFeesCreated                LicenseFee[]                     @relation("LicenseFeeCreatedBy")
+  licenseFeesUpdated                LicenseFee[]                     @relation("LicenseFeeUpdatedBy")
+  applicationTimelineEvents         ApplicationTimelineEvent[]
+  applicationDocuments              ApplicationDocument[]
+  applicationFees                   ApplicationFee[]
+  applicationFeedback               ApplicationRegulatorFeedback[]
 
   // Free trial fields (one-time, user-scoped -- not org-scoped)
   freeTrialActivatedAt DateTime?
@@ -70,22 +79,22 @@ model User {
   freeTrialUsage       Json? // TrialUsage: { complianceQueries, gapAnalyses, checklists, vaultUploads, totalTokensUsed }
 
   // Pilot testing fields (14-day closed beta -- additive, never touched for non-pilot users)
-  isPilot            Boolean             @default(false)
-  pilotCohort        String? // e.g. "PILOT_COHORT_001"
-  pilotStartedAt     DateTime?
-  pilotExpiresAt     DateTime?
-  pilotAccessStatus  String              @default("ACTIVE") // ACTIVE | EXPIRED | CONVERTED | REVOKED
-  pilotFirstExtensionGrantedAt DateTime?
+  isPilot                       Boolean             @default(false)
+  pilotCohort                   String? // e.g. "PILOT_COHORT_001"
+  pilotStartedAt                DateTime?
+  pilotExpiresAt                DateTime?
+  pilotAccessStatus             String              @default("ACTIVE") // ACTIVE | EXPIRED | CONVERTED | REVOKED
+  pilotFirstExtensionGrantedAt  DateTime?
   pilotSecondExtensionGrantedAt DateTime?
-  pilotExtensionCount Int                @default(0)
-  pilotCreatedByAdminId String?
-  pilotLastExtendedByAdminId String?
-  postPilotTier      String              @default("REGULATOR") // tier to revert to after pilot expires
-  pilotConvertedAt   DateTime? // set when pilot converts to a paid plan
-  pilotEvents        PilotEvent[]
-  pilotAccesses      PilotAccess[]
-  publishedAlerts    RegulatoryAlert[]
-  alertNotifications AlertNotification[]
+  pilotExtensionCount           Int                 @default(0)
+  pilotCreatedByAdminId         String?
+  pilotLastExtendedByAdminId    String?
+  postPilotTier                 String              @default("REGULATOR") // tier to revert to after pilot expires
+  pilotConvertedAt              DateTime? // set when pilot converts to a paid plan
+  pilotEvents                   PilotEvent[]
+  pilotAccesses                 PilotAccess[]
+  publishedAlerts               RegulatoryAlert[]
+  alertNotifications            AlertNotification[]
 
   // Account deletion fields (GDPR compliant scheduled deletion)
   deletionScheduledAt DateTime?
@@ -201,6 +210,10 @@ model Organization {
   alertSubscription      AlertSubscription?
   alertNotifications     AlertNotification[]
   regulatoryApplications RegulatoryApplication[]
+  licenses               License[]
+  licenseTimelineEvents  LicenseTimelineEvent[]
+  licenseDocuments       LicenseDocument[]
+  licenseFees            LicenseFee[]
 
   // Enterprise AI Policy Generator
   generatedPolicies GeneratedPolicy[]
@@ -210,7 +223,7 @@ model Organization {
   // Organization membership (multi-member orgs)
   members OrganizationMember[] @relation("OrganizationMembers")
 
-  pilotAccesses PilotAccess[]
+  pilotAccesses      PilotAccess[]
   corpusGapFeedbacks CorpusGapFeedback[]
 
   @@index([name])
@@ -477,28 +490,28 @@ model ComplianceQueryRun {
 }
 
 model RegulatoryApplication {
-  id                 String                         @id @default(cuid())
-  organizationId     String
-  userId             String
-  title              String
-  regulator          String
-  licenseType        String
-  status             String                         @default("DRAFT")
-  progress           Int                            @default(0)
-  referenceNumber    String?
-  nextAction         String?
-  dueDate            DateTime?
-  submittedAt        DateTime?
-  decidedAt          DateTime?
-  deletedAt          DateTime?
-  createdAt          DateTime                       @default(now())
-  updatedAt          DateTime                       @updatedAt
-  organization       Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user               User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  timelineEvents     ApplicationTimelineEvent[]
-  documents          ApplicationDocument[]
-  fees               ApplicationFee[]
-  regulatorFeedback  ApplicationRegulatorFeedback[]
+  id                String                         @id @default(cuid())
+  organizationId    String
+  userId            String
+  title             String
+  regulator         String
+  licenseType       String
+  status            String                         @default("DRAFT")
+  progress          Int                            @default(0)
+  referenceNumber   String?
+  nextAction        String?
+  dueDate           DateTime?
+  submittedAt       DateTime?
+  decidedAt         DateTime?
+  deletedAt         DateTime?
+  createdAt         DateTime                       @default(now())
+  updatedAt         DateTime                       @updatedAt
+  organization      Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user              User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timelineEvents    ApplicationTimelineEvent[]
+  documents         ApplicationDocument[]
+  fees              ApplicationFee[]
+  regulatorFeedback ApplicationRegulatorFeedback[]
 
   @@index([organizationId])
   @@index([userId])
@@ -524,18 +537,18 @@ model ApplicationTimelineEvent {
 }
 
 model ApplicationDocument {
-  id            String                @id @default(cuid())
-  applicationId String
-  userId        String
-  name          String
-  status        String                @default("REQUIRED")
+  id              String                @id @default(cuid())
+  applicationId   String
+  userId          String
+  name            String
+  status          String                @default("REQUIRED")
   vaultDocumentId String?
-  notes         String?
-  uploadedAt    DateTime?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
-  application   RegulatoryApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notes           String?
+  uploadedAt      DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  application     RegulatoryApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([applicationId])
   @@index([status])
@@ -559,17 +572,17 @@ model ApplicationFee {
 }
 
 model ApplicationRegulatorFeedback {
-  id            String                @id @default(cuid())
-  applicationId String
-  userId        String
-  fromName      String?
-  message       String
-  actionRequired Boolean              @default(false)
-  dueDate       DateTime?
-  receivedAt    DateTime              @default(now())
-  createdAt     DateTime              @default(now())
-  application   RegulatoryApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String                @id @default(cuid())
+  applicationId  String
+  userId         String
+  fromName       String?
+  message        String
+  actionRequired Boolean               @default(false)
+  dueDate        DateTime?
+  receivedAt     DateTime              @default(now())
+  createdAt      DateTime              @default(now())
+  application    RegulatoryApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([applicationId])
   @@index([receivedAt])
@@ -640,29 +653,29 @@ model ChecklistItem {
 }
 
 model GapAnalysis {
-  id                   String    @id @default(cuid())
+  id                   String                 @id @default(cuid())
   userId               String
   organizationId       String?
   documentName         String
   documentUrl          String
   documentType         String
   regulatoryFrameworks Json
-  analysisDepth        String    @default("standard")
+  analysisDepth        String                 @default("standard")
   focusAreas           Json?
   results              Json?
   overallScore         Int?
-  status               String    @default("UPLOADING")
-  progress             Int       @default(0)
+  status               String                 @default("UPLOADING")
+  progress             Int                    @default(0)
   errorMessage         String?
-  ragGrounded          Boolean   @default(true)
-  chunksProcessed      Int       @default(1)
+  ragGrounded          Boolean                @default(true)
+  chunksProcessed      Int                    @default(1)
   reportUrl            String?
   reportGeneratedAt    DateTime?
   completedAt          DateTime?
   deletedAt            DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-  user                 User      @relation(fields: [userId], references: [id])
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  user                 User                   @relation(fields: [userId], references: [id])
   frameworks           GapAnalysisFramework[]
 
   // Enterprise AI Policy Generator
@@ -676,7 +689,7 @@ model GapAnalysis {
 }
 
 model GapAnalysisFramework {
-  id            String      @id @default(cuid())
+  id            String   @id @default(cuid())
   gapAnalysisId String
   frameworkId   String?
   slug          String
@@ -684,7 +697,7 @@ model GapAnalysisFramework {
   category      String?
   tier          String?
   sortOrder     Int?
-  capturedAt    DateTime    @default(now())
+  capturedAt    DateTime @default(now())
 
   gapAnalysis GapAnalysis          @relation(fields: [gapAnalysisId], references: [id], onDelete: Cascade)
   framework   RegulatoryFramework? @relation(fields: [frameworkId], references: [id], onDelete: SetNull)
@@ -920,6 +933,18 @@ enum PolicyStatus {
   GENERATING
   COMPLETED
   FAILED
+  ARCHIVED
+}
+
+enum LicenseStatus {
+  DRAFT
+  ACTIVE
+  PENDING_RENEWAL
+  SUBMITTED
+  APPROVED
+  EXPIRED
+  SUSPENDED
+  REVOKED
   ARCHIVED
 }
 
@@ -1449,17 +1474,152 @@ model ComplianceEvent {
   recurrence     String?   @default("NONE") // NONE | MONTHLY | QUARTERLY | ANNUALLY
   assigneeId     String?
   createdById    String
+  sourceType     String?
+  sourceId       String?
   completedAt    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  notifications Notification[]
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  notifications         Notification[]
+  licenseTimelineEvents LicenseTimelineEvent[]
 
   @@unique([organizationId, title, dueDate])
+  @@unique([organizationId, sourceType, sourceId])
   @@index([organizationId])
   @@index([organizationId, dueDate])
   @@index([organizationId, status])
+  @@index([organizationId, sourceType, sourceId])
+}
+
+// ============================================================================
+// License Management
+// ============================================================================
+
+model License {
+  id             String        @id @default(cuid())
+  organizationId String
+  licenseType    String
+  regulator      String
+  licenseNumber  String?
+  status         LicenseStatus @default(ACTIVE)
+
+  issueDate      DateTime?
+  expiryDate     DateTime?
+  renewalDueDate DateTime?
+  submittedAt    DateTime?
+  approvedAt     DateTime?
+
+  assignedOwnerId String?
+  notes           String? @db.Text
+
+  createdByUserId String
+  updatedByUserId String?
+
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedOwner User?        @relation("LicenseAssignedOwner", fields: [assignedOwnerId], references: [id], onDelete: SetNull)
+  createdBy     User         @relation("LicenseCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedBy     User?        @relation("LicenseUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  timelineEvents LicenseTimelineEvent[]
+  documents      LicenseDocument[]
+  fees           LicenseFee[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([expiryDate])
+  @@index([renewalDueDate])
+  @@index([assignedOwnerId])
+  @@index([deletedAt])
+}
+
+model LicenseTimelineEvent {
+  id             String @id @default(cuid())
+  licenseId      String
+  organizationId String
+
+  eventType   String
+  title       String
+  description String?   @db.Text
+  dueDate     DateTime?
+  completedAt DateTime?
+  status      String    @default("PENDING")
+
+  assignedToUserId   String?
+  evidenceDocumentId String?
+  complianceEventId  String?
+
+  createdByUserId String
+  updatedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  license          License          @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedTo       User?            @relation("LicenseTimelineAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  evidenceDocument VaultDocument?   @relation("LicenseTimelineEvidenceDocument", fields: [evidenceDocumentId], references: [id], onDelete: SetNull)
+  complianceEvent  ComplianceEvent? @relation(fields: [complianceEventId], references: [id], onDelete: SetNull)
+  createdBy        User             @relation("LicenseTimelineCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedBy        User?            @relation("LicenseTimelineUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([licenseId])
+  @@index([organizationId])
+  @@index([dueDate])
+  @@index([status])
+  @@index([assignedToUserId])
+  @@index([complianceEventId])
+}
+
+model LicenseDocument {
+  id              String   @id @default(cuid())
+  licenseId       String
+  organizationId  String
+  vaultDocumentId String
+  documentType    String?
+  notes           String?  @db.Text
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  license       License       @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vaultDocument VaultDocument @relation("LicenseDocumentVaultDocument", fields: [vaultDocumentId], references: [id], onDelete: Restrict)
+  createdBy     User          @relation("LicenseDocumentCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([licenseId, vaultDocumentId])
+  @@index([licenseId])
+  @@index([organizationId])
+  @@index([vaultDocumentId])
+}
+
+model LicenseFee {
+  id              String    @id @default(cuid())
+  licenseId       String
+  organizationId  String
+  amount          Decimal?  @db.Decimal(12, 2)
+  currency        String    @default("KES")
+  description     String?
+  dueDate         DateTime?
+  paidAt          DateTime?
+  status          String    @default("PENDING")
+  createdByUserId String
+  updatedByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  license      License      @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation("LicenseFeeCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedBy    User?        @relation("LicenseFeeUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([licenseId])
+  @@index([organizationId])
+  @@index([dueDate])
+  @@index([status])
 }
 
 model VaultDocument {
@@ -1499,8 +1659,10 @@ model VaultDocument {
   retentionExpiresAt DateTime?
   deletedAt          DateTime?
 
-  uploadedBy   User         @relation(fields: [uploadedById], references: [id])
-  organization Organization @relation(fields: [organizationId], references: [id])
+  uploadedBy                    User                   @relation(fields: [uploadedById], references: [id])
+  organization                  Organization           @relation(fields: [organizationId], references: [id])
+  licenseDocuments              LicenseDocument[]      @relation("LicenseDocumentVaultDocument")
+  licenseTimelineEvidenceEvents LicenseTimelineEvent[] @relation("LicenseTimelineEvidenceDocument")
 
   @@index([organizationId])
   @@index([uploadedById])
@@ -1511,16 +1673,16 @@ model VaultDocument {
 }
 
 model RegulatoryFramework {
-  id          String   @id @default(cuid())
-  slug        String   @unique
-  name        String
-  category    String
-  description String?
-  tier        String   @default("STARTUP")
-  isActive    Boolean  @default(true)
-  sortOrder   Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                   String                 @id @default(cuid())
+  slug                 String                 @unique
+  name                 String
+  category             String
+  description          String?
+  tier                 String                 @default("STARTUP")
+  isActive             Boolean                @default(true)
+  sortOrder            Int                    @default(0)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
   gapAnalysisSnapshots GapAnalysisFramework[]
 }
 
@@ -2088,11 +2250,11 @@ model GeneratedPolicy {
   completedAt DateTime?
 
   // Relations
-  user              User                      @relation(fields: [userId], references: [id])
-  organization      Organization              @relation(fields: [organizationId], references: [id])
-  sourceGapAnalysis GapAnalysis?              @relation(fields: [sourceGapAnalysisId], references: [id])
-  parent            GeneratedPolicy?          @relation("GeneratedPolicyVersions", fields: [parentId], references: [id])
-  versions          GeneratedPolicy[]         @relation("GeneratedPolicyVersions")
+  user              User                             @relation(fields: [userId], references: [id])
+  organization      Organization                     @relation(fields: [organizationId], references: [id])
+  sourceGapAnalysis GapAnalysis?                     @relation(fields: [sourceGapAnalysisId], references: [id])
+  parent            GeneratedPolicy?                 @relation("GeneratedPolicyVersions", fields: [parentId], references: [id])
+  versions          GeneratedPolicy[]                @relation("GeneratedPolicyVersions")
   citations         GeneratedPolicyCitation[]
   sourceSnapshots   GeneratedPolicySourceSnapshot[]
   exportLogs        GeneratedPolicyExportLog[]
@@ -2123,7 +2285,7 @@ model GeneratedPolicyCitation {
   sourceSnapshotId  String?
   createdAt         DateTime @default(now())
 
-  generatedPolicy GeneratedPolicy @relation(fields: [generatedPolicyId], references: [id], onDelete: Cascade)
+  generatedPolicy GeneratedPolicy                @relation(fields: [generatedPolicyId], references: [id], onDelete: Cascade)
   sourceSnapshot  GeneratedPolicySourceSnapshot? @relation(fields: [sourceSnapshotId], references: [id], onDelete: SetNull)
 
   @@index([generatedPolicyId])

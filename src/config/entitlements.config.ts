@@ -87,6 +87,8 @@ export interface PlanEntitlementConfig {
 
   /** Compliance Calendar -- create/manage org-scoped deadline events */
   complianceCalendar: boolean;
+  /** License Management -- manage org-scoped licenses, renewals, evidence links, and fees */
+  licenseManagement: boolean;
 
   // Tiered / numeric
   documentRepository: StorageEntitlement;
@@ -142,6 +144,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     regulatoryAlerts:      true,
     alerts:                { historyDays: -1, emailFrequency: 'REALTIME', customFilters: true, aiSummary: true },
     complianceCalendar:    false,
+    licenseManagement:     false,
     documentRepository:    { limitMB: 0 }, // no document repo
     vaultDocumentMaxBytes:  0,
     vaultTotalQuotaBytes:   0,
@@ -172,6 +175,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     regulatoryAlerts:      true,
     alerts:                { historyDays: 90, emailFrequency: 'WEEKLY', customFilters: false, aiSummary: false },
     complianceCalendar:    false,
+    licenseManagement:     false,
     documentRepository:    { limitMB: 1024 }, // 1 GB
     vaultDocumentMaxBytes:  10 * 1024 * 1024,
     vaultTotalQuotaBytes:   1024 * 1024 * 1024,
@@ -202,6 +206,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     regulatoryAlerts:      true,
     alerts:                { historyDays: 365, emailFrequency: 'DAILY', customFilters: true, aiSummary: true },
     complianceCalendar:    true,
+    licenseManagement:     true,
     documentRepository:    { limitMB: 10240 }, // 10 GB
     vaultDocumentMaxBytes:  25 * 1024 * 1024,
     vaultTotalQuotaBytes:   10240 * 1024 * 1024,
@@ -232,6 +237,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     regulatoryAlerts:      true,
     alerts:                { historyDays: -1, emailFrequency: 'REALTIME', customFilters: true, aiSummary: true },
     complianceCalendar:    true,
+    licenseManagement:     true,
     documentRepository:    { limitMB: -1 }, // unlimited
     vaultDocumentMaxBytes:  50 * 1024 * 1024,
     vaultTotalQuotaBytes:   -1,
@@ -270,6 +276,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     regulatoryAlerts:      true,
     alerts:                { historyDays: 7, emailFrequency: null, customFilters: false, aiSummary: false },
     complianceCalendar:    false,
+    licenseManagement:     false,
     documentRepository:    { limitMB: 1024 }, // same as STARTUP -- 1 GB
     vaultDocumentMaxBytes:  5 * 1024 * 1024,
     vaultTotalQuotaBytes:   100 * 1024 * 1024,

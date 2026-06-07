@@ -1,100 +1,147 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MemberRole, MemberStatus } from '@prisma/client';
 import {
-  buildOrganizationMembershipBackfillPlan,
+  type BackfillDependencies,
+  type LegacyUserCandidate,
+  buildInitialReport,
+  buildMembershipCreateInput,
+  classifyLegacyMembershipCase,
   membershipCacheKeysFor,
+  runOrganizationMembershipBackfill,
 } from './backfill-organization-memberships';
 
 function user(overrides: {
   id: string;
   organizationId: string | null;
-  memberships?: Array<{
-    id: string;
-    organizationId: string;
-    role: MemberRole;
-    status: MemberStatus;
-  }>;
+  memberships?: LegacyUserCandidate['organizationMemberships'];
   organization?: { id: string } | null;
-}) {
+}): LegacyUserCandidate {
   return {
-    email: `${overrides.id}@example.test`,
+    id: overrides.id,
+    organizationId: overrides.organizationId,
     organization: overrides.organization === undefined && overrides.organizationId
       ? { id: overrides.organizationId }
       : overrides.organization ?? null,
     organizationMemberships: overrides.memberships ?? [],
-    ...overrides,
   };
 }
 
-describe('organization membership backfill planner', () => {
-  it('does nothing when a matching active membership already exists', () => {
-    const plan = buildOrganizationMembershipBackfillPlan([
-      user({
-        id: 'user_1',
-        organizationId: 'org_1',
-        memberships: [{
-          id: 'member_1',
-          organizationId: 'org_1',
-          role: MemberRole.ADMIN,
-          status: MemberStatus.ACTIVE,
-        }],
-      }),
-    ]);
+function dependencies(candidates: LegacyUserCandidate[]): {
+  deps: BackfillDependencies;
+  createMembership: ReturnType<typeof vi.fn<BackfillDependencies['createMembership']>>;
+  deleteCacheKey: ReturnType<typeof vi.fn<BackfillDependencies['deleteCacheKey']>>;
+} {
+  const createMembership = vi.fn<BackfillDependencies['createMembership']>().mockResolvedValue(undefined);
+  const deleteCacheKey = vi.fn<BackfillDependencies['deleteCacheKey']>().mockResolvedValue(1);
 
-    expect(plan.existingMemberships).toBe(1);
-    expect(plan.creates).toEqual([]);
-    expect(plan.ambiguous).toEqual([]);
+  return {
+    createMembership,
+    deleteCacheKey,
+    deps: {
+      findCandidates: vi.fn<BackfillDependencies['findCandidates']>().mockResolvedValue(candidates),
+      findMemberships: vi.fn<BackfillDependencies['findMemberships']>().mockResolvedValue([]),
+      createMembership,
+      deleteCacheKey,
+    },
+  };
+}
+
+describe('organization membership backfill classification', () => {
+  it('reports an existing active matching membership without creating anything', () => {
+    const item = classifyLegacyMembershipCase(user({
+      id: 'user_1',
+      organizationId: 'org_1',
+      memberships: [{
+        id: 'member_1',
+        organizationId: 'org_1',
+        role: MemberRole.ADMIN,
+        status: MemberStatus.ACTIVE,
+      }],
+    }));
+
+    expect(item.classification).toBe('existing_active');
+    expect(item.wouldCreate).toBe(false);
+
+    const report = buildInitialReport('dry-run', [user({
+      id: 'user_1',
+      organizationId: 'org_1',
+      memberships: [{
+        id: 'member_1',
+        organizationId: 'org_1',
+        role: MemberRole.ADMIN,
+        status: MemberStatus.ACTIVE,
+      }],
+    })]);
+
+    expect(report.existingActive).toBe(1);
+    expect(report.wouldCreate).toBe(0);
   });
 
-  it('plans a safe MEMBER membership for a legacy user with no membership', () => {
-    const plan = buildOrganizationMembershipBackfillPlan([
-      user({ id: 'user_1', organizationId: 'org_1' }),
-    ]);
+  it('plans a safe MEMBER membership for a missing membership in dry-run', () => {
+    const item = classifyLegacyMembershipCase(user({ id: 'user_1', organizationId: 'org_1' }));
 
-    expect(plan.missingMemberships).toBe(1);
-    expect(plan.creates).toEqual([{
+    expect(item.classification).toBe('missing_would_create');
+    expect(item.wouldCreate).toBe(true);
+    expect(buildMembershipCreateInput('user_1', 'org_1')).toEqual({
       userId: 'user_1',
-      email: 'user_1@example.test',
       organizationId: 'org_1',
       role: MemberRole.MEMBER,
-    }]);
+      status: MemberStatus.ACTIVE,
+    });
   });
 
   it('skips existing non-active memberships instead of overwriting them', () => {
-    const plan = buildOrganizationMembershipBackfillPlan([
-      user({
-        id: 'user_1',
+    const item = classifyLegacyMembershipCase(user({
+      id: 'user_1',
+      organizationId: 'org_1',
+      memberships: [{
+        id: 'member_1',
         organizationId: 'org_1',
-        memberships: [{
-          id: 'member_1',
-          organizationId: 'org_1',
-          role: MemberRole.OWNER,
-          status: MemberStatus.REMOVED,
-        }],
-      }),
-    ]);
+        role: MemberRole.OWNER,
+        status: MemberStatus.REMOVED,
+      }],
+    }));
 
-    expect(plan.creates).toEqual([]);
-    expect(plan.ambiguous).toMatchObject([{
+    expect(item).toMatchObject({
+      classification: 'existing_non_active',
       userId: 'user_1',
       organizationId: 'org_1',
-      reason: 'existing_non_active_membership',
       existingStatus: MemberStatus.REMOVED,
       existingRole: MemberRole.OWNER,
-    }]);
+      wouldCreate: false,
+    });
   });
 
   it('reports missing organizations as ambiguous', () => {
-    const plan = buildOrganizationMembershipBackfillPlan([
+    const item = classifyLegacyMembershipCase(
       user({ id: 'user_1', organizationId: 'org_missing', organization: null }),
-    ]);
+    );
 
-    expect(plan.creates).toEqual([]);
-    expect(plan.ambiguous).toMatchObject([{
+    expect(item).toMatchObject({
+      classification: 'ambiguous_org_missing',
       userId: 'user_1',
       organizationId: 'org_missing',
-      reason: 'missing_organization',
-    }]);
+      wouldCreate: false,
+    });
+  });
+
+  it('reports other active organization memberships as ambiguous', () => {
+    const item = classifyLegacyMembershipCase(user({
+      id: 'user_1',
+      organizationId: 'org_1',
+      memberships: [{
+        id: 'member_2',
+        organizationId: 'org_2',
+        role: MemberRole.MEMBER,
+        status: MemberStatus.ACTIVE,
+      }],
+    }));
+
+    expect(item).toMatchObject({
+      classification: 'ambiguous_other_active_org',
+      otherActiveOrganizationIds: ['org_2'],
+      wouldCreate: false,
+    });
   });
 
   it('uses the expected membership cache keys', () => {
@@ -102,5 +149,45 @@ describe('organization membership backfill planner', () => {
       'sheriabot:orgmem:user_1:org_1',
       'sheriabot:planctx:user_1',
     ]);
+  });
+});
+
+describe('organization membership backfill runner', () => {
+  it('does not write or invalidate caches in dry-run mode', async () => {
+    const { deps, createMembership, deleteCacheKey } = dependencies([
+      user({ id: 'user_1', organizationId: 'org_1' }),
+    ]);
+
+    const report = await runOrganizationMembershipBackfill(
+      { mode: 'dry-run', verbose: false, json: false },
+      deps,
+    );
+
+    expect(report.wouldCreate).toBe(1);
+    expect(report.created).toBe(0);
+    expect(createMembership).not.toHaveBeenCalled();
+    expect(deleteCacheKey).not.toHaveBeenCalled();
+  });
+
+  it('creates missing memberships with MEMBER/ACTIVE and invalidates caches in apply mode', async () => {
+    const { deps, createMembership, deleteCacheKey } = dependencies([
+      user({ id: 'user_1', organizationId: 'org_1' }),
+    ]);
+
+    const report = await runOrganizationMembershipBackfill(
+      { mode: 'apply', verbose: false, json: false },
+      deps,
+    );
+
+    expect(createMembership).toHaveBeenCalledWith({
+      userId: 'user_1',
+      organizationId: 'org_1',
+      role: MemberRole.MEMBER,
+      status: MemberStatus.ACTIVE,
+    });
+    expect(deleteCacheKey).toHaveBeenCalledWith('sheriabot:orgmem:user_1:org_1');
+    expect(deleteCacheKey).toHaveBeenCalledWith('sheriabot:planctx:user_1');
+    expect(report.created).toBe(1);
+    expect(report.cachesInvalidated).toBe(2);
   });
 });
