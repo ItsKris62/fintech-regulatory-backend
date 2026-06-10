@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "country": "Malawi",
+  "jurisdictionCode": "MW",
+  "sources": [
+    {
+      "id": "mw-rbm",
+      "country": "Malawi",
+      "jurisdictionCode": "MW",
+      "regulator": "Reserve Bank of Malawi",
+      "sourceType": "REGULATOR",
+      "baseUrl": "https://www.rbm.mw/regulatorydocuments/",
+      "allowedDomains": ["rbm.mw", "www.rbm.mw"],
+      "categories": ["banking", "payments", "microfinance", "consumer-protection"],
+      "crawlMode": "link-discovery",
+      "priority": "P0",
+      "enabled": true,
+      "notes": "Central bank — primary regulator for banking, payments, microfinance. Check /regulatorydocuments/, /publications/, and /directives/ pages."
+    },
+    {
+      "id": "mw-fia",
+      "country": "Malawi",
+      "jurisdictionCode": "MW",
+      "regulator": "Financial Intelligence Authority Malawi",
+      "sourceType": "FIU",
+      "baseUrl": "https://www.fia.gov.mw/",
+      "allowedDomains": ["fia.gov.mw", "www.fia.gov.mw"],
+      "categories": ["aml-cft"],
+      "crawlMode": "link-discovery",
+      "priority": "P0",
+      "enabled": true,
+      "notes": "FIU for Malawi — AML/CFT legislation, guidelines, and reporting requirements."
+    },
+    {
+      "id": "mw-macra",
+      "country": "Malawi",
+      "jurisdictionCode": "MW",
+      "regulator": "Malawi Communications Regulatory Authority",
+      "sourceType": "REGULATOR",
+      "baseUrl": "https://www.macra.org.mw/",
+      "allowedDomains": ["macra.org.mw", "www.macra.org.mw"],
+      "categories": ["ict", "cybersecurity", "data-protection"],
+      "crawlMode": "link-discovery",
+      "priority": "P1",
+      "enabled": true,
+      "notes": "Telecom and ICT regulator. Cybersecurity guidelines and data protection-related regulations."
+    },
+    {
+      "id": "mw-malawilii",
+      "country": "Malawi",
+      "jurisdictionCode": "MW",
+      "regulator": "MalawiLII (Legal Information Institute)",
+      "sourceType": "LEGAL_DATABASE",
+      "baseUrl": "https://malawilii.org/legislation",
+      "allowedDomains": ["malawilii.org", "www.malawilii.org"],
+      "categories": ["banking", "payments", "data-protection", "cybersecurity", "aml-cft", "consumer-protection", "microfinance"],
+      "crawlMode": "link-discovery",
+      "priority": "P1",
+      "enabled": true,
+      "notes": "AfricanLII node for Malawi. Consolidated legislation database — use as fallback/cross-reference for primary source documents."
+    },
+    {
+      "id": "mw-parliament",
+      "country": "Malawi",
+      "jurisdictionCode": "MW",
+      "regulator": "Malawi Parliament",
+      "sourceType": "GOVERNMENT_PORTAL",
+      "baseUrl": "https://www.parliament.gov.mw/",
+      "allowedDomains": ["parliament.gov.mw", "www.parliament.gov.mw"],
+      "categories": ["banking", "payments", "data-protection", "cybersecurity", "aml-cft"],
+      "crawlMode": "link-discovery",
+      "priority": "P2",
+      "enabled": true,
+      "notes": "Official legislative portal — Acts as passed by Parliament."
+    },
+    {
+      "id": "mw-mse",
+      "country": "Malawi",
+      "jurisdictionCode": "MW",
+      "regulator": "Malawi Stock Exchange / Capital Markets",
+      "sourceType": "SECURITIES_REGULATOR",
+      "baseUrl": "https://www.mse.co.mw/",
+      "allowedDomains": ["mse.co.mw", "www.mse.co.mw"],
+      "categories": ["capital-markets"],
+      "crawlMode": "link-discovery",
+      "priority": "P2",
+      "enabled": true,
+      "notes": "Capital markets regulatory documents and listings rules."
+    }
+  ]
+}

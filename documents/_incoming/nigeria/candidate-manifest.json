@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "country": "Nigeria",
+  "jurisdictionCode": "NG",
+  "discoveredAt": "2026-06-10T16:44:36.543Z",
+  "entries": [
+    {
+      "id": "ng-candidate-read-more-001",
+      "country": "Nigeria",
+      "jurisdictionCode": "NG",
+      "discoveredTitle": "Read More",
+      "normalizedTitle": "Read More",
+      "sourceUrl": "https://ncc.gov.ng/sites/default/files/2026-06/Communique-Issued-at-The-End-of-the-109th-Board-Meeting-of-the-Nigerian-Communications-Commission-Held-on-May-25%2C-2026.pdf",
+      "sourcePageUrl": "https://www.ncc.gov.ng/",
+      "regulator": "Nigerian Communications Commission",
+      "suggestedCategory": "other",
+      "suggestedDocumentType": "OTHER",
+      "suggestedAuthorityStatus": "UNKNOWN",
+      "suggestedIsBinding": null,
+      "priority": "UNKNOWN",
+      "decision": "REJECTED",
+      "decisionReason": "False positive; not a P0 regulatory document.",
+      "reviewedBy": null,
+      "reviewedAt": null,
+      "discoveredAt": "2026-06-10T16:44:33.748Z",
+      "contentType": null,
+      "fileExtension": "pdf",
+      "proposedLocalPath": "documents/nigeria/other/communique-issued-at-the-end-of-the-109th-board-meeting-of-the-nigerian-communications-commission-held-on-may-25-202.pdf",
+      "downloadedLocalPath": null,
+      "checksumSha256": null,
+      "duplicateOf": null,
+      "tags": [],
+      "notes": null
+    }
+  ]
+}
