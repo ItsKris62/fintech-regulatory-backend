@@ -1,12 +1,12 @@
 # Download Report — Nigeria
 
-Generated: 2026-06-10T17:12:09.080Z
+Generated: 2026-06-10T20:04:19.252Z
 Mode: LIVE
 
 ## Summary
 
 - Downloaded: 0
-- Skipped (not APPROVED): 1
+- Skipped (not APPROVED): 24
 - Failed: 0
 
 ---

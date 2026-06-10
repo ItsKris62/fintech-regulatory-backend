@@ -1,12 +1,12 @@
 # Download Report — Malawi
 
-Generated: 2026-06-10T17:11:56.849Z
+Generated: 2026-06-10T20:04:19.231Z
 Mode: LIVE
 
 ## Summary
 
 - Downloaded: 0
-- Skipped (not APPROVED): 4
+- Skipped (not APPROVED): 20
 - Failed: 0
 
 ---

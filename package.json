@@ -45,7 +45,8 @@
     "corpus:validate": "tsx src/scripts/corpus/validate-manifest.ts",
     "corpus:inventory": "tsx src/scripts/corpus/inventory.ts",
     "corpus:discover": "tsx src/scripts/corpus/discover-sources.ts",
-    "corpus:download": "tsx src/scripts/corpus/download-approved.ts"
+    "corpus:download": "tsx src/scripts/corpus/download-approved.ts",
+    "corpus:intake": "tsx src/scripts/corpus/manual-intake.ts"
   },
   "keywords": [],
   "author": "",
