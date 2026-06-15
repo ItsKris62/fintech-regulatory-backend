@@ -33,6 +33,7 @@ export type ExtendedNotificationType =
   | 'CHECKLIST_COMPLETED'
   | 'GAP_ANALYSIS_STARTED'
   | 'GAP_ANALYSIS_COMPLETED'
+  | 'CORPUS_GAP_REPORT_INGESTED'
   // -- Document vault --------------------------------------------------------
   | 'DOCUMENT_UPLOADED'
   | 'DOCUMENT_DELETED'
@@ -104,6 +105,7 @@ export interface NotificationPreferences {
     organization_invite: { email: boolean; inApp: boolean };
     system_announcement: { email: boolean; inApp: boolean };
     requirement_due: { email: boolean; inApp: boolean };
+    corpus_gap_report_ingested: { email: boolean; inApp: boolean };
     subscription_alert: { email: boolean; inApp: boolean };
     report_ready: { email: boolean; inApp: boolean };
     member_joined: { email: boolean; inApp: boolean };
@@ -120,6 +122,7 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: Omit<NotificationPreferences, 'us
     organization_invite: { email: true, inApp: true },
     system_announcement: { email: true, inApp: true },
     requirement_due: { email: true, inApp: true },
+    corpus_gap_report_ingested: { email: true, inApp: true },
     subscription_alert: { email: true, inApp: true },
     report_ready: { email: true, inApp: true },
     member_joined: { email: false, inApp: true },

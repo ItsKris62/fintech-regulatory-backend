@@ -9,14 +9,17 @@ describe('appRouter critical feature mounts', () => {
     expect(routerSource).toContain("import { checklistRouter } from '../routers/checklist.router';");
     expect(routerSource).toContain("import { complianceDashboardRouter } from '../routers/compliance-dashboard.router';");
     expect(routerSource).toContain("import { gapAnalysisRouter } from '../routers/gap-analysis.router';");
+    expect(routerSource).toContain("import { corpusGapReportRouter } from '../routers/corpusGapReport.router';");
     expect(routerSource).toMatch(/\bchecklist:\s*checklistRouter\b/);
     expect(routerSource).toMatch(/\bcomplianceDashboard:\s*complianceDashboardRouter\b/);
     expect(routerSource).toMatch(/\bgapAnalysis:\s*gapAnalysisRouter\b/);
+    expect(routerSource).toMatch(/\bcorpusGapReport:\s*corpusGapReportRouter\b/);
   });
 
   it('documents the tRPC namespaces consumed by the dashboard UI', () => {
     expect(routerSource).toContain('/trpc/checklist.*');
     expect(routerSource).toContain('/trpc/complianceDashboard.*');
     expect(routerSource).toContain('/trpc/gapAnalysis.*');
+    expect(routerSource).toContain('/trpc/corpusGapReport.*');
   });
 });

@@ -31,6 +31,7 @@ import { applicationRouter } from '../routers/application.router';
 import { licenseRouter } from '../routers/license.router';
 import { customFrameworkRouter } from '../routers/custom-framework.router';
 import { enterpriseContractRouter } from '../routers/enterprise-contract.router';
+import { corpusGapReportRouter } from '../routers/corpusGapReport.router';
 
 /**
  * Root Application Router
@@ -61,6 +62,7 @@ import { enterpriseContractRouter } from '../routers/enterprise-contract.router'
  * - /trpc/enterprisePolicy.* - Enterprise AI Policy Generator (ENTERPRISE tier only)
  * - /trpc/customFramework.*  - Org-scoped Enterprise custom frameworks
  * - /trpc/enterpriseContract.* - Admin Enterprise contract overrides
+ * - /trpc/corpusGapReport.* - Structured missing corpus document reports
  */
 export const appRouter = router({
   auth: authRouter,
@@ -95,6 +97,7 @@ export const appRouter = router({
   license: licenseRouter,
   customFramework: customFrameworkRouter,
   enterpriseContract: enterpriseContractRouter,
+  corpusGapReport: corpusGapReportRouter,
 });
 
 /**

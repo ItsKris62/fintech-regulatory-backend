@@ -56,6 +56,7 @@ model User {
   queryFeedbacks                    QueryFeedback[]
   savedResponses                    SavedResponse[]
   corpusGapFeedbacks                CorpusGapFeedback[]
+  corpusGapReports                  CorpusGapReport[]
   supportTickets                    SupportTicket[]
   ticketComments                    TicketComment[]
   regulatoryApplications            RegulatoryApplication[]
@@ -225,6 +226,7 @@ model Organization {
 
   pilotAccesses       PilotAccess[]
   corpusGapFeedbacks  CorpusGapFeedback[]
+  corpusGapReports    CorpusGapReport[]
   customFrameworks    CustomFramework[]
   enterpriseContracts EnterpriseContract[]
 
@@ -992,6 +994,7 @@ enum NotificationType {
   CHECKLIST_COMPLETED
   GAP_ANALYSIS_STARTED
   GAP_ANALYSIS_COMPLETED
+  CORPUS_GAP_REPORT_INGESTED
 
   // Document vault
   DOCUMENT_UPLOADED
@@ -2616,5 +2619,63 @@ model CorpusGapFeedback {
   @@index([userId])
   @@index([organizationId])
   @@index([status])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// Corpus Gap Reports
+// ============================================================================
+
+enum CorpusGapDocumentType {
+  LEGISLATION
+  REGULATION
+  CIRCULAR
+  GUIDELINE
+  POLICY
+  STANDARD
+  OTHER
+}
+
+enum CorpusGapJurisdiction {
+  KENYA
+  MALAWI
+  NIGERIA
+  RWANDA
+  OTHER
+}
+
+enum CorpusGapReportStatus {
+  PENDING
+  UNDER_REVIEW
+  INGESTED
+  REJECTED
+  DUPLICATE
+}
+
+model CorpusGapReport {
+  id               String                  @id @default(cuid())
+  organizationId   String
+  reportedByUserId String
+  documentName     String
+  issuingAuthority String
+  documentType     CorpusGapDocumentType
+  jurisdiction     CorpusGapJurisdiction
+  description      String?
+  sourceUrl        String?
+  status           CorpusGapReportStatus   @default(PENDING)
+  adminNotes       String?
+  resolvedAt       DateTime?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  reportedByUser User         @relation(fields: [reportedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([reportedByUserId])
+  @@index([status])
+  @@index([jurisdiction])
+  @@index([documentType])
+  @@index([documentName, jurisdiction, status])
   @@index([createdAt])
 }
