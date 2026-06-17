@@ -206,7 +206,7 @@ export async function deleteByFilter(
   namespace?: string
 ): Promise<void> {
   const index = await getIndex();
-  await index.namespace(namespace || '__default__').deleteMany(filter);
+  await index.namespace(namespace || '__default__').deleteMany({ filter });
 }
 
 /**

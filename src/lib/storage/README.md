@@ -41,11 +41,7 @@ R2_PUBLIC_URL=https://your-bucket.r2.dev  # Optional custom domain
 npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
 ```
 
-### 4. Test Storage System
-
-```bash
-tsx scripts/test-storage.ts
-```
+### 4. Test Storage
 
 ## 📚 Usage Examples
 

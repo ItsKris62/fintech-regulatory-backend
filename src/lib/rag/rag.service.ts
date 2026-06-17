@@ -97,7 +97,7 @@ function andFilters(...filters: Array<Record<string, any> | undefined | null>): 
   return { $and: present };
 }
 
-function indexVersionFilter(mode?: SearchOptions['sourceIndexMode'], fallbackToV1 = false): Record<string, any> | undefined {
+function indexVersionFilter(mode: SearchOptions['sourceIndexMode'] = 'v1', fallbackToV1 = false): Record<string, any> | undefined {
   const effectiveMode = fallbackToV1 && mode === 'prefer-v2' ? 'v1' : mode;
   if (effectiveMode === 'v2' || effectiveMode === 'prefer-v2') {
     return { indexVersion: { $eq: 'v2' } };

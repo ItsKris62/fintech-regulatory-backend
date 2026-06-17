@@ -1,5 +1,4 @@
 import { prisma } from '../lib/prisma/client';
-import { deleteVectors } from '../lib/rag/client';
 
 const UNINTENDED_DOC_IDS = [
   'cmn4yrwto07u87gs5stdbdfsh', // POCAMLA Act
@@ -32,7 +31,9 @@ async function run() {
 
   for (const chunk of unintendedChunks) {
     byDoc[chunk.documentId].chunks++;
-    byDoc[chunk.documentId].pineconeIds.push(chunk.pineconeId);
+    if (chunk.pineconeId) {
+      byDoc[chunk.documentId].pineconeIds.push(chunk.pineconeId);
+    }
     byDoc[chunk.documentId].chunkIds.push(chunk.id);
   }
 
@@ -80,14 +81,10 @@ async function run() {
     for (const [docId, data] of Object.entries(byDoc)) {
       if (data.pineconeIds.length > 0) {
         // Pinecone deletion
-        console.log(`Deleting ${data.pineconeIds.length} vectors for doc ${docId}...`);
-        
-        // Chunk array to avoid URL length limits if needed, pinecone can usually handle 1000
-        const chunkSize = 500;
-        for (let i = 0; i < data.pineconeIds.length; i += chunkSize) {
-          const batch = data.pineconeIds.slice(i, i + chunkSize);
-          await deleteVectors(batch);
-        }
+        console.log(`Deleting vectors for doc ${docId} using filter...`);
+        const { deleteByFilter } = require('../lib/rag/client');
+        await deleteByFilter({ documentId: docId, indexVersion: 'v2' });
+
         
         // DB deletion
         console.log(`Deleting ${data.chunkIds.length} DB chunks for doc ${docId}...`);
@@ -102,4 +99,7 @@ async function run() {
   }
 }
 
-run().catch(console.error).finally(() => (prisma as any).$disconnect());
+run().catch((e) => {
+  console.error(e);
+  process.exit(1);
+}).finally(() => (prisma as any).$disconnect());

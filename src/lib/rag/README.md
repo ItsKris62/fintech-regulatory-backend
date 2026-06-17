@@ -53,11 +53,7 @@ OPENAI_API_KEY=sk-...
 npm install @pinecone-database/pinecone
 ```
 
-### 4. Test RAG System
 
-```bash
-tsx scripts/test-rag.ts
-```
 
 ## 📚 Usage Examples
 

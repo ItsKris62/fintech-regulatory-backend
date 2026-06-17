@@ -24,22 +24,6 @@ Get an API key from [console.anthropic.com](https://console.anthropic.com) and a
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-### 2. Test AI Service
-
-```bash
-# Run all tests
-tsx scripts/test-ai.ts
-
-# Test policy generation only
-tsx scripts/test-ai.ts policy
-
-# Test compliance queries only
-tsx scripts/test-ai.ts query
-
-# Test quick checks
-tsx scripts/test-ai.ts quick
-```
-
 ## 📚 Usage Examples
 
 ### Policy Generation

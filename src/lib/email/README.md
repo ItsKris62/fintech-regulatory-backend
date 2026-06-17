@@ -27,15 +27,7 @@ RESEND_API_KEY=re_...
 FROM_EMAIL=noreply@yourdomain.com
 ```
 
-### 2. Test Email Service
 
-```bash
-# Test configuration and generate template previews
-tsx scripts/test-email.ts
-
-# Send actual test email
-tsx scripts/test-email.ts your@email.com
-```
 
 ## 📚 Usage Examples
 
@@ -323,13 +315,7 @@ If rate limit is exceeded, the email is automatically queued for later sending.
 6. **CTA Buttons**: Make them obvious and accessible
 7. **Branding**: Consistent SheriaBot branding across all templates
 
-### Testing Templates
 
-Preview templates before sending:
-
-```bash
-tsx scripts/test-email.ts
-```
 
 This generates HTML previews in `email-previews/` directory that you can open in a browser.
 

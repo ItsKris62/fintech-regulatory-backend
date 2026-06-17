@@ -91,7 +91,12 @@ describe('RAGService.search', () => {
       'data protection obligations',
       8,
       undefined,
-      { frameworkSlug: 'data-protection' },
+      {
+        $and: [
+          { frameworkSlug: 'data-protection' },
+          { $or: [{ indexVersion: { $eq: 'v1' } }, { indexVersion: { $exists: false } }] },
+        ],
+      },
     );
     expect(results).toHaveLength(2);
     expect(results[0].chunkText).toBe('relaxed result');
@@ -128,7 +133,12 @@ describe('RAGService.search', () => {
       undefined,
       {
         $and: [
-          { frameworkSlug: 'aml-cft' },
+          {
+            $and: [
+              { frameworkSlug: 'aml-cft' },
+              { $or: [{ indexVersion: { $eq: 'v1' } }, { indexVersion: { $exists: false } }] },
+            ]
+          },
           { $or: [{ corpusStatus: { $eq: 'ACTIVE' } }, { corpusStatus: { $exists: false } }] },
           { $or: [{ authorityStatus: { $eq: 'IN_FORCE' } }, { authorityStatus: { $exists: false } }] },
         ],
