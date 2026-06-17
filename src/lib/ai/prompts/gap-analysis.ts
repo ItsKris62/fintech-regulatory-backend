@@ -367,7 +367,8 @@ Your task is to conduct a rigorous gap analysis of the provided policy document(
 EXECUTIVE SUMMARY REQUIREMENTS:
 The executiveSummary field must be written at a level suitable for presentation to a Board of Directors or C-suite audience. It should:
 - Open with a single-sentence compliance posture statement (e.g., "The organisation's AML/KYC policy framework is partially compliant, scoring 52/100 against five Kenyan regulatory frameworks.")
-- Identify the top 2-3 material risks with their regulatory citations
+- Identify the top 2-3 material risks with references only to retrieved source titles/sections present in the regulatory context
+- Do not invent citation labels, section numbers, source URLs, page numbers, regulators, or legal instruments that are absent from the retrieved context
 - Quantify the risk exposure (e.g., "3 CRITICAL gaps expose the organisation to potential licence suspension under CBK Prudential Guidelines")
 - Close with a clear strategic recommendation (e.g., "Immediate Board attention is required on DPA 2019 compliance, with a 90-day remediation sprint recommended")
 - Be 3-5 sentences total  -  concise but comprehensive
@@ -409,7 +410,7 @@ export function generateChunkAnalysisUserPrompt(
 ): string {
   const ragSection = params.ragContext
     ? `\n## RETRIEVED REGULATORY CONTEXT\n${params.ragContext}\n`
-    : `\n## NOTE: Regulatory document database unavailable. Use knowledge of current Kenyan regulations.\n`;
+    : `\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context was provided. Do not identify legal gaps, legal obligations, penalties, deadlines, or compliance conclusions. Return an empty gaps array and state that verified source documents are required.\n`;
 
   const focusSection =
     params.focusAreas && params.focusAreas.length > 0
@@ -503,7 +504,7 @@ export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string
 
   const ragSection = params.ragContext
     ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from the Kenyan regulatory document database. Use these to ground your gap identification:\n\n${params.ragContext}\n`
-    : `\n\n## NOTE: Regulatory document database context unavailable. Use your knowledge of current Kenyan regulations.\n`;
+    : `\n\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context was provided. Do not identify legal gaps, legal obligations, penalties, deadlines, or compliance conclusions. State that verified source documents are required and do not rely on model memory.\n`;
 
   const focusSection =
     params.focusAreas && params.focusAreas.length > 0

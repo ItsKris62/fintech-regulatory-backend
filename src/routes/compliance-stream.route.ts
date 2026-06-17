@@ -4,8 +4,9 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { stream } from '@/lib/ai/client';
-import { searchAndGetContext, type SearchResult } from '@/lib/rag/rag.service';
+import { ragService, searchAndGetContext } from '@/lib/rag/rag.service';
 import { runOrchestrator } from '@/modules/compliance/orchestrator';
+import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import { getPilotEntitlements } from '@/utils/entitlements';
 import { appConfig } from '@/config/app.config';
@@ -24,7 +25,22 @@ import {
   generateComplianceUserPrompt,
 } from '@/lib/ai/prompts/compliance-query';
 import type { OrgMembershipEntry } from '@/server/trpc/context';
-import type { AcceptedChunkRef } from '@/modules/compliance/orchestrator/types';
+import {
+  buildComplianceSourceInsufficiencyAnswer,
+  buildUnsupportedClaimsAnswer,
+  hasUsableSourceContext,
+} from '@/lib/source-grounding/source-insufficiency';
+import {
+  buildCitationsFromAcceptedRefs,
+  buildCitationsFromChunks,
+  findAcceptedChunks,
+  hasUsableCitations,
+  type SourceCitation,
+} from '@/lib/source-grounding/citations';
+import {
+  persistClaimVerification,
+  verifyAnswerClaims,
+} from '@/lib/source-grounding/claim-verification';
 
 // Constants
 const RATE_LIMIT_MAX     = 100; // same window as tRPC rateLimited('complianceQuery')
@@ -34,77 +50,6 @@ const USAGE_TTL_SECONDS  = 35 * 24 * 60 * 60; // 35 days (matches middleware)
 
 // Redis metric key segment; matches BillingMetric.COMPLIANCE_QUERIES enum value
 const METRIC_KEY = 'COMPLIANCE_QUERIES';
-
-type CitationVerificationStatus = 'verified' | 'unverified' | 'not_checked';
-
-type CitationRow = {
-  documentId:    string | null;
-  documentTitle: string;
-  section:       string;
-  textSnippet:   string;
-  score:         number;
-  citation:      string | null;
-  authorityStatus: string;
-  isBinding:     boolean;
-  source:        string | null;
-  version:       string | null;
-  verified:      boolean;
-  verificationStatus: CitationVerificationStatus;
-};
-
-function citationFromSearchResult(
-  source: SearchResult,
-  verificationStatus: CitationVerificationStatus = 'not_checked',
-): CitationRow {
-  return {
-    documentId:    source.documentId ?? null,
-    documentTitle: source.documentTitle || 'Unknown',
-    section:       source.section || '',
-    textSnippet:   (source.chunkText || '').slice(0, 500),
-    score:         source.score ?? 0,
-    citation:      source.citation ?? null,
-    authorityStatus: source.authorityStatus ?? 'IN_FORCE',
-    isBinding:     source.isBinding ?? true,
-    source:        source.source ?? null,
-    version:       source.version ?? null,
-    verified:      verificationStatus === 'verified',
-    verificationStatus,
-  };
-}
-
-function acceptedCitationsFromRun(
-  acceptedChunkIds: unknown,
-  ragResults: SearchResult[],
-): CitationRow[] {
-  const acceptedRefs = Array.isArray(acceptedChunkIds)
-    ? (acceptedChunkIds as AcceptedChunkRef[])
-    : [];
-
-  return acceptedRefs.map((ref): CitationRow => {
-    const match =
-      ragResults.find(
-        (r) => r.documentId === ref.documentId && (r.section ?? '') === (ref.section ?? ''),
-      ) ??
-      ragResults.find((r) => r.documentId === ref.documentId);
-
-    return match
-      ? citationFromSearchResult(match, 'verified')
-      : {
-          documentId:    ref.documentId,
-          documentTitle: ref.documentTitle || 'Unknown',
-          section:       ref.section ?? '',
-          textSnippet:   '',
-          score:         0,
-          citation:      null,
-          authorityStatus: 'IN_FORCE',
-          isBinding:     true,
-          source:        null,
-          version:       null,
-          verified:      true,
-          verificationStatus: 'verified',
-        };
-  });
-}
 
 // Input schema
 const inputSchema = z.object({
@@ -355,7 +300,7 @@ export async function registerComplianceStreamRoute(
       }
 
       // RAG retrieval (before hijack so we can return HTTP 500 if needed)
-      const ragContext = await searchAndGetContext(input.question, { topK: 10, minScore: 0.7 }).catch((err: unknown) => {
+      const ragContext = await searchAndGetContext(input.question, { topK: 10, minScore: 0.7, preferActiveSources: true }).catch((err: unknown) => {
         logger.error({
           type: 'compliance_stream_rag_error',
           error: err instanceof Error ? err.message : String(err),
@@ -425,6 +370,107 @@ export async function registerComplianceStreamRoute(
 
       write({ type: 'connected', queryId: query.id, ragSources: ragContext.results.length });
 
+      if (!hasUsableSourceContext(ragContext)) {
+        const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+
+        await prisma.complianceQuery.update({
+          where: { id: query.id },
+          data: {
+            response: sourceInsufficientAnswer,
+            status: 'completed',
+            citations: [],
+            metadata: {
+              streaming: true,
+              ragSources: ragContext.results.length,
+              ragContextChars: ragContext.context?.length ?? 0,
+              grounded: false,
+              abstained: true,
+              sourceInsufficient: true,
+              organizationType: input.organizationType,
+              industry: input.industry,
+              context: input.context,
+            },
+          },
+        });
+
+        write({ type: 'chunk', text: sourceInsufficientAnswer });
+        write({
+          type: 'done',
+          queryId: query.id,
+          route: 'abstain',
+          grounded: false,
+          abstained: true,
+          runId: null,
+          citations: [],
+          confidence: null,
+        });
+
+        clearInterval(heartbeatTimer);
+        reply.raw.end();
+
+        logger.info({
+          type: 'compliance_stream_source_insufficient',
+          userId: auth.userId,
+          queryId: query.id,
+        });
+
+        return;
+      }
+
+      const preGenerationGrade = await runGraderAgent(input.question, ragContext.results, 10);
+      const acceptedResults = preGenerationGrade.accepted;
+      const acceptedContext = ragService.getContextForPrompt(acceptedResults, 10, 4000);
+
+      if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext })) {
+        const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+
+        await prisma.complianceQuery.update({
+          where: { id: query.id },
+          data: {
+            response: sourceInsufficientAnswer,
+            status: 'completed',
+            citations: [],
+            metadata: {
+              streaming: true,
+              ragSources: ragContext.results.length,
+              acceptedSources: acceptedResults.length,
+              graderFailed: preGenerationGrade.gradeFailed,
+              grounded: false,
+              abstained: true,
+              sourceInsufficient: true,
+              organizationType: input.organizationType,
+              industry: input.industry,
+              context: input.context,
+            },
+          },
+        });
+
+        write({ type: 'chunk', text: sourceInsufficientAnswer });
+        write({
+          type: 'done',
+          queryId: query.id,
+          route: 'abstain',
+          grounded: false,
+          abstained: true,
+          runId: null,
+          citations: [],
+          confidence: null,
+        });
+
+        clearInterval(heartbeatTimer);
+        reply.raw.end();
+
+        logger.info({
+          type: 'compliance_stream_no_accepted_sources',
+          userId: auth.userId,
+          queryId: query.id,
+          retrievedSources: ragContext.results.length,
+          graderFailed: preGenerationGrade.gradeFailed,
+        });
+
+        return;
+      }
+
       // Stream AI synthesis
       const systemPrompt = generateComplianceSystemPrompt();
       const userPrompt   = generateComplianceUserPrompt({
@@ -432,9 +478,9 @@ export async function registerComplianceStreamRoute(
         organizationType: input.organizationType,
         industry:         input.industry,
         context:          input.context,
-        ragContext:       ragContext.context ?? undefined,
+        ragContext:       acceptedContext || undefined,
       });
-      const maxTokens = ragContext.context ? 3000 : aiConfig.parameters.queryMaxTokens;
+      const maxTokens = acceptedContext ? 3000 : aiConfig.parameters.queryMaxTokens;
 
       let fullContent = '';
 
@@ -448,7 +494,6 @@ export async function registerComplianceStreamRoute(
             externalAbortSignal:  streamController.signal,
             onChunk: (chunk) => {
               fullContent += chunk;
-              write({ type: 'chunk', text: chunk });
             },
           },
           'query',
@@ -466,7 +511,9 @@ export async function registerComplianceStreamRoute(
             metadata: {
               streaming:        true,
               ragSources:       ragContext.results.length,
-              grounded:         ragContext.results.length > 0,
+              acceptedSources:   acceptedResults.length,
+              grounded:         true,
+              graderFailed:     preGenerationGrade.gradeFailed,
               tokensUsed:       result.inputTokens + result.outputTokens,
               organizationType: input.organizationType,
               industry:         input.industry,
@@ -493,7 +540,8 @@ export async function registerComplianceStreamRoute(
         let abstained                 = false;
         let runId: string | null      = null;
         let confidence: number | null = null;
-        let citations: CitationRow[]  = [];
+        let citations: SourceCitation[]  = [];
+        let acceptedChunksForClaims = acceptedResults;
 
         if (appConfig.features.orchestratorEnabled) {
           await runOrchestrator({
@@ -522,15 +570,19 @@ export async function registerComplianceStreamRoute(
             const accepted = Array.isArray(run.acceptedChunkIds)
               ? (run.acceptedChunkIds as unknown[]).length
               : 0;
-            abstained = route === 'abstain' || accepted === 0 || run.verifierVerdict === 'FAIL_ABSTAIN';
+            abstained = route === 'abstain' || accepted === 0 || run.verifierVerdict === 'FAIL' || run.verifierVerdict === 'FAIL_ABSTAIN';
 
-            // Build citations from verifier-accepted chunks only.
-            citations = acceptedCitationsFromRun(run.acceptedChunkIds, ragContext.results);
+            citations = buildCitationsFromAcceptedRefs(
+              run.acceptedChunkIds,
+              ragContext.results,
+              run.verifierVerdict === 'PASS' ? 'verified' : 'unverified',
+            );
+            acceptedChunksForClaims = findAcceptedChunks(run.acceptedChunkIds, ragContext.results);
           }
         } else {
-          // Legacy shadow path: include RAG sources, but do not mark them verified.
+          // Legacy shadow path: include pre-generation accepted sources, but do not mark them verified.
           // Fire-and-forget; runId remains null, so frontend must disable "Tell us what's missing".
-          citations = ragContext.results.map((source) => citationFromSearchResult(source, 'not_checked'));
+          citations = buildCitationsFromChunks(acceptedResults, 'not_checked');
           runOrchestrator({
             complianceQueryId:      query.id,
             question:               input.question,
@@ -541,11 +593,46 @@ export async function registerComplianceStreamRoute(
           }).catch(() => {});
         }
 
+        const claimVerification = verifyAnswerClaims(fullContent, acceptedChunksForClaims);
+        await persistClaimVerification(prisma, query.id, claimVerification);
+
+        if (abstained || !hasUsableCitations(citations) || claimVerification.unsupportedClaims.length > 0) {
+          const sourceInsufficientAnswer = claimVerification.unsupportedClaims.length > 0
+            ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
+            : buildComplianceSourceInsufficiencyAnswer();
+          fullContent = sourceInsufficientAnswer;
+          citations = [];
+          confidence = null;
+          grounded = false;
+          abstained = true;
+        }
+
         await prisma.complianceQuery.update({
           where: { id: query.id },
-          data:  { citations },
+          data:  {
+            response: fullContent,
+            citations,
+            confidence,
+            metadata: {
+              streaming: true,
+              ragSources: ragContext.results.length,
+              acceptedSources: citations.length,
+              grounded,
+              abstained,
+              sourceInsufficient: abstained && citations.length === 0,
+              route,
+              runId,
+              claimVerificationVerdict: claimVerification.verdict,
+              verifiedClaims: claimVerification.supportedClaims.length,
+              unsupportedClaims: claimVerification.unsupportedClaims.map((claim) => claim.claimText),
+              organizationType: input.organizationType,
+              industry: input.industry,
+              context: input.context,
+            },
+          },
         });
 
+        write({ type: 'chunk', text: fullContent });
         write({ type: 'done', queryId: query.id, route, grounded, abstained, runId, citations, confidence });
 
         logger.info({

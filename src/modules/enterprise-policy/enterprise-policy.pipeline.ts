@@ -2,6 +2,9 @@ import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma/client';
 import { aiService } from '@/lib/ai/ai.service';
+import { ragService, type SearchResult } from '@/lib/rag/rag.service';
+import { buildCitationsFromChunks, hasUsableCitations } from '@/lib/source-grounding/citations';
+import { POLICY_SOURCE_INSUFFICIENCY_MESSAGE, SourceInsufficiencyError } from '@/lib/source-grounding/source-insufficiency';
 import { logger } from '@/utils/logger';
 
 type JobLike = {
@@ -77,6 +80,34 @@ function contentHash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+async function buildEnterprisePolicySources(frameworks: string[]): Promise<{ context: string | undefined; results: SearchResult[] }> {
+  const chunks: string[] = [];
+  const acceptedResults: SearchResult[] = [];
+  const seen = new Set<string>();
+
+  for (const framework of frameworks) {
+    const results = await ragService.search(`${framework} Kenya regulatory requirements policy obligations`, {
+      topK: 5,
+      minScore: 0.7,
+    });
+
+    for (const result of results) {
+      const key = `${result.documentId}:${result.section ?? ''}:${result.chunkText.slice(0, 80)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      acceptedResults.push(result);
+      chunks.push(
+        `[SOURCE: ${result.documentTitle}${result.section ? ` - ${result.section}` : ''}]\n${result.chunkText}`
+      );
+    }
+  }
+
+  return {
+    context: chunks.length > 0 ? chunks.join('\n\n---\n\n') : undefined,
+    results: acceptedResults,
+  };
+}
+
 export async function runEnterprisePolicyJob(job: JobLike, progress: ProgressFn): Promise<void> {
   const input = payloadAsObject(job.payload);
   const policyId = job.targetEntityId;
@@ -111,12 +142,19 @@ export async function runEnterprisePolicyJob(job: JobLike, progress: ProgressFn)
     data: { status: 'DRAFTING', progress: 25 },
   });
 
+  const policySources = await buildEnterprisePolicySources(input.regulatoryFrameworks);
+  const sourceCitations = buildCitationsFromChunks(policySources.results, 'verified');
+  if (!policySources.context || !hasUsableCitations(sourceCitations)) {
+    throw new SourceInsufficiencyError(POLICY_SOURCE_INSUFFICIENCY_MESSAGE);
+  }
+
   const result = await aiService.generatePolicy({
     scenario: buildScenario(input),
     organizationType: (input.organizationType ?? 'OTHER') as never,
     regulatoryAreas: input.regulatoryFrameworks as never,
     specificRequirements: input.description,
     targetAudience: input.targetAudience ?? 'All employees',
+    ragContext: policySources.context,
   }, policyId);
 
   const sectionPairs = [
@@ -143,13 +181,13 @@ export async function runEnterprisePolicyJob(job: JobLike, progress: ProgressFn)
     title,
     content: markdownToTipTap(String(content)),
     contentMarkdown: String(content),
-    citations: result.sections.citations ?? [],
+    citations: sourceCitations.map((citation) => citation.citation ?? citation.documentTitle),
     status: 'generated',
     wordCount: String(content).split(/\s+/).filter(Boolean).length,
   }));
 
   await progress(75, 'Persisting source and citation audit records.', {
-    citationCount: result.sections.citations?.length ?? 0,
+    citationCount: sourceCitations.length,
   });
   await prisma.generatedPolicy.update({
     where: { id: policyId },
@@ -192,25 +230,22 @@ export async function runEnterprisePolicyJob(job: JobLike, progress: ProgressFn)
   const firstSnapshot = sourceSnapshots.find((snapshot): snapshot is NonNullable<typeof snapshot> => !!snapshot);
   await prisma.generatedPolicyCitation.deleteMany({ where: { generatedPolicyId: policyId } });
   await prisma.generatedPolicyCitation.createMany({
-    data: (result.sections.citations ?? []).map((citationText, index) => {
-      const actNameMatch = citationText.match(/^([^,(]+)/);
-      return {
-        generatedPolicyId: policyId,
-        sectionId: 'document',
-        actName: actNameMatch ? actNameMatch[1].trim() : citationText.slice(0, 100),
-        section: '',
-        textSnippet: citationText,
-        confidence: 'medium',
-        verified: false,
-        citationVerified: null,
-        rawSource: {
-          index,
-          model: result.model,
-          contentHash: contentHash(citationText),
-        },
-        sourceSnapshotId: firstSnapshot?.id ?? null,
-      };
-    }),
+    data: sourceCitations.map((citation, index) => ({
+      generatedPolicyId: policyId,
+      sectionId: 'document',
+      actName: citation.documentTitle,
+      section: citation.section,
+      textSnippet: citation.textSnippet,
+      confidence: 'high',
+      verified: true,
+      citationVerified: true,
+      rawSource: {
+        index,
+        citation,
+        contentHash: contentHash(citation.textSnippet),
+      },
+      sourceSnapshotId: firstSnapshot?.id ?? null,
+    })),
   });
 
   await prisma.generatedPolicyGenerationEvent.create({
@@ -234,7 +269,7 @@ export async function runEnterprisePolicyJob(job: JobLike, progress: ProgressFn)
     generatedAt: new Date().toISOString(),
     contentHash: contentHash(result.content),
     sourceSnapshotCount: sourceSnapshots.filter(Boolean).length,
-    citationCount: result.sections.citations?.length ?? 0,
+    citationCount: sourceCitations.length,
   };
 
   await prisma.generatedPolicy.update({

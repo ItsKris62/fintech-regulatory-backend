@@ -443,6 +443,7 @@ model ComplianceQuery {
   saves              SavedResponse[]
   citationRecords    Citation[]           @relation("ComplianceQueryCitations")
   runs               ComplianceQueryRun[]
+  answerClaims       ComplianceAnswerClaim[]
   corpusGapFeedbacks CorpusGapFeedback[]
 
   @@index([userId])
@@ -491,6 +492,49 @@ model ComplianceQueryRun {
   @@index([verifierVerdict])
   @@index([createdAt])
   @@index([status])
+}
+
+model ComplianceAnswerClaim {
+  id                String                    @id @default(cuid())
+  complianceQueryId String
+  claimText         String                    @db.Text
+  claimType         String
+  requiresCitation  Boolean                   @default(true)
+  status            String
+  confidence        Float?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  complianceQuery   ComplianceQuery           @relation(fields: [complianceQueryId], references: [id], onDelete: Cascade)
+  citations         ComplianceClaimCitation[]
+
+  @@index([complianceQueryId])
+  @@index([status])
+  @@index([claimType])
+}
+
+model ComplianceClaimCitation {
+  id                        String                  @id @default(cuid())
+  claimId                   String
+  regulatoryDocumentChunkId String?
+  documentId                String?
+  documentTitle             String?
+  section                   String?
+  chunkRank                 Int?
+  quoteStart                Int?
+  quoteEnd                  Int?
+  supportExcerpt            String                  @db.Text
+  supportVerdict            String
+  confidence                Float?
+  verifierModel             String?
+  rawSource                 Json?
+  createdAt                 DateTime                @default(now())
+  claim                     ComplianceAnswerClaim   @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  regulatoryDocumentChunk   RegulatoryDocumentChunk? @relation(fields: [regulatoryDocumentChunkId], references: [id])
+
+  @@index([claimId])
+  @@index([regulatoryDocumentChunkId])
+  @@index([documentId])
+  @@index([supportVerdict])
 }
 
 model RegulatoryApplication {
@@ -1120,6 +1164,15 @@ model RegulatoryDocument {
   storageKey      String
   status          RegulatoryDocumentStatus   @default(PENDING)
   checksum        String?
+  officialUrl     String?
+  publicationDate DateTime?
+  retrievedAt     DateTime?
+  effectiveEndDate DateTime?
+  sourceRegistryId String?
+  sourceDocumentVersionId String?
+  supersededByDocumentId String?
+  indexVersion    String                     @default("v1")
+  metadata        Json?
   chunkCount      Int?
   totalCharacters Int?
   processedAt     DateTime?
@@ -1127,12 +1180,21 @@ model RegulatoryDocument {
   createdAt       DateTime                   @default(now())
   updatedAt       DateTime                   @updatedAt
   chunks          RegulatoryDocumentChunk[]
+  approvedSource  ApprovedSource?            @relation(fields: [sourceRegistryId], references: [id])
+  sourceDocumentVersion SourceDocumentVersion? @relation("RegulatoryDocumentCurrentSourceVersion", fields: [sourceDocumentVersionId], references: [id])
+  sourceVersions  SourceDocumentVersion[]     @relation("RegulatoryDocumentSourceVersions")
+  supersededByDocument RegulatoryDocument?     @relation("RegulatoryDocumentSupersession", fields: [supersededByDocumentId], references: [id])
+  supersedesDocuments RegulatoryDocument[]     @relation("RegulatoryDocumentSupersession")
 
   @@index([status])
   @@index([category])
   @@index([jurisdiction])
   @@index([authorityStatus])
   @@index([checksum])
+  @@index([sourceRegistryId])
+  @@index([sourceDocumentVersionId])
+  @@index([supersededByDocumentId])
+  @@index([indexVersion])
 }
 
 model RegulatoryDocumentChunk {
@@ -1143,10 +1205,100 @@ model RegulatoryDocumentChunk {
   section    String?
   tokenCount Int
   pineconeId String             @unique
+  pageStart  Int?
+  pageEnd    Int?
+  sectionNumber String?
+  clauseNumber String?
+  scheduleNumber String?
+  headingPath Json?
+  provisionId String?
+  charStart Int?
+  charEnd Int?
+  contentHash String?
+  sourceDocumentVersionId String?
+  indexVersion String           @default("v1")
+  metadata Json?
   createdAt  DateTime           @default(now())
   document   RegulatoryDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sourceDocumentVersion SourceDocumentVersion? @relation(fields: [sourceDocumentVersionId], references: [id])
+  claimCitations ComplianceClaimCitation[]
 
   @@index([documentId])
+  @@index([sourceDocumentVersionId])
+  @@index([contentHash])
+  @@index([provisionId])
+  @@index([indexVersion])
+}
+
+model ApprovedSource {
+  id             String                 @id @default(cuid())
+  jurisdiction   String
+  authorityName  String
+  authorityType  String
+  baseUrl        String
+  allowedDomains Json?
+  status         ApprovedSourceStatus   @default(ACTIVE)
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  notes          String?                @db.Text
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  documents      RegulatoryDocument[]
+  sourceVersions SourceDocumentVersion[]
+
+  @@index([jurisdiction])
+  @@index([authorityName])
+  @@index([status])
+}
+
+model SourceDocumentVersion {
+  id                    String                       @id @default(cuid())
+  regulatoryDocumentId  String
+  approvedSourceId      String?
+  officialUrl           String
+  publicationDate       DateTime?
+  retrievedAt           DateTime?
+  effectiveDate         DateTime?
+  effectiveEndDate      DateTime?
+  versionLabel          String?
+  checksumSha256        String?
+  authorityStatus       AuthorityStatus              @default(IN_FORCE)
+  isBinding             Boolean?
+  supersedesId          String?
+  supersededById        String?
+  status                SourceDocumentVersionStatus  @default(ACTIVE)
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+  regulatoryDocument    RegulatoryDocument           @relation("RegulatoryDocumentSourceVersions", fields: [regulatoryDocumentId], references: [id], onDelete: Cascade)
+  approvedSource        ApprovedSource?              @relation(fields: [approvedSourceId], references: [id])
+  currentForDocuments   RegulatoryDocument[]         @relation("RegulatoryDocumentCurrentSourceVersion")
+  chunks                RegulatoryDocumentChunk[]
+  supersedes            SourceDocumentVersion?        @relation("SourceDocumentVersionSupersession", fields: [supersedesId], references: [id])
+  supersededBy          SourceDocumentVersion?        @relation("SourceDocumentVersionSupersededBy", fields: [supersededById], references: [id])
+  supersededVersions    SourceDocumentVersion[]       @relation("SourceDocumentVersionSupersession")
+  supersedingVersions   SourceDocumentVersion[]       @relation("SourceDocumentVersionSupersededBy")
+
+  @@index([regulatoryDocumentId])
+  @@index([approvedSourceId])
+  @@index([status])
+  @@index([authorityStatus])
+  @@index([checksumSha256])
+  @@index([supersedesId])
+  @@index([supersededById])
+}
+
+enum ApprovedSourceStatus {
+  ACTIVE
+  INACTIVE
+  DEPRECATED
+}
+
+enum SourceDocumentVersionStatus {
+  ACTIVE
+  SUPERSEDED
+  ARCHIVED
+  DRAFT
+  CONSULTATION
 }
 
 enum RegulatoryDocumentCategory {

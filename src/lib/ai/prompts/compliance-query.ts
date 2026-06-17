@@ -91,7 +91,8 @@ Example (note the blank lines surrounding the table):
 
 ## SOURCE ATTRIBUTION
 - Use ONLY the provided regulatory context for legal claims. Do not invent citations to documents not in the provided context.
-- Cite the document title and section for every substantive legal claim.
+- Refer only to document titles, sections, regulators, and legal instruments that appear in the retrieved context.
+- Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs. The application attaches source-list citations from accepted retrieved chunks separately.
 - If the provided context is insufficient to fully answer the question, state this clearly: "The available regulatory corpus does not contain sufficient information on [topic]."
 - Distinguish between:
   - Corpus-supported answers: claims backed by the retrieved regulatory evidence.
@@ -114,7 +115,7 @@ export function generateComplianceUserPrompt(params: ComplianceQueryParams): str
   if (context)          prompt += `\n\n**Additional Context:**\n${context}`;
 
   if (ragContext) {
-    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive legal claim. If a claim cannot be supported by the evidence below, explicitly state that the corpus does not contain relevant provisions rather than drawing on general knowledge or fabricating citations.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every citation to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}\n`;
+    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus and accepted for this answer. Ground your answer exclusively in this evidence. Refer only to document titles and sections present below. Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs; the application attaches source-list citations from accepted chunks separately. If a claim cannot be supported by the evidence below, explicitly state that the corpus does not contain relevant provisions rather than relying on model memory or fabricating citations.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every reference to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}\n`;
   }
 
   prompt += `
@@ -188,12 +189,12 @@ ${originalQuestion}
 ${originalAnswer}`;
 
   if (ragContext) {
-    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus. Ground your answer exclusively in this evidence. Cite the document title and section for every substantive legal claim. If a claim cannot be supported by the evidence below, explicitly state that the corpus does not contain relevant provisions rather than drawing on general knowledge or fabricating citations.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every citation to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}`;
+    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus and accepted for this answer. Ground your answer exclusively in this evidence. Refer only to document titles and sections present below. Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs; the application attaches source-list citations from accepted chunks separately. If a claim cannot be supported by the evidence below, explicitly state that the corpus does not contain relevant provisions rather than relying on model memory or fabricating citations.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every reference to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}`;
   }
 
   prompt += `\n\n## Follow-up Question\n${followUpQuestion}
 
-Answer the follow-up question while building on the previous answer, maintaining consistency, and providing any additional legal citations needed. Use the same Markdown structure (## headings, tables where applicable) and authoritative compliance tone.`;
+Answer the follow-up question while building on the previous answer, maintaining consistency, and referring only to source titles/sections present in the retrieved evidence. Do not create standalone citation labels; the application attaches accepted source-list citations separately. Use the same Markdown structure (## headings, tables where applicable) and authoritative compliance tone.`;
 
   return prompt;
 }

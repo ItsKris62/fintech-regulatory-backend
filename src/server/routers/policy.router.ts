@@ -1027,9 +1027,39 @@ export const policyRouter = router({
           }
         }
 
-        // Verify citations with AI  -  verifyCitations takes string[]
-        const citationTexts = policy.citations.map((c) => c.textSnippet);
-        const verificationResults = await ctx.aiService.verifyCitations(citationTexts);
+        const citationTexts = policy.citations
+          .map((c) => c.textSnippet)
+          .filter((text): text is string => typeof text === 'string' && text.trim().length > 0);
+
+        const checks = await Promise.all(
+          citationTexts.map(async (text, index) => {
+            const matches = await ctx.ragService.search(text, { topK: 3, minScore: 0.7 }).catch(() => []);
+            return {
+              index: index + 1,
+              citation: text,
+              verified: matches.length > 0,
+              sourceCount: matches.length,
+              sources: matches.map((match) => ({
+                documentId: match.documentId,
+                documentTitle: match.documentTitle,
+                section: match.section ?? null,
+                score: match.score,
+              })),
+            };
+          }),
+        );
+
+        const verified = checks.filter((check) => check.verified).length;
+        const verificationResults = {
+          content: JSON.stringify({ checks }, null, 2),
+          model: 'corpus-search',
+          inputTokens: 0,
+          outputTokens: 0,
+          cost: 0,
+          citationCount: checks.length,
+          verified,
+          failed: checks.length - verified,
+        };
 
         logger.info({
           type: 'policy_citations_verified',

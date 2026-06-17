@@ -1,0 +1,540 @@
+{
+  "datasetPath": "C:\\Users\\USER\\Videos\\Sheria-Bot-SaaS\\fintech-regulatory-backend\\src\\evals\\source-verification-golden.json",
+  "itemCount": 10,
+  "modes": {
+    "v1": {
+      "expectedSourceHitRate": 0.6,
+      "forbiddenSourceHitRate": 0.1,
+      "abstainSatisfiedRate": 1,
+      "averageMetadataCompleteness": 0.2,
+      "results": [
+        {
+          "id": "ke-dpa-supported-controller-obligations",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.25,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-odpc-regulations-supported",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 1,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-nps-psp-supported",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.5,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-dcp-supported",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": true,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.75,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-aml-supported-pocamla",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-cross-framework-dpa-not-aml",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-trap-unavailable-crypto-specific-act",
+          "expectedBehavior": "ABSTAIN",
+          "retrievedCount": 8,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-stale-source-check",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.25,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-nonbinding-guidance-label",
+          "expectedBehavior": "PARTIAL",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.5,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-corpus-gap-frc-guidance",
+          "expectedBehavior": "PARTIAL",
+          "retrievedCount": 8,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        }
+      ]
+    },
+    "v2": {
+      "expectedSourceHitRate": 0,
+      "forbiddenSourceHitRate": 0,
+      "abstainSatisfiedRate": 1,
+      "averageMetadataCompleteness": 0,
+      "results": [
+        {
+          "id": "ke-dpa-supported-controller-obligations",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        },
+        {
+          "id": "ke-odpc-regulations-supported",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        },
+        {
+          "id": "ke-nps-psp-supported",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        },
+        {
+          "id": "ke-dcp-supported",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        },
+        {
+          "id": "ke-aml-supported-pocamla",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        },
+        {
+          "id": "ke-cross-framework-dpa-not-aml",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        },
+        {
+          "id": "ke-trap-unavailable-crypto-specific-act",
+          "expectedBehavior": "ABSTAIN",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        },
+        {
+          "id": "ke-stale-source-check",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        },
+        {
+          "id": "ke-nonbinding-guidance-label",
+          "expectedBehavior": "PARTIAL",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        },
+        {
+          "id": "ke-corpus-gap-frc-guidance",
+          "expectedBehavior": "PARTIAL",
+          "retrievedCount": 0,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0,
+          "missingMetadataFields": []
+        }
+      ]
+    },
+    "prefer-v2": {
+      "expectedSourceHitRate": 0.6,
+      "forbiddenSourceHitRate": 0.1,
+      "abstainSatisfiedRate": 1,
+      "averageMetadataCompleteness": 0.2,
+      "results": [
+        {
+          "id": "ke-dpa-supported-controller-obligations",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.25,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-odpc-regulations-supported",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 1,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-nps-psp-supported",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.5,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-dcp-supported",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": true,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.75,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-aml-supported-pocamla",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-cross-framework-dpa-not-aml",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-trap-unavailable-crypto-specific-act",
+          "expectedBehavior": "ABSTAIN",
+          "retrievedCount": 8,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-stale-source-check",
+          "expectedBehavior": "ANSWER",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.25,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-nonbinding-guidance-label",
+          "expectedBehavior": "PARTIAL",
+          "retrievedCount": 8,
+          "expectedSourceHit": true,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0.5,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        },
+        {
+          "id": "ke-corpus-gap-frc-guidance",
+          "expectedBehavior": "PARTIAL",
+          "retrievedCount": 8,
+          "expectedSourceHit": false,
+          "forbiddenSourceHit": false,
+          "abstainSatisfied": true,
+          "precisionSignal": 0,
+          "metadataCompleteness": 0.2,
+          "missingMetadataFields": [
+            "authorityStatus",
+            "contentHash",
+            "corpusStatus",
+            "indexVersion",
+            "officialUrl",
+            "provisionId",
+            "sectionNumber",
+            "sourceDocumentVersionId"
+          ]
+        }
+      ]
+    }
+  }
+}

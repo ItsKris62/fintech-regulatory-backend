@@ -1,0 +1,103 @@
+[
+  {
+    "id": "ke-dpa-supported-controller-obligations",
+    "question": "What source-backed obligations apply to a Kenyan data controller?",
+    "jurisdiction": "Kenya",
+    "framework": "data-protection",
+    "expectedBehavior": "ANSWER",
+    "expectedSourceTitles": ["Data Protection Act"],
+    "forbiddenSourceTitles": ["POCAMLA", "National Payment System"],
+    "requiresExactProvision": false,
+    "notes": "Initial supported DPA retrieval smoke item; exact provisions become mandatory after v2 source metadata is populated."
+  },
+  {
+    "id": "ke-odpc-regulations-supported",
+    "question": "Which ODPC regulations support data protection compliance duties for fintechs?",
+    "jurisdiction": "Kenya",
+    "framework": "data-protection",
+    "expectedBehavior": "ANSWER",
+    "expectedSourceTitles": ["Data Protection", "ODPC"],
+    "forbiddenSourceTitles": ["POCAMLA"],
+    "requiresExactProvision": false
+  },
+  {
+    "id": "ke-nps-psp-supported",
+    "question": "What source-backed requirements apply to payment service providers under Kenya's national payment system framework?",
+    "jurisdiction": "Kenya",
+    "framework": "payments",
+    "expectedBehavior": "ANSWER",
+    "expectedSourceTitles": ["National Payment System"],
+    "forbiddenSourceTitles": ["Data Protection Act"],
+    "requiresExactProvision": false
+  },
+  {
+    "id": "ke-dcp-supported",
+    "question": "What source-backed licensing duties apply to digital credit providers in Kenya?",
+    "jurisdiction": "Kenya",
+    "framework": "digital-credit",
+    "expectedBehavior": "ANSWER",
+    "expectedSourceTitles": ["Digital Credit", "Central Bank"],
+    "forbiddenSourceTitles": ["ODPC"],
+    "requiresExactProvision": false
+  },
+  {
+    "id": "ke-aml-supported-pocamla",
+    "question": "What AML/CFT source governs suspicious transaction reporting for Kenyan fintechs?",
+    "jurisdiction": "Kenya",
+    "framework": "aml-cft",
+    "expectedBehavior": "ANSWER",
+    "expectedSourceTitles": ["POCAMLA", "Proceeds of Crime", "Financial Reporting Centre"],
+    "forbiddenSourceTitles": ["Data Protection Act"],
+    "requiresExactProvision": false
+  },
+  {
+    "id": "ke-cross-framework-dpa-not-aml",
+    "question": "For privacy notices, should SheriaBot retrieve AML law instead of data protection sources?",
+    "jurisdiction": "Kenya",
+    "framework": "data-protection",
+    "expectedBehavior": "ANSWER",
+    "expectedSourceTitles": ["Data Protection"],
+    "forbiddenSourceTitles": ["POCAMLA", "Financial Reporting Centre"],
+    "requiresExactProvision": false
+  },
+  {
+    "id": "ke-trap-unavailable-crypto-specific-act",
+    "question": "What obligations are imposed by the Kenyan Crypto Asset Service Providers Act in the current corpus?",
+    "jurisdiction": "Kenya",
+    "framework": "crypto",
+    "expectedBehavior": "ABSTAIN",
+    "expectedSourceTitles": [],
+    "forbiddenSourceTitles": ["Data Protection Act", "POCAMLA", "National Payment System"],
+    "requiresExactProvision": true,
+    "notes": "Trap item: if the corpus lacks this source, correct behavior is source insufficiency."
+  },
+  {
+    "id": "ke-stale-source-check",
+    "question": "Which currently in-force source supports payment system licensing, avoiding superseded drafts?",
+    "jurisdiction": "Kenya",
+    "framework": "payments",
+    "expectedBehavior": "ANSWER",
+    "expectedSourceTitles": ["National Payment System"],
+    "forbiddenSourceTitles": ["Draft", "Consultation"],
+    "requiresExactProvision": false
+  },
+  {
+    "id": "ke-nonbinding-guidance-label",
+    "question": "Is CBK cybersecurity guidance binding legislation or non-binding guidance?",
+    "jurisdiction": "Kenya",
+    "framework": "cybersecurity",
+    "expectedBehavior": "PARTIAL",
+    "expectedSourceTitles": ["Cybersecurity", "Central Bank"],
+    "requiresExactProvision": false
+  },
+  {
+    "id": "ke-corpus-gap-frc-guidance",
+    "question": "What exact page and clause in FRC AML/CFT guidance applies to mobile money agents?",
+    "jurisdiction": "Kenya",
+    "framework": "aml-cft",
+    "expectedBehavior": "PARTIAL",
+    "expectedSourceTitles": ["Financial Reporting Centre", "AML", "CFT"],
+    "requiresExactProvision": true,
+    "notes": "Should become ANSWER only when v2 page/provision metadata exists for the relevant source."
+  }
+]

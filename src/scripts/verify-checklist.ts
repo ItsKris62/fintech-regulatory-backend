@@ -302,13 +302,13 @@ async function runPromptBuilderTests(): Promise<void> {
     };
   });
 
-  // 2c. Tier 1 with no passages produces note
-  await runTest('buildTier1Prompt with no passages uses training-knowledge note', async () => {
+  // 2c. Tier 1 with no passages produces source-insufficiency note
+  await runTest('buildTier1Prompt with no passages uses source-insufficiency note', async () => {
     const { user } = buildTier1Prompt(INPUT, []);
-    const hasNote = user.includes('training knowledge') || user.includes('unavailable');
+    const hasNote = user.includes('SOURCE INSUFFICIENCY') && user.includes('Do not generate legal obligations');
     return {
       passed:  hasNote,
-      message: hasNote ? 'Training-knowledge fallback note present' : 'Missing no-context note',
+      message: hasNote ? 'Source-insufficiency note present' : 'Missing source-insufficiency note',
     };
   });
 

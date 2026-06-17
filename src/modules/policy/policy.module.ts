@@ -13,6 +13,7 @@
 
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
+import { ragService } from '@/lib/rag/rag.service';
 import { mailer as _mailer } from '@/lib/email/mailer.service';
 import { sendEmail } from '@/lib/email/client';
 import { getSystemConfigNumber } from '@/lib/system-config';
@@ -918,14 +919,33 @@ class PolicyModule {
     try {
       const citations = await this.getCitations(userId, policyId);
 
-      // Simple verification - in production, verify against actual sources
       let verified = 0;
       let failed = 0;
 
       const updatedCitations = await Promise.all(
         citations.map(async citation => {
-          // Simulate verification (in production, check RAG database)
-          const isVerified = citation.confidence > 0.7;
+          const citationQuery = [
+            citation.source,
+            citation.title,
+            citation.section,
+            citation.content,
+          ].filter(Boolean).join(' ');
+          let isVerified = false;
+
+          if (citationQuery.trim()) {
+            try {
+              const matches = await ragService.search(citationQuery, { topK: 3, minScore: 0.7 });
+              isVerified = matches.length > 0;
+            } catch (verificationError) {
+              logger.warn({
+                type: 'policy_citation_corpus_verification_failed',
+                userId,
+                policyId,
+                citationId: citation.id,
+                error: verificationError instanceof Error ? verificationError.message : String(verificationError),
+              });
+            }
+          }
 
           await prisma.citation.update({
             where: { id: citation.id },

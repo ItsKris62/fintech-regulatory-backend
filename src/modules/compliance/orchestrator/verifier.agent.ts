@@ -37,9 +37,9 @@ export async function runVerifierAgent(
   evidence: SearchResult[]
 ): Promise<VerifierAgentResult> {
   if (evidence.length === 0) {
-    // No accepted chunks — no basis for PASS; measure as PARTIAL with note
+    // No accepted chunks means there is no source-list basis for a legal answer.
     return {
-      verdict: 'PARTIAL',
+      verdict: 'FAIL',
       unsupportedClaims: ['No graded evidence available to verify claims'],
       tokens: { input: 0, output: 0 },
       parseFailed: false,

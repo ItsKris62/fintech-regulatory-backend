@@ -13,14 +13,14 @@ import {
   getSuggestedQueriesSchema,
   recordSuggestionClickSchema,
 } from '../schemas/compliance.schema';
-import { searchAndGetContext, type SearchResult } from '@/lib/rag/rag.service';
+import { ragService, searchAndGetContext } from '@/lib/rag/rag.service';
 import { complianceModule } from '@/modules/compliance';
-import type { AcceptedChunkRef } from '@/modules/compliance/orchestrator/types';
 import { logger } from '@/utils/logger';
 import { incrementTrialUsage } from '@/modules/trial';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { runOrchestrator } from '@/modules/compliance/orchestrator';
+import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import { appConfig } from '@/config/app.config';
 import { gapAnalysisExportService } from '@/services/gap-analysis-export.service';
@@ -28,77 +28,22 @@ import { checklistExportService } from '@/services/checklist-export.service';
 import { complianceQueryExportService } from '@/services/complianceQueryExport.service';
 import { storageService } from '@/lib/storage/storage.service';
 import { GapAnalysisResultSchema } from '@/lib/ai/prompts/gap-analysis';
-
-type CitationVerificationStatus = 'verified' | 'unverified' | 'not_checked';
-
-type ComplianceCitation = {
-  documentId: string | null;
-  documentTitle: string;
-  section: string;
-  textSnippet: string;
-  score: number;
-  citation: string | null;
-  authorityStatus: string;
-  isBinding: boolean;
-  source: string | null;
-  version: string | null;
-  verified: boolean;
-  verificationStatus: CitationVerificationStatus;
-};
-
-function buildCitationFromSearchResult(
-  source: SearchResult,
-  verificationStatus: CitationVerificationStatus = 'not_checked',
-): ComplianceCitation {
-  return {
-    documentId: source.documentId ?? null,
-    documentTitle: source.documentTitle || 'Unknown',
-    section: source.section || '',
-    textSnippet: (source.chunkText || '').slice(0, 500),
-    score: source.score ?? 0,
-    citation: source.citation ?? null,
-    authorityStatus: source.authorityStatus ?? 'IN_FORCE',
-    isBinding: source.isBinding ?? true,
-    source: source.source ?? null,
-    version: source.version ?? null,
-    verified: verificationStatus === 'verified',
-    verificationStatus,
-  };
-}
-
-function buildAcceptedCitations(
-  acceptedChunkIds: unknown,
-  ragResults: SearchResult[],
-): ComplianceCitation[] {
-  const acceptedRefs = Array.isArray(acceptedChunkIds)
-    ? (acceptedChunkIds as AcceptedChunkRef[])
-    : [];
-
-  return acceptedRefs.map((ref) => {
-    const match =
-      ragResults.find(
-        (r) => r.documentId === ref.documentId && (r.section ?? '') === (ref.section ?? ''),
-      ) ??
-      ragResults.find((r) => r.documentId === ref.documentId);
-
-    return match
-      ? buildCitationFromSearchResult(match, 'verified')
-      : {
-          documentId: ref.documentId,
-          documentTitle: ref.documentTitle || 'Unknown',
-          section: ref.section ?? '',
-          textSnippet: '',
-          score: 0,
-          citation: null,
-          authorityStatus: 'IN_FORCE',
-          isBinding: true,
-          source: null,
-          version: null,
-          verified: true,
-          verificationStatus: 'verified' as const,
-        };
-  });
-}
+import {
+  buildComplianceSourceInsufficiencyAnswer,
+  buildUnsupportedClaimsAnswer,
+  hasUsableSourceContext,
+} from '@/lib/source-grounding/source-insufficiency';
+import {
+  buildCitationsFromAcceptedRefs,
+  buildCitationsFromChunks,
+  findAcceptedChunks,
+  hasUsableCitations,
+  type SourceCitation,
+} from '@/lib/source-grounding/citations';
+import {
+  persistClaimVerification,
+  verifyAnswerClaims,
+} from '@/lib/source-grounding/claim-verification';
 
 /**
  * Compliance Router
@@ -132,7 +77,108 @@ export const complianceRouter = router({
         const ragContext = await searchAndGetContext(input.question, {
           topK: 10,
           minScore: 0.7,
+          preferActiveSources: true,
         });
+
+        const agenticComplexityLevel =
+          PLAN_ENTITLEMENTS[ctx.plan ?? 'REGULATOR'].agenticComplexityLevel;
+
+        if (!hasUsableSourceContext(ragContext)) {
+          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+          const query = await (ctx.prisma.complianceQuery.create as any)({
+            data: {
+              query: input.question,
+              userId: ctx.user!.id,
+              organizationId: ctx.orgMembership!.organizationId,
+              response: sourceInsufficientAnswer,
+              citations: [],
+              confidence: null,
+              status: 'completed',
+              metadata: {
+                ragSources: ragContext.results.length,
+                ragContextChars: ragContext.context?.length ?? 0,
+                grounded: false,
+                abstained: true,
+                sourceInsufficient: true,
+                organizationType: input.organizationType,
+                industry: input.industry,
+                context: input.context,
+              },
+            },
+          });
+
+          logger.info({
+            type: 'compliance_query_source_insufficient',
+            userId: ctx.user!.id,
+            queryId: query.id,
+          });
+
+          return {
+            queryId: query.id,
+            answer: sourceInsufficientAnswer,
+            citations: [],
+            confidence: null,
+            suggestedFollowUps: [],
+            route: 'abstain',
+            grounded: false,
+            abstained: true,
+            runId: null as string | null,
+          };
+        }
+
+        const preGenerationGrade = await runGraderAgent(
+          input.question,
+          ragContext.results,
+          10,
+        );
+        const acceptedResults = preGenerationGrade.accepted;
+        const acceptedContext = ragService.getContextForPrompt(acceptedResults, 10, 4000);
+
+        if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext })) {
+          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+          const query = await (ctx.prisma.complianceQuery.create as any)({
+            data: {
+              query: input.question,
+              userId: ctx.user!.id,
+              organizationId: ctx.orgMembership!.organizationId,
+              response: sourceInsufficientAnswer,
+              citations: [],
+              confidence: null,
+              status: 'completed',
+              metadata: {
+                ragSources: ragContext.results.length,
+                acceptedSources: acceptedResults.length,
+                graderFailed: preGenerationGrade.gradeFailed,
+                grounded: false,
+                abstained: true,
+                sourceInsufficient: true,
+                organizationType: input.organizationType,
+                industry: input.industry,
+                context: input.context,
+              },
+            },
+          });
+
+          logger.info({
+            type: 'compliance_query_no_accepted_sources',
+            userId: ctx.user!.id,
+            queryId: query.id,
+            retrievedSources: ragContext.results.length,
+            graderFailed: preGenerationGrade.gradeFailed,
+          });
+
+          return {
+            queryId: query.id,
+            answer: sourceInsufficientAnswer,
+            citations: [],
+            confidence: null,
+            suggestedFollowUps: [],
+            route: 'abstain',
+            grounded: false,
+            abstained: true,
+            runId: null as string | null,
+          };
+        }
 
         // Generate answer grounded in retrieved evidence
         const answer = await ctx.aiService.answerComplianceQuery({
@@ -140,7 +186,7 @@ export const complianceRouter = router({
           organizationType: input.organizationType,
           industry: input.industry,
           context: input.context,
-          ragContext: ragContext.context || undefined,
+          ragContext: acceptedContext || undefined,
         });
 
         // Build RAG source citations for JSON storage.
@@ -152,18 +198,23 @@ export const complianceRouter = router({
         // Correct pattern for now: store RAG source references as JSON directly on
         // ComplianceQuery.citations (Json? column). This preserves full
         // auditability and AI explainability without FK dependencies.
-        const queryCitations = ragContext.results.map((source: SearchResult) =>
-          buildCitationFromSearchResult(source, 'not_checked')
-        );
+        const queryCitations = buildCitationsFromChunks(acceptedResults, 'not_checked');
+        const legacyClaimVerification = !appConfig.features.orchestratorEnabled
+          ? verifyAnswerClaims(answer.content, acceptedResults)
+          : null;
+        const finalAnswerContent = legacyClaimVerification?.unsupportedClaims.length
+          ? buildUnsupportedClaimsAnswer(legacyClaimVerification.unsupportedClaims.map((claim) => claim.claimText))
+          : answer.content;
+        const finalQueryCitations = legacyClaimVerification?.unsupportedClaims.length ? [] : queryCitations;
 
         // Guard: warn if RAG chunks are missing documentIds (ingestion gap)
-        const missingDocIds = queryCitations.filter((c: ComplianceCitation) => !c.documentId).length;
+        const missingDocIds = finalQueryCitations.filter((c: SourceCitation) => !c.documentId).length;
         if (missingDocIds > 0) {
           logger.warn({
             type: 'compliance_query_citations_missing_doc_ids',
             userId: ctx.user!.id,
             missingCount: missingDocIds,
-            totalCount: queryCitations.length,
+            totalCount: finalQueryCitations.length,
           });
         }
 
@@ -173,24 +224,25 @@ export const complianceRouter = router({
             query: input.question,
             userId: ctx.user!.id,
             organizationId: ctx.orgMembership!.organizationId,
-            response: answer.content,
-            citations: queryCitations.length > 0 ? queryCitations : undefined,
+            response: finalAnswerContent,
+            citations: finalQueryCitations.length > 0 ? finalQueryCitations : undefined,
             metadata: {
               model: answer.model,
               tokensUsed: answer.inputTokens + answer.outputTokens,
               ragSources: ragContext.results.length,
-              ragContextChars: ragContext.context?.length ?? 0,
-              grounded: ragContext.results.length > 0,
-              cacheBypassed: ragContext.results.length > 0,
+              acceptedSources: acceptedResults.length,
+              ragContextChars: acceptedContext.length,
+              grounded: hasUsableCitations(finalQueryCitations),
+              cacheBypassed: true,
+              graderFailed: preGenerationGrade.gradeFailed,
+              claimVerificationVerdict: legacyClaimVerification?.verdict,
+              unsupportedClaims: legacyClaimVerification?.unsupportedClaims.map((claim) => claim.claimText) ?? [],
               organizationType: input.organizationType,
               industry: input.industry,
               context: input.context,
             },
           },
         });
-
-        const agenticComplexityLevel =
-          PLAN_ENTITLEMENTS[ctx.plan ?? 'REGULATOR'].agenticComplexityLevel;
 
         // Track token usage for free trial users (fire-and-forget, non-fatal).
         if (ctx.plan === 'FREE_TRIAL') {
@@ -219,17 +271,89 @@ export const complianceRouter = router({
           const route = run?.route ?? 'simple';
           const grounded = run?.grounded ?? false;
           const accepted = Array.isArray(run?.acceptedChunkIds) ? (run!.acceptedChunkIds as unknown[]).length : 0;
-          const abstained = route === 'abstain' || accepted === 0 || run?.verifierVerdict === 'FAIL_ABSTAIN';
+          const abstained = route === 'abstain' || accepted === 0 || run?.verifierVerdict === 'FAIL' || run?.verifierVerdict === 'FAIL_ABSTAIN';
           // Confidence derived from verifier verdict. null when no run row (double-failure edge case).
           const confidence =
             run?.verifierVerdict === 'PASS' ? 0.9 :
               run?.verifierVerdict === 'PARTIAL' ? 0.7 :
                 null;
-          const acceptedCitations = buildAcceptedCitations(run?.acceptedChunkIds, ragContext.results);
+          const acceptedCitations = buildCitationsFromAcceptedRefs(
+            run?.acceptedChunkIds,
+            ragContext.results,
+            run?.verifierVerdict === 'PASS' ? 'verified' : 'unverified',
+          );
+          const acceptedChunksForClaims = findAcceptedChunks(run?.acceptedChunkIds, ragContext.results);
+          const claimVerification = verifyAnswerClaims(answer.content, acceptedChunksForClaims);
+          await persistClaimVerification(ctx.prisma, query.id, claimVerification);
+
+          if (
+            abstained ||
+            run?.verifierVerdict === 'FAIL' ||
+            !hasUsableCitations(acceptedCitations) ||
+            claimVerification.unsupportedClaims.length > 0
+          ) {
+            const sourceInsufficientAnswer = claimVerification.unsupportedClaims.length > 0
+              ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
+              : buildComplianceSourceInsufficiencyAnswer();
+            await ctx.prisma.complianceQuery.update({
+              where: { id: query.id },
+              data: {
+                response: sourceInsufficientAnswer,
+                citations: [],
+                confidence: null,
+                metadata: {
+                  model: answer.model,
+                  tokensUsed: answer.inputTokens + answer.outputTokens,
+                  ragSources: ragContext.results.length,
+                  acceptedSources: accepted,
+                  grounded: false,
+                  abstained: true,
+                  sourceInsufficient: true,
+                  verifierVerdict: run?.verifierVerdict ?? null,
+                  claimVerificationVerdict: claimVerification.verdict,
+                  unsupportedClaims: claimVerification.unsupportedClaims.map((claim) => claim.claimText),
+                  organizationType: input.organizationType,
+                  industry: input.industry,
+                  context: input.context,
+                },
+              },
+            });
+
+            return {
+              queryId: query.id,
+              answer: sourceInsufficientAnswer,
+              citations: [],
+              confidence: null,
+              suggestedFollowUps: [],
+              route,
+              grounded: false,
+              abstained: true,
+              runId: run?.id ?? null,
+            };
+          }
 
           await ctx.prisma.complianceQuery.update({
             where: { id: query.id },
-            data: { citations: acceptedCitations },
+            data: {
+              citations: acceptedCitations,
+              confidence,
+              metadata: {
+                model: answer.model,
+                tokensUsed: answer.inputTokens + answer.outputTokens,
+                ragSources: ragContext.results.length,
+                acceptedSources: acceptedCitations.length,
+                grounded,
+                abstained,
+                verifierVerdict: run?.verifierVerdict ?? null,
+                claimVerificationVerdict: claimVerification.verdict,
+                verifiedClaims: claimVerification.supportedClaims.length,
+                unsupportedClaims: [],
+                verificationStatus: run?.verifierVerdict === 'PASS' ? 'verified' : 'unverified',
+                organizationType: input.organizationType,
+                industry: input.industry,
+                context: input.context,
+              },
+            },
           });
 
           logger.info({
@@ -263,6 +387,10 @@ export const complianceRouter = router({
 
         // -- Legacy grounded query path -----------------------------------------
         // Shadow orchestrator is fire-and-forget: never blocks the user response.
+        if (legacyClaimVerification) {
+          await persistClaimVerification(ctx.prisma, query.id, legacyClaimVerification);
+        }
+
         runOrchestrator({
           complianceQueryId: query.id,
           question: input.question,
@@ -278,19 +406,20 @@ export const complianceRouter = router({
           queryId: query.id,
           duration,
           tokensUsed: answer.inputTokens + answer.outputTokens,
-          citationsCount: queryCitations.length,
+          citationsCount: finalQueryCitations.length,
           orchestrated: false,
+          claimVerificationVerdict: legacyClaimVerification?.verdict,
         });
 
         return {
           queryId: query.id,
-          answer: answer.content,
-          citations: queryCitations,
+          answer: finalAnswerContent,
+          citations: finalQueryCitations,
           confidence: null,
           suggestedFollowUps: [],
           route: null as string | null,
-          grounded: ragContext.results.length > 0,
-          abstained: false,
+          grounded: hasUsableCitations(finalQueryCitations),
+          abstained: finalQueryCitations.length === 0,
           runId: null as string | null,
         };
       } catch (error: any) {
@@ -359,22 +488,103 @@ export const complianceRouter = router({
         const ragContext = await searchAndGetContext(input.question, {
           topK: 10,
           minScore: 0.7,
+          preferActiveSources: true,
         });
+
+        if (!hasUsableSourceContext(ragContext)) {
+          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+          const query = await (ctx.prisma.complianceQuery.create as any)({
+            data: {
+              query: input.question,
+              userId,
+              organizationId,
+              response: sourceInsufficientAnswer,
+              citations: [],
+              status: 'completed',
+              metadata: {
+                followUpTo: input.originalQueryId,
+                ragSources: ragContext.results.length,
+                ragContextChars: ragContext.context?.length ?? 0,
+                grounded: false,
+                abstained: true,
+                sourceInsufficient: true,
+              },
+            },
+          });
+
+          logger.info({
+            type: 'compliance_followup_source_insufficient',
+            userId: ctx.user!.id,
+            queryId: query.id,
+            originalQueryId: input.originalQueryId,
+          });
+
+          return {
+            queryId: query.id,
+            answer: sourceInsufficientAnswer,
+            citations: [],
+          };
+        }
+
+        const preGenerationGrade = await runGraderAgent(input.question, ragContext.results, 10);
+        const acceptedResults = preGenerationGrade.accepted;
+        const acceptedContext = ragService.getContextForPrompt(acceptedResults, 10, 4000);
+
+        if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext })) {
+          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+          const query = await (ctx.prisma.complianceQuery.create as any)({
+            data: {
+              query: input.question,
+              userId,
+              organizationId,
+              response: sourceInsufficientAnswer,
+              citations: [],
+              status: 'completed',
+              metadata: {
+                followUpTo: input.originalQueryId,
+                ragSources: ragContext.results.length,
+                acceptedSources: acceptedResults.length,
+                graderFailed: preGenerationGrade.gradeFailed,
+                grounded: false,
+                abstained: true,
+                sourceInsufficient: true,
+              },
+            },
+          });
+
+          logger.info({
+            type: 'compliance_followup_no_accepted_sources',
+            userId,
+            queryId: query.id,
+            originalQueryId: input.originalQueryId,
+            retrievedSources: ragContext.results.length,
+            graderFailed: preGenerationGrade.gradeFailed,
+          });
+
+          return {
+            queryId: query.id,
+            answer: sourceInsufficientAnswer,
+            citations: [],
+          };
+        }
 
         // Generate answer grounded in retrieved evidence and original query context
         const answer = await ctx.aiService.answerFollowUpQuery(
           originalQuery.query,
           originalQuery.response || originalQuery.summary || '',
           input.question,
-          ragContext.context || undefined,
+          acceptedContext || undefined,
         );
 
         // Same citation pattern as the primary query mutation:
         // store RAG source references as JSON on ComplianceQuery, not in
         // the Citation table (which has a FK constraint to Policy.id).
-        const queryCitations = ragContext.results.map((source: SearchResult) =>
-          buildCitationFromSearchResult(source, 'not_checked')
-        );
+        const queryCitations = buildCitationsFromChunks(acceptedResults, 'not_checked');
+        const claimVerification = verifyAnswerClaims(answer.content, acceptedResults);
+        const finalAnswer = claimVerification.unsupportedClaims.length > 0
+          ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
+          : answer.content;
+        const finalCitations = claimVerification.unsupportedClaims.length > 0 ? [] : queryCitations;
 
         // Save follow-up query with citations as JSON
         const query = await (ctx.prisma.complianceQuery.create as any)({
@@ -382,15 +592,23 @@ export const complianceRouter = router({
             query: input.question,
             userId,
             organizationId,
-            response: answer.content,
-            citations: queryCitations.length > 0 ? queryCitations : undefined,
+            response: finalAnswer,
+            citations: finalCitations.length > 0 ? finalCitations : undefined,
             metadata: {
               followUpTo: input.originalQueryId,
               model: answer.model,
               tokensUsed: answer.inputTokens + answer.outputTokens,
+              ragSources: ragContext.results.length,
+              acceptedSources: acceptedResults.length,
+              grounded: hasUsableCitations(finalCitations),
+              graderFailed: preGenerationGrade.gradeFailed,
+              claimVerificationVerdict: claimVerification.verdict,
+              unsupportedClaims: claimVerification.unsupportedClaims.map((claim) => claim.claimText),
             },
           },
         });
+
+        await persistClaimVerification(ctx.prisma, query.id, claimVerification);
 
         await ctx.incrementUsage?.();
 
@@ -407,13 +625,14 @@ export const complianceRouter = router({
           organizationId,
           queryId: query.id,
           originalQueryId: input.originalQueryId,
-          citationsCount: queryCitations.length,
+          citationsCount: finalCitations.length,
+          claimVerificationVerdict: claimVerification.verdict,
         });
 
         return {
           queryId: query.id,
-          answer: answer.content,
-          citations: queryCitations,
+          answer: finalAnswer,
+          citations: finalCitations,
         };
       } catch (error: any) {
         logger.error({

@@ -34,6 +34,15 @@ import type { BenchmarkDocumentSummary, GapAnalysisResult } from '@/lib/ai/promp
 import type { SearchResult } from '@/lib/rag/rag.service';
 import { sanitizePolicyText, chunkPolicyText } from '@/lib/ai/prompts/gap-analysis';
 import { extractPdfText } from '@/lib/pdf/extract-text';
+import {
+  buildComplianceSourceInsufficiencyAnswer,
+  COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE,
+  GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE,
+  hasUsableSourceContext,
+  SourceInsufficiencyError,
+} from '@/lib/source-grounding/source-insufficiency';
+import { buildCitationsFromChunks, hasUsableCitations } from '@/lib/source-grounding/citations';
+import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
 import {
@@ -377,6 +386,17 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
         ? false
         : groundedFrameworkCount >= Math.ceil(regulatoryFrameworks.length / 2);
 
+    if (regulatoryFrameworks.length === 0 || groundedFrameworkCount < regulatoryFrameworks.length) {
+      logger.warn({
+        type: 'gap_analysis_source_insufficient',
+        userId,
+        analysisId,
+        groundedFrameworkCount,
+        totalFrameworks: regulatoryFrameworks.length,
+      });
+      throw new SourceInsufficiencyError(GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE);
+    }
+
     let ragContext: string | undefined;
     if (labeledResults.length > 0) {
       const grouped: Record<string, string[]> = {};
@@ -545,7 +565,9 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
       error: (err as Error).message,
     });
 
-    const errorMessage = err instanceof Error
+    const errorMessage = err instanceof SourceInsufficiencyError
+      ? err.message
+      : err instanceof Error
       ? `Analysis failed: ${err.message}`
       : 'Analysis failed due to an unexpected error. Please try again.';
 
@@ -614,16 +636,92 @@ class ComplianceModule {
       // 5. Build context from RAG results
       const context = this.buildQueryContext(ragResults, validated.context);
 
+      if (!hasUsableSourceContext({ results: ragResults, context })) {
+        const answer = buildComplianceSourceInsufficiencyAnswer();
+        const detectedAreas = validated.regulatoryAreas ?? [];
+        const savedQuery = await prisma.complianceQuery.create({
+          data: {
+            userId,
+            organizationId: validated.organizationId ?? null,
+            query: validated.query,
+            response: answer,
+            citations: [],
+            regulatoryAreas: detectedAreas,
+            processingTimeMs: Date.now() - startTime,
+            status: 'completed',
+            metadata: {
+              ragSources: ragResults.length,
+              grounded: false,
+              abstained: true,
+              sourceInsufficient: true,
+            },
+          },
+        });
+
+        return {
+          id: savedQuery.id,
+          query: validated.query,
+          answer,
+          citations: [],
+          regulatoryAreas: detectedAreas as RegulatoryArea[],
+          confidence: 0,
+          recommendations: [],
+          relatedQueries: [],
+          processingTimeMs: Date.now() - startTime,
+          createdAt: savedQuery.createdAt,
+        } as ComplianceQueryResult;
+      }
+
+      const grade = await runGraderAgent(validated.query, ragResults, 10);
+      const acceptedResults = grade.accepted;
+      const acceptedContext = this.buildQueryContext(acceptedResults, validated.context);
+      const citations = buildCitationsFromChunks(acceptedResults, 'not_checked');
+
+      if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext }) || !hasUsableCitations(citations)) {
+        const answer = buildComplianceSourceInsufficiencyAnswer();
+        const detectedAreas = validated.regulatoryAreas ?? [];
+        const savedQuery = await prisma.complianceQuery.create({
+          data: {
+            userId,
+            organizationId: validated.organizationId ?? null,
+            query: validated.query,
+            response: answer,
+            citations: [],
+            regulatoryAreas: detectedAreas,
+            processingTimeMs: Date.now() - startTime,
+            status: 'completed',
+            metadata: {
+              ragSources: ragResults.length,
+              acceptedSources: acceptedResults.length,
+              graderFailed: grade.gradeFailed,
+              grounded: false,
+              abstained: true,
+              sourceInsufficient: true,
+            },
+          },
+        });
+
+        return {
+          id: savedQuery.id,
+          query: validated.query,
+          answer,
+          citations: [],
+          regulatoryAreas: detectedAreas as RegulatoryArea[],
+          confidence: 0,
+          recommendations: [],
+          relatedQueries: [],
+          processingTimeMs: Date.now() - startTime,
+          createdAt: savedQuery.createdAt,
+        } as ComplianceQueryResult;
+      }
+
       // 6. Generate answer using AI
       const aiResponse = await aiService.answerComplianceQuery({
         query: validated.query,
-        context,
+        context: acceptedContext,
         regulatoryAreas: validated.regulatoryAreas || [],
         includeRecommendations: validated.includeRecommendations,
       } as any) as any;
-
-      // 7. Extract citations
-      const citations = this.extractCitationsFromRag(ragResults);
 
       // 8. Determine regulatory areas from response
       const detectedAreas = this.detectRegulatoryAreas(
@@ -651,7 +749,7 @@ class ComplianceModule {
         id: savedQuery.id,
         query: validated.query,
         answer: aiResponse.answer,
-        citations,
+        citations: citations as any,
         regulatoryAreas: detectedAreas as RegulatoryArea[],
         confidence: aiResponse.confidence || 0.85,
         recommendations: aiResponse.recommendations,
@@ -1710,7 +1808,7 @@ Follow-up Question: ${followUp}
     if (ragResults.length > 0) {
       context = 'Relevant regulatory information:\n\n';
       for (const result of ragResults) {
-        context += `[${result.source || 'Regulation'}] ${result.content}\n\n`;
+        context += `[${result.source || result.documentTitle || 'Regulation'}] ${result.chunkText || result.content || ''}\n\n`;
       }
     }
 
@@ -1719,27 +1817,6 @@ Follow-up Question: ${followUp}
     }
 
     return context;
-  }
-
-  /**
-   * Extract citations from RAG results
-   */
-  private extractCitationsFromRag(ragResults: any[]): any[] {
-    return ragResults.map((result, index) => ({
-      documentId: result.documentId ?? `citation-${index}`,
-      documentTitle: result.documentTitle || result.title || result.source || 'Unknown',
-      section: result.section || '',
-      textSnippet: (result.chunkText || result.content || '').slice(0, 500),
-      score: result.score || result.relevanceScore || 0,
-      citation: result.citation ?? null,
-      authorityStatus: result.authorityStatus ?? 'IN_FORCE',
-      isBinding: result.isBinding ?? true,
-      source: result.source ?? null,
-      version: result.version ?? null,
-      regulatoryArea: result.regulatoryArea || 'CBK',
-      verified: false,
-      verificationStatus: 'not_checked' as const,
-    }));
   }
 
   /**
@@ -2042,7 +2119,10 @@ Follow-up Question: ${followUp}
           checklistId: record.id,
           error: (ragErr as Error).message,
         });
-        // Continue without RAG context  -  AI uses its training knowledge
+      }
+
+      if (!ragContext?.trim()) {
+        throw new SourceInsufficiencyError(COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE);
       }
 
       // 3. Generate checklist with Claude AI

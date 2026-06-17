@@ -19,11 +19,11 @@ import {
 } from './policy.types';
 import {
   extractSections,
-  extractCitationsFromContent,
   generateTitle,
   getRegulatoryAreaName,
   getRegulatoryAuthority,
 } from './policy.utils';
+import { POLICY_SOURCE_INSUFFICIENCY_MESSAGE } from '@/lib/source-grounding/source-insufficiency';
 
 const { REDIS_KEYS, PUBSUB_CHANNELS } = POLICY_CONSTANTS;
 
@@ -57,6 +57,13 @@ export class PolicyGenerator {
       // Stage 2: Search for relevant regulations
       await this.publishProgress(policyId, 'SEARCHING_REGULATIONS', 15, 'Searching regulatory database...');
       const regulatoryContext = await this.searchRegulations(params.regulatoryAreas);
+      if (regulatoryContext.length === 0) {
+        throw new PolicyError(
+          POLICY_SOURCE_INSUFFICIENCY_MESSAGE,
+          'GENERATION_FAILED',
+          422
+        );
+      }
 
       // Stage 3: Analyze context
       await this.publishProgress(policyId, 'ANALYZING_CONTEXT', 25, 'Analyzing compliance requirements...');
@@ -217,7 +224,12 @@ export class PolicyGenerator {
         });
 
         if (results && results.length > 0) {
-          contexts.push(...results.map(function(m) { return (m as any).chunkText || (m as any).metadata?.content || ''; }));
+          contexts.push(...results.map((result: any) => {
+            const title = result.documentTitle || result.title || result.source || areaName;
+            const section = result.section ? ` - ${result.section}` : '';
+            const text = result.chunkText || result.metadata?.content || '';
+            return `[SOURCE: ${title}${section}]\n${text}`;
+          }));
         }
       } catch (error) {
         logger.warn({
@@ -239,7 +251,7 @@ export class PolicyGenerator {
     regulatoryContext: string[]
   ): Promise<string> {
     const analysisPrompt = `
-Analyze the following scenario and regulatory context to identify key compliance requirements:
+Analyze the following scenario and retrieved regulatory context to identify key compliance requirements. Use only the retrieved regulatory context for legal obligations, legal citations, penalties, deadlines, thresholds, and compliance conclusions.
 
 SCENARIO:
 ${params.scenario}
@@ -259,6 +271,8 @@ Please provide a brief analysis of:
 1. Key compliance requirements
 2. Potential risks and challenges
 3. Priority areas to address
+
+If the retrieved context is insufficient for any legal or compliance claim, state that the source material is insufficient rather than relying on model memory.
 `;
 
     const response = await (aiService as any).complete({
@@ -358,7 +372,8 @@ ${outline.map((s, i) => `${i + 1}. ${s}`).join('\n')}
 INSTRUCTIONS:
 - ${detailInstructions[params.detailLevel!]}
 - ${audienceInstructions[params.targetAudience!]}
-- Include specific regulatory references with [Source: Name, Section X.X] format
+- Include specific regulatory references with [Source: Name, Section X.X] format only when supported by the retrieved regulatory context in the analysis
+- Do not state legal obligations, citations, penalties, statutory thresholds, filing requirements, deadlines, or compliance conclusions beyond the retrieved source material
 - Use markdown formatting (## for sections, ### for subsections)
 - Include practical guidance and actionable steps
 ${params.includeRecommendations ? '- Include recommendations at the end' : ''}
@@ -379,132 +394,22 @@ Generate the complete policy document:
    * Extract citations from generated content
    */
   private async extractCitations(
-    content: string,
+    _content: string,
     regulatoryContext: string[]
   ): Promise<CitationExtract[]> {
-    // First, extract citations from the content itself
-    const extractedCitations = extractCitationsFromContent(content);
-    
-    // Add confidence scores based on context matching
-    const citations: CitationExtract[] = extractedCitations.map(citation => ({
-      source: (citation as any).source || '',
-      title: (citation as any).title || '',
-      section: (citation as any).section || null,
-      content: (citation as any).content || '',
-      confidence: this.calculateCitationConfidence(citation as any, regulatoryContext),
-    }));
-
-    // Use AI to find additional citations if needed
-    if (citations.length < 3) {
-      const additionalCitations = await this.findAdditionalCitations(content, regulatoryContext);
-      citations.push(...additionalCitations);
-    }
-
-    return citations;
-  }
-
-  /**
-   * Calculate confidence score for a citation
-   */
-  private calculateCitationConfidence(
-    citation: CitationExtract,
-    context: string[]
-  ): number {
-    let confidence = 0.5; // Base confidence
-
-    // Check if citation source appears in context
-    for (const ctx of context) {
-      if (ctx.toLowerCase().includes(citation.source.toLowerCase())) {
-        confidence += 0.3;
-        break;
-      }
-    }
-
-    // Check if section is specified
-    if (citation.section) {
-      confidence += 0.1;
-    }
-
-    // Check if content is provided
-    if (citation.content && citation.content.length > 20) {
-      confidence += 0.1;
-    }
-
-    return Math.min(confidence, 1.0);
-  }
-
-  /**
-   * Find additional citations using AI
-   */
-  private async findAdditionalCitations(
-    content: string,
-    context: string[]
-  ): Promise<CitationExtract[]> {
-    const citationPrompt = `
-Based on the following policy content, identify specific legal citations and regulatory references that should be included:
-
-POLICY CONTENT:
-${content.slice(0, 3000)}
-
-AVAILABLE REGULATORY CONTEXT:
-${context.slice(0, 2).join('\n\n')}
-
-List 3-5 specific citations in the format:
-- Source: [Act/Regulation Name]
-- Section: [Section number if applicable]
-- Content: [Brief quote or summary]
-`;
-
-    try {
-      const response = await (aiService as any).complete({
-        prompt: citationPrompt,
-        maxTokens: 500,
-        temperature: 0.3,
-      });
-
-      // Parse citations from response
-      const lines = response.content.split('\n');
-      const citations: CitationExtract[] = [];
-      let current: Partial<CitationExtract> = {};
-
-      for (const line of lines) {
-        if (line.includes('Source:')) {
-          if (current.source) {
-            citations.push({
-              source: current.source,
-              title: current.source,
-              section: current.section || null,
-              content: current.content || '',
-              confidence: 0.6,
-            });
-          }
-          current = { source: line.replace(/.*Source:\s*/, '').trim() };
-        } else if (line.includes('Section:')) {
-          current.section = line.replace(/.*Section:\s*/, '').trim();
-        } else if (line.includes('Content:')) {
-          current.content = line.replace(/.*Content:\s*/, '').trim();
-        }
-      }
-
-      // Add last citation
-      if (current.source) {
-        citations.push({
-          source: current.source,
-          title: current.source,
-          section: current.section || null,
-          content: current.content || '',
-          confidence: 0.6,
-        });
-      }
-
-      return citations;
-    } catch (error) {
-      logger.warn({
-        type: 'citation_extraction_warning',
-        error: (error as Error).message,
-      });
-      return [];
-    }
+    return regulatoryContext.map((ctx) => {
+      const sourceMatch = ctx.match(/^\[SOURCE:\s*([^\]\n]+)\]/);
+      const sourceLabel = sourceMatch?.[1]?.trim() || 'Retrieved regulatory source';
+      const [title, section] = sourceLabel.split(/\s+-\s+/, 2);
+      const content = ctx.replace(/^\[SOURCE:[^\]\n]+\]\s*/m, '').trim().slice(0, 500);
+      return {
+        source: title,
+        title,
+        section: section || null,
+        content,
+        confidence: 1,
+      };
+    }).filter((citation) => citation.content.length > 0);
   }
 
   /**

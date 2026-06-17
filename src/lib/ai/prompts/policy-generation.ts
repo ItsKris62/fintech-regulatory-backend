@@ -13,6 +13,7 @@ export interface PolicyGenerationParams {
   specificRequirements?: string;
   targetAudience?: string;
   existingPolicies?: string;
+  ragContext?: string;
 }
 
 /**
@@ -54,8 +55,10 @@ WRITING STYLE:
 - Use bullet points and numbered lists for clarity
 
 IMPORTANT:
-- Only cite laws and regulations that actually exist in Kenya
-- Be specific with section numbers and clauses
+- Use only retrieved source context for legal obligations, legal citations, penalties, statutory thresholds, filing requirements, deadlines, and compliance conclusions
+- If retrieved source context is unavailable or insufficient, refuse to generate legal citations or legal obligations and ask the user to attach or select the relevant regulatory sources
+- Refer only to laws, regulators, section numbers, and clauses that appear in the retrieved source context
+- Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs. The application attaches source-list citations from retrieved chunks separately
 - Distinguish between mandatory requirements and best practices
 - Consider the Kenyan business and regulatory environment
 - Address practical implementation challenges`;
@@ -65,7 +68,7 @@ IMPORTANT:
  * Generate user prompt for policy generation
  */
 export function generatePolicyUserPrompt(params: PolicyGenerationParams): string {
-  const { scenario, organizationType, regulatoryAreas, specificRequirements, targetAudience, existingPolicies } = params;
+  const { scenario, organizationType, regulatoryAreas, specificRequirements, targetAudience, existingPolicies, ragContext } = params;
 
   let prompt = `Generate a comprehensive policy framework for the following scenario:
 
@@ -91,9 +94,19 @@ ${targetAudience}
 `;
   }
 
-  if (existingPolicies) {
+if (existingPolicies) {
     prompt += `\n**EXISTING POLICIES TO CONSIDER:**
 ${existingPolicies}
+`;
+  }
+
+  if (ragContext) {
+    prompt += `\n**RETRIEVED REGULATORY SOURCE CONTEXT:**
+${ragContext}
+`;
+  } else {
+    prompt += `\n**SOURCE INSUFFICIENCY:**
+No retrieved regulatory source context was provided. Do not generate legal obligations, legal citations, penalties, statutory thresholds, filing requirements, legal deadlines, or compliance conclusions. You may only state that verified source documents are required and provide non-legal operational next steps.
 `;
   }
 
@@ -140,15 +153,13 @@ Please provide a comprehensive policy framework with the following sections:
    - Resources required
    - Success metrics
 
-7. **LEGAL CITATIONS APPENDIX**
-   Complete list of all referenced laws, acts, and regulations with:
-   - Full act/regulation name
-   - Section/clause numbers
-   - Brief description of relevance
+7. **SOURCE SUPPORT NOTES**
+   Briefly identify the retrieved source titles/sections that support the policy, using only names and sections present in the retrieved source context. Do not invent citation labels or metadata.
 
 IMPORTANT INSTRUCTIONS:
-- Use ONLY Kenyan laws and regulations
-- Provide specific citations (e.g., "Data Protection Act 2019, Section 25")
+- Use ONLY the retrieved regulatory source context for legal and compliance claims
+- Refer only to source titles and sections present in the retrieved context; the application attaches enforceable source-list citations separately
+- If the retrieved source context is insufficient, refuse legal citation/obligation generation instead of relying on model memory
 - Consider the practical Kenyan business context
 - Flag any uncertainties or areas requiring legal review
 - Make recommendations specific and actionable

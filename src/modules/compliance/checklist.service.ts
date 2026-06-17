@@ -58,6 +58,7 @@ import {
   type GenerateChecklistAsyncInput,
   type RawChecklistItemRow,
 } from './checklist.types';
+import { COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE } from '@/lib/source-grounding/source-insufficiency';
 
 // ---------------------------------------------------------------------------
 // ChecklistService
@@ -211,12 +212,30 @@ class ChecklistService {
         });
       }
     } catch (ragErr: unknown) {
-      // Non-fatal  -  Tier 1/2 will proceed with fewer/no passages; Tier 3 ignores RAG.
       logger.warn({
         type:        'checklist_rag_search_failed',
         checklistId,
         error:       (ragErr as Error).message,
       });
+    }
+
+    if (ragPassages.length === 0) {
+      logger.warn({
+        type: 'checklist_source_insufficient',
+        checklistId,
+        userId,
+      });
+      await prisma.checklist.update({
+        where: { id: checklistId },
+        data: {
+          status: CHECKLIST_STATUS.FAILED,
+          metadata: {
+            errorMessage: COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE,
+            sourceInsufficient: true,
+          } as unknown as Record<string, unknown>,
+        },
+      });
+      return;
     }
 
     // -- 3. Three-tier generation ---------------------------------------------
@@ -236,7 +255,8 @@ class ChecklistService {
    *
    * Tier 1  -  Full:       full prompt, up to 12 RAG passages (≤8000 token budget), 8192 max_tokens, 240s
    * Tier 2  -  Simplified: shorter prompt, top-6 passages (≤3000 token budget),   6144 max_tokens, 200s
-   * Tier 3  -  Minimal:    minimal prompt, no RAG,                                  4096 max_tokens, 150s
+   * Tier 3  -  Minimal:    source-insufficiency prompt only; service-level guard
+   *                       prevents legal generation when no RAG passages exist.
    *
    * Each tier streams via executeChecklistStream() and validates via parseWithTierSchema()
    * (per-category Zod validation  -  no unvalidated data reaches the database).
@@ -307,7 +327,7 @@ class ChecklistService {
       logger.warn({ type: 'checklist_tier_failed', checklistId, userId, tier: 2, error: msg, durationMs: Date.now() - t2Start });
     }
 
-    // -- Tier 3: Minimal (no RAG) ---------------------------------------------
+    // -- Tier 3: Minimal source-insufficiency fallback ------------------------
     const t3Start = Date.now();
     try {
       const checklist = await this.runTier(3, checklistId, input, []);
@@ -316,7 +336,7 @@ class ChecklistService {
         checklistId, input, checklist,
         {
           generationTier: 'minimal',
-          note:           'Generated without document context  -  review for completeness',
+          note:           'Generated only after earlier source-grounded tiers failed; review before use',
           originalError:  errors[0]?.error,
         },
         0, trialUserId, startTime

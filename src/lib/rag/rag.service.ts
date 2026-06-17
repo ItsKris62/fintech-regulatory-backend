@@ -3,6 +3,7 @@ import { chunkDocument, chunkLegalAct, DocumentChunk, ChunkConfig } from './chun
 import { logger } from '@/utils/logger';
 import { hashString } from '@/utils/helpers';
 import { redis } from '@/lib/redis/client';
+import { buildPreferredActiveSourceFilter } from '@/lib/source-grounding/source-metadata';
 
 const RAG_CTX_CACHE_TTL = 1800; // 30 minutes — caches Pinecone lookup, not AI answer
 
@@ -21,8 +22,14 @@ export interface DocumentToIndex {
   isBinding?: boolean;
   source?: string;
   version?: string;
+  effectiveDate?: Date;
   metadata?: Record<string, any>;
   framework?: string;
+  officialUrl?: string;
+  sourceDocumentVersionId?: string;
+  indexVersion?: string;
+  effectiveEndDate?: string;
+  documentChecksum?: string;
 }
 
 /**
@@ -44,6 +51,21 @@ export interface SearchResult {
   framework?: string;
   frameworkSlug?: string;
   legalDocumentId?: string;
+  officialUrl?: string;
+  sourceDocumentVersionId?: string;
+  indexVersion?: string;
+  pageStart?: number;
+  pageEnd?: number;
+  sectionNumber?: string;
+  clauseNumber?: string;
+  scheduleNumber?: string;
+  headingPath?: string[] | string;
+  provisionId?: string;
+  contentHash?: string;
+  documentChecksum?: string;
+  effectiveDate?: string;
+  effectiveEndDate?: string;
+  sourceLimited?: boolean;
 }
 
 /**
@@ -59,6 +81,36 @@ export interface SearchOptions {
     minResults: number;
     relaxedFilter?: Record<string, any>;
   };
+  preferActiveSources?: boolean;
+  sourceIndexMode?: 'v1' | 'v2' | 'prefer-v2';
+  preferV2FallbackConfig?: {
+    minV2Results?: number;
+    minV2TopScore?: number;
+    minV2DocumentDiversity?: number;
+  };
+}
+
+function andFilters(...filters: Array<Record<string, any> | undefined | null>): Record<string, any> | undefined {
+  const present = filters.filter((filter): filter is Record<string, any> => !!filter && Object.keys(filter).length > 0);
+  if (present.length === 0) return undefined;
+  if (present.length === 1) return present[0];
+  return { $and: present };
+}
+
+function indexVersionFilter(mode?: SearchOptions['sourceIndexMode'], fallbackToV1 = false): Record<string, any> | undefined {
+  const effectiveMode = fallbackToV1 && mode === 'prefer-v2' ? 'v1' : mode;
+  if (effectiveMode === 'v2' || effectiveMode === 'prefer-v2') {
+    return { indexVersion: { $eq: 'v2' } };
+  }
+  if (effectiveMode === 'v1') {
+    return {
+      $or: [
+        { indexVersion: { $eq: 'v1' } },
+        { indexVersion: { $exists: false } },
+      ],
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -121,6 +173,20 @@ export class RAGService {
         framework: document.framework ?? document.metadata?.framework,
         frameworkSlug: document.metadata?.frameworkSlug,
         legalDocumentId: document.metadata?.legalDocumentId ?? document.id,
+        indexVersion: document.metadata?.indexVersion ?? 'v1',
+        officialUrl: document.metadata?.officialUrl,
+        sourceDocumentVersionId: document.metadata?.sourceDocumentVersionId,
+        pageStart: chunk.metadata?.pageStart ?? document.metadata?.pageStart,
+        pageEnd: chunk.metadata?.pageEnd ?? document.metadata?.pageEnd,
+        sectionNumber: chunk.metadata?.sectionNumber ?? document.metadata?.sectionNumber,
+        clauseNumber: chunk.metadata?.clauseNumber ?? document.metadata?.clauseNumber,
+        scheduleNumber: chunk.metadata?.scheduleNumber ?? document.metadata?.scheduleNumber,
+        headingPath: chunk.metadata?.headingPath ?? document.metadata?.headingPath,
+        provisionId: chunk.metadata?.provisionId ?? document.metadata?.provisionId,
+        contentHash: chunk.metadata?.contentHash ?? document.metadata?.contentHash,
+        documentChecksum: document.metadata?.documentChecksum,
+        effectiveDate: document.effectiveDate?.toISOString?.() ?? document.metadata?.effectiveDate,
+        effectiveEndDate: document.metadata?.effectiveEndDate,
       }));
 
       // Upsert to Pinecone
@@ -194,16 +260,24 @@ export class RAGService {
       namespace,
       includeMetadata: _includeMetadata = true,
       fallbackIfTooFew,
+      preferActiveSources = false,
+      sourceIndexMode,
     } = options;
+    const baseFilter = andFilters(filter, indexVersionFilter(sourceIndexMode));
+    const effectiveFilter = preferActiveSources
+      ? buildPreferredActiveSourceFilter({ baseFilter })
+      : baseFilter;
 
     const startTime = Date.now();
 
     logger.info({
       type: 'rag_search_started',
       query: query.substring(0, 100),
-      topK,
-      minScore,
-    });
+        topK,
+        minScore,
+        preferActiveSources,
+        sourceIndexMode,
+      });
 
     try {
       // Search Pinecone (integrated embeddings  -  query string passed directly)
@@ -211,10 +285,45 @@ export class RAGService {
         query,
         topK,
         namespace,
-        filter
+        effectiveFilter
       );
 
-      const hasStrictFilter = !!filter && Object.keys(filter).length > 0;
+      if (sourceIndexMode === 'prefer-v2') {
+        const fallbackConfig = {
+          minV2Results: options.preferV2FallbackConfig?.minV2Results ?? 3,
+          minV2TopScore: options.preferV2FallbackConfig?.minV2TopScore ?? 0.78,
+          minV2DocumentDiversity: options.preferV2FallbackConfig?.minV2DocumentDiversity ?? 2,
+        };
+        const validResults = results.filter((result) => result.score >= minScore);
+        const topScore = validResults.length > 0 ? Math.max(...validResults.map((r) => r.score)) : 0;
+        const uniqueDocs = new Set(validResults.map((r) => r.metadata.documentId)).size;
+
+        const shouldFallback = 
+          validResults.length < fallbackConfig.minV2Results ||
+          topScore < fallbackConfig.minV2TopScore ||
+          uniqueDocs < fallbackConfig.minV2DocumentDiversity;
+
+        if (shouldFallback) {
+          const v1BaseFilter = andFilters(filter, indexVersionFilter(sourceIndexMode, true));
+          const v1Filter = preferActiveSources
+            ? buildPreferredActiveSourceFilter({ baseFilter: v1BaseFilter })
+            : v1BaseFilter;
+          logger.info({
+            type: 'rag_search_v2_fallback_to_v1',
+            topK,
+            minScore,
+            reason: {
+              validResultsCount: validResults.length,
+              topScore,
+              uniqueDocs,
+              config: fallbackConfig,
+            }
+          });
+          results = await queryVectors(query, topK, namespace, v1Filter);
+        }
+      }
+
+      const hasStrictFilter = !!effectiveFilter && Object.keys(effectiveFilter).length > 0;
       if (
         fallbackIfTooFew &&
         hasStrictFilter &&
@@ -226,11 +335,18 @@ export class RAGService {
           minResults: fallbackIfTooFew.minResults,
           hasRelaxedFilter: !!fallbackIfTooFew.relaxedFilter,
         });
+        const relaxedBaseFilter = andFilters(
+          fallbackIfTooFew.relaxedFilter,
+          indexVersionFilter(sourceIndexMode),
+        );
+        const relaxedFilter = preferActiveSources
+          ? buildPreferredActiveSourceFilter({ baseFilter: relaxedBaseFilter })
+          : relaxedBaseFilter;
         results = await queryVectors(
           query,
           topK,
           namespace,
-          fallbackIfTooFew.relaxedFilter,
+          relaxedFilter,
         );
       }
 
@@ -253,6 +369,20 @@ export class RAGService {
           framework: result.metadata.framework,
           frameworkSlug: result.metadata.frameworkSlug,
           legalDocumentId: result.metadata.legalDocumentId,
+          officialUrl: result.metadata.officialUrl,
+          sourceDocumentVersionId: result.metadata.sourceDocumentVersionId,
+          indexVersion: result.metadata.indexVersion,
+          pageStart: result.metadata.pageStart,
+          pageEnd: result.metadata.pageEnd,
+          sectionNumber: result.metadata.sectionNumber,
+          clauseNumber: result.metadata.clauseNumber,
+          scheduleNumber: result.metadata.scheduleNumber,
+          headingPath: result.metadata.headingPath,
+          provisionId: result.metadata.provisionId,
+          contentHash: result.metadata.contentHash,
+          documentChecksum: result.metadata.documentChecksum,
+          effectiveDate: result.metadata.effectiveDate,
+          effectiveEndDate: result.metadata.effectiveEndDate,
         }));
 
       const duration = Date.now() - startTime;
@@ -505,6 +635,8 @@ export async function searchAndGetContext(
     minScore,
     filter: options.filter ?? null,
     namespace: options.namespace ?? null,
+    preferActiveSources: options.preferActiveSources ?? false,
+    sourceIndexMode: options.sourceIndexMode ?? null,
   }))}`;
 
   try {

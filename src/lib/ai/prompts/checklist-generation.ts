@@ -137,7 +137,7 @@ NEVER stop mid-string, mid-array, or mid-object. Always close every open bracket
 export function generateChecklistUserPrompt(params: ChecklistGenerationParams): string {
   const ragSection = params.ragContext
     ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from a database of actual Kenyan regulatory documents. Use these to ground your checklist items in real law  -  cite the source document and section where applicable:\n\n${params.ragContext}\n`
-    : `\n\n## NOTE: Regulatory database context unavailable. Rely on your training knowledge of current Kenyan financial services regulations.\n`;
+    : `\n\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context was provided. Do not generate legal obligations, penalties, deadlines, statutory thresholds, filing requirements, or compliance conclusions. State that verified regulatory source documents are required and provide only non-legal operational next steps.\n`;
 
   return `Generate a comprehensive, professional compliance checklist for the following Kenyan fintech business. This checklist will be used by the company's legal and compliance team and must meet the quality bar of a senior compliance consultant's output.
 
@@ -477,17 +477,15 @@ NEVER stop mid-string or mid-object.`;
 }
 
 function generateTier3SystemPrompt(): string {
-  return `You are a Kenyan fintech regulatory compliance advisor. Generate a baseline compliance checklist using your training knowledge of Kenyan financial services regulations.
+  return `You are a Kenyan fintech regulatory compliance advisor. No retrieved regulatory source context is available.
 
-Focus exclusively on these three areas:
-1. CBK licensing and registration requirements (National Payment System Act 2011, CBK Act Cap 491, Digital Credit Providers Regulations 2022)
-2. Data Protection Act 2019  -  ODPC registration, consent, data subject rights
-3. AML/CFT obligations  -  POCAMLA, FRC registration, CDD/EDD, STR/CTR filing
+Do not generate legal obligations, legal citations, penalties, statutory thresholds, regulator filing requirements, legal deadlines, or compliance conclusions.
+Return a source-insufficiency checklist that asks the user to add or select verified regulatory source documents and provides only non-legal operational next steps.
 
 OUTPUT RULES  -  FOLLOW EXACTLY:
 1. Respond ONLY with valid JSON. No markdown fences, no preamble. Start with { and end with }.
-2. Cite only laws and section numbers you are confident are accurate. Write "Section [verify]" rather than inventing numbers.
-3. Generate 10-15 checklist items across 2-4 categories. Brevity over completeness.
+2. Do not cite laws, sections, penalties, deadlines, or obligations.
+3. Generate 3-5 non-legal operational items about selecting, uploading, or narrowing source documents.
 4. Keep all string values under 300 characters.
 5. Metadata fields are optional  -  omit any you are unsure about.
 
@@ -501,7 +499,7 @@ NEVER stop mid-string. A small valid JSON beats a large broken one.`;
 function generateTier2UserPrompt(params: ChecklistGenerationParams): string {
   const ragSection = params.ragContext
     ? `\n\n## RETRIEVED REGULATORY CONTEXT (use to cite specific laws)\n${params.ragContext}\n`
-    : `\n\n## NOTE: No document context available. Use your training knowledge.\n`;
+    : `\n\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context is available. Do not generate legal obligations, legal citations, penalties, statutory thresholds, filing requirements, legal deadlines, or compliance conclusions. Return only non-legal operational next steps for adding or selecting verified regulatory sources.\n`;
 
   return `Generate a focused compliance checklist for this Kenyan fintech business. Generate 15-20 items across 3-5 categories  -  prioritise the most critical regulatory requirements.
 
@@ -552,7 +550,7 @@ Return ONLY valid JSON. Start with { and end with }. No other text.`;
 }
 
 function generateTier3UserPrompt(params: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>): string {
-  return `Generate a baseline compliance checklist for this Kenyan fintech using your training knowledge of Kenyan regulations. Generate 10-15 items across 2-4 categories. Focus on CBK licensing, Data Protection Act 2019, and AML/CFT obligations only.
+  return `No retrieved regulatory source context is available for this Kenyan fintech checklist request. Do not generate legal obligations, legal citations, penalties, statutory thresholds, filing requirements, legal deadlines, or compliance conclusions. Generate 3-5 non-legal operational checklist items that help the user add or select verified regulatory sources.
 
 ## BUSINESS PROFILE
 - **Product / Service Type:** ${params.productType}
@@ -565,18 +563,18 @@ ${params.additionalConcerns ? `- **Specific Concerns:** ${params.additionalConce
   "categories": [
     {
       "id": "LIC",
-      "name": "Licensing & Registration",
-      "description": "Core CBK licensing requirements.",
+      "name": "Source Preparation",
+      "description": "Non-legal steps needed before a source-grounded assessment.",
       "items": [
         {
           "id": "LIC-001",
-          "title": "Obtain required CBK licence",
-          "regulatoryBasis": "National Payment System Act 2011, Section 12",
+          "title": "Select relevant regulatory sources",
+          "regulatoryBasis": "Source required before legal assessment",
           "priority": "CRITICAL",
-          "description": "Obtain the appropriate CBK licence for your payment service type before commencing operations.",
-          "actionItems": ["Identify applicable CBK licence category", "Submit application to CBK"],
-          "deadline": "Before commencing operations",
-          "penalty": "Criminal liability  -  refer to applicable Act"
+          "description": "Choose the Act, Regulation, Guideline, Circular, or benchmark document that should ground this checklist.",
+          "actionItems": ["Select source documents", "Re-run checklist generation with verified sources"],
+          "deadline": "Source required before legal assessment",
+          "penalty": "No penalty assessed without source evidence"
         }
       ]
     }

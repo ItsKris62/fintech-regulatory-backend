@@ -35,6 +35,13 @@ type RegulatoryBenchmarkRow = {
   documentType: string;
   authorityStatus: string;
   version: string | null;
+  officialUrl: string | null;
+  effectiveDate: Date | null;
+  effectiveEndDate: Date | null;
+  isBinding: boolean;
+  indexVersion: string;
+  sourceDocumentVersionId: string | null;
+  status: string;
   updatedAt: Date;
 };
 
@@ -46,6 +53,13 @@ export type AuthorizedBenchmarkDocument = {
   documentType: string;
   authorityStatus: string | null;
   version: string | null;
+  officialUrl: string | null;
+  effectiveDate: Date | null;
+  effectiveEndDate: Date | null;
+  isBinding: boolean | null;
+  indexVersion: string | null;
+  sourceDocumentVersionId: string | null;
+  sourceStatus: string | null;
   organizationId: string | null;
   isGlobal: boolean;
   updatedAt: Date;
@@ -90,6 +104,13 @@ function normalizeLegalDocument(doc: LegalBenchmarkRow): AuthorizedBenchmarkDocu
     documentType: doc.documentType,
     authorityStatus: null,
     version: String(doc.version),
+    officialUrl: null,
+    effectiveDate: null,
+    effectiveEndDate: null,
+    isBinding: null,
+    indexVersion: null,
+    sourceDocumentVersionId: null,
+    sourceStatus: null,
     organizationId: doc.organizationId,
     isGlobal: doc.organizationId === null,
     updatedAt: doc.updatedAt,
@@ -106,6 +127,13 @@ function normalizeRegulatoryDocument(doc: RegulatoryBenchmarkRow): AuthorizedBen
     documentType: doc.documentType,
     authorityStatus: doc.authorityStatus,
     version: doc.version,
+    officialUrl: doc.officialUrl,
+    effectiveDate: doc.effectiveDate,
+    effectiveEndDate: doc.effectiveEndDate,
+    isBinding: doc.isBinding,
+    indexVersion: doc.indexVersion,
+    sourceDocumentVersionId: doc.sourceDocumentVersionId,
+    sourceStatus: doc.status,
     organizationId: null,
     isGlobal: true,
     updatedAt: doc.updatedAt,
@@ -176,6 +204,13 @@ export async function listAuthorizedBenchmarkDocuments(input: {
         documentType: true,
         authorityStatus: true,
         version: true,
+        officialUrl: true,
+        effectiveDate: true,
+        effectiveEndDate: true,
+        isBinding: true,
+        indexVersion: true,
+        sourceDocumentVersionId: true,
+        status: true,
         updatedAt: true,
       },
     }).catch(() => []) ?? Promise.resolve([]),
@@ -213,4 +248,3 @@ export async function validateAuthorizedBenchmarkDocumentIds(input: {
 
   return selected;
 }
-

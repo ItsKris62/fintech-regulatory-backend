@@ -263,11 +263,11 @@ ${chunks.join('\n\n---\n\n')}
 
 ---
 **INSTRUCTIONS FOR USING THE ABOVE CONTEXT:**
-- Cite each source you reference as: "According to [Document Title], [Section]..."
+- Refer only to source titles and sections present above. Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs; application citation rows are built from retrieved corpus chunks separately.
 - If your answer draws from multiple sources, note each one explicitly
 - If a source has Authority Status DRAFT, CONSULTATION, or SUPERSEDED, clearly label the citation as non-binding and do not describe it as current binding law
-- If the retrieved context does not fully address the query, state this clearly and supplement with your broader knowledge of Kenyan law
-- If the query is entirely outside the scope of the retrieved documents, say so`;
+- If the retrieved context does not fully address the query, state this clearly and do not make legal or compliance claims beyond the retrieved source material
+- If the query is entirely outside the scope of the retrieved documents, say so and ask for the missing regulatory source`;
 }
 
 // ============================================================================
@@ -371,7 +371,7 @@ export async function enhancedComplianceQuery(
     organizationType,
     industry,
     urgency,
-    context: ragContextString || undefined,
+    ragContext: ragContextString || undefined,
   };
 
   const aiResult = await aiService.answerComplianceQuery(complianceParams);
@@ -385,8 +385,8 @@ export async function enhancedComplianceQuery(
     isBinding: r.isBinding,
     source: r.source,
     version: r.version,
-    verified: true,
-    verificationStatus: 'verified' as const,
+    verified: false,
+    verificationStatus: 'not_checked' as const,
   }));
 
   const documentsFound = [...new Set(searchResults.map(r => r.documentTitle))];

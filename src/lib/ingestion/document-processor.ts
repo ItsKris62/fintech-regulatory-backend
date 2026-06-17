@@ -21,6 +21,11 @@ import {
   DocumentIndexingError,
   DocumentUploadError,
 } from '@/utils/error'
+import {
+  mapV1DocumentToV2Metadata,
+  omitNullishMetadata,
+  prepareV2ChunkMetadata,
+} from '@/lib/source-grounding/source-metadata'
 
 // ============================================================================
 // Types
@@ -39,6 +44,12 @@ export interface DocumentIngestionInput {
   authorityStatus?: 'DRAFT' | 'IN_FORCE' | 'SUPERSEDED' | 'CONSULTATION';
   isBinding?: boolean;
   supersedesDocumentId?: string;
+  officialUrl?: string;
+  publicationDate?: Date;
+  retrievedAt?: Date;
+  effectiveEndDate?: Date;
+  sourceRegistryId?: string;
+  sourceDocumentVersionId?: string;
 }
 
 export interface IngestionResult {
@@ -268,6 +279,7 @@ async function processDocument(
 
   const vectorIds: string[] = []
   const chunkRows: any[] = []
+  const documentMetadata = mapV1DocumentToV2Metadata(doc)
 
   for (let i = 0; i < chunks.length; i += VECTOR_BATCH_SIZE) {
     const batch = chunks.slice(i, i + VECTOR_BATCH_SIZE)
@@ -290,7 +302,31 @@ async function processDocument(
           ? rawSection.slice(0, MAX_SECTION_BYTES) + '...'
           : rawSection
 
-      return {
+      const v2Metadata = prepareV2ChunkMetadata({
+        documentId: doc.id,
+        chunkIndex,
+        content: chunk.text,
+        documentChecksum: doc.checksum ?? null,
+        provisionAnchor: {
+          sectionNumber: safeSection,
+        },
+        sourceVersion: {
+          sourceDocumentVersionId: doc.sourceDocumentVersionId ?? null,
+          officialUrl: doc.officialUrl ?? null,
+          publicationDate: doc.publicationDate ?? null,
+          retrievedAt: doc.retrievedAt ?? null,
+          effectiveDate: doc.effectiveDate ?? null,
+          effectiveEndDate: doc.effectiveEndDate ?? null,
+          versionLabel: doc.version ?? null,
+          checksumSha256: doc.checksum ?? null,
+        },
+        authorityStatus: doc.authorityStatus ?? 'IN_FORCE',
+        corpusStatus: documentMetadata.corpusStatus,
+        isBinding: doc.isBinding ?? true,
+        indexVersion: doc.indexVersion ?? 'v1',
+      })
+
+      return omitNullishMetadata({
         id,
         chunk_text: safeChunkText,
         documentId: doc.id,
@@ -309,8 +345,17 @@ async function processDocument(
         isBinding: doc.isBinding ?? true,
         source: doc.source,
         version: doc.version ?? undefined,
-        corpusStatus: 'ACTIVE',
-      }
+        corpusStatus: documentMetadata.corpusStatus,
+        indexVersion: doc.indexVersion ?? 'v1',
+        officialUrl: doc.officialUrl ?? undefined,
+        sourceDocumentVersionId: doc.sourceDocumentVersionId ?? undefined,
+        sectionNumber: v2Metadata.sectionNumber ?? undefined,
+        provisionId: v2Metadata.provisionId,
+        contentHash: v2Metadata.contentHash,
+        documentChecksum: doc.checksum ?? undefined,
+        effectiveDate: doc.effectiveDate ? new Date(doc.effectiveDate).toISOString() : undefined,
+        effectiveEndDate: doc.effectiveEndDate ? new Date(doc.effectiveEndDate).toISOString() : undefined,
+      }) as IntegratedVectorRecord
     })
 
     try {
@@ -328,6 +373,22 @@ async function processDocument(
         content: chunk.text,
         section: chunk.section ?? null,
         tokenCount: Math.ceil(chunk.text.length / 4),
+        sectionNumber: chunk.section ?? null,
+        provisionId: prepareV2ChunkMetadata({
+          documentId: doc.id,
+          chunkIndex: i + idx,
+          content: chunk.text,
+          provisionAnchor: { sectionNumber: chunk.section ?? null },
+          indexVersion: doc.indexVersion ?? 'v1',
+        }).provisionId,
+        contentHash: prepareV2ChunkMetadata({
+          documentId: doc.id,
+          chunkIndex: i + idx,
+          content: chunk.text,
+          indexVersion: doc.indexVersion ?? 'v1',
+        }).contentHash,
+        sourceDocumentVersionId: doc.sourceDocumentVersionId ?? null,
+        indexVersion: doc.indexVersion ?? 'v1',
       })
     })
   }
@@ -409,6 +470,12 @@ export class DocumentIngestionService {
         jurisdiction: input.jurisdiction,
         documentType: input.documentType,
         effectiveDate: input.effectiveDate,
+        effectiveEndDate: input.effectiveEndDate,
+        officialUrl: input.officialUrl,
+        publicationDate: input.publicationDate,
+        retrievedAt: input.retrievedAt,
+        sourceRegistryId: input.sourceRegistryId,
+        sourceDocumentVersionId: input.sourceDocumentVersionId,
         version: input.version,
         authorityStatus: input.authorityStatus ?? 'IN_FORCE',
         isBinding: input.isBinding ?? defaultBindingForAuthority(input.authorityStatus),
@@ -417,6 +484,7 @@ export class DocumentIngestionService {
         storageKey,
         status: 'PROCESSING',
         checksum,
+        indexVersion: 'v1',
       },
     })
 

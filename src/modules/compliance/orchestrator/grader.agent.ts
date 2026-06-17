@@ -63,19 +63,20 @@ export async function runGraderAgent(
         }
       }
 
-      // Any chunk not graded (truncated response) is accepted — fail-open
+      // Any chunk not graded is rejected. Phase 1B requires accepted sources
+      // to be explicit, not inferred from parser truncation or model failure.
       for (let i = 0; i < toGrade.length; i++) {
-        if (!gradedIndices.has(i)) accepted.push(toGrade[i]);
+        if (!gradedIndices.has(i)) rejected.push(toGrade[i]);
       }
 
       logger.debug({ type: 'grader_agent_result', accepted: accepted.length, rejected: rejected.length });
       return { accepted, rejected, tokens, gradeFailed: false };
     } catch {
       logger.warn({ type: 'grader_agent_parse_failed', contentSnippet: result.content.slice(0, 120) });
-      return { accepted: toGrade, rejected: [], tokens, gradeFailed: true };
+      return { accepted: [], rejected: toGrade, tokens, gradeFailed: true };
     }
   } catch (err: any) {
     logger.error({ type: 'grader_agent_error', error: err?.message });
-    return { accepted: toGrade, rejected: [], tokens: { input: 0, output: 0 }, gradeFailed: true };
+    return { accepted: [], rejected: toGrade, tokens: { input: 0, output: 0 }, gradeFailed: true };
   }
 }

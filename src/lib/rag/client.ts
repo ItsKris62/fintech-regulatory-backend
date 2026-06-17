@@ -37,6 +37,20 @@ export interface VectorMetadata {
   frameworkSlug?: string;
   /** Original LegalDocument ID when this vector came from the legal corpus. */
   legalDocumentId?: string;
+  indexVersion?: string;
+  officialUrl?: string;
+  sourceDocumentVersionId?: string;
+  pageStart?: number;
+  pageEnd?: number;
+  sectionNumber?: string;
+  clauseNumber?: string;
+  scheduleNumber?: string;
+  headingPath?: string[] | string;
+  provisionId?: string;
+  contentHash?: string;
+  documentChecksum?: string;
+  effectiveDate?: string;
+  effectiveEndDate?: string;
 }
 
 /**

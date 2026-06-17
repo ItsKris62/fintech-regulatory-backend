@@ -1,0 +1,156 @@
+{
+  "dryRun": true,
+  "scanned": 61,
+  "priorityDocuments": 33,
+  "linked": 8,
+  "skipped": 25,
+  "missingOfficialUrl": [
+    "cmpb3pxmj01i1o4s5l2t0h47w",
+    "cmp9qigg10001igs58m90a2ho",
+    "cmp9qhb3m00friks5lzyjevvx",
+    "cmn4yu1qy099i7gs5adsfky3e",
+    "cmn4yrwto07u87gs5stdbdfsh",
+    "cmn4yraqy07d67gs5dhusv7dx",
+    "cmn4yqs6r072p7gs5ohhhs4de",
+    "cmn4yo5wd05p17gs5pourds7j",
+    "cmn4ymckn042r7gs57yaouakl",
+    "cmn4yl4i8039h7gs5cil1zhla",
+    "cmn4yl05i037x7gs55fsncr3p",
+    "cmn4ykx31036o7gs5tjgbrbep",
+    "cmn4ykrn6034v7gs5t4s0w2da",
+    "cmn4ykeux030v7gs53byuf7ia",
+    "cmn4yi1wf00q97gs586blsh5x",
+    "cmn4yhwsq00q57gs524ei6lar",
+    "cmn4yhix800hw7gs5es8ae7ny",
+    "cmn4yhbcb00gd7gs5n9mi6ipb",
+    "cmn4yh38900dh7gs5grcpvfmy"
+  ],
+  "missingChecksum": [],
+  "manualReview": [
+    {
+      "id": "cmpb3q08h01i2o4s586qk837v",
+      "title": "Kenya Artificial Intelligence Strategy 2025-2030",
+      "reason": "No approved source match from existing source/title/category metadata."
+    },
+    {
+      "id": "cmpb3pxmj01i1o4s5l2t0h47w",
+      "title": "Computer Misuse and Cybercrimes (Amendment) Act, 2025",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmp9qigg10001igs58m90a2ho",
+      "title": "Computer Misuse and Cybercrimes (Amendment) Act, 2025",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmp9qhb3m00friks5lzyjevvx",
+      "title": "Computer Misuse and Cybercrimes (Amendment) Act, 2025",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4ywa0y0b3x7gs5ydmqo0qf",
+      "title": "NIST AI Risk Management Framework (AI RMF 1.0)",
+      "reason": "No approved source match from existing source/title/category metadata."
+    },
+    {
+      "id": "cmn4yur9c09pg7gs5p3myyhwm",
+      "title": "Kenya Cloud Policy, 2024",
+      "reason": "No approved source match from existing source/title/category metadata."
+    },
+    {
+      "id": "cmn4yu1qy099i7gs5adsfky3e",
+      "title": "General Data Protection Regulation (GDPR) — Regulation (EU) 2016/679",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4ytaof08x67gs5du0rnetn",
+      "title": "NIST Cybersecurity Framework 2.0 — Implementation Examples",
+      "reason": "No approved source match from existing source/title/category metadata."
+    },
+    {
+      "id": "cmn4yt48q08uq7gs5d9jss2cp",
+      "title": "NIST Cybersecurity Framework 2.0",
+      "reason": "No approved source match from existing source/title/category metadata."
+    },
+    {
+      "id": "cmn4yrwto07u87gs5stdbdfsh",
+      "title": "Proceeds of Crime and Anti-Money Laundering Act (No. 9 of 2009, Revised 2022)",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yraqy07d67gs5dhusv7dx",
+      "title": "Computer Misuse and Cybercrimes (General) Regulations, 2024 (L.N. No. 44)",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yqvp2073b7gs58nwt85q1",
+      "title": "National ICT Policy, 2019",
+      "reason": "No approved source match from existing source/title/category metadata."
+    },
+    {
+      "id": "cmn4yqs6r072p7gs5ohhhs4de",
+      "title": "Computer Misuse and Cybercrimes (Amendment) Act, 2025 (alternate copy)",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yo5wd05p17gs5pourds7j",
+      "title": "Central Bank of Kenya (Digital Credit Providers) Regulations, 2022 (L.N. No. 46)",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4ymckn042r7gs57yaouakl",
+      "title": "CBK Prudential Guidelines for Institutions Licensed under the Banking Act",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yl4i8039h7gs5cil1zhla",
+      "title": "Guidelines on Cybersecurity for Payment Service Providers",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yl05i037x7gs55fsncr3p",
+      "title": "Framework for CO2 Reduction in the ICT Sector, 2025",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4ykx31036o7gs5tjgbrbep",
+      "title": "Environmental and Social Impact Assessment Guidelines for ICT Projects, 2025",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4ykrn6034v7gs5t4s0w2da",
+      "title": "Guidelines for Undertaking ICT Infrastructure Works",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4ykeux030v7gs53byuf7ia",
+      "title": "Guidelines for Network Redundancy, Resilience and Diversity for ICT Networks in Kenya",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yi1wf00q97gs586blsh5x",
+      "title": "ODPC Guidance Note on Data Processing by MSMEs",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yhwsq00q57gs524ei6lar",
+      "title": "ODPC Guidance Note on Data Protection Impact Assessment (DPIA)",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yhix800hw7gs5es8ae7ny",
+      "title": "ODPC Guidance Note for Digital Credit Providers",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yhbcb00gd7gs5n9mi6ipb",
+      "title": "ODPC Guidance Note on Registration of Data Controllers and Data Processors",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    },
+    {
+      "id": "cmn4yh38900dh7gs5grcpvfmy",
+      "title": "Data Protection (Compliance Audit) Regulations, 2024",
+      "reason": "Missing manifest-backed officialUrl; source version not created."
+    }
+  ]
+}

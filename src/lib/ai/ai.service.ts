@@ -41,6 +41,13 @@ import {
 import { aiConfig } from '@/config/ai.config';
 import { logger } from '@/utils/logger';
 import { policyProgressPubSub } from '@/lib/redis/pubsub';
+import {
+  buildComplianceSourceInsufficiencyAnswer,
+  COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE,
+  GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE,
+  POLICY_SOURCE_INSUFFICIENCY_MESSAGE,
+  SourceInsufficiencyError,
+} from '@/lib/source-grounding/source-insufficiency';
 
 /**
  * Policy generation result
@@ -146,6 +153,47 @@ export class AIService {
         organizationType: params.organizationType,
         regulatoryAreas: params.regulatoryAreas,
       });
+
+      if (!params.ragContext?.trim()) {
+        const content = `## Source status
+
+${POLICY_SOURCE_INSUFFICIENCY_MESSAGE}
+
+## Non-legal operational next steps
+
+- Select or attach the relevant Acts, Regulations, Guidelines, Circulars, or benchmark documents.
+- Narrow the policy request to the specific framework or regulator that should ground the policy.
+- Re-run policy generation after verified source material is available.
+
+No legal obligations, citations, penalties, deadlines, thresholds, or compliance conclusions were generated.`;
+
+        const sections = extractPolicySections(content);
+
+        if (policyId) {
+          await policyProgressPubSub.complete(policyId, { sourceInsufficient: true });
+        }
+
+        logger.warn({
+          type: 'policy_generation_source_insufficient',
+          policyId,
+          regulatoryAreas: params.regulatoryAreas,
+        });
+
+        return {
+          content,
+          model: 'source-insufficiency-guard',
+          inputTokens: 0,
+          outputTokens: 0,
+          cost: 0,
+          cached: false,
+          stopReason: 'source_insufficient',
+          sections,
+          followUpQuestions: [
+            'Which verified regulatory source should ground this policy?',
+            'Do you want to narrow the policy to a specific framework or regulator?',
+          ],
+        };
+      }
 
       // Generate prompts
       const systemPrompt = generatePolicySystemPrompt();
@@ -392,6 +440,27 @@ export class AIService {
       question: params.question.substring(0, 100),
     });
 
+    if (!params.ragContext?.trim()) {
+      const content = buildComplianceSourceInsufficiencyAnswer();
+      const sections = extractAnswerSections(content);
+
+      logger.warn({
+        type: 'compliance_query_source_insufficient_ai_guard',
+        question: params.question.substring(0, 100),
+      });
+
+      return {
+        content,
+        model: 'source-insufficiency-guard',
+        inputTokens: 0,
+        outputTokens: 0,
+        cost: 0,
+        cached: false,
+        stopReason: 'source_insufficient',
+        sections,
+      };
+    }
+
     const systemPrompt = generateComplianceSystemPrompt();
     const userPrompt = generateComplianceUserPrompt(params);
 
@@ -443,6 +512,26 @@ export class AIService {
       type: 'followup_query_started',
       grounded: !!ragContext,
     });
+
+    if (!ragContext?.trim()) {
+      const content = buildComplianceSourceInsufficiencyAnswer();
+      const sections = extractAnswerSections(content);
+
+      logger.warn({
+        type: 'followup_query_source_insufficient_ai_guard',
+      });
+
+      return {
+        content,
+        model: 'source-insufficiency-guard',
+        inputTokens: 0,
+        outputTokens: 0,
+        cost: 0,
+        cached: false,
+        stopReason: 'source_insufficient',
+        sections,
+      };
+    }
 
     const systemPrompt = generateComplianceSystemPrompt();
     const userPrompt = generateFollowUpQueryPrompt(
@@ -594,6 +683,15 @@ export class AIService {
       ragContextLength: params.ragContext?.length ?? 0,
     });
 
+    if (!params.ragContext?.trim()) {
+      logger.warn({
+        type: 'checklist_generation_source_insufficient_ai_guard',
+        productType: params.productType,
+        businessStage: params.businessStage,
+      });
+      throw new SourceInsufficiencyError(COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE);
+    }
+
     const systemPrompt = generateChecklistSystemPrompt();
     const userPrompt   = generateChecklistUserPrompt(params);
 
@@ -685,6 +783,15 @@ export class AIService {
       policyTextLength: params.policyText.length,
       ragContextLength: params.ragContext?.length ?? 0,
     });
+
+    if (!params.ragContext?.trim()) {
+      logger.warn({
+        type: 'gap_analysis_source_insufficient_ai_guard',
+        documentName: params.documentName,
+        frameworks: params.regulatoryFrameworks,
+      });
+      throw new SourceInsufficiencyError(GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE);
+    }
 
     const systemPrompt = generateGapAnalysisSystemPrompt();
     const userPrompt = generateGapAnalysisUserPrompt(params);
@@ -785,6 +892,15 @@ export class AIService {
       frameworks: params.regulatoryFrameworks,
       totalChunks,
     });
+
+    if (!params.ragContext?.trim()) {
+      logger.warn({
+        type: 'gap_analysis_multi_chunk_source_insufficient_ai_guard',
+        documentName: params.documentName,
+        frameworks: params.regulatoryFrameworks,
+      });
+      throw new SourceInsufficiencyError(GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE);
+    }
 
     const systemPrompt = generateGapAnalysisSystemPrompt();
     // Chunks only need to identify gaps  -  keep token budget lean

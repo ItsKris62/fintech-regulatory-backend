@@ -457,7 +457,7 @@ function buildMainSection(params: DocxExportParams): object {
         children: [
           new TextRun({ text: 'Warning: Limited Regulatory Grounding. ', font: 'Arial', size: 20, bold: true, color: C.gold }),
           new TextRun({
-            text: 'This analysis was generated without access to the SheriaBot regulatory document database. Results are based on AI training knowledge only.',
+            text: 'This analysis did not have sufficient SheriaBot regulatory source evidence. Legal gap findings should not be treated as verified until source documents are selected or added.',
             font: 'Arial', size: 20, color: C.slate,
           }),
         ],
