@@ -16,6 +16,11 @@ export type SourceCitation = {
   version: string | null;
   verified: boolean;
   verificationStatus: CitationVerificationStatus;
+  regulator?: string;
+  sectionTitle?: string;
+  sectionNumber?: string;
+  pageNumber?: number;
+  chunkId?: string;
 };
 
 export function buildCitationFromSearchResult(
@@ -35,6 +40,11 @@ export function buildCitationFromSearchResult(
     version: source.version ?? null,
     verified: verificationStatus === 'verified',
     verificationStatus,
+    regulator: source.authorityStatus, // regulator is not natively in SearchResult, but we can pass it if it existed.
+    sectionNumber: source.sectionNumber,
+    pageNumber: source.pageStart,
+    // Note: chunkId can be inferred from contentHash or just not provided if not available.
+    chunkId: source.contentHash,
   };
 }
 

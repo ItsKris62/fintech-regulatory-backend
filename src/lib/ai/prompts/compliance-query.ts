@@ -5,6 +5,13 @@
 
 /**
  * Compliance query request parameters
+/**
+ * Compliance Query Prompt Templates
+ * Answers specific regulatory compliance questions with citations
+ */
+
+/**
+ * Compliance query request parameters
  */
 export interface ComplianceQueryParams {
   question: string;
@@ -13,12 +20,13 @@ export interface ComplianceQueryParams {
   context?: string;
   urgency?: 'LOW' | 'MEDIUM' | 'HIGH';
   ragContext?: string; // formatted retrieved evidence injected by the router; bypasses answer cache
+  answerDetail?: 'standard' | 'detailed';
 }
 
 /**
  * Generate system prompt for compliance queries
  */
-export function generateComplianceSystemPrompt(): string {
+export function generateComplianceSystemPrompt(answerDetail: 'standard' | 'detailed' = 'standard'): string {
   return `You are SheriaBot, an authoritative AI compliance intelligence system specialising in Kenyan regulatory law for the financial services sector. Your audience is compliance officers, legal teams, and fintech founders at licensed and aspiring financial institutions.
 
 ## EXPERTISE AREAS
@@ -42,13 +50,18 @@ Structure every response using Markdown. Use level-2 headings (\`##\`) for all m
 - Separate every major element (paragraph, list, table, sub-heading) with a blank line so renderers parse them correctly.
 
 Required sections, in order:
+${answerDetail === 'standard' ? `
+1. ## Direct Answer
+2. ## Key Obligations
+3. ## Practical Next Steps
+4. ## Referenced Documents and Sections` : `
 1. ## Direct Answer
 2. ## Legal Basis
 3. ## Compliance Requirements
 4. ## Implementation Guidance
 5. ## Timeline
 6. ## Consequences of Non-Compliance
-7. ## Related Considerations
+7. ## Related Considerations`}
 
 ## TABLES
 Use Markdown GFM tables whenever you are:
@@ -105,7 +118,7 @@ Example (note the blank lines surrounding the table):
  * Generate user prompt for compliance query
  */
 export function generateComplianceUserPrompt(params: ComplianceQueryParams): string {
-  const { question, organizationType, industry, context, urgency, ragContext } = params;
+  const { question, organizationType, industry, context, urgency, ragContext, answerDetail = 'standard' } = params;
 
   let prompt = `## Compliance Question\n\n${question}\n`;
 
@@ -117,14 +130,27 @@ export function generateComplianceUserPrompt(params: ComplianceQueryParams): str
   if (ragContext) {
     prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus and accepted for this answer. Ground your answer exclusively in this evidence. Refer only to document titles and sections present below. Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs; the application attaches source-list citations from accepted chunks separately. If a claim cannot be supported by the evidence below, explicitly state that the corpus does not contain relevant provisions rather than relying on model memory or fabricating citations.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every reference to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}\n`;
   }
-
-  prompt += `
+  prompt += `
 
 ---
 
-Provide a comprehensive, enterprise-grade compliance analysis using the exact structure below. Use Markdown tables wherever applicable  -  especially for requirement comparisons, penalty schedules, and timeline summaries.
+Provide a ${answerDetail === 'standard' ? 'concise but complete compliance analysis focusing on practical next actions' : 'comprehensive, enterprise-grade compliance analysis'}. Use the exact structure below. Use Markdown tables wherever applicable  -  especially for requirement comparisons, penalty schedules, and timeline summaries.
 
-## Direct Answer
+${answerDetail === 'standard' ? `## Direct Answer
+
+State clearly, in 2-3 sentences, what is required and whether this organisation type must comply.
+
+## Key Obligations
+
+List the main, high-level mandatory obligations derived from the regulatory evidence.
+
+## Practical Next Steps
+
+Provide 2-3 immediate, practical actions the organisation should take.
+
+## Referenced Documents and Sections
+
+Cite the specific regulatory documents and sections used in this answer. Use bullet points.` : `## Direct Answer
 
 State clearly, in 2-3 sentences, what is required and whether this organisation type must comply.
 
@@ -162,7 +188,7 @@ State penalties, fines, licence revocations, and reputational risks. Use a table
 
 ## Related Considerations
 
-Highlight connected regulatory requirements, upcoming regulatory changes, and any industry-specific nuances relevant to this organisation type.
+Highlight connected regulatory requirements, upcoming regulatory changes, and any industry-specific nuances relevant to this organisation type.`}
 
 ---
 

@@ -1,7 +1,7 @@
 import type { SearchResult } from '@/lib/rag/rag.service';
 
 export const COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE =
-  'I could not verify this from the currently available SheriaBot source corpus. Please add or select the relevant regulatory document, or try narrowing the question to a specific framework, regulator, or document.';
+  'SheriaBot could not find a sufficiently verified source in the indexed corpus for this specific question.';
 
 export const GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE =
   'The selected benchmark/source documents do not provide enough verified regulatory evidence to complete this legal gap assessment. Please select stronger benchmark documents or add the missing regulatory source.';

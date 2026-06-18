@@ -57,7 +57,15 @@ const inputSchema = z.object({
   organizationType: z.string().optional(),
   industry:         z.string().optional(),
   context:          z.string().optional(),
+  answerDetail:     z.enum(['standard', 'detailed']).default('standard'),
 });
+
+export function extractNamedRegulations(question: string): string[] {
+  const regex = /\b([A-Z][A-Za-z0-9&]*\s+)+(Act|Regulations?|Guidelines?|Circular|Notice|Rules?|Framework)(?:\s+\d{4})?\b/g;
+  const matches = question.match(regex);
+  if (!matches) return [];
+  return Array.from(new Set(matches.map(m => m.trim())));
+}
 
 // Auth resolution
 interface AuthContext {
@@ -157,14 +165,16 @@ interface UsageCheck {
   increment: (tokensUsed?: number) => Promise<void>;
 }
 
-export async function checkAndPrepareUsage(auth: AuthContext): Promise<UsageCheck> {
+export async function checkAndPrepareUsage(auth: AuthContext, requiredCredits: number = 1): Promise<UsageCheck> {
   if (auth.plan === 'FREE_TRIAL') {
-    const queryIncrement = await incrementTrialUsageAtomic(auth.userId, 'complianceQueries', 1);
-    if (!queryIncrement.allowed) {
+    const queryCheck = await checkTrialLimit(auth.userId, 'complianceQueries');
+    if (queryCheck.current + requiredCredits > queryCheck.limit) {
       return {
         allowed: false,
         statusCode: 403,
-        message: `Trial limit reached (${queryIncrement.newCount}/${queryIncrement.limit}). Upgrade to continue.`,
+        message: requiredCredits === 2 
+          ? `Detailed answers require 2 query credits. Please switch to Standard or upgrade.` 
+          : `Trial limit reached (${queryCheck.current}/${queryCheck.limit}). Upgrade to continue.`,
         increment: async () => {},
       };
     }
@@ -184,6 +194,7 @@ export async function checkAndPrepareUsage(auth: AuthContext): Promise<UsageChec
       statusCode: 429,
       message: '',
       increment: async (tokensUsed?: number) => {
+        await incrementTrialUsageAtomic(auth.userId, 'complianceQueries', requiredCredits);
         if (tokensUsed !== undefined && tokensUsed > 0) {
           const tokenIncrement = await incrementTrialUsageAtomic(auth.userId, 'totalTokensUsed', tokensUsed);
           if (!tokenIncrement.allowed) {
@@ -232,19 +243,21 @@ export async function checkAndPrepareUsage(auth: AuthContext): Promise<UsageChec
   const currentRaw = await redis.get<number>(usageKey);
   const current    = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw ?? 0);
 
-  if (current >= quota.limit) {
+  if (current + requiredCredits > quota.limit) {
     const label = quota.period === 'lifetime' ? 'Lifetime' : 'Monthly';
     return {
       allowed:    false,
       statusCode: 429,
-      message:    `${label} limit reached (${current}/${quota.limit}). Upgrade your plan for more.`,
+      message:    requiredCredits === 2 
+        ? `Detailed answers require 2 query credits. Please switch to Standard or upgrade your plan.`
+        : `${label} limit reached (${current}/${quota.limit}). Upgrade your plan for more.`,
       increment:  async () => {},
     };
   }
 
   const increment = async (): Promise<void> => {
-    const newCount = await redis.incr(usageKey);
-    if (newCount === 1 && quota.period !== 'lifetime') {
+    const newCount = await redis.incrby(usageKey, requiredCredits);
+    if (newCount === requiredCredits && quota.period !== 'lifetime') {
       await redis.expire(usageKey, USAGE_TTL_SECONDS);
     }
     logger.debug({ type: 'usage_incremented', orgId: auth.organizationId, metric: METRIC_KEY, current: newCount });
@@ -284,6 +297,7 @@ export async function registerComplianceStreamRoute(
         return reply.status(400).send({ error: 'Invalid input', issues: parsed.error.flatten() });
       }
       const input = parsed.data;
+      const requiredCredits = input.answerDetail === 'detailed' ? 2 : 1;
 
       // Rate limiting (same Redis counter as tRPC rateLimited('complianceQuery'))
       try {
@@ -294,13 +308,20 @@ export async function registerComplianceStreamRoute(
       }
 
       // Usage entitlement enforcement
-      const usage = await checkAndPrepareUsage(auth);
+      const usage = await checkAndPrepareUsage(auth, requiredCredits);
       if (!usage.allowed) {
         return reply.status(usage.statusCode).send({ error: usage.message });
       }
 
+      // Named regulation detection
+      const detectedRegulations = extractNamedRegulations(input.question);
+      let augmentedQuery = input.question;
+      if (detectedRegulations.length > 0) {
+        augmentedQuery += ` ${detectedRegulations.join(' ')}`;
+      }
+
       // RAG retrieval (before hijack so we can return HTTP 500 if needed)
-      const ragContext = await searchAndGetContext(input.question, { topK: 10, minScore: 0.7, preferActiveSources: true }).catch((err: unknown) => {
+      const ragContext = await searchAndGetContext(augmentedQuery, { topK: 10, minScore: 0.7, preferActiveSources: true }).catch((err: unknown) => {
         logger.error({
           type: 'compliance_stream_rag_error',
           error: err instanceof Error ? err.message : String(err),
@@ -321,6 +342,8 @@ export async function registerComplianceStreamRoute(
             organizationType: input.organizationType,
             industry:         input.industry,
             context:          input.context,
+            answerDetail:     input.answerDetail,
+            detectedRegulations,
           },
         },
       });
@@ -389,6 +412,10 @@ export async function registerComplianceStreamRoute(
               organizationType: input.organizationType,
               industry: input.industry,
               context: input.context,
+              answerDetail: input.answerDetail,
+              unitsConsumed: 0,
+              fallbackTriggered: true,
+              detectedRegulations,
             },
           },
         });
@@ -441,6 +468,10 @@ export async function registerComplianceStreamRoute(
               organizationType: input.organizationType,
               industry: input.industry,
               context: input.context,
+              answerDetail: input.answerDetail,
+              unitsConsumed: 0,
+              fallbackTriggered: true,
+              detectedRegulations,
             },
           },
         });
@@ -472,12 +503,13 @@ export async function registerComplianceStreamRoute(
       }
 
       // Stream AI synthesis
-      const systemPrompt = generateComplianceSystemPrompt();
+      const systemPrompt = generateComplianceSystemPrompt(input.answerDetail);
       const userPrompt   = generateComplianceUserPrompt({
         question:         input.question,
         organizationType: input.organizationType,
         industry:         input.industry,
         context:          input.context,
+        answerDetail:     input.answerDetail,
         ragContext:       acceptedContext || undefined,
       });
       const maxTokens = acceptedContext ? 3000 : aiConfig.parameters.queryMaxTokens;
@@ -518,6 +550,10 @@ export async function registerComplianceStreamRoute(
               organizationType: input.organizationType,
               industry:         input.industry,
               context:          input.context,
+              answerDetail:     input.answerDetail,
+              unitsConsumed:    requiredCredits,
+              fallbackTriggered: false,
+              detectedRegulations,
             },
           },
         });

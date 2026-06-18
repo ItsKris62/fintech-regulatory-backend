@@ -22,6 +22,7 @@ export const complianceQuerySchema = z.object({
   organizationType: z.enum(['FINTECH', 'BANK', 'TELECOM', 'INSURANCE', 'OTHER']).optional(),
   industry: z.string().max(100).optional(),
   context: z.string().max(2000).optional(),
+  answerDetail: z.enum(['standard', 'detailed']).default('standard'),
 });
 
 export type ComplianceQueryInput = z.infer<typeof complianceQuerySchema>;
