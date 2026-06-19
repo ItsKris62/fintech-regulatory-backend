@@ -6,9 +6,14 @@ import {
   extractNamedRegulations,
   checkAndPrepareUsage,
   getFallbackReasonForRetrieval,
+  hasUsableRetrievedChunks,
+  selectGenerationSources,
 } from './compliance-stream.route';
 import { redis } from '@/lib/redis/client';
 import * as trialUsage from '@/modules/trial';
+import { generateComplianceUserPrompt } from '@/lib/ai/prompts/compliance-query';
+import { buildCitationsFromChunks } from '@/lib/source-grounding/citations';
+import type { SearchResult } from '@/lib/rag/rag.service';
 
 vi.mock('@/lib/redis/client', () => ({
   redis: {
@@ -89,6 +94,67 @@ describe('Compliance Stream Routing & Billing Logic', () => {
     it('uses explicit fallback reasons for no retrieval and post-retrieval insufficiency', () => {
       expect(getFallbackReasonForRetrieval(0, null)).toBe('NO_RAG_CHUNKS');
       expect(getFallbackReasonForRetrieval(3, '')).toBe('LOW_RELEVANCE');
+    });
+
+    it('treats chunks with title and content as usable even when section metadata is missing', () => {
+      expect(hasUsableRetrievedChunks([
+        {
+          documentTitle: 'Kenya Data Protection Act, 2019',
+          chunkText: 'A data controller shall process personal data lawfully.',
+        },
+      ])).toBe(true);
+    });
+
+    it('does not trigger fallback when relevant chunks were retrieved but the verifier failed open', () => {
+      const retrieved = [{ id: 'chunk-1' }];
+      const selected = selectGenerationSources(retrieved, [], true);
+
+      expect(selected.sources).toEqual(retrieved);
+      expect(selected.usedVerifierFallback).toBe(true);
+      expect(selected.allChunksFailedVerification).toBe(false);
+    });
+
+    it('triggers all-chunks-failed only when verification completes with zero accepted chunks', () => {
+      const selected = selectGenerationSources([{ id: 'chunk-1' }], [], false);
+
+      expect(selected.sources).toEqual([]);
+      expect(selected.usedVerifierFallback).toBe(false);
+      expect(selected.allChunksFailedVerification).toBe(true);
+    });
+
+    it('returns referenced documents from actual retrieved chunks even without section metadata', () => {
+      const chunk: SearchResult = {
+        documentId: 'doc-1',
+        documentTitle: 'National Payment System Act 2011',
+        chunkText: 'A payment service provider must comply with requirements issued by the Central Bank.',
+        score: 0.91,
+        rank: 1,
+      };
+
+      const citations = buildCitationsFromChunks([chunk], 'not_checked');
+
+      expect(citations).toHaveLength(1);
+      expect(citations[0]).toMatchObject({
+        documentId: 'doc-1',
+        documentTitle: 'National Payment System Act 2011',
+        verificationStatus: 'not_checked',
+      });
+    });
+  });
+
+  describe('Compliance answer prompt detail levels', () => {
+    it('Detailed mode asks for a longer grounded answer than Standard mode', () => {
+      const baseParams = {
+        question: 'What KYC requirements apply to fintech startups in Kenya?',
+        ragContext: '[Document: POCAMLA]\nKYC obligations and records.\n---',
+      };
+      const standard = generateComplianceUserPrompt({ ...baseParams, answerDetail: 'standard' });
+      const detailed = generateComplianceUserPrompt({ ...baseParams, answerDetail: 'detailed' });
+
+      expect(detailed.length).toBeGreaterThan(standard.length);
+      expect(detailed).toContain('## Executive Summary');
+      expect(detailed).toContain('## Recommended Controls');
+      expect(detailed).toContain('## Referenced Documents and Sections');
     });
   });
 

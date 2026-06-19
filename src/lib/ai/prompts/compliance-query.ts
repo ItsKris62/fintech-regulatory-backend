@@ -55,13 +55,14 @@ ${answerDetail === 'standard' ? `
 2. ## Key Obligations
 3. ## Practical Next Steps
 4. ## Referenced Documents and Sections` : `
-1. ## Direct Answer
-2. ## Legal Basis
-3. ## Compliance Requirements
-4. ## Implementation Guidance
-5. ## Timeline
-6. ## Consequences of Non-Compliance
-7. ## Related Considerations`}
+1. ## Executive Summary
+2. ## Applicable Legal Context
+3. ## Compliance Obligations
+4. ## Implementation Steps
+5. ## Recommended Controls
+6. ## Risks and Consequences
+7. ## Limitations
+8. ## Referenced Documents and Sections`}
 
 ## TABLES
 Use Markdown GFM tables whenever you are:
@@ -134,7 +135,7 @@ export function generateComplianceUserPrompt(params: ComplianceQueryParams): str
 
 ---
 
-Provide a ${answerDetail === 'standard' ? 'concise but complete compliance analysis focusing on practical next actions' : 'comprehensive, enterprise-grade compliance analysis'}. Use the exact structure below. Use Markdown tables wherever applicable  -  especially for requirement comparisons, penalty schedules, and timeline summaries.
+Provide a ${answerDetail === 'standard' ? 'concise but complete compliance analysis focusing on practical next actions' : 'comprehensive, enterprise-grade compliance analysis with enough detail for a board, compliance lead, or product owner to act on'}. Use the exact structure below. Use Markdown tables wherever applicable  -  especially for requirement comparisons, penalty schedules, controls, risks, and timeline summaries.
 
 ${answerDetail === 'standard' ? `## Direct Answer
 
@@ -142,7 +143,7 @@ State clearly, in 2-3 sentences, what is required and whether this organisation 
 
 ## Key Obligations
 
-List the main, high-level mandatory obligations derived from the regulatory evidence.
+List the main mandatory obligations derived from the regulatory evidence. Mention the source document or section beside each obligation where available.
 
 ## Practical Next Steps
 
@@ -150,45 +151,49 @@ Provide 2-3 immediate, practical actions the organisation should take.
 
 ## Referenced Documents and Sections
 
-Cite the specific regulatory documents and sections used in this answer. Use bullet points.` : `## Direct Answer
+Cite the specific regulatory documents and sections used in this answer. Use bullet points and include every retrieved source you relied on.` : `## Executive Summary
 
-State clearly, in 2-3 sentences, what is required and whether this organisation type must comply.
+Summarise the conclusion in 3-5 sentences. State what the organisation must do, which regulators are implicated, and whether the retrieved corpus fully or partially supports the answer.
 
-## Legal Basis
+## Applicable Legal Context
 
-Cite all applicable Kenyan Acts, Regulations, Guidelines, and Circulars with precise section references. Present them in a table:
+Explain the legal and regulatory context using only retrieved evidence. Cite applicable Kenyan Acts, Regulations, Guidelines, and Circulars with section references where they appear in the retrieved chunks. Present them in a table:
 
 | Instrument | Section / Clause | Obligation | Regulator |
 |---|---|---|---|
 
-## Compliance Requirements
+## Compliance Obligations
 
-List every mandatory obligation. Use ### sub-headings to group by theme (e.g., ### Documentation, ### Systems & Controls, ### Reporting Obligations). Where multiple requirements exist, use a table:
+List mandatory obligations. Use ### sub-headings to group by theme (e.g., ### Governance, ### Customer Due Diligence, ### Data Protection, ### Reporting, ### Records, ### Systems & Controls). Where multiple requirements exist, use a table:
 
 | Requirement | Mandatory? | Deadline | Notes |
 |---|---|---|---|
 
-## Implementation Guidance
+## Implementation Steps
 
-Step-by-step actions an organisation should take. Use a numbered list for the main steps. Add ### sub-sections for distinct workstreams where appropriate.
+Give step-by-step actions an organisation should take. Use a numbered list for the main steps. Add ### sub-sections for distinct workstreams where appropriate.
 
-## Timeline
+## Recommended Controls
 
-Summarise all deadlines, grace periods, and ongoing obligations in a table:
+Recommend practical controls, policies, registers, monitoring routines, board approvals, staff training, reporting workflows, and evidence artefacts. Use a table:
 
-| Milestone | Deadline | Frequency | Notes |
+| Control | Purpose | Evidence to Keep | Owner |
 |---|---|---|---|
 
-## Consequences of Non-Compliance
+## Risks and Consequences
 
-State penalties, fines, licence revocations, and reputational risks. Use a table where multiple offence tiers or regulators apply:
+State legal, regulatory, operational, licence, enforcement, and reputational risks supported by the retrieved sources. Use a table where multiple risk categories or regulators apply:
 
-| Violation | Penalty / Sanction | Authority | Legal Basis |
+| Risk | Consequence | Authority | Legal Basis |
 |---|---|---|---|
 
-## Related Considerations
+## Limitations
 
-Highlight connected regulatory requirements, upcoming regulatory changes, and any industry-specific nuances relevant to this organisation type.`}
+State what the retrieved corpus does not conclusively establish. Do not make unsupported claims.
+
+## Referenced Documents and Sections
+
+List every retrieved source document used in the answer. Include section, clause, page, or heading metadata where available. If section metadata is missing but the document title and content were used, list the document title and say "section not specified in metadata".`}
 
 ---
 

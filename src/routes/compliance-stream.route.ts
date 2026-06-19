@@ -28,7 +28,6 @@ import {
 import type { OrgMembershipEntry } from '@/server/trpc/context';
 import {
   buildComplianceSourceInsufficiencyAnswer,
-  buildUnsupportedClaimsAnswer,
   type ComplianceFallbackReason,
   hasUsableSourceContext,
 } from '@/lib/source-grounding/source-insufficiency';
@@ -49,6 +48,12 @@ const RATE_LIMIT_MAX     = 100; // same window as tRPC rateLimited('complianceQu
 const RATE_LIMIT_WINDOW  = 900; // 15 min
 const HEARTBEAT_INTERVAL = 15_000; // 15 s, below Render's ~60 s idle timeout
 const USAGE_TTL_SECONDS  = 35 * 24 * 60 * 60; // 35 days (matches middleware)
+const RAG_TOP_K = 20;
+const RAG_MIN_SCORE = 0.6;
+const STANDARD_CONTEXT_CHUNKS = 12;
+const DETAILED_CONTEXT_CHUNKS = 18;
+const STANDARD_CONTEXT_CHARS = 10_000;
+const DETAILED_CONTEXT_CHARS = 18_000;
 
 // Redis metric key segment; matches BillingMetric.COMPLIANCE_QUERIES enum value
 const METRIC_KEY = 'COMPLIANCE_QUERIES';
@@ -104,6 +109,30 @@ export function getFallbackReasonForRetrieval(resultsCount: number, context: str
   if (resultsCount === 0) return 'NO_RAG_CHUNKS';
   if (!context?.trim()) return 'LOW_RELEVANCE';
   return 'LOW_RELEVANCE';
+}
+
+export function hasUsableRetrievedChunks(results: Array<{ documentTitle?: string | null; chunkText?: string | null }>): boolean {
+  return results.some((result) => !!result.documentTitle?.trim() && !!result.chunkText?.trim());
+}
+
+export function selectGenerationSources<T>(
+  retrievedResults: T[],
+  acceptedResults: T[],
+  gradeFailed: boolean,
+): { sources: T[]; usedVerifierFallback: boolean; allChunksFailedVerification: boolean } {
+  if (acceptedResults.length > 0) {
+    return { sources: acceptedResults, usedVerifierFallback: false, allChunksFailedVerification: false };
+  }
+
+  if (gradeFailed && retrievedResults.length > 0) {
+    return { sources: retrievedResults, usedVerifierFallback: true, allChunksFailedVerification: false };
+  }
+
+  return {
+    sources: [],
+    usedVerifierFallback: false,
+    allChunksFailedVerification: retrievedResults.length > 0,
+  };
 }
 
 function getRetrievedDocumentTitles(results: Array<{ documentTitle: string }>): string[] {
@@ -391,7 +420,7 @@ export async function registerComplianceStreamRoute(
       });
 
       // RAG retrieval (before hijack so we can return HTTP 500 if needed)
-      const ragContext = await searchAndGetContext(ragQuery, { topK: 12, minScore: 0.62, preferActiveSources: true }).catch((err: unknown) => {
+      const ragContext = await searchAndGetContext(ragQuery, { topK: RAG_TOP_K, minScore: RAG_MIN_SCORE, preferActiveSources: true }).catch((err: unknown) => {
         logger.error({
           type: 'compliance_stream_rag_error',
           userId: auth.userId,
@@ -480,7 +509,7 @@ export async function registerComplianceStreamRoute(
 
       write({ type: 'connected', queryId: query.id, ragSources: ragContext.results.length });
 
-      if (!hasUsableSourceContext(ragContext)) {
+      if (!hasUsableSourceContext(ragContext) || !hasUsableRetrievedChunks(ragContext.results)) {
         const fallbackReason = getFallbackReasonForRetrieval(ragContext.results.length, ragContext.context);
         const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
 
@@ -552,8 +581,15 @@ export async function registerComplianceStreamRoute(
       }
 
       const preGenerationGrade = await runGraderAgent(input.question, ragContext.results, 10);
-      const acceptedResults = preGenerationGrade.accepted;
-      const acceptedContext = ragService.getContextForPrompt(acceptedResults, 10, 4000);
+      const generationSelection = selectGenerationSources(
+        ragContext.results,
+        preGenerationGrade.accepted,
+        preGenerationGrade.gradeFailed,
+      );
+      const acceptedResults = generationSelection.sources;
+      const contextChunkLimit = input.answerDetail === 'detailed' ? DETAILED_CONTEXT_CHUNKS : STANDARD_CONTEXT_CHUNKS;
+      const contextCharLimit = input.answerDetail === 'detailed' ? DETAILED_CONTEXT_CHARS : STANDARD_CONTEXT_CHARS;
+      const acceptedContext = ragService.getContextForPrompt(acceptedResults, contextChunkLimit, contextCharLimit);
 
       logger.info({
         type: 'compliance_stream_source_verification_complete',
@@ -568,13 +604,14 @@ export async function registerComplianceStreamRoute(
         retrievedDocumentTitles: getRetrievedDocumentTitles(ragContext.results),
         retrievedChunkScores: getRetrievedChunkScores(ragContext.results),
         verificationInputCount: ragContext.results.length,
-        verifiedSourcesCount: acceptedResults.length,
+        verifiedSourcesCount: preGenerationGrade.accepted.length,
         rejectedSourcesCount: preGenerationGrade.rejected.length,
-        fallbackTriggered: acceptedResults.length === 0,
-        fallbackReason: acceptedResults.length === 0 ? 'ALL_CHUNKS_FAILED_VERIFICATION' : null,
+        fallbackTriggered: generationSelection.allChunksFailedVerification,
+        fallbackReason: generationSelection.allChunksFailedVerification ? 'ALL_CHUNKS_FAILED_VERIFICATION' : null,
+        verifierFailedOpen: generationSelection.usedVerifierFallback,
       });
 
-      if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext })) {
+      if (generationSelection.allChunksFailedVerification || !hasUsableRetrievedChunks(acceptedResults) || !acceptedContext.trim()) {
         const fallbackReason: ComplianceFallbackReason = 'ALL_CHUNKS_FAILED_VERIFICATION';
         const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
 
@@ -587,8 +624,9 @@ export async function registerComplianceStreamRoute(
             metadata: {
               streaming: true,
               ragSources: ragContext.results.length,
-              acceptedSources: acceptedResults.length,
+              acceptedSources: preGenerationGrade.accepted.length,
               graderFailed: preGenerationGrade.gradeFailed,
+              verifierFailedOpen: generationSelection.usedVerifierFallback,
               grounded: false,
               abstained: true,
               sourceInsufficient: true,
@@ -637,9 +675,10 @@ export async function registerComplianceStreamRoute(
           retrievedDocumentTitles: getRetrievedDocumentTitles(ragContext.results),
           retrievedChunkScores: getRetrievedChunkScores(ragContext.results),
           verificationInputCount: ragContext.results.length,
-          verifiedSourcesCount: acceptedResults.length,
+          verifiedSourcesCount: preGenerationGrade.accepted.length,
           rejectedSourcesCount: preGenerationGrade.rejected.length,
           graderFailed: preGenerationGrade.gradeFailed,
+          verifierFailedOpen: generationSelection.usedVerifierFallback,
           fallbackTriggered: true,
           fallbackReason,
           unitsConsumed: 0,
@@ -658,7 +697,9 @@ export async function registerComplianceStreamRoute(
         answerDetail:     input.answerDetail,
         ragContext:       acceptedContext || undefined,
       });
-      const maxTokens = acceptedContext ? 3000 : aiConfig.parameters.queryMaxTokens;
+      const maxTokens = input.answerDetail === 'detailed'
+        ? Math.max(aiConfig.parameters.queryMaxTokens, 5000)
+        : Math.max(aiConfig.parameters.queryMaxTokens, 3000);
 
       let fullContent = '';
 
@@ -692,6 +733,7 @@ export async function registerComplianceStreamRoute(
               acceptedSources:   acceptedResults.length,
               grounded:         true,
               graderFailed:     preGenerationGrade.gradeFailed,
+              verifierFailedOpen: generationSelection.usedVerifierFallback,
               tokensUsed:       result.inputTokens + result.outputTokens,
               organizationType: input.organizationType,
               industry:         input.industry,
@@ -716,7 +758,11 @@ export async function registerComplianceStreamRoute(
         let abstained                 = false;
         let runId: string | null      = null;
         let confidence: number | null = null;
-        let citations: SourceCitation[]  = [];
+        const baselineCitations = buildCitationsFromChunks(
+          acceptedResults,
+          generationSelection.usedVerifierFallback ? 'not_checked' : 'verified',
+        );
+        let citations: SourceCitation[]  = baselineCitations;
         let acceptedChunksForClaims = acceptedResults;
         let fallbackReason: ComplianceFallbackReason | null = null;
 
@@ -744,21 +790,23 @@ export async function registerComplianceStreamRoute(
               run.verifierVerdict === 'PASS'    ? 0.9 :
               run.verifierVerdict === 'PARTIAL' ? 0.7 :
               null;
-            const accepted = Array.isArray(run.acceptedChunkIds)
-              ? (run.acceptedChunkIds as unknown[]).length
-              : 0;
-            abstained = route === 'abstain' || accepted === 0 || run.verifierVerdict === 'FAIL' || run.verifierVerdict === 'FAIL_ABSTAIN';
+            abstained = route === 'abstain';
             fallbackReason =
               route === 'abstain' ? 'OUT_OF_SCOPE' :
-              accepted === 0 || run.verifierVerdict === 'FAIL' || run.verifierVerdict === 'FAIL_ABSTAIN' ? 'ALL_CHUNKS_FAILED_VERIFICATION' :
               null;
 
-            citations = buildCitationsFromAcceptedRefs(
+            const verifiedCitations = buildCitationsFromAcceptedRefs(
               run.acceptedChunkIds,
               ragContext.results,
               run.verifierVerdict === 'PASS' ? 'verified' : 'unverified',
             );
-            acceptedChunksForClaims = findAcceptedChunks(run.acceptedChunkIds, ragContext.results);
+            if (hasUsableCitations(verifiedCitations)) {
+              citations = verifiedCitations;
+              acceptedChunksForClaims = findAcceptedChunks(run.acceptedChunkIds, ragContext.results);
+            } else {
+              citations = baselineCitations;
+              acceptedChunksForClaims = acceptedResults;
+            }
           }
         } else {
           // Legacy shadow path: include pre-generation accepted sources, but do not mark them verified.
@@ -777,15 +825,11 @@ export async function registerComplianceStreamRoute(
         const claimVerification = verifyAnswerClaims(fullContent, acceptedChunksForClaims);
         await persistClaimVerification(prisma, query.id, claimVerification);
 
-        if (abstained || !hasUsableCitations(citations) || claimVerification.unsupportedClaims.length > 0) {
+        if (abstained || !hasUsableCitations(citations)) {
           fallbackReason =
             fallbackReason ??
-            (claimVerification.unsupportedClaims.length > 0 || !hasUsableCitations(citations)
-              ? 'ALL_CHUNKS_FAILED_VERIFICATION'
-              : 'LOW_RELEVANCE');
-          const sourceInsufficientAnswer = claimVerification.unsupportedClaims.length > 0
-            ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
-            : buildComplianceSourceInsufficiencyAnswer(fallbackReason);
+            (!hasUsableCitations(citations) ? 'ALL_CHUNKS_FAILED_VERIFICATION' : 'LOW_RELEVANCE');
+          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
           fullContent = sourceInsufficientAnswer;
           citations = [];
           confidence = null;
