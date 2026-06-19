@@ -1,7 +1,22 @@
 import type { SearchResult } from '@/lib/rag/rag.service';
 
+export type ComplianceFallbackReason =
+  | 'NO_RAG_CHUNKS'
+  | 'ALL_CHUNKS_FAILED_VERIFICATION'
+  | 'LOW_RELEVANCE'
+  | 'OUT_OF_SCOPE'
+  | 'ROUTE_ERROR';
+
 export const COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE =
   'SheriaBot could not find a sufficiently verified source in the indexed corpus for this specific question.';
+
+export const COMPLIANCE_FALLBACK_MESSAGES: Record<ComplianceFallbackReason, string> = {
+  NO_RAG_CHUNKS: 'No sufficiently relevant indexed documents were retrieved for this question.',
+  ALL_CHUNKS_FAILED_VERIFICATION: 'SheriaBot found potentially related documents, but they were not strong enough to support a verified answer.',
+  LOW_RELEVANCE: COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE,
+  OUT_OF_SCOPE: 'This question is outside SheriaBot\'s Kenyan fintech compliance scope.',
+  ROUTE_ERROR: COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE,
+};
 
 export const GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE =
   'The selected benchmark/source documents do not provide enough verified regulatory evidence to complete this legal gap assessment. Please select stronger benchmark documents or add the missing regulatory source.';
@@ -16,10 +31,17 @@ export function hasUsableSourceContext(input: {
   return (input.results?.length ?? 0) > 0 && !!input.context?.trim();
 }
 
-export function buildComplianceSourceInsufficiencyAnswer(): string {
+export function buildComplianceSourceInsufficiencyAnswer(
+  fallbackReason: ComplianceFallbackReason | null = null,
+): string {
+  const message = fallbackReason ? COMPLIANCE_FALLBACK_MESSAGES[fallbackReason] : COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE;
+  const noSourceClaim = fallbackReason === 'NO_RAG_CHUNKS'
+    ? 'no sufficiently relevant source chunk was retrieved.'
+    : 'no supporting source chunk was verified.';
+
   return `## Source status
 
-${COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE}
+${message}
 
 ## Non-legal operational next steps
 
@@ -27,7 +49,7 @@ ${COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE}
 - Add or select the relevant regulatory source document if it is missing from the corpus.
 - Re-run the question after the relevant source material is available.
 
-I have not stated legal obligations, penalties, deadlines, thresholds, or compliance conclusions because no supporting source chunk was retrieved.`;
+I have not stated legal obligations, penalties, deadlines, thresholds, or compliance conclusions because ${noSourceClaim}`;
 }
 
 export function buildUnsupportedClaimsAnswer(unsupportedClaims: string[]): string {

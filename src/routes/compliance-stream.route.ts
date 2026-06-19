@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { stream } from '@/lib/ai/client';
 import { ragService, searchAndGetContext } from '@/lib/rag/rag.service';
+import { getPineconeDiagnostics } from '@/lib/rag/client';
 import { runOrchestrator } from '@/modules/compliance/orchestrator';
 import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
@@ -28,6 +29,7 @@ import type { OrgMembershipEntry } from '@/server/trpc/context';
 import {
   buildComplianceSourceInsufficiencyAnswer,
   buildUnsupportedClaimsAnswer,
+  type ComplianceFallbackReason,
   hasUsableSourceContext,
 } from '@/lib/source-grounding/source-insufficiency';
 import {
@@ -65,6 +67,65 @@ export function extractNamedRegulations(question: string): string[] {
   const matches = question.match(regex);
   if (!matches) return [];
   return Array.from(new Set(matches.map(m => m.trim())));
+}
+
+export function buildComplianceRagQuery(question: string, detectedRegulations: string[] = []): string {
+  const lower = question.toLowerCase();
+  const boosts = new Set<string>();
+
+  if (detectedRegulations.length > 0) {
+    for (const regulation of detectedRegulations) boosts.add(regulation);
+  }
+
+  if (/\b(aml|anti[-\s]?money|cft|terrorist financ|kyc|know your customer|suspicious transaction|frc)\b/i.test(question)) {
+    ['AML/CFT', 'POCAMLA', 'Financial Reporting Centre', 'KYC', 'suspicious transaction reporting'].forEach((term) => boosts.add(term));
+  }
+
+  if (/\b(payment|psp|payment service provider|mobile money|e-money|m-pesa|mpesa|national payment|cbk)\b/i.test(question)) {
+    ['Central Bank of Kenya', 'CBK', 'National Payment System', 'payment service provider', 'mobile money', 'e-money'].forEach((term) => boosts.add(term));
+  }
+
+  if (lower.includes('data protection') || lower.includes('personal data') || lower.includes('privacy') || lower.includes('odpc')) {
+    ['Data Protection Act', 'ODPC', 'data controller', 'data processor', 'personal data'].forEach((term) => boosts.add(term));
+  }
+
+  if (lower.includes('digital lender') || lower.includes('digital lending') || lower.includes('digital credit')) {
+    ['digital credit provider', 'digital lender', 'CBK Digital Credit Providers'].forEach((term) => boosts.add(term));
+  }
+
+  if (lower.includes('fintech')) {
+    ['Kenya fintech compliance', 'banking', 'payments', 'lending', 'capital markets'].forEach((term) => boosts.add(term));
+  }
+
+  return [question, ...boosts].join(' ');
+}
+
+export function getFallbackReasonForRetrieval(resultsCount: number, context: string | null | undefined): ComplianceFallbackReason {
+  if (resultsCount === 0) return 'NO_RAG_CHUNKS';
+  if (!context?.trim()) return 'LOW_RELEVANCE';
+  return 'LOW_RELEVANCE';
+}
+
+function getRetrievedDocumentTitles(results: Array<{ documentTitle: string }>): string[] {
+  return Array.from(new Set(results.map((result) => result.documentTitle).filter(Boolean)));
+}
+
+function getRetrievedChunkScores(results: Array<{ score: number; documentTitle: string; section?: string; pageStart?: number; pageEnd?: number }>): Array<{
+  rank: number;
+  documentTitle: string;
+  section?: string;
+  pageStart?: number;
+  pageEnd?: number;
+  score: number;
+}> {
+  return results.map((result, index) => ({
+    rank: index + 1,
+    documentTitle: result.documentTitle,
+    section: result.section,
+    pageStart: result.pageStart,
+    pageEnd: result.pageEnd,
+    score: Number(result.score.toFixed(4)),
+  }));
 }
 
 // Auth resolution
@@ -315,18 +376,44 @@ export async function registerComplianceStreamRoute(
 
       // Named regulation detection
       const detectedRegulations = extractNamedRegulations(input.question);
-      let augmentedQuery = input.question;
-      if (detectedRegulations.length > 0) {
-        augmentedQuery += ` ${detectedRegulations.join(' ')}`;
-      }
+      const ragQuery = buildComplianceRagQuery(input.question, detectedRegulations);
+      const pineconeDiagnostics = getPineconeDiagnostics();
+
+      logger.info({
+        type: 'compliance_stream_rag_retrieval_start',
+        userId: auth.userId,
+        orgId: auth.organizationId,
+        query: input.question,
+        answerDetail: input.answerDetail,
+        detectedRegulations,
+        ragQuery,
+        pinecone: pineconeDiagnostics,
+      });
 
       // RAG retrieval (before hijack so we can return HTTP 500 if needed)
-      const ragContext = await searchAndGetContext(augmentedQuery, { topK: 10, minScore: 0.7, preferActiveSources: true }).catch((err: unknown) => {
+      const ragContext = await searchAndGetContext(ragQuery, { topK: 12, minScore: 0.62, preferActiveSources: true }).catch((err: unknown) => {
         logger.error({
           type: 'compliance_stream_rag_error',
+          userId: auth.userId,
+          orgId: auth.organizationId,
           error: err instanceof Error ? err.message : String(err),
         });
         return { results: [], context: null };
+      });
+
+      logger.info({
+        type: 'compliance_stream_rag_retrieval_complete',
+        userId: auth.userId,
+        orgId: auth.organizationId,
+        query: input.question,
+        answerDetail: input.answerDetail,
+        detectedRegulations,
+        ragQuery,
+        pinecone: pineconeDiagnostics,
+        retrievedChunksCount: ragContext.results.length,
+        retrievedDocumentTitles: getRetrievedDocumentTitles(ragContext.results),
+        retrievedChunkScores: getRetrievedChunkScores(ragContext.results),
+        verificationInputCount: ragContext.results.length,
       });
 
       // Persist query record
@@ -394,7 +481,8 @@ export async function registerComplianceStreamRoute(
       write({ type: 'connected', queryId: query.id, ragSources: ragContext.results.length });
 
       if (!hasUsableSourceContext(ragContext)) {
-        const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+        const fallbackReason = getFallbackReasonForRetrieval(ragContext.results.length, ragContext.context);
+        const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
 
         await prisma.complianceQuery.update({
           where: { id: query.id },
@@ -415,7 +503,10 @@ export async function registerComplianceStreamRoute(
               answerDetail: input.answerDetail,
               unitsConsumed: 0,
               fallbackTriggered: true,
+              fallbackReason,
               detectedRegulations,
+              ragQuery,
+              pinecone: pineconeDiagnostics,
             },
           },
         });
@@ -430,6 +521,7 @@ export async function registerComplianceStreamRoute(
           runId: null,
           citations: [],
           confidence: null,
+          fallbackReason,
         });
 
         clearInterval(heartbeatTimer);
@@ -438,7 +530,22 @@ export async function registerComplianceStreamRoute(
         logger.info({
           type: 'compliance_stream_source_insufficient',
           userId: auth.userId,
+          orgId: auth.organizationId,
           queryId: query.id,
+          query: input.question,
+          answerDetail: input.answerDetail,
+          detectedRegulations,
+          ragQuery,
+          pinecone: pineconeDiagnostics,
+          retrievedChunksCount: ragContext.results.length,
+          retrievedDocumentTitles: getRetrievedDocumentTitles(ragContext.results),
+          retrievedChunkScores: getRetrievedChunkScores(ragContext.results),
+          verificationInputCount: ragContext.results.length,
+          verifiedSourcesCount: 0,
+          rejectedSourcesCount: ragContext.results.length,
+          fallbackTriggered: true,
+          fallbackReason,
+          unitsConsumed: 0,
         });
 
         return;
@@ -448,8 +555,28 @@ export async function registerComplianceStreamRoute(
       const acceptedResults = preGenerationGrade.accepted;
       const acceptedContext = ragService.getContextForPrompt(acceptedResults, 10, 4000);
 
+      logger.info({
+        type: 'compliance_stream_source_verification_complete',
+        userId: auth.userId,
+        orgId: auth.organizationId,
+        query: input.question,
+        answerDetail: input.answerDetail,
+        detectedRegulations,
+        ragQuery,
+        pinecone: pineconeDiagnostics,
+        retrievedChunksCount: ragContext.results.length,
+        retrievedDocumentTitles: getRetrievedDocumentTitles(ragContext.results),
+        retrievedChunkScores: getRetrievedChunkScores(ragContext.results),
+        verificationInputCount: ragContext.results.length,
+        verifiedSourcesCount: acceptedResults.length,
+        rejectedSourcesCount: preGenerationGrade.rejected.length,
+        fallbackTriggered: acceptedResults.length === 0,
+        fallbackReason: acceptedResults.length === 0 ? 'ALL_CHUNKS_FAILED_VERIFICATION' : null,
+      });
+
       if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext })) {
-        const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+        const fallbackReason: ComplianceFallbackReason = 'ALL_CHUNKS_FAILED_VERIFICATION';
+        const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
 
         await prisma.complianceQuery.update({
           where: { id: query.id },
@@ -471,7 +598,10 @@ export async function registerComplianceStreamRoute(
               answerDetail: input.answerDetail,
               unitsConsumed: 0,
               fallbackTriggered: true,
+              fallbackReason,
               detectedRegulations,
+              ragQuery,
+              pinecone: pineconeDiagnostics,
             },
           },
         });
@@ -486,6 +616,7 @@ export async function registerComplianceStreamRoute(
           runId: null,
           citations: [],
           confidence: null,
+          fallbackReason,
         });
 
         clearInterval(heartbeatTimer);
@@ -494,9 +625,24 @@ export async function registerComplianceStreamRoute(
         logger.info({
           type: 'compliance_stream_no_accepted_sources',
           userId: auth.userId,
+          orgId: auth.organizationId,
           queryId: query.id,
+          query: input.question,
+          answerDetail: input.answerDetail,
+          detectedRegulations,
+          ragQuery,
+          pinecone: pineconeDiagnostics,
           retrievedSources: ragContext.results.length,
+          retrievedChunksCount: ragContext.results.length,
+          retrievedDocumentTitles: getRetrievedDocumentTitles(ragContext.results),
+          retrievedChunkScores: getRetrievedChunkScores(ragContext.results),
+          verificationInputCount: ragContext.results.length,
+          verifiedSourcesCount: acceptedResults.length,
+          rejectedSourcesCount: preGenerationGrade.rejected.length,
           graderFailed: preGenerationGrade.gradeFailed,
+          fallbackTriggered: true,
+          fallbackReason,
+          unitsConsumed: 0,
         });
 
         return;
@@ -553,18 +699,12 @@ export async function registerComplianceStreamRoute(
               answerDetail:     input.answerDetail,
               unitsConsumed:    requiredCredits,
               fallbackTriggered: false,
+              fallbackReason: null,
               detectedRegulations,
+              ragQuery,
+              pinecone: pineconeDiagnostics,
             },
           },
-        });
-
-        // Usage increment deferred so failed synthesis costs nothing
-        await usage.increment(result.inputTokens + result.outputTokens).catch((err: unknown) => {
-          logger.error({
-            type: 'compliance_stream_usage_increment_failed',
-            userId: auth.userId,
-            error: err instanceof Error ? err.message : String(err),
-          });
         });
 
         // Orchestrator
@@ -578,6 +718,7 @@ export async function registerComplianceStreamRoute(
         let confidence: number | null = null;
         let citations: SourceCitation[]  = [];
         let acceptedChunksForClaims = acceptedResults;
+        let fallbackReason: ComplianceFallbackReason | null = null;
 
         if (appConfig.features.orchestratorEnabled) {
           await runOrchestrator({
@@ -607,6 +748,10 @@ export async function registerComplianceStreamRoute(
               ? (run.acceptedChunkIds as unknown[]).length
               : 0;
             abstained = route === 'abstain' || accepted === 0 || run.verifierVerdict === 'FAIL' || run.verifierVerdict === 'FAIL_ABSTAIN';
+            fallbackReason =
+              route === 'abstain' ? 'OUT_OF_SCOPE' :
+              accepted === 0 || run.verifierVerdict === 'FAIL' || run.verifierVerdict === 'FAIL_ABSTAIN' ? 'ALL_CHUNKS_FAILED_VERIFICATION' :
+              null;
 
             citations = buildCitationsFromAcceptedRefs(
               run.acceptedChunkIds,
@@ -633,9 +778,14 @@ export async function registerComplianceStreamRoute(
         await persistClaimVerification(prisma, query.id, claimVerification);
 
         if (abstained || !hasUsableCitations(citations) || claimVerification.unsupportedClaims.length > 0) {
+          fallbackReason =
+            fallbackReason ??
+            (claimVerification.unsupportedClaims.length > 0 || !hasUsableCitations(citations)
+              ? 'ALL_CHUNKS_FAILED_VERIFICATION'
+              : 'LOW_RELEVANCE');
           const sourceInsufficientAnswer = claimVerification.unsupportedClaims.length > 0
             ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
-            : buildComplianceSourceInsufficiencyAnswer();
+            : buildComplianceSourceInsufficiencyAnswer(fallbackReason);
           fullContent = sourceInsufficientAnswer;
           citations = [];
           confidence = null;
@@ -656,6 +806,9 @@ export async function registerComplianceStreamRoute(
               grounded,
               abstained,
               sourceInsufficient: abstained && citations.length === 0,
+              fallbackTriggered: abstained,
+              fallbackReason,
+              unitsConsumed: abstained ? 0 : requiredCredits,
               route,
               runId,
               claimVerificationVerdict: claimVerification.verdict,
@@ -664,22 +817,54 @@ export async function registerComplianceStreamRoute(
               organizationType: input.organizationType,
               industry: input.industry,
               context: input.context,
+              answerDetail: input.answerDetail,
+              detectedRegulations,
+              ragQuery,
+              pinecone: pineconeDiagnostics,
             },
           },
         });
 
+        if (!abstained) {
+          // Usage increment deferred so failed or unverified synthesis costs nothing.
+          await usage.increment(result.inputTokens + result.outputTokens).catch((err: unknown) => {
+            logger.error({
+              type: 'compliance_stream_usage_increment_failed',
+              userId: auth.userId,
+              orgId: auth.organizationId,
+              queryId: query.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
+
         write({ type: 'chunk', text: fullContent });
-        write({ type: 'done', queryId: query.id, route, grounded, abstained, runId, citations, confidence });
+        write({ type: 'done', queryId: query.id, route, grounded, abstained, runId, citations, confidence, fallbackReason });
 
         logger.info({
           type:         'compliance_stream_complete',
           userId:       auth.userId,
+          orgId:        auth.organizationId,
           queryId:      query.id,
+          query:        input.question,
+          answerDetail: input.answerDetail,
+          detectedRegulations,
+          ragQuery,
+          pinecone: pineconeDiagnostics,
+          retrievedChunksCount: ragContext.results.length,
+          retrievedDocumentTitles: getRetrievedDocumentTitles(ragContext.results),
+          retrievedChunkScores: getRetrievedChunkScores(ragContext.results),
+          verificationInputCount: ragContext.results.length,
+          verifiedSourcesCount: citations.length,
+          rejectedSourcesCount: Math.max(ragContext.results.length - citations.length, 0),
           ragSources:   ragContext.results.length,
           tokensUsed:   result.inputTokens + result.outputTokens,
           route,
           grounded,
           abstained,
+          fallbackTriggered: abstained,
+          fallbackReason,
+          unitsConsumed: abstained ? 0 : requiredCredits,
           orchestrated: appConfig.features.orchestratorEnabled,
         });
       } catch (err: unknown) {
@@ -688,7 +873,22 @@ export async function registerComplianceStreamRoute(
         logger.error({
           type:        'compliance_stream_error',
           userId:      auth.userId,
+          orgId:       auth.organizationId,
           queryId:     query.id,
+          query:       input.question,
+          answerDetail: input.answerDetail,
+          detectedRegulations,
+          ragQuery,
+          pinecone: pineconeDiagnostics,
+          retrievedChunksCount: ragContext.results.length,
+          retrievedDocumentTitles: getRetrievedDocumentTitles(ragContext.results),
+          retrievedChunkScores: getRetrievedChunkScores(ragContext.results),
+          verificationInputCount: ragContext.results.length,
+          verifiedSourcesCount: 0,
+          rejectedSourcesCount: ragContext.results.length,
+          fallbackTriggered: true,
+          fallbackReason: 'ROUTE_ERROR',
+          unitsConsumed: 0,
           error:       err instanceof Error ? err.message : String(err),
           disconnect:  isDisconnect,
         });

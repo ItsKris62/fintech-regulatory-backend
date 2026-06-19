@@ -85,6 +85,18 @@ function getIndexName(): string {
   return process.env.PINECONE_INDEX_NAME || 'sheriabot-legal-docs';
 }
 
+export function getPineconeDiagnostics(namespace?: string): {
+  indexName: string;
+  namespace: string;
+  environment: string | null;
+} {
+  return {
+    indexName: getIndexName(),
+    namespace: namespace || '__default__',
+    environment: process.env.PINECONE_ENVIRONMENT || null,
+  };
+}
+
 /**
  * Get Pinecone index
  */
@@ -159,8 +171,10 @@ export async function queryVectors(
 
     logger.debug({
       type: 'pinecone_integrated_query',
+      indexName: getIndexName(),
+      environment: process.env.PINECONE_ENVIRONMENT || null,
       topK,
-      namespace,
+      namespace: namespace || '__default__',
       hasFilter: !!filter,
     });
 

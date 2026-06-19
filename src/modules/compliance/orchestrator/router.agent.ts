@@ -19,6 +19,11 @@ Classify the user's compliance question into exactly one route:
 - "complex" : requires synthesising multiple regulations, multi-step procedural guidance, or cross-jurisdictional analysis
 - "abstain" : question is outside Kenyan fintech / financial-services regulatory scope
 
+Important: an unknown, imaginary, or unverified named regulation inside an otherwise Kenyan fintech,
+banking, payments, lending, data protection, AML/CFT, tax, company, or capital markets compliance
+question is not "abstain". Route it as "simple" or "complex" so source verification can decide whether
+the named regulation is supported by the corpus.
+
 Respond with a single JSON object:
 {
   "route": "simple"|"complex"|"abstain",
