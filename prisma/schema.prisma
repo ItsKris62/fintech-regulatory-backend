@@ -123,6 +123,11 @@ model User {
   organizationMemberships OrganizationMember[] @relation("OrganizationMemberUser")
   sentInvitations         OrganizationMember[] @relation("OrganizationMemberInviter")
 
+  // Blog CMS
+  blogPostsAuthored   BlogPost[] @relation("BlogPostAuthor")
+  blogPostsReviewed   BlogPost[] @relation("BlogPostReviewer")
+  blogPostsUpdated    BlogPost[] @relation("BlogPostUpdatedBy")
+
   @@index([email])
   @@index([supabaseAuthId])
   @@index([organizationId])
@@ -2830,4 +2835,95 @@ model CorpusGapReport {
   @@index([documentType])
   @@index([documentName, jurisdiction, status])
   @@index([createdAt])
+}
+
+model BlogPost {
+  id                  String            @id @default(cuid())
+
+  title               String
+  slug                String            @unique
+  excerpt             String?           @db.Text
+
+  // Store markdown as the source of truth for launch.
+  content             String?           @db.Text
+
+  // Optional sanitized/rendered HTML cache.
+  htmlContent         String?           @db.Text
+
+  coverImageUrl       String?
+  category            String
+  tags                String[]          @default([])
+
+  status              BlogPostStatus    @default(DRAFT)
+  featured            Boolean           @default(false)
+
+  jurisdiction        String            @default("Kenya")
+  relatedRegulations  String[]          @default([])
+
+  seoTitle            String?
+  seoDescription      String?
+  canonicalUrl        String?
+  ogImageUrl          String?
+
+  authorId            String
+  reviewerId          String?
+  updatedById         String?
+
+  publishedAt         DateTime?
+  lastReviewedAt      DateTime?
+  archivedAt          DateTime?
+  deletedAt           DateTime?
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  author              User              @relation("BlogPostAuthor", fields: [authorId], references: [id])
+  reviewer            User?             @relation("BlogPostReviewer", fields: [reviewerId], references: [id])
+  updatedBy           User?             @relation("BlogPostUpdatedBy", fields: [updatedById], references: [id])
+
+  sources             BlogPostSource[]
+
+  @@index([slug])
+  @@index([status])
+  @@index([category])
+  @@index([featured])
+  @@index([publishedAt])
+  @@index([deletedAt])
+}
+
+model BlogPostSource {
+  id              String              @id @default(cuid())
+  postId          String
+
+  sourceType      BlogSourceType
+  title           String
+  publisher       String?
+  url             String?
+  publishedAt     DateTime?
+  accessedAt      DateTime            @default(now())
+
+  notes           String?             @db.Text
+
+  post            BlogPost            @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([postId])
+  @@index([sourceType])
+}
+
+enum BlogPostStatus {
+  DRAFT
+  IN_REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+enum BlogSourceType {
+  OFFICIAL
+  THIRD_PARTY
+  INTERNAL
+  MEDIA
+  INTERNATIONAL_STANDARD
 }
