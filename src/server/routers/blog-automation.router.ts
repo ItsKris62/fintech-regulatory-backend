@@ -13,8 +13,21 @@ import {
   adminDismissSourceItemSchema,
   adminRunMonitorNowSchema,
   adminListDiscoveryRunsSchema,
+  adminScoreSourceItemSchema,
+  adminScoreEligibleSourceItemsSchema,
+  adminListSuggestionsSchema,
+  adminGetSuggestionSchema,
+  adminDismissSuggestionSchema,
+  adminApproveSuggestionForDraftSchema,
+  adminMarkSuggestionNeedsMoreSourcesSchema,
+  adminDeleteSuggestionSchema,
+  adminCreateDraftFromSuggestionSchema,
+  adminGenerateAiDraftSchema,
 } from '../schemas/blog-automation.schema';
 import { runSourceDiscoveryForMonitor } from '../../modules/blog-automation/source-discovery.service';
+import { createSuggestionFromSourceItem } from '../../modules/blog-automation/suggestion-builder';
+import { buildDraftSkeletonFromSuggestion } from '../../modules/blog-automation/draft-skeleton.service';
+import { generateAiDraftForBlogPost } from '../../modules/blog-automation/ai-draft-generation.service';
 
 export const blogAutomationRouter = router({
   adminListMonitors: adminProcedure
@@ -358,5 +371,309 @@ export const blogAutomationRouter = router({
         runs,
         pagination: { page, limit, total, pages: Math.ceil(total / limit) },
       };
+    }),
+
+  adminScoreSourceItem: adminProcedure
+    .input(adminScoreSourceItemSchema)
+    .mutation(async ({ input, ctx }) => {
+      const result = await createSuggestionFromSourceItem({
+        sourceItemId: input.sourceItemId,
+        minScore: input.minScore ?? 45,
+        createdByUserId: ctx.user!.id,
+      });
+      return result;
+    }),
+
+  adminScoreEligibleSourceItems: adminProcedure
+    .input(adminScoreEligibleSourceItemsSchema)
+    .mutation(async ({ input, ctx }) => {
+      const { minScore = 45, limit = 50, jurisdiction, monitorId } = input;
+      
+      const where: any = {
+        deletedAt: null,
+        status: { in: ['NEW', 'READY_FOR_SCORING'] },
+      };
+      
+      if (jurisdiction) where.jurisdiction = jurisdiction;
+      if (monitorId) where.monitorId = monitorId;
+
+      const items = await ctx.prisma.blogSourceItem.findMany({
+        where,
+        take: limit,
+        orderBy: { discoveredAt: 'asc' },
+      });
+
+      const summary = {
+        processed: 0,
+        suggestionsCreated: 0,
+        belowThreshold: 0,
+        duplicatesSkipped: 0,
+        failures: 0,
+      };
+
+      for (const item of items) {
+        summary.processed++;
+        try {
+          const res = await createSuggestionFromSourceItem({
+            sourceItemId: item.id,
+            minScore,
+            createdByUserId: ctx.user!.id,
+          });
+          if (res.createdSuggestion) {
+            summary.suggestionsCreated++;
+          } else if (res.reason === 'Duplicate') {
+            summary.duplicatesSkipped++;
+          } else {
+            summary.belowThreshold++;
+          }
+        } catch (e) {
+          summary.failures++;
+        }
+      }
+
+      return summary;
+    }),
+
+  adminListSuggestions: adminProcedure
+    .input(adminListSuggestionsSchema)
+    .query(async ({ input, ctx }) => {
+      const { status, priority, jurisdiction, category, articleType, search, page, limit } = input;
+      const skip = (page - 1) * limit;
+
+      const where: any = { deletedAt: null };
+
+      if (status) where.status = status;
+      if (priority) where.priority = priority;
+      if (jurisdiction) where.jurisdiction = jurisdiction;
+      if (category) where.category = category;
+      if (articleType) where.articleType = articleType;
+
+      if (search) {
+        where.OR = [
+          { title: { contains: search, mode: 'insensitive' } },
+          { summary: { contains: search, mode: 'insensitive' } },
+        ];
+      }
+
+      const [suggestions, total] = await Promise.all([
+        ctx.prisma.blogArticleSuggestion.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            sources: {
+              include: {
+                sourceItem: {
+                  include: { monitor: { select: { id: true, name: true } } }
+                }
+              }
+            }
+          },
+        }),
+        ctx.prisma.blogArticleSuggestion.count({ where }),
+      ]);
+
+      return {
+        suggestions,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      };
+    }),
+
+  adminGetSuggestion: adminProcedure
+    .input(adminGetSuggestionSchema)
+    .query(async ({ input, ctx }) => {
+      const suggestion = await ctx.prisma.blogArticleSuggestion.findUnique({
+        where: { id: input.id },
+        include: {
+          sources: {
+            include: {
+              sourceItem: {
+                include: { monitor: true }
+              }
+            }
+          },
+          dismissedBy: { select: { id: true, fullName: true } },
+          approvedBy: { select: { id: true, fullName: true } },
+        },
+      });
+
+      if (!suggestion || suggestion.deletedAt) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Suggestion not found' });
+      }
+
+      return suggestion;
+    }),
+
+  adminDismissSuggestion: adminProcedure
+    .input(adminDismissSuggestionSchema)
+    .mutation(async ({ input, ctx }) => {
+      return ctx.prisma.blogArticleSuggestion.update({
+        where: { id: input.id },
+        data: {
+          status: 'DISMISSED',
+          dismissedReason: input.reason,
+          dismissedAt: new Date(),
+          dismissedById: ctx.user!.id,
+        },
+      });
+    }),
+
+  adminApproveSuggestionForDraft: adminProcedure
+    .input(adminApproveSuggestionForDraftSchema)
+    .mutation(async ({ input, ctx }) => {
+      return ctx.prisma.blogArticleSuggestion.update({
+        where: { id: input.id },
+        data: {
+          status: 'APPROVED_FOR_DRAFT',
+          approvedAt: new Date(),
+          approvedById: ctx.user!.id,
+        },
+      });
+    }),
+
+  adminMarkSuggestionNeedsMoreSources: adminProcedure
+    .input(adminMarkSuggestionNeedsMoreSourcesSchema)
+    .mutation(async ({ input, ctx }) => {
+      const suggestion = await ctx.prisma.blogArticleSuggestion.findUnique({ where: { id: input.id } });
+      if (!suggestion) throw new TRPCError({ code: 'NOT_FOUND', message: 'Not found' });
+      
+      const newAction = input.reason 
+        ? `${suggestion.suggestedNextAction}\n\n[Needs Sources Note]: ${input.reason}`
+        : suggestion.suggestedNextAction;
+
+      return ctx.prisma.blogArticleSuggestion.update({
+        where: { id: input.id },
+        data: {
+          status: 'NEEDS_MORE_SOURCES',
+          needsMoreSources: true,
+          suggestedNextAction: newAction,
+        },
+      });
+    }),
+
+  adminDeleteSuggestion: adminProcedure
+    .input(adminDeleteSuggestionSchema)
+    .mutation(async ({ input, ctx }) => {
+      return ctx.prisma.blogArticleSuggestion.update({
+        where: { id: input.id },
+        data: {
+          deletedAt: new Date(),
+        },
+      });
+    }),
+
+  adminCreateDraftFromSuggestion: adminProcedure
+    .input(adminCreateDraftFromSuggestionSchema)
+    .mutation(async ({ input, ctx }) => {
+      const suggestion = await ctx.prisma.blogArticleSuggestion.findUnique({
+        where: { id: input.suggestionId },
+        include: {
+          sources: {
+            include: {
+              sourceItem: {
+                include: { monitor: true }
+              }
+            }
+          }
+        }
+      });
+
+      if (!suggestion || suggestion.deletedAt) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Suggestion not found' });
+      }
+
+      if (suggestion.status !== 'APPROVED_FOR_DRAFT') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Suggestion must be APPROVED_FOR_DRAFT' });
+      }
+
+      if (suggestion.blogPostId) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'A draft already exists for this suggestion' });
+      }
+
+      if (suggestion.sources.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Suggestion has no attached sources' });
+      }
+
+      // Generate unique slug
+      let baseSlug = suggestion.suggestedSlug || suggestion.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      let uniqueSlug = baseSlug;
+      let counter = 1;
+      while (true) {
+        const existingPost = await ctx.prisma.blogPost.findUnique({ where: { slug: uniqueSlug } });
+        if (!existingPost) break;
+        uniqueSlug = `${baseSlug}-${counter}`;
+        counter++;
+      }
+
+      const sourceTitles = suggestion.sources.map(s => s.sourceItem.title);
+      const sourceUrls = suggestion.sources.map(s => s.sourceItem.url);
+
+      const skeletonContent = buildDraftSkeletonFromSuggestion({
+        title: suggestion.title,
+        jurisdiction: suggestion.jurisdiction,
+        category: suggestion.category,
+        articleType: suggestion.articleType,
+        summary: suggestion.summary,
+        sourceTitles,
+        sourceUrls,
+        targetAudience: suggestion.targetAudience,
+        recommendedTags: suggestion.recommendedTags,
+      });
+
+      return ctx.prisma.$transaction(async (tx) => {
+        const blogPost = await tx.blogPost.create({
+          data: {
+            status: 'DRAFT',
+            title: suggestion.title,
+            slug: uniqueSlug,
+            excerpt: suggestion.summary,
+            content: skeletonContent,
+            category: suggestion.category,
+            tags: suggestion.recommendedTags,
+            jurisdiction: suggestion.jurisdiction,
+            seoTitle: suggestion.title,
+            seoDescription: suggestion.summary ? suggestion.summary.substring(0, 160) : null,
+            authorId: ctx.user!.id,
+            updatedById: ctx.user!.id,
+          }
+        });
+
+        // Attach sources
+        for (const source of suggestion.sources) {
+          await tx.blogPostSource.create({
+            data: {
+              postId: blogPost.id,
+              sourceType: source.sourceItem.sourceType,
+              title: source.sourceItem.title,
+              publisher: source.sourceItem.publisher || source.sourceItem.monitor.name,
+              url: source.sourceItem.url,
+              publishedAt: source.sourceItem.publicationDate,
+              accessedAt: new Date(),
+              notes: `Created from source discovery item ${source.sourceItem.id}`,
+            }
+          });
+        }
+
+        // Update suggestion
+        await tx.blogArticleSuggestion.update({
+          where: { id: suggestion.id },
+          data: {
+            status: 'DRAFT_CREATED',
+            blogPostId: blogPost.id,
+          }
+        });
+
+        return {
+          blogPostId: blogPost.id,
+          slug: blogPost.slug,
+        };
+      });
+    }),
+
+  adminGenerateAiDraft: adminProcedure
+    .input(adminGenerateAiDraftSchema)
+    .mutation(async ({ input, ctx }) => {
+      return generateAiDraftForBlogPost(input.blogPostId, ctx.user!.id);
     }),
 });

@@ -131,6 +131,10 @@ model User {
   blogSourceMonitorsCreated  BlogSourceMonitor[] @relation("BlogSourceMonitorCreatedBy")
   blogSourceMonitorsUpdated  BlogSourceMonitor[] @relation("BlogSourceMonitorUpdatedBy")
   blogDiscoveryRunsTriggered BlogDiscoveryRun[]  @relation("BlogDiscoveryRunTriggeredBy")
+  blogSuggestionsDismissed BlogArticleSuggestion[] @relation("BlogSuggestionDismissedBy")
+  blogSuggestionsApproved  BlogArticleSuggestion[] @relation("BlogSuggestionApprovedBy")
+  blogDraftGenerationRunsRequested BlogDraftGenerationRun[] @relation("BlogDraftGenerationRequestedBy")
+  blogDraftGenerationRunsApplied   BlogDraftGenerationRun[] @relation("BlogDraftGenerationAppliedBy")
 
   @@index([email])
   @@index([supabaseAuthId])
@@ -2886,6 +2890,8 @@ model BlogPost {
   updatedBy           User?             @relation("BlogPostUpdatedBy", fields: [updatedById], references: [id])
 
   sources             BlogPostSource[]
+  automationSuggestion BlogArticleSuggestion?
+  draftGenerationRuns BlogDraftGenerationRun[]
 
   @@index([slug])
   @@index([status])
@@ -3091,6 +3097,7 @@ model BlogSourceItem {
   deletedAt         DateTime?
 
   monitor           BlogSourceMonitor    @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  suggestions       BlogSuggestionSource[]
 
   @@index([monitorId])
   @@index([jurisdiction])
@@ -3131,4 +3138,167 @@ model BlogDiscoveryRun {
   @@index([monitorId])
   @@index([status])
   @@index([startedAt])
+}
+
+enum BlogSuggestionPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum BlogSuggestionStatus {
+  PENDING_REVIEW
+  APPROVED_FOR_DRAFT
+  DRAFT_CREATED
+  DISMISSED
+  DUPLICATE
+  NEEDS_MORE_SOURCES
+}
+
+enum BlogArticleType {
+  SINGLE_JURISDICTION_UPDATE
+  COUNTRY_SPECIFIC_GUIDE
+  CROSS_COUNTRY_COMPARISON
+  REGIONAL_TREND_ANALYSIS
+  EVERGREEN_EXPLAINER
+  PRODUCT_EDUCATION
+}
+
+enum BlogSourceQuality {
+  LOW
+  MEDIUM
+  HIGH
+  OFFICIAL
+}
+
+model BlogArticleSuggestion {
+  id                    String                  @id @default(cuid())
+
+  title                 String
+  suggestedSlug          String?
+  summary               String?                 @db.Text
+
+  jurisdiction           BlogJurisdiction
+  jurisdictions          BlogJurisdiction[]      @default([])
+
+  category              String
+  articleType            BlogArticleType
+  priority               BlogSuggestionPriority  @default(MEDIUM)
+  status                 BlogSuggestionStatus    @default(PENDING_REVIEW)
+
+  relevanceScore         Int                     @default(0)
+  sourceQuality          BlogSourceQuality       @default(MEDIUM)
+
+  recommendedTags        String[]                @default([])
+  targetAudience         String[]                @default([])
+
+  reason                 String?                 @db.Text
+  suggestedNextAction     String?                 @db.Text
+
+  requiresOfficialSource Boolean                 @default(false)
+  requiresHumanReview    Boolean                 @default(true)
+  needsMoreSources       Boolean                 @default(false)
+
+  dismissedReason        String?                 @db.Text
+  dismissedAt            DateTime?
+  dismissedById          String?
+
+  approvedAt             DateTime?
+  approvedById           String?
+
+  blogPostId             String?                 @unique
+  blogPost               BlogPost?               @relation(fields: [blogPostId], references: [id])
+
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  deletedAt              DateTime?
+
+  dismissedBy            User?                   @relation("BlogSuggestionDismissedBy", fields: [dismissedById], references: [id])
+  approvedBy             User?                   @relation("BlogSuggestionApprovedBy", fields: [approvedById], references: [id])
+
+  sources                BlogSuggestionSource[]
+
+  @@index([jurisdiction])
+  @@index([category])
+  @@index([articleType])
+  @@index([priority])
+  @@index([status])
+  @@index([relevanceScore])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
+
+model BlogSuggestionSource {
+  suggestionId           String
+  sourceItemId            String
+
+  suggestion              BlogArticleSuggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  sourceItem              BlogSourceItem        @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+
+  createdAt               DateTime              @default(now())
+
+  @@id([suggestionId, sourceItemId])
+  @@index([sourceItemId])
+}
+enum BlogDraftGenerationStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum BlogDraftGenerationProvider {
+  ANTHROPIC
+  OPENAI
+  OTHER
+}
+
+model BlogDraftGenerationRun {
+  id                  String                       @id @default(cuid())
+
+  blogPostId          String
+  suggestionId        String?
+
+  status              BlogDraftGenerationStatus    @default(PENDING)
+  provider            BlogDraftGenerationProvider?
+  model               String?
+  promptVersion       String                       @default("blog-draft-v1")
+
+  inputSourceCount    Int                          @default(0)
+  inputTokenEstimate  Int?
+  outputTokenEstimate Int?
+  costUsdEstimate     Float?
+
+  errorMessage        String?                      @db.Text
+
+  generatedTitle      String?
+  generatedExcerpt    String?                      @db.Text
+  generatedContent    String?                      @db.Text
+  generatedSeoTitle   String?
+  generatedSeoDescription String?                  @db.Text
+  generatedTags       String[]                     @default([])
+  reviewerNotes       String?                      @db.Text
+  uncertaintyFlags    String[]                     @default([])
+
+  appliedToPost       Boolean                      @default(false)
+  appliedAt           DateTime?
+  appliedById         String?
+
+  requestedById       String?
+  startedAt           DateTime?
+  completedAt         DateTime?
+
+  createdAt           DateTime                     @default(now())
+  updatedAt           DateTime                     @updatedAt
+
+  blogPost            BlogPost                     @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
+  requestedBy         User?                        @relation("BlogDraftGenerationRequestedBy", fields: [requestedById], references: [id])
+  appliedBy           User?                        @relation("BlogDraftGenerationAppliedBy", fields: [appliedById], references: [id])
+
+  @@index([blogPostId])
+  @@index([suggestionId])
+  @@index([status])
+  @@index([createdAt])
 }

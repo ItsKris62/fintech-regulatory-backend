@@ -7,6 +7,10 @@ import {
   BlogSourceType,
   BlogSourceItemStatus,
   BlogDiscoveryRunStatus,
+  BlogSuggestionPriority,
+  BlogSuggestionStatus,
+  BlogArticleType,
+  BlogSourceQuality,
 } from '@prisma/client';
 
 export const blogJurisdictionSchema = z.nativeEnum(BlogJurisdiction);
@@ -16,6 +20,10 @@ export const blogMonitorStatusSchema = z.nativeEnum(BlogMonitorStatus);
 export const blogSourceTypeSchema = z.nativeEnum(BlogSourceType);
 export const blogSourceItemStatusSchema = z.nativeEnum(BlogSourceItemStatus);
 export const blogDiscoveryRunStatusSchema = z.nativeEnum(BlogDiscoveryRunStatus);
+export const blogSuggestionPrioritySchema = z.nativeEnum(BlogSuggestionPriority);
+export const blogSuggestionStatusSchema = z.nativeEnum(BlogSuggestionStatus);
+export const blogArticleTypeSchema = z.nativeEnum(BlogArticleType);
+export const blogSourceQualitySchema = z.nativeEnum(BlogSourceQuality);
 
 // Strict URL validator to block SSRF vectors
 const isSafeUrl = (urlStr: string) => {
@@ -149,3 +157,55 @@ export const adminListDiscoveryRunsSchema = z.object({
   limit: z.number().min(1).max(100).default(20),
 });
 
+export const adminScoreSourceItemSchema = z.object({
+  sourceItemId: z.string().min(1),
+  minScore: z.number().min(0).max(100).optional(),
+});
+
+export const adminScoreEligibleSourceItemsSchema = z.object({
+  minScore: z.number().min(0).max(100).optional(),
+  limit: z.number().min(1).max(100).optional(),
+  jurisdiction: blogJurisdictionSchema.optional(),
+  monitorId: z.string().optional(),
+});
+
+export const adminListSuggestionsSchema = z.object({
+  status: blogSuggestionStatusSchema.optional(),
+  priority: blogSuggestionPrioritySchema.optional(),
+  jurisdiction: blogJurisdictionSchema.optional(),
+  category: z.string().optional(),
+  articleType: blogArticleTypeSchema.optional(),
+  search: z.string().optional(),
+  page: z.number().min(1).default(1),
+  limit: z.number().min(1).max(100).default(20),
+});
+
+export const adminGetSuggestionSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminDismissSuggestionSchema = z.object({
+  id: z.string().min(1),
+  reason: z.string().min(5),
+});
+
+export const adminApproveSuggestionForDraftSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminMarkSuggestionNeedsMoreSourcesSchema = z.object({
+  id: z.string().min(1),
+  reason: z.string().optional(),
+});
+
+export const adminDeleteSuggestionSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminCreateDraftFromSuggestionSchema = z.object({
+  suggestionId: z.string().min(1),
+});
+
+export const adminGenerateAiDraftSchema = z.object({
+  blogPostId: z.string().min(1),
+});
