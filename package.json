@@ -37,6 +37,7 @@
     "seed:marketing:flags": "tsx src/scripts/seed-marketing-feature-flags.ts",
     "cron:cleanup-snapshots": "tsx src/scripts/cleanup-compliance-snapshots.ts",
     "backfill:compliance-snapshots": "tsx src/scripts/backfill-compliance-snapshots.ts",
+    "cron:blog-source-discovery": "tsx src/scripts/blog-source-discovery-cron.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:ci": "eslint . --max-warnings 0",
@@ -73,6 +74,7 @@
     "@trpc/server": "^11.9.0",
     "@upstash/redis": "^1.36.4",
     "bcryptjs": "^3.0.3",
+    "cheerio": "^1.2.0",
     "dayjs": "^1.11.19",
     "docx": "^9.6.1",
     "dotenv": "^17.2.4",
@@ -90,6 +92,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "resend": "^6.9.1",
+    "rss-parser": "^3.13.0",
     "stripe": "^20.4.1",
     "zod": "^4.3.6",
     "zod-to-json-schema": "^3.25.1"

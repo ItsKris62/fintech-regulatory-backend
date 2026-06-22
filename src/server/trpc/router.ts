@@ -33,6 +33,7 @@ import { customFrameworkRouter } from '../routers/custom-framework.router';
 import { enterpriseContractRouter } from '../routers/enterprise-contract.router';
 import { corpusGapReportRouter } from '../routers/corpusGapReport.router';
 import { blogRouter } from '../routers/blog.router';
+import { blogAutomationRouter } from '../routers/blog-automation.router';
 
 /**
  * Root Application Router
@@ -100,6 +101,7 @@ export const appRouter = router({
   enterpriseContract: enterpriseContractRouter,
   corpusGapReport: corpusGapReportRouter,
   blog: blogRouter,
+  blogAutomation: blogAutomationRouter,
 });
 
 /**

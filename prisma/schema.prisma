@@ -127,6 +127,10 @@ model User {
   blogPostsAuthored   BlogPost[] @relation("BlogPostAuthor")
   blogPostsReviewed   BlogPost[] @relation("BlogPostReviewer")
   blogPostsUpdated    BlogPost[] @relation("BlogPostUpdatedBy")
+  blogSourceMonitorsVerified BlogSourceMonitor[] @relation("BlogSourceMonitorVerifiedBy")
+  blogSourceMonitorsCreated  BlogSourceMonitor[] @relation("BlogSourceMonitorCreatedBy")
+  blogSourceMonitorsUpdated  BlogSourceMonitor[] @relation("BlogSourceMonitorUpdatedBy")
+  blogDiscoveryRunsTriggered BlogDiscoveryRun[]  @relation("BlogDiscoveryRunTriggeredBy")
 
   @@index([email])
   @@index([supabaseAuthId])
@@ -2926,4 +2930,205 @@ enum BlogSourceType {
   INTERNAL
   MEDIA
   INTERNATIONAL_STANDARD
+}
+
+enum BlogJurisdiction {
+  KE
+  MW
+  RW
+  NG
+  REGIONAL
+  GLOBAL
+}
+
+enum BlogAuthorityType {
+  CENTRAL_BANK
+  DATA_PROTECTION
+  AML_CFT
+  COMMUNICATIONS
+  SECURITIES
+  CONSUMER_PROTECTION
+  COMPETITION
+  GAZETTE
+  LEGAL_DATABASE
+  INTERNATIONAL_STANDARD
+  DEVELOPMENT_FINANCE
+  INDUSTRY_BODY
+  INTERNAL
+  OTHER
+}
+
+enum BlogMonitoringMethod {
+  RSS
+  HTML_LISTING
+  API
+  MANUAL
+}
+
+enum BlogMonitorStatus {
+  ACTIVE
+  INACTIVE
+  NEEDS_VERIFICATION
+  FAILING
+}
+
+enum BlogMonitorLastRunStatus {
+  SUCCESS
+  FAILED
+  NEVER_RUN
+}
+
+model BlogSourceMonitor {
+  id                  String                   @id @default(cuid())
+
+  name                String
+  description         String?                  @db.Text
+
+  jurisdiction        BlogJurisdiction
+  countryLabel        String?
+  authorityType       BlogAuthorityType
+  sourceType          BlogSourceType
+  monitoringMethod    BlogMonitoringMethod     @default(MANUAL)
+
+  baseUrl             String
+  feedUrl             String?
+
+  topics              String[]                 @default([])
+  keywords            String[]                 @default([])
+
+  status              BlogMonitorStatus        @default(NEEDS_VERIFICATION)
+  lastRunStatus       BlogMonitorLastRunStatus @default(NEVER_RUN)
+
+  isOfficial          Boolean                  @default(true)
+  isActive            Boolean                  @default(false)
+
+  lastCheckedAt       DateTime?
+  lastSuccessfulRunAt DateTime?
+  lastFailureAt       DateTime?
+  failureCount        Int                      @default(0)
+  lastFailureReason   String?                  @db.Text
+
+  // Discovery safety fields for future sprints.
+  maxItemsPerRun      Int                      @default(20)
+  fetchTimeoutMs      Int                      @default(15000)
+  respectRobots       Boolean                  @default(true)
+
+  verificationStatus  String                   @default("NEEDS_VERIFICATION")
+  verifiedAt          DateTime?
+  verifiedById        String?
+
+  notes               String?                  @db.Text
+
+  createdById         String?
+  updatedById         String?
+
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  deletedAt           DateTime?
+
+  verifiedBy          User?                    @relation("BlogSourceMonitorVerifiedBy", fields: [verifiedById], references: [id])
+  createdBy           User?                    @relation("BlogSourceMonitorCreatedBy", fields: [createdById], references: [id])
+  updatedBy           User?                    @relation("BlogSourceMonitorUpdatedBy", fields: [updatedById], references: [id])
+
+  @@index([jurisdiction])
+  @@index([authorityType])
+  @@index([sourceType])
+  @@index([monitoringMethod])
+  @@index([status])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@unique([jurisdiction, baseUrl])
+  
+  items               BlogSourceItem[]
+  discoveryRuns       BlogDiscoveryRun[]
+}
+
+enum BlogSourceItemStatus {
+  NEW
+  READY_FOR_SCORING
+  SCORED
+  DUPLICATE
+  DISMISSED
+  FETCH_FAILED
+  CONVERTED_TO_SUGGESTION
+}
+
+enum BlogDiscoveryRunStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL_SUCCESS
+  FAILED
+  SKIPPED_LOCKED
+}
+
+model BlogSourceItem {
+  id                String               @id @default(cuid())
+
+  monitorId         String
+
+  title             String
+  url               String
+  normalizedUrl     String
+  publisher         String?
+  summary           String?              @db.Text
+
+  jurisdiction      BlogJurisdiction
+  authorityType     BlogAuthorityType
+  sourceType        BlogSourceType
+
+  publicationDate   DateTime?
+  discoveredAt      DateTime             @default(now())
+
+  contentHash       String
+  rawContentHash    String?
+  status            BlogSourceItemStatus @default(NEW)
+
+  failureReason     String?              @db.Text
+  dismissedReason   String?              @db.Text
+
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  deletedAt         DateTime?
+
+  monitor           BlogSourceMonitor    @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+
+  @@index([monitorId])
+  @@index([jurisdiction])
+  @@index([authorityType])
+  @@index([sourceType])
+  @@index([status])
+  @@index([publicationDate])
+  @@index([discoveredAt])
+  @@index([deletedAt])
+  @@unique([monitorId, normalizedUrl])
+  @@unique([contentHash])
+}
+
+model BlogDiscoveryRun {
+  id                String                 @id @default(cuid())
+
+  monitorId          String?
+  status             BlogDiscoveryRunStatus @default(RUNNING)
+
+  startedAt          DateTime               @default(now())
+  completedAt        DateTime?
+
+  itemsFound         Int                    @default(0)
+  itemsCreated       Int                    @default(0)
+  duplicateCount     Int                    @default(0)
+  failureCount       Int                    @default(0)
+
+  errorMessage       String?                @db.Text
+  triggeredBy        String                 @default("ADMIN") // ADMIN, CRON, SYSTEM
+  triggeredByUserId  String?
+
+  monitor            BlogSourceMonitor?     @relation(fields: [monitorId], references: [id])
+  triggeredByUser    User?                  @relation("BlogDiscoveryRunTriggeredBy", fields: [triggeredByUserId], references: [id])
+
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  @@index([monitorId])
+  @@index([status])
+  @@index([startedAt])
 }
