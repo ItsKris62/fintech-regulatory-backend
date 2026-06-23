@@ -1,16 +1,16 @@
 import { PrismaClient, BlogSourceItemStatus, BlogSuggestionStatus } from '@prisma/client';
 import { scoreSourceItemForBlogSuggestion } from './relevance-scoring.service';
+import { blogNotificationService } from './blog-notification.service';
 
 const prisma = new PrismaClient();
 
-export async function createSuggestionFromSourceItem({
-  sourceItemId,
-  minScore = 45,
-}: {
+export async function createSuggestionFromSourceItem(params: {
   sourceItemId: string;
   minScore?: number;
   createdByUserId?: string;
 }) {
+  const { sourceItemId, minScore = 45, createdByUserId } = params;
+
   const sourceItem = await prisma.blogSourceItem.findUnique({
     where: { id: sourceItemId },
     include: { monitor: true },
@@ -95,6 +95,17 @@ export async function createSuggestionFromSourceItem({
 
     return sug;
   });
+
+  if (suggestion.priority === 'HIGH' || suggestion.priority === 'URGENT') {
+    const adminId = createdByUserId || sourceItem.monitor.createdById;
+    if (adminId) {
+      await blogNotificationService.notifyHighPrioritySuggestion(
+        adminId,
+        sourceItem.monitor.name,
+        suggestion.id
+      ).catch(console.error);
+    }
+  }
 
   return { createdSuggestion: true, scoringResult, suggestion };
 }

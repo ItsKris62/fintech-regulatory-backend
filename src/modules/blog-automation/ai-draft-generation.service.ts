@@ -1,6 +1,7 @@
 import { prisma } from '../../lib/prisma/client';
 import { complete } from '../../lib/ai/client';
 import { getBlogDraftUserPrompt, BLOG_DRAFT_SYSTEM_PROMPT } from './blog-draft-prompt';
+import { blogNotificationService } from './blog-notification.service';
 
 export async function generateAiDraftForBlogPost(blogPostId: string, adminUserId: string) {
   const post = await prisma.blogPost.findUnique({
@@ -114,6 +115,12 @@ export async function generateAiDraftForBlogPost(blogPostId: string, adminUserId
         updatedById: adminUserId,
       }
     });
+
+    // Notify that draft is ready for verification
+    await blogNotificationService.notifyDraftReadyForVerification(
+      adminUserId,
+      post.id
+    ).catch(console.error);
 
     return {
       post: updatedPost,

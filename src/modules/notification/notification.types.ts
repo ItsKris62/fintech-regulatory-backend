@@ -47,7 +47,9 @@ export type ExtendedNotificationType =
   | 'SUPPORT_TICKET_UPDATED'
   // -- Calendar events -------------------------------------------------------
   | 'EVENT_CREATED'
-  | 'EVENT_REMINDER';
+  | 'EVENT_REMINDER'
+  // -- Blog Automation -------------------------------------------------------
+  | 'BLOG_AUTOMATION';
 
 export type NotificationCategoryName =
   | 'SECURITY'

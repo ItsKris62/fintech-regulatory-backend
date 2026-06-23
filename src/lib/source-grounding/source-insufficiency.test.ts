@@ -53,7 +53,7 @@ describe('source insufficiency guards', () => {
   it('builds a compliance abstain answer without legal conclusions', () => {
     const answer = buildComplianceSourceInsufficiencyAnswer();
 
-    expect(answer).toContain('I could not verify this');
+    expect(answer).toContain('SheriaBot could not find a sufficiently verified source');
     expect(answer).toContain('I have not stated legal obligations');
     expectNoUnsafePhrases(answer);
   });

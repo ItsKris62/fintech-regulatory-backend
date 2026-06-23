@@ -136,6 +136,8 @@ model User {
   blogDraftGenerationRunsRequested BlogDraftGenerationRun[] @relation("BlogDraftGenerationRequestedBy")
   blogDraftGenerationRunsApplied   BlogDraftGenerationRun[] @relation("BlogDraftGenerationAppliedBy")
 
+  blogVerificationRunsRequested BlogVerificationRun[] @relation("BlogVerificationRunRequestedBy")
+
   @@index([email])
   @@index([supabaseAuthId])
   @@index([organizationId])
@@ -1073,6 +1075,7 @@ enum NotificationType {
   // Calendar events
   EVENT_CREATED
   EVENT_REMINDER
+  BLOG_AUTOMATION
 }
 
 enum NotificationCategory {
@@ -2892,6 +2895,7 @@ model BlogPost {
   sources             BlogPostSource[]
   automationSuggestion BlogArticleSuggestion?
   draftGenerationRuns BlogDraftGenerationRun[]
+  verificationRuns    BlogVerificationRun[]
 
   @@index([slug])
   @@index([status])
@@ -3140,6 +3144,119 @@ model BlogDiscoveryRun {
   @@index([startedAt])
 }
 
+enum BlogVerificationStatus {
+  PENDING
+  RUNNING
+  PASSED
+  NEEDS_REVIEW
+  BLOCKED
+  FAILED
+}
+
+enum BlogVerificationIssueSeverity {
+  INFO
+  WARNING
+  BLOCKING
+}
+
+enum BlogVerificationIssueType {
+  MISSING_SOURCE
+  MISSING_OFFICIAL_SOURCE
+  INVALID_SOURCE_URL
+  PLACEHOLDER_SOURCE_URL
+  BROKEN_SOURCE_URL
+  JURISDICTION_MISMATCH
+  SOURCE_TYPE_MISMATCH
+  RISKY_LEGAL_CLAIM
+  UNSUPPORTED_OBLIGATION_LANGUAGE
+  MISSING_DISCLAIMER
+  MISSING_AI_REVIEW_WARNING
+  POSSIBLE_COPYING_RISK
+  EMPTY_CONTENT
+  WEAK_SOURCE_COVERAGE
+  OUTDATED_SOURCE
+  UNKNOWN_PUBLICATION_DATE
+  GENERATION_UNCERTAINTY
+  OTHER
+}
+
+enum BlogVerificationRunType {
+  MANUAL
+  PRE_PUBLISH
+  SYSTEM
+}
+
+model BlogVerificationRun {
+  id                  String                    @id @default(cuid())
+
+  blogPostId           String
+  draftGenerationRunId String?
+
+  status              BlogVerificationStatus    @default(PENDING)
+  runType             BlogVerificationRunType   @default(MANUAL)
+
+  qualityScore         Int                       @default(0)
+  sourceScore          Int                       @default(0)
+  claimRiskScore       Int                       @default(0)
+  jurisdictionScore    Int                       @default(0)
+  readinessScore       Int                       @default(0)
+
+  blockingIssueCount   Int                       @default(0)
+  warningIssueCount    Int                       @default(0)
+  infoIssueCount       Int                       @default(0)
+
+  summary              String?                   @db.Text
+  recommendedAction    String?                   @db.Text
+
+  startedAt            DateTime                  @default(now())
+  completedAt          DateTime?
+  errorMessage         String?                   @db.Text
+
+  requestedById        String?
+
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+
+  blogPost             BlogPost                  @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
+  requestedBy          User?                     @relation("BlogVerificationRunRequestedBy", fields: [requestedById], references: [id])
+
+  issues               BlogVerificationIssue[]
+
+  @@index([blogPostId])
+  @@index([draftGenerationRunId])
+  @@index([status])
+  @@index([runType])
+  @@index([createdAt])
+}
+
+model BlogVerificationIssue {
+  id                  String                         @id @default(cuid())
+
+  runId               String
+  severity            BlogVerificationIssueSeverity
+  issueType            BlogVerificationIssueType
+
+  title               String
+  description         String                         @db.Text
+  recommendation      String?                        @db.Text
+
+  excerpt             String?                        @db.Text
+  paragraphIndex      Int?
+  sentenceIndex       Int?
+
+  sourceId            String?
+  sourceUrl           String?
+  claimText           String?                        @db.Text
+
+  createdAt           DateTime                       @default(now())
+
+  run                 BlogVerificationRun            @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([severity])
+  @@index([issueType])
+}
+
 enum BlogSuggestionPriority {
   LOW
   MEDIUM
@@ -3302,3 +3419,34 @@ model BlogDraftGenerationRun {
   @@index([status])
   @@index([createdAt])
 }
+
+model BlogEditorialDigest {
+  id                       String   @id @default(cuid())
+
+  periodStart              DateTime
+  periodEnd                DateTime
+
+  status                   String   @default("GENERATED") // GENERATED, SENT, FAILED
+  generatedAt              DateTime @default(now())
+  sentAt                   DateTime?
+
+  sourceMonitorsChecked    Int      @default(0)
+  sourceItemsDiscovered    Int      @default(0)
+  highPrioritySuggestions  Int      @default(0)
+  urgentSuggestions        Int      @default(0)
+  approvedAwaitingDraft    Int      @default(0)
+  draftsAwaitingVerification Int    @default(0)
+  blockedDrafts            Int      @default(0)
+  failingMonitors          Int      @default(0)
+
+  summaryJson              Json?
+  errorMessage             String?  @db.Text
+
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([periodStart])
+  @@index([periodEnd])
+  @@index([status])
+}
+

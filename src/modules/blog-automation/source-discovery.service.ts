@@ -4,6 +4,7 @@ import { acquireDiscoveryLock, releaseDiscoveryLock } from './discovery-lock';
 import { generateContentHash } from './content-hash';
 import { parseRssFeed } from './rss-parser';
 import { parseHtmlListing } from './html-listing-parser';
+import { blogNotificationService } from './blog-notification.service';
 
 const prisma = new PrismaClient();
 
@@ -168,9 +169,18 @@ export async function runSourceDiscoveryForMonitor({
     } else {
       updateData.lastFailureAt = new Date();
       updateData.failureCount = monitor.failureCount + 1;
-      updateData.lastFailureReason = errorMessage;
       if (updateData.failureCount >= 5) {
          updateData.status = 'FAILING';
+         // Notify creator/admin if it fails 5 times or on failure?
+      }
+      
+      // Notify monitor failure
+      if (monitor.createdById) {
+         await blogNotificationService.notifyMonitorFailure(
+           monitor.createdById, 
+           monitor.name, 
+           errorMessage || 'Unknown error'
+         ).catch(console.error);
       }
     }
 

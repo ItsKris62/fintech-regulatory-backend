@@ -204,7 +204,20 @@ export const blogRouter = router({
     .query(async ({ input, ctx }) => {
       const post = await ctx.prisma.blogPost.findUnique({
         where: { id: input.id },
-        include: { sources: true },
+        include: { 
+          sources: true,
+          automationSuggestion: {
+            include: {
+              sources: {
+                include: {
+                  sourceItem: {
+                    include: { monitor: true }
+                  }
+                }
+              }
+            }
+          }
+        },
       });
       if (!post || post.deletedAt) throw new TRPCError({ code: 'NOT_FOUND' });
       return post;
@@ -281,7 +294,11 @@ export const blogRouter = router({
       const { id, status } = input;
       const post = await ctx.prisma.blogPost.findUnique({
         where: { id },
-        include: { sources: true },
+        include: { 
+          sources: true,
+          verificationRuns: { orderBy: { createdAt: 'desc' }, take: 1 },
+          draftGenerationRuns: { orderBy: { createdAt: 'desc' }, take: 1 }
+        },
       });
 
       if (!post || post.deletedAt) throw new TRPCError({ code: 'NOT_FOUND' });
@@ -304,6 +321,22 @@ export const blogRouter = router({
         } else if (post.category === 'International Standards') {
           if (!post.sources.some(s => ['OFFICIAL', 'INTERNATIONAL_STANDARD'].includes(s.sourceType))) {
             throw new TRPCError({ code: 'BAD_REQUEST', message: `International Standards requires an OFFICIAL or INTERNATIONAL_STANDARD source` });
+          }
+        }
+
+        const latestVerification = post.verificationRuns[0];
+        const latestAiDraft = post.draftGenerationRuns[0];
+
+        if (latestVerification?.status === 'BLOCKED') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: Source and Claim Verification is BLOCKED.' });
+        }
+
+        if (latestAiDraft) {
+          const draftTime = latestAiDraft.createdAt;
+          const verificationTime = latestVerification ? (latestVerification.completedAt || latestVerification.createdAt) : null;
+          
+          if (!verificationTime || draftTime > verificationTime) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: An AI draft was generated but no verification has been run since then.' });
           }
         }
 

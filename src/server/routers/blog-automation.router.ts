@@ -23,11 +23,20 @@ import {
   adminDeleteSuggestionSchema,
   adminCreateDraftFromSuggestionSchema,
   adminGenerateAiDraftSchema,
+  adminRunBlogVerificationSchema,
+  adminListBlogVerificationRunsSchema,
+  adminGetBlogVerificationRunSchema,
+  adminGetLatestBlogVerificationSchema,
+  adminListEditorialDigestsSchema,
+  adminGetEditorialDigestSchema,
+  adminGenerateEditorialDigestSchema,
 } from '../schemas/blog-automation.schema';
 import { runSourceDiscoveryForMonitor } from '../../modules/blog-automation/source-discovery.service';
 import { createSuggestionFromSourceItem } from '../../modules/blog-automation/suggestion-builder';
 import { buildDraftSkeletonFromSuggestion } from '../../modules/blog-automation/draft-skeleton.service';
 import { generateAiDraftForBlogPost } from '../../modules/blog-automation/ai-draft-generation.service';
+import { runBlogPostVerification } from '../../modules/blog-automation/blog-verification.service';
+import { blogEditorialDigestService } from '../../modules/blog-automation/blog-editorial-digest.service';
 
 export const blogAutomationRouter = router({
   adminListMonitors: adminProcedure
@@ -676,4 +685,137 @@ export const blogAutomationRouter = router({
     .mutation(async ({ input, ctx }) => {
       return generateAiDraftForBlogPost(input.blogPostId, ctx.user!.id);
     }),
+
+  adminRunBlogVerification: adminProcedure
+    .input(adminRunBlogVerificationSchema)
+    .mutation(async ({ input, ctx }) => {
+      return runBlogPostVerification({
+        blogPostId: input.blogPostId,
+        requestedByUserId: ctx.user!.id,
+        runType: input.runType,
+        useAiReview: input.useAiReview
+      });
+    }),
+
+  adminListBlogVerificationRuns: adminProcedure
+    .input(adminListBlogVerificationRunsSchema)
+    .query(async ({ input, ctx }) => {
+      const { blogPostId, status, page, limit } = input;
+      const skip = (page - 1) * limit;
+
+      const where: any = {};
+      if (blogPostId) where.blogPostId = blogPostId;
+      if (status) where.status = status;
+
+      const [runs, total] = await Promise.all([
+        ctx.prisma.blogVerificationRun.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            requestedBy: { select: { id: true, fullName: true } }
+          }
+        }),
+        ctx.prisma.blogVerificationRun.count({ where })
+      ]);
+
+      return {
+        runs,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      };
+    }),
+
+  adminGetBlogVerificationRun: adminProcedure
+    .input(adminGetBlogVerificationRunSchema)
+    .query(async ({ input, ctx }) => {
+      const run = await ctx.prisma.blogVerificationRun.findUnique({
+        where: { id: input.id },
+        include: {
+          issues: true,
+          requestedBy: { select: { id: true, fullName: true } },
+          blogPost: { select: { id: true, title: true } }
+        }
+      });
+      if (!run) throw new TRPCError({ code: 'NOT_FOUND', message: 'Verification run not found' });
+      return run;
+    }),
+
+  adminGetLatestBlogVerification: adminProcedure
+    .input(adminGetLatestBlogVerificationSchema)
+    .query(async ({ input, ctx }) => {
+      const run = await ctx.prisma.blogVerificationRun.findFirst({
+        where: { blogPostId: input.blogPostId },
+        orderBy: { createdAt: 'desc' },
+        include: { issues: true }
+      });
+      
+      if (!run) {
+        return { run: null, isStale: false, isAiStale: false };
+      }
+
+      const post = await ctx.prisma.blogPost.findUnique({
+        where: { id: input.blogPostId },
+        include: {
+          sources: true,
+          draftGenerationRuns: {
+            orderBy: { createdAt: 'desc' },
+            take: 1
+          }
+        }
+      });
+
+      if (!post) {
+        return { run, isStale: false, isAiStale: false };
+      }
+
+      let isStale = false;
+      let isAiStale = false;
+      const verificationTime = run.completedAt || run.createdAt;
+
+      if (post.updatedAt > verificationTime) {
+        isStale = true;
+      }
+
+      for (const source of post.sources) {
+        if (source.updatedAt > verificationTime) {
+          isStale = true;
+          break;
+        }
+      }
+
+      const latestAiDraft = post.draftGenerationRuns[0];
+      if (latestAiDraft) {
+        const draftTime = latestAiDraft.createdAt;
+        if (draftTime > verificationTime) {
+          isStale = true;
+          isAiStale = true;
+        }
+      }
+
+      return { run, isStale, isAiStale };
+    }),
+
+  adminListEditorialDigests: adminProcedure
+    .input(adminListEditorialDigestsSchema)
+    .query(async ({ input }) => {
+      return blogEditorialDigestService.getDigests(input.page, input.limit);
+    }),
+
+  adminGetEditorialDigest: adminProcedure
+    .input(adminGetEditorialDigestSchema)
+    .query(async ({ input }) => {
+      return blogEditorialDigestService.getDigestById(input.id);
+    }),
+
+  adminGenerateEditorialDigest: adminProcedure
+    .input(adminGenerateEditorialDigestSchema)
+    .mutation(async ({ input }) => {
+      return blogEditorialDigestService.generateBlogEditorialDigest({
+        force: input.force,
+        periodStart: input.periodStart,
+        periodEnd: input.periodEnd,
+      });
+    }),
 });
+

@@ -11,7 +11,13 @@ import {
   BlogSuggestionStatus,
   BlogArticleType,
   BlogSourceQuality,
+  BlogVerificationStatus,
+  BlogVerificationRunType,
 } from '@prisma/client';
+
+export const blogVerificationStatusSchema = z.nativeEnum(BlogVerificationStatus);
+export const blogVerificationRunTypeSchema = z.nativeEnum(BlogVerificationRunType);
+
 
 export const blogJurisdictionSchema = z.nativeEnum(BlogJurisdiction);
 export const blogAuthorityTypeSchema = z.nativeEnum(BlogAuthorityType);
@@ -208,4 +214,40 @@ export const adminCreateDraftFromSuggestionSchema = z.object({
 
 export const adminGenerateAiDraftSchema = z.object({
   blogPostId: z.string().min(1),
+});
+
+export const adminRunBlogVerificationSchema = z.object({
+  blogPostId: z.string().min(1),
+  runType: blogVerificationRunTypeSchema.optional().default('MANUAL'),
+  useAiReview: z.boolean().optional().default(false),
+});
+
+export const adminListBlogVerificationRunsSchema = z.object({
+  blogPostId: z.string().optional(),
+  status: blogVerificationStatusSchema.optional(),
+  page: z.number().min(1).default(1),
+  limit: z.number().min(1).max(100).default(20),
+});
+
+export const adminGetBlogVerificationRunSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminGetLatestBlogVerificationSchema = z.object({
+  blogPostId: z.string().min(1),
+});
+
+export const adminListEditorialDigestsSchema = z.object({
+  page: z.number().min(1).default(1),
+  limit: z.number().min(1).max(100).default(20),
+});
+
+export const adminGetEditorialDigestSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminGenerateEditorialDigestSchema = z.object({
+  force: z.boolean().optional().default(false),
+  periodStart: z.date().optional(),
+  periodEnd: z.date().optional(),
 });
