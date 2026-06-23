@@ -1,4 +1,5 @@
-import { PrismaClient, BlogMonitorLastRunStatus, BlogDiscoveryRunStatus } from '@prisma/client';
+import { BlogMonitorLastRunStatus, BlogDiscoveryRunStatus } from '@prisma/client';
+import type { prisma as appPrisma } from '@/lib/prisma/client';
 import { isUrlSafe, normalizeUrl } from './url-safety';
 import { acquireDiscoveryLock, releaseDiscoveryLock } from './discovery-lock';
 import { generateContentHash } from './content-hash';
@@ -6,13 +7,15 @@ import { parseRssFeed } from './rss-parser';
 import { parseHtmlListing } from './html-listing-parser';
 import { blogNotificationService } from './blog-notification.service';
 
-const prisma = new PrismaClient();
+type BlogAutomationPrisma = typeof appPrisma;
 
 export async function runSourceDiscoveryForMonitor({
+  prisma,
   monitorId,
   triggeredBy,
   triggeredByUserId,
 }: {
+  prisma: BlogAutomationPrisma;
   monitorId: string;
   triggeredBy: 'ADMIN' | 'CRON' | 'SYSTEM';
   triggeredByUserId?: string;

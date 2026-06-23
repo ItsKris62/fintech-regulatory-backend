@@ -1,7 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma/client';
 import { runSourceDiscoveryForMonitor } from '../modules/blog-automation/source-discovery.service';
 
-const prisma = new PrismaClient();
 
 async function main() {
   console.log('[Blog Discovery Cron] Starting...');
@@ -28,6 +27,7 @@ async function main() {
         try {
           console.log(`[Blog Discovery Cron] Running monitor ${monitor.name} (${monitor.id})`);
           const result = await runSourceDiscoveryForMonitor({
+            prisma,
             monitorId: monitor.id,
             triggeredBy: 'CRON',
           });

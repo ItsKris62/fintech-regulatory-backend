@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma/client';
 import bcrypt from 'bcryptjs';
 
 /**
@@ -8,8 +8,6 @@ import bcrypt from 'bcryptjs';
  * Safe to run multiple times  -  uses upserts.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const prisma = new (PrismaClient as any)();
 
 async function seed(): Promise<void> {
   console.log('🌱 Starting production seed...\n');

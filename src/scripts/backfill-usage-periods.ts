@@ -16,10 +16,10 @@
  */
 
 import 'dotenv/config';
-import { PrismaClient, SubscriptionPlan } from '@prisma/client';
+import { SubscriptionPlan } from '@prisma/client';
+import { prisma } from '../lib/prisma/client';
 import { PLAN_ENTITLEMENTS } from '../config/entitlements.config';
 
-const prisma = new PrismaClient();
 
 // EAT offset: UTC+3
 const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;

@@ -32,7 +32,7 @@ vi.mock('@/lib/prisma/client', () => ({
     blogSourceItem: {
       count: vi.fn().mockResolvedValue(20),
     },
-    blogSuggestion: {
+    blogArticleSuggestion: {
       findMany: vi.fn().mockResolvedValue([{ priority: 'HIGH' }, { priority: 'URGENT' }]),
       count: vi.fn().mockResolvedValue(3),
     },

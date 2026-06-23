@@ -1,15 +1,17 @@
-import { PrismaClient, BlogSourceItemStatus, BlogSuggestionStatus } from '@prisma/client';
+import { BlogSourceItemStatus, BlogSuggestionStatus } from '@prisma/client';
+import type { prisma as appPrisma } from '@/lib/prisma/client';
 import { scoreSourceItemForBlogSuggestion } from './relevance-scoring.service';
 import { blogNotificationService } from './blog-notification.service';
 
-const prisma = new PrismaClient();
+type BlogAutomationPrisma = typeof appPrisma;
 
 export async function createSuggestionFromSourceItem(params: {
+  prisma: BlogAutomationPrisma;
   sourceItemId: string;
   minScore?: number;
   createdByUserId?: string;
 }) {
-  const { sourceItemId, minScore = 45, createdByUserId } = params;
+  const { prisma, sourceItemId, minScore = 45, createdByUserId } = params;
 
   const sourceItem = await prisma.blogSourceItem.findUnique({
     where: { id: sourceItemId },

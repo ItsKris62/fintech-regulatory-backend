@@ -346,6 +346,7 @@ export const blogAutomationRouter = router({
     .mutation(async ({ input, ctx }) => {
       // Logic relies on runSourceDiscoveryForMonitor which will do validation
       return runSourceDiscoveryForMonitor({
+        prisma: ctx.prisma,
         monitorId: input.monitorId,
         triggeredBy: 'ADMIN',
         triggeredByUserId: ctx.user!.id,
@@ -386,6 +387,7 @@ export const blogAutomationRouter = router({
     .input(adminScoreSourceItemSchema)
     .mutation(async ({ input, ctx }) => {
       const result = await createSuggestionFromSourceItem({
+        prisma: ctx.prisma,
         sourceItemId: input.sourceItemId,
         minScore: input.minScore ?? 45,
         createdByUserId: ctx.user!.id,
@@ -424,6 +426,7 @@ export const blogAutomationRouter = router({
         summary.processed++;
         try {
           const res = await createSuggestionFromSourceItem({
+            prisma: ctx.prisma,
             sourceItemId: item.id,
             minScore,
             createdByUserId: ctx.user!.id,
@@ -690,6 +693,7 @@ export const blogAutomationRouter = router({
     .input(adminRunBlogVerificationSchema)
     .mutation(async ({ input, ctx }) => {
       return runBlogPostVerification({
+        prisma: ctx.prisma,
         blogPostId: input.blogPostId,
         requestedByUserId: ctx.user!.id,
         runType: input.runType,

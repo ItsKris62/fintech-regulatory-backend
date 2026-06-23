@@ -7,9 +7,9 @@
  * Safe to run multiple times  -  uses upsert.
  */
 
-import { PrismaClient } from '@prisma/client';
+import 'dotenv/config';
+import { prisma } from '../lib/prisma/client';
 
-const prisma = new PrismaClient();
 
 const REGULATOR_DOMAINS = [
   { domain: 'centralbank.go.ke', orgName: 'Central Bank of Kenya', orgType: 'regulator' },

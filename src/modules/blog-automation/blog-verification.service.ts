@@ -1,15 +1,18 @@
-import { PrismaClient, BlogVerificationStatus, BlogVerificationIssueType, BlogVerificationIssueSeverity, BlogVerificationRunType } from '@prisma/client';
+import { BlogVerificationStatus, BlogVerificationIssueType, BlogVerificationIssueSeverity, BlogVerificationRunType } from '@prisma/client';
+import type { prisma as appPrisma } from '@/lib/prisma/client';
 import { extractRiskyClaims } from './claim-risk.service';
 import { blogNotificationService } from './blog-notification.service';
 
-const prisma = new PrismaClient();
+type BlogAutomationPrisma = typeof appPrisma;
 
 export async function runBlogPostVerification({
+  prisma,
   blogPostId,
   requestedByUserId,
   runType = 'MANUAL',
   useAiReview = false,
 }: {
+  prisma: BlogAutomationPrisma;
   blogPostId: string;
   requestedByUserId?: string;
   runType?: BlogVerificationRunType;
