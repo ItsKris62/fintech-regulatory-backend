@@ -232,6 +232,36 @@ export const adminRouter = router({
   }),
 
   /**
+   * Get pilot-monitoring operational overview metrics.
+   *
+   * @admin
+   */
+  getOperationalOverview: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const overview = await adminModule.getOperationalOverview();
+
+      logger.info({
+        type: 'admin_operational_overview_retrieved',
+        adminId: ctx.user!.id,
+      });
+
+      return overview;
+    } catch (error: unknown) {
+      logger.error({
+        type: 'admin_operational_overview_error',
+        adminId: ctx.user!.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: sanitizeErrorMessage(error, 'Could not load operational overview.'),
+        cause: error,
+      });
+    }
+  }),
+
+  /**
    * List all users with pagination
    *
    * @admin

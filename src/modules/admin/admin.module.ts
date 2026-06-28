@@ -111,6 +111,9 @@ import {
   type OrgPaymentHistory,
   type SessionSummary,
   type AuditLogExportFilters,
+  type AdminOperationalOverview,
+  type OperationalActivityItem,
+  type OperationalStatus,
 } from './admin.types';
 
 const { CACHE_TTL } = ADMIN_CONSTANTS;
@@ -123,6 +126,35 @@ const ORG_TIER_ALIASES: Record<SubscriptionPlan, string[]> = {
   BUSINESS: ['BUSINESS', 'business', 'professional', 'growth'],
   ENTERPRISE: ['ENTERPRISE', 'enterprise', 'custom'],
 };
+
+const FAILED_QUERY_STATUSES = ['failed', 'error', 'errored', 'FAILED', 'ERROR', 'ERRORED'];
+const ROLE_CHANGE_ACTIONS = [
+  'admin_update_user_role',
+  'admin_update_user',
+  'BULK_USER_TIER_CHANGE',
+  'admin_update_subscription',
+  'admin_update_organization_plan',
+];
+
+function normalizeOperationalStatus(status: unknown): OperationalStatus {
+  if (status === 'healthy' || status === 'degraded' || status === 'down') return status;
+  return 'unknown';
+}
+
+function operationalSeverityForAction(action: string): OperationalActivityItem['severity'] {
+  const lowered = action.toLowerCase();
+  if (lowered.includes('delete') || lowered.includes('suspend') || lowered.includes('failed')) return 'critical';
+  if (lowered.includes('reject') || lowered.includes('reset') || lowered.includes('export')) return 'warning';
+  return 'info';
+}
+
+function toActivityTitle(action: string): string {
+  return action
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
 function toKES(amount: number | bigint | null | undefined): number {
   return Number(amount ?? 0) / CURRENCY_MINOR_UNIT_SCALE;
@@ -984,6 +1016,180 @@ class AdminModule {
     }
 
     return health;
+  }
+
+  async getOperationalOverview(): Promise<AdminOperationalOverview> {
+    const now = new Date();
+    const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const last48Hours = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const last7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const openTicketStatuses = ['OPEN', 'IN_PROGRESS', 'AWAITING_USER'] as const;
+
+    const healthPromise = this.getSystemHealth().catch((error: unknown) => {
+      logger.warn({
+        type: 'admin_operational_overview_health_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+
+    const [
+      totalUsers,
+      activeToday,
+      activeLast7Days,
+      newLast7Days,
+      totalQueries,
+      queriesLast24Hours,
+      queriesLast7Days,
+      failedQueryRows,
+      failedRunRows,
+      feedbackGroups,
+      corpusPending,
+      corpusOpen,
+      corpusResolvedLast7Days,
+      supportOpen,
+      supportUrgent,
+      supportOverdueOrStale,
+      failedPaymentsLast30Days,
+      revenueLast30Days,
+      activeSubscriptions,
+      trialUsers,
+      failedLoginsLast24Hours,
+      suspiciousLoginGroups,
+      recentRoleChanges,
+      recentLogs,
+      health,
+    ] = await Promise.all([
+      prisma.user.count({ where: { deletedAt: null } }),
+      prisma.user.count({ where: { deletedAt: null, lastLoginAt: { gte: last24Hours } } }),
+      prisma.user.count({ where: { deletedAt: null, lastLoginAt: { gte: last7Days } } }),
+      prisma.user.count({ where: { deletedAt: null, createdAt: { gte: last7Days } } }),
+      prisma.complianceQuery.count(),
+      prisma.complianceQuery.count({ where: { createdAt: { gte: last24Hours } } }),
+      prisma.complianceQuery.count({ where: { createdAt: { gte: last7Days } } }),
+      prisma.complianceQuery.findMany({
+        where: { createdAt: { gte: last7Days }, status: { in: FAILED_QUERY_STATUSES } },
+        select: { id: true },
+      }),
+      prisma.complianceQueryRun.findMany({
+        where: {
+          createdAt: { gte: last7Days },
+          OR: [
+            { status: { in: FAILED_QUERY_STATUSES } },
+            { errorMessage: { not: null } },
+            { graderFailed: true },
+          ],
+        },
+        select: { complianceQueryId: true },
+        distinct: ['complianceQueryId'],
+      }),
+      prisma.queryFeedback.groupBy({
+        by: ['rating'],
+        where: { createdAt: { gte: last30Days } },
+        _count: { _all: true },
+      }),
+      prisma.corpusGapReport.count({ where: { status: 'PENDING' } }),
+      prisma.corpusGapReport.count({ where: { status: { in: ['PENDING', 'UNDER_REVIEW'] } } }),
+      prisma.corpusGapReport.count({ where: { resolvedAt: { gte: last7Days } } }),
+      prisma.supportTicket.count({ where: { status: { in: [...openTicketStatuses] } } }),
+      prisma.supportTicket.count({ where: { status: { in: [...openTicketStatuses] }, priority: 'URGENT' } }),
+      prisma.supportTicket.count({ where: { status: { in: [...openTicketStatuses] }, updatedAt: { lt: last48Hours } } }),
+      prisma.payment.count({ where: { status: 'FAILED', createdAt: { gte: last30Days } } }),
+      prisma.payment.aggregate({
+        where: { status: 'COMPLETED', paidAt: { gte: last30Days } },
+        _sum: { amount: true },
+      }),
+      prisma.organization.count({ where: { subscriptionStatus: 'ACTIVE' } }),
+      prisma.organization.count({ where: { subscriptionStatus: 'TRIALING' } }),
+      prisma.loginHistory.count({ where: { success: false, createdAt: { gte: last24Hours } } }),
+      prisma.loginHistory.groupBy({
+        by: ['ipAddress'],
+        where: { success: false, createdAt: { gte: last24Hours }, ipAddress: { not: null } },
+        _count: { _all: true },
+      }),
+      prisma.auditLog.count({ where: { action: { in: ROLE_CHANGE_ACTIONS }, createdAt: { gte: last7Days } } }),
+      prisma.auditLog.findMany({
+        take: 8,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          action: true,
+          entityType: true,
+          entityId: true,
+          createdAt: true,
+        },
+      }),
+      healthPromise,
+    ]);
+
+    const failedQueryIds = new Set<string>([
+      ...failedQueryRows.map((row) => row.id),
+      ...failedRunRows.map((row) => row.complianceQueryId),
+    ]);
+    const failedLast7Days = failedQueryIds.size;
+    const upVotesLast30Days = feedbackGroups.find((item) => item.rating === 'up')?._count._all ?? 0;
+    const downVotesLast30Days = feedbackGroups.find((item) => item.rating === 'down')?._count._all ?? 0;
+    const totalVotesLast30Days = upVotesLast30Days + downVotesLast30Days;
+    const suspiciousLoginEvents = suspiciousLoginGroups.filter((item) => item._count._all >= 3).length;
+
+    return {
+      users: {
+        total: totalUsers,
+        activeToday,
+        activeLast7Days,
+        newLast7Days,
+      },
+      queries: {
+        total: totalQueries,
+        last24Hours: queriesLast24Hours,
+        last7Days: queriesLast7Days,
+        failedLast7Days,
+        failureRateLast7Days: queriesLast7Days > 0 ? Math.round((failedLast7Days / queriesLast7Days) * 1000) / 10 : 0,
+      },
+      feedback: {
+        totalVotesLast30Days,
+        upVotesLast30Days,
+        downVotesLast30Days,
+        satisfactionRate: totalVotesLast30Days > 0 ? Math.round((upVotesLast30Days / totalVotesLast30Days) * 1000) / 10 : 0,
+      },
+      corpusGaps: {
+        pending: corpusPending,
+        open: corpusOpen,
+        resolvedLast7Days: corpusResolvedLast7Days,
+      },
+      support: {
+        open: supportOpen,
+        urgent: supportUrgent,
+        overdueOrStale: supportOverdueOrStale,
+      },
+      billing: {
+        failedPaymentsLast30Days,
+        recentRevenueLast30Days: roundCurrency(toKES(revenueLast30Days._sum.amount)),
+        activeSubscriptions,
+        trialUsers,
+      },
+      security: {
+        failedLoginsLast24Hours,
+        suspiciousLoginEvents,
+        recentRoleChanges,
+      },
+      system: {
+        overallStatus: normalizeOperationalStatus(health?.status),
+        database: normalizeOperationalStatus(health?.services.database.status),
+        redis: normalizeOperationalStatus(health?.services.redis.status),
+        storage: normalizeOperationalStatus(health?.services.storage.status),
+        pinecone: normalizeOperationalStatus(health?.services.pinecone.status),
+      },
+      recentActivity: recentLogs.map((log) => ({
+        id: log.id,
+        type: log.entityType ?? 'System',
+        title: toActivityTitle(log.action),
+        description: log.entityId ? `${log.entityType ?? 'Entity'} ${log.entityId.slice(0, 8)}` : undefined,
+        severity: operationalSeverityForAction(log.action),
+        createdAt: log.createdAt.toISOString(),
+      })),
+    };
   }
 
   async getDatabaseStats(): Promise<DatabaseStats> {

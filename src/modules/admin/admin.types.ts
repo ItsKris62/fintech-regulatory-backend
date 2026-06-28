@@ -467,6 +467,73 @@ export interface SubscriptionBreakdown {
 }
 
 // ============================================================================
+// Operational Overview Types
+// ============================================================================
+
+export type OperationalStatus = 'healthy' | 'degraded' | 'down' | 'unknown';
+export type OperationalSeverity = 'info' | 'warning' | 'critical';
+
+export interface OperationalActivityItem {
+  id: string;
+  type: string;
+  title: string;
+  description?: string;
+  severity?: OperationalSeverity;
+  createdAt: string;
+}
+
+export interface AdminOperationalOverview {
+  users: {
+    total: number;
+    activeToday: number;
+    activeLast7Days: number;
+    newLast7Days: number;
+  };
+  queries: {
+    total: number;
+    last24Hours: number;
+    last7Days: number;
+    failedLast7Days: number;
+    failureRateLast7Days: number;
+  };
+  feedback: {
+    totalVotesLast30Days: number;
+    upVotesLast30Days: number;
+    downVotesLast30Days: number;
+    satisfactionRate: number;
+  };
+  corpusGaps: {
+    pending: number;
+    open: number;
+    resolvedLast7Days: number;
+  };
+  support: {
+    open: number;
+    urgent: number;
+    overdueOrStale: number;
+  };
+  billing: {
+    failedPaymentsLast30Days: number;
+    recentRevenueLast30Days: number;
+    activeSubscriptions: number;
+    trialUsers: number;
+  };
+  security: {
+    failedLoginsLast24Hours: number;
+    suspiciousLoginEvents: number;
+    recentRoleChanges: number;
+  };
+  system: {
+    overallStatus: OperationalStatus;
+    database: OperationalStatus;
+    redis: OperationalStatus;
+    storage: OperationalStatus;
+    pinecone: OperationalStatus;
+  };
+  recentActivity: OperationalActivityItem[];
+}
+
+// ============================================================================
 // Payment History Types
 // ============================================================================
 

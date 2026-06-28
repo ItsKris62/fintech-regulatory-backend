@@ -39,6 +39,8 @@ export type {
   SelfServeBillingPlan,
   Subscription,
   SubscriptionOverview,
+  AdminOperationalOverview,
+  OperationalStatus,
 } from './admin.types';
 
 export {
