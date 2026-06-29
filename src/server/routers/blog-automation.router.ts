@@ -41,7 +41,7 @@ import { blogEditorialDigestService } from '../../modules/blog-automation/blog-e
 export const blogAutomationRouter = router({
   adminListMonitors: adminProcedure
     .input(adminListMonitorsSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const {
         jurisdiction,
         authorityType,
@@ -96,7 +96,7 @@ export const blogAutomationRouter = router({
 
   adminGetMonitor: adminProcedure
     .input(adminGetMonitorSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const monitor = await ctx.prisma.blogSourceMonitor.findUnique({
         where: { id: input.id },
         include: {
@@ -115,7 +115,7 @@ export const blogAutomationRouter = router({
 
   adminCreateMonitor: adminProcedure
     .input(adminCreateMonitorSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       // Check baseUrl uniqueness per jurisdiction
       const existing = await ctx.prisma.blogSourceMonitor.findUnique({
         where: {
@@ -147,7 +147,7 @@ export const blogAutomationRouter = router({
 
   adminUpdateMonitor: adminProcedure
     .input(adminUpdateMonitorSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       const { id, ...data } = input;
 
       const monitor = await ctx.prisma.blogSourceMonitor.findUnique({
@@ -187,7 +187,7 @@ export const blogAutomationRouter = router({
 
   adminSetMonitorStatus: adminProcedure
     .input(adminSetMonitorStatusSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       const { id, status, isActive } = input;
 
       const monitor = await ctx.prisma.blogSourceMonitor.findUnique({
@@ -230,7 +230,7 @@ export const blogAutomationRouter = router({
 
   adminVerifyMonitor: adminProcedure
     .input(adminVerifyMonitorSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       const { id, notes } = input;
 
       const monitor = await ctx.prisma.blogSourceMonitor.findUnique({
@@ -262,7 +262,7 @@ export const blogAutomationRouter = router({
 
   adminDeleteMonitor: adminProcedure
     .input(adminDeleteMonitorSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       return ctx.prisma.blogSourceMonitor.update({
         where: { id: input.id },
         data: {
@@ -275,7 +275,7 @@ export const blogAutomationRouter = router({
 
   adminListSourceItems: adminProcedure
     .input(adminListSourceItemsSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const { monitorId, jurisdiction, authorityType, sourceType, status, search, page, limit } = input;
       const skip = (page - 1) * limit;
 
@@ -314,7 +314,7 @@ export const blogAutomationRouter = router({
 
   adminGetSourceItem: adminProcedure
     .input(adminGetSourceItemSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const item = await ctx.prisma.blogSourceItem.findUnique({
         where: { id: input.id },
         include: {
@@ -331,7 +331,7 @@ export const blogAutomationRouter = router({
 
   adminDismissSourceItem: adminProcedure
     .input(adminDismissSourceItemSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       return ctx.prisma.blogSourceItem.update({
         where: { id: input.id },
         data: {
@@ -343,7 +343,7 @@ export const blogAutomationRouter = router({
 
   adminRunMonitorNow: adminProcedure
     .input(adminRunMonitorNowSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       // Logic relies on runSourceDiscoveryForMonitor which will do validation
       return runSourceDiscoveryForMonitor({
         prisma: ctx.prisma,
@@ -355,7 +355,7 @@ export const blogAutomationRouter = router({
 
   adminListDiscoveryRuns: adminProcedure
     .input(adminListDiscoveryRunsSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const { monitorId, status, page, limit } = input;
       const skip = (page - 1) * limit;
 
@@ -385,7 +385,7 @@ export const blogAutomationRouter = router({
 
   adminScoreSourceItem: adminProcedure
     .input(adminScoreSourceItemSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       const result = await createSuggestionFromSourceItem({
         prisma: ctx.prisma,
         sourceItemId: input.sourceItemId,
@@ -397,7 +397,7 @@ export const blogAutomationRouter = router({
 
   adminScoreEligibleSourceItems: adminProcedure
     .input(adminScoreEligibleSourceItemsSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       const { minScore = 45, limit = 50, jurisdiction, monitorId } = input;
       
       const where: any = {
@@ -448,7 +448,7 @@ export const blogAutomationRouter = router({
 
   adminListSuggestions: adminProcedure
     .input(adminListSuggestionsSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const { status, priority, jurisdiction, category, articleType, search, page, limit } = input;
       const skip = (page - 1) * limit;
 
@@ -494,7 +494,7 @@ export const blogAutomationRouter = router({
 
   adminGetSuggestion: adminProcedure
     .input(adminGetSuggestionSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const suggestion = await ctx.prisma.blogArticleSuggestion.findUnique({
         where: { id: input.id },
         include: {
@@ -519,7 +519,7 @@ export const blogAutomationRouter = router({
 
   adminDismissSuggestion: adminProcedure
     .input(adminDismissSuggestionSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       return ctx.prisma.blogArticleSuggestion.update({
         where: { id: input.id },
         data: {
@@ -533,7 +533,7 @@ export const blogAutomationRouter = router({
 
   adminApproveSuggestionForDraft: adminProcedure
     .input(adminApproveSuggestionForDraftSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       return ctx.prisma.blogArticleSuggestion.update({
         where: { id: input.id },
         data: {
@@ -546,7 +546,7 @@ export const blogAutomationRouter = router({
 
   adminMarkSuggestionNeedsMoreSources: adminProcedure
     .input(adminMarkSuggestionNeedsMoreSourcesSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       const suggestion = await ctx.prisma.blogArticleSuggestion.findUnique({ where: { id: input.id } });
       if (!suggestion) throw new TRPCError({ code: 'NOT_FOUND', message: 'Not found' });
       
@@ -566,7 +566,7 @@ export const blogAutomationRouter = router({
 
   adminDeleteSuggestion: adminProcedure
     .input(adminDeleteSuggestionSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       return ctx.prisma.blogArticleSuggestion.update({
         where: { id: input.id },
         data: {
@@ -577,7 +577,7 @@ export const blogAutomationRouter = router({
 
   adminCreateDraftFromSuggestion: adminProcedure
     .input(adminCreateDraftFromSuggestionSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       const suggestion = await ctx.prisma.blogArticleSuggestion.findUnique({
         where: { id: input.suggestionId },
         include: {
@@ -685,13 +685,13 @@ export const blogAutomationRouter = router({
 
   adminGenerateAiDraft: adminProcedure
     .input(adminGenerateAiDraftSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       return generateAiDraftForBlogPost(input.blogPostId, ctx.user!.id);
     }),
 
   adminRunBlogVerification: adminProcedure
     .input(adminRunBlogVerificationSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input, ctx }): Promise<any> => {
       return runBlogPostVerification({
         prisma: ctx.prisma,
         blogPostId: input.blogPostId,
@@ -703,7 +703,7 @@ export const blogAutomationRouter = router({
 
   adminListBlogVerificationRuns: adminProcedure
     .input(adminListBlogVerificationRunsSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const { blogPostId, status, page, limit } = input;
       const skip = (page - 1) * limit;
 
@@ -732,7 +732,7 @@ export const blogAutomationRouter = router({
 
   adminGetBlogVerificationRun: adminProcedure
     .input(adminGetBlogVerificationRunSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const run = await ctx.prisma.blogVerificationRun.findUnique({
         where: { id: input.id },
         include: {
@@ -747,7 +747,7 @@ export const blogAutomationRouter = router({
 
   adminGetLatestBlogVerification: adminProcedure
     .input(adminGetLatestBlogVerificationSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<any> => {
       const run = await ctx.prisma.blogVerificationRun.findFirst({
         where: { blogPostId: input.blogPostId },
         orderBy: { createdAt: 'desc' },
@@ -802,24 +802,65 @@ export const blogAutomationRouter = router({
 
   adminListEditorialDigests: adminProcedure
     .input(adminListEditorialDigestsSchema)
-    .query(async ({ input }) => {
-      return blogEditorialDigestService.getDigests(input.page, input.limit);
+    .query(async ({ input }): Promise<any> => {
+      const result = await blogEditorialDigestService.getDigests(input.page, input.limit);
+      return {
+        items: result.items.map((item) => ({
+          id: item.id,
+          periodStart: item.periodStart.toISOString(),
+          periodEnd: item.periodEnd.toISOString(),
+          status: item.status,
+          sourceMonitorsChecked: item.sourceMonitorsChecked,
+          sourceItemsDiscovered: item.sourceItemsDiscovered,
+          highPrioritySuggestions: item.highPrioritySuggestions,
+          urgentSuggestions: item.urgentSuggestions,
+          approvedAwaitingDraft: item.approvedAwaitingDraft,
+          draftsAwaitingVerification: item.draftsAwaitingVerification,
+          blockedDrafts: item.blockedDrafts,
+          failingMonitors: item.failingMonitors,
+          createdAt: item.createdAt.toISOString(),
+        })),
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+        totalPages: result.totalPages,
+      };
     }),
 
   adminGetEditorialDigest: adminProcedure
     .input(adminGetEditorialDigestSchema)
-    .query(async ({ input }) => {
-      return blogEditorialDigestService.getDigestById(input.id);
+    .query(async ({ input }): Promise<any> => {
+      const item = await blogEditorialDigestService.getDigestById(input.id);
+      return {
+        id: item.id,
+        periodStart: item.periodStart.toISOString(),
+        periodEnd: item.periodEnd.toISOString(),
+        status: item.status,
+        sourceMonitorsChecked: item.sourceMonitorsChecked,
+        sourceItemsDiscovered: item.sourceItemsDiscovered,
+        highPrioritySuggestions: item.highPrioritySuggestions,
+        urgentSuggestions: item.urgentSuggestions,
+        approvedAwaitingDraft: item.approvedAwaitingDraft,
+        draftsAwaitingVerification: item.draftsAwaitingVerification,
+        blockedDrafts: item.blockedDrafts,
+        failingMonitors: item.failingMonitors,
+        createdAt: item.createdAt.toISOString(),
+      };
     }),
 
   adminGenerateEditorialDigest: adminProcedure
     .input(adminGenerateEditorialDigestSchema)
-    .mutation(async ({ input }) => {
-      return blogEditorialDigestService.generateBlogEditorialDigest({
+    .mutation(async ({ input }): Promise<any> => {
+      const item = await blogEditorialDigestService.generateBlogEditorialDigest({
         force: input.force,
         periodStart: input.periodStart,
         periodEnd: input.periodEnd,
       });
+      return {
+        id: item.id,
+        status: item.status,
+        createdAt: item.createdAt.toISOString(),
+      };
     }),
 });
 
