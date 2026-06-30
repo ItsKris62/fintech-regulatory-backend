@@ -817,7 +817,7 @@ export const blogAutomationRouter = router({
           approvedAwaitingDraft: item.approvedAwaitingDraft,
           draftsAwaitingVerification: item.draftsAwaitingVerification,
           blockedDrafts: item.blockedDrafts,
-          failingMonitors: item.failingMonitors,
+          failingMonitors: item.failingMonitors as any,
           createdAt: item.createdAt.toISOString(),
         })),
         total: result.total,
@@ -843,7 +843,7 @@ export const blogAutomationRouter = router({
         approvedAwaitingDraft: item.approvedAwaitingDraft,
         draftsAwaitingVerification: item.draftsAwaitingVerification,
         blockedDrafts: item.blockedDrafts,
-        failingMonitors: item.failingMonitors,
+        failingMonitors: item.failingMonitors as any,
         createdAt: item.createdAt.toISOString(),
       };
     }),
