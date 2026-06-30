@@ -1359,6 +1359,166 @@ export const adminRouter = router({
     };
   }),
 
+  getSystemOpsHealth: adminProcedure.query(async () => {
+    // 1. Get base health check
+    const baseHealth = await adminModule.getSystemHealth().catch((err: unknown) => {
+      logger.warn({ type: 'getSystemOpsHealth_base_failed', error: err instanceof Error ? err.message : String(err) });
+      return {
+        status: 'degraded' as const,
+        services: {
+          database: { status: 'degraded' as const },
+          redis: { status: 'degraded' as const },
+          pinecone: { status: 'degraded' as const },
+          storage: { status: 'degraded' as const },
+        }
+      };
+    });
+
+    const now = new Date().toISOString();
+
+    const result = {
+      overallStatus: baseHealth.status,
+      generatedAt: now,
+      checks: {
+        database: {
+          status: baseHealth.services.database.status,
+          label: 'Database',
+          message: baseHealth.services.database.status === 'healthy' ? 'Database connection is stable.' : 'Database connection issues detected.',
+          lastCheckedAt: now,
+        },
+        redis: {
+          status: baseHealth.services.redis.status,
+          label: 'Redis Cache',
+          message: baseHealth.services.redis.status === 'healthy' ? 'Redis cache is available.' : 'Redis connection issues detected.',
+          lastCheckedAt: now,
+        },
+        pinecone: {
+          status: baseHealth.services.pinecone.status,
+          label: 'Pinecone (RAG)',
+          message: baseHealth.services.pinecone.status === 'healthy' ? 'Vector database is responding.' : 'Vector database issues detected.',
+          lastCheckedAt: now,
+        },
+        storage: {
+          status: baseHealth.services.storage.status,
+          label: 'Storage (R2)',
+          message: baseHealth.services.storage.status === 'healthy' ? 'Object storage is reachable.' : 'Object storage issues detected.',
+          lastCheckedAt: now,
+        },
+        aiProvider: {
+          status: 'unknown' as const,
+          label: 'AI Provider',
+          message: 'AI provider health check is not configured yet.',
+        },
+        emailProvider: {
+          status: 'unknown' as const,
+          label: 'Email Provider',
+          message: 'Email provider health check is not configured yet.',
+        },
+        vaultReconciliation: {
+          status: 'not_configured' as const,
+          label: 'Vault Reconciliation',
+          message: 'Vault reconciliation engine is not configured.',
+        },
+        malwareScanning: {
+          status: 'not_configured' as const,
+          label: 'Malware Scanning',
+          message: 'Malware scanning is not currently enabled for uploads.',
+        },
+        webhookHealth: {
+          status: 'unknown' as const,
+          label: 'Webhooks',
+          message: 'Webhook health tracking is not currently available.',
+        },
+        cronJobs: {
+          status: 'unknown' as const,
+          label: 'Cron Jobs',
+          message: 'Cron job execution tracking is not available.',
+        }
+      }
+    };
+
+    return result;
+  }),
+
+  getSecuritySummary: adminProcedure.query(async ({ ctx }) => {
+    const now = new Date();
+    const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const last7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const [
+      successfulSessionsLast24h,
+      successfulSessionsLast7d,
+      failedLoginsLast24h,
+      totpUsers,
+      adminUsers,
+      activeSessions,
+      auditLogsLast24h,
+      securityAuditLogsLast7d,
+      recentRoleChangesLast7d
+    ] = await Promise.all([
+      ctx.prisma.loginHistory.count({ where: { success: true, createdAt: { gte: last24h } } }),
+      ctx.prisma.loginHistory.count({ where: { success: true, createdAt: { gte: last7d } } }),
+      ctx.prisma.loginHistory.count({ where: { success: false, createdAt: { gte: last24h } } }),
+      ctx.prisma.user.count({ where: { totpEnabled: true, deletedAt: null } }),
+      ctx.prisma.user.count({ where: { role: 'ADMIN', deletedAt: null } }),
+      ctx.prisma.session.count({ where: { expiresAt: { gt: now } } }),
+      ctx.prisma.auditLog.count({ where: { createdAt: { gte: last24h } } }),
+      ctx.prisma.auditLog.count({ where: { createdAt: { gte: last7d } } }),
+      ctx.prisma.auditLog.count({ where: { action: 'USER_ROLE_UPDATED', createdAt: { gte: last7d } } }),
+    ]);
+
+    const failedLogins = await ctx.prisma.loginHistory.findMany({
+      where: { success: false, createdAt: { gte: last24h }, ipAddress: { not: null } },
+      select: { ipAddress: true }
+    });
+    
+    const ipFailMap: Record<string, number> = {};
+    failedLogins.forEach((l) => {
+      if (l.ipAddress) ipFailMap[l.ipAddress] = (ipFailMap[l.ipAddress] || 0) + 1;
+    });
+    const suspiciousIpCount = Object.values(ipFailMap).filter(count => count >= 3).length;
+
+    const warnings: Array<{ id: string; severity: 'info' | 'warning' | 'critical'; title: string; message: string }> = [];
+    
+    if (suspiciousIpCount > 0) {
+      warnings.push({
+        id: 'suspicious-ips',
+        severity: 'warning',
+        title: 'Suspicious IPs detected',
+        message: `There are ${suspiciousIpCount} IPs with 3 or more failed login attempts in the last 24 hours.`
+      });
+    }
+
+    return {
+      generatedAt: now.toISOString(),
+      overallStatus: suspiciousIpCount > 0 ? 'degraded' as const : 'healthy' as const,
+      loginActivity: {
+        successfulSessionsLast24h,
+        successfulSessionsLast7d,
+        failedLoginsLast24h,
+        failedLoginTrackingAvailable: true,
+        suspiciousIpCount,
+      },
+      sessions: {
+        activeSessions,
+        expiredSessionsLast7d: 0,
+        revokedSessionsLast7d: null,
+      },
+      accessControl: {
+        recentRoleChangesLast7d,
+        adminUsers,
+        usersWithTotpEnabled: totpUsers,
+        totpTrackingAvailable: true,
+      },
+      audit: {
+        auditLogsLast24h,
+        securityAuditLogsLast7d,
+        auditLoggingAvailable: true,
+      },
+      warnings,
+    };
+  }),
+
   // --- INVITATION MANAGEMENT ------------------------------------------------
 
   /**
@@ -2250,6 +2410,226 @@ export const adminRouter = router({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update billing plan catalog', cause: error });
       }
     }),
+
+  // --- BILLING OPERATIONS SUMMARY -----------------------------------------
+
+  getBillingOperationsSummary: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+      // Revenue (only COMPLETED payments)
+      const revenue30dAgg = await ctx.prisma.payment.aggregate({
+        where: { status: 'COMPLETED', paidAt: { gte: thirtyDaysAgo } },
+        _sum: { amount: true },
+      });
+      const revenueAllTimeAgg = await ctx.prisma.payment.aggregate({
+        where: { status: 'COMPLETED' },
+        _sum: { amount: true },
+      });
+
+      // Payments
+      const successfulLast30DaysCount = await ctx.prisma.payment.count({
+        where: { status: 'COMPLETED', createdAt: { gte: thirtyDaysAgo } }
+      });
+      const failedLast30DaysCount = await ctx.prisma.payment.count({
+        where: { status: 'FAILED', createdAt: { gte: thirtyDaysAgo } }
+      });
+      const pendingLast30DaysCount = await ctx.prisma.payment.count({
+        where: { status: 'PENDING', createdAt: { gte: thirtyDaysAgo } }
+      });
+
+      const failedAmount30dAgg = await ctx.prisma.payment.aggregate({
+        where: { status: 'FAILED', createdAt: { gte: thirtyDaysAgo } },
+        _sum: { amount: true },
+      });
+      const pendingAmount30dAgg = await ctx.prisma.payment.aggregate({
+        where: { status: 'PENDING', createdAt: { gte: thirtyDaysAgo } },
+        _sum: { amount: true },
+      });
+
+      // Subscriptions
+      const activeSubs = await ctx.prisma.organization.count({ where: { subscriptionStatus: 'ACTIVE' } });
+      const trialingSubs = await ctx.prisma.organization.count({ where: { subscriptionStatus: 'TRIALING' } });
+      const pastDueSubs = await ctx.prisma.organization.count({ where: { subscriptionStatus: 'PAST_DUE' } });
+      const cancelledSubs = await ctx.prisma.organization.count({ where: { subscriptionStatus: 'CANCELLED' } });
+      const suspendedSubs = await ctx.prisma.organization.count({ where: { subscriptionStatus: 'SUSPENDED' } });
+
+      // Trials
+      const activeTrials = await ctx.prisma.user.count({
+        where: { freeTrialActivatedAt: { not: null }, freeTrialExpiresAt: { gt: now } }
+      });
+      const expiringIn7Days = await ctx.prisma.user.count({
+        where: { freeTrialActivatedAt: { not: null }, freeTrialExpiresAt: { gt: now, lte: sevenDaysFromNow } }
+      });
+      const expiredLast7Days = await ctx.prisma.user.count({
+        where: { freeTrialActivatedAt: { not: null }, freeTrialExpiresAt: { lte: now, gt: sevenDaysAgo } }
+      });
+
+      // Problem Accounts
+      const problemAccounts: Array<{
+        organizationId: string | null;
+        organizationName: string | null;
+        userId?: string | null;
+        userEmail?: string | null;
+        issueType: "failed_payment" | "past_due" | "trial_expiring" | "suspended" | "unknown";
+        amount?: number | null;
+        currency?: string | null;
+        lastEventAt?: string | null;
+        actionHref?: string | null;
+      }> = [];
+      
+      // 1. Failed payments last 30d
+      const recentFailedPayments = await ctx.prisma.payment.findMany({
+        where: { status: 'FAILED', createdAt: { gte: thirtyDaysAgo } },
+        include: { org: { select: { id: true, name: true, users: { select: { id: true, email: true }, take: 1 } } } },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+      });
+      for (const p of recentFailedPayments) {
+        problemAccounts.push({
+          organizationId: p.orgId,
+          organizationName: p.org.name,
+          userId: p.org.users[0]?.id || null,
+          userEmail: p.org.users[0]?.email || null,
+          issueType: 'failed_payment',
+          amount: p.amount,
+          currency: p.currency,
+          lastEventAt: p.createdAt.toISOString(),
+          actionHref: `/admin/organizations/${p.orgId}`,
+        });
+      }
+
+      // 2. Past Due Orgs
+      const pastDueOrgs = await ctx.prisma.organization.findMany({
+        where: { subscriptionStatus: 'PAST_DUE' },
+        include: { users: { select: { id: true, email: true }, take: 1 } },
+        take: 20,
+      });
+      for (const o of pastDueOrgs) {
+        problemAccounts.push({
+          organizationId: o.id,
+          organizationName: o.name,
+          userId: o.users[0]?.id || null,
+          userEmail: o.users[0]?.email || null,
+          issueType: 'past_due',
+          amount: null,
+          currency: null,
+          lastEventAt: null,
+          actionHref: `/admin/organizations/${o.id}`,
+        });
+      }
+
+      // 3. Expiring Trials
+      const expiringTrialUsers = await ctx.prisma.user.findMany({
+        where: { freeTrialActivatedAt: { not: null }, freeTrialExpiresAt: { gt: now, lte: sevenDaysFromNow } },
+        include: { organization: { select: { id: true, name: true } } },
+        take: 20,
+        orderBy: { freeTrialExpiresAt: 'asc' },
+      });
+      for (const u of expiringTrialUsers) {
+        problemAccounts.push({
+          organizationId: u.organizationId,
+          organizationName: u.organization?.name || null,
+          userId: u.id,
+          userEmail: u.email,
+          issueType: 'trial_expiring',
+          amount: null,
+          currency: null,
+          lastEventAt: u.freeTrialExpiresAt?.toISOString() || null,
+          actionHref: `/admin/users/${u.id}`,
+        });
+      }
+
+      // 4. Suspended Orgs
+      const suspendedOrgsArray = await ctx.prisma.organization.findMany({
+        where: { subscriptionStatus: 'SUSPENDED' },
+        include: { users: { select: { id: true, email: true }, take: 1 } },
+        take: 20,
+      });
+      for (const o of suspendedOrgsArray) {
+        problemAccounts.push({
+          organizationId: o.id,
+          organizationName: o.name,
+          userId: o.users[0]?.id || null,
+          userEmail: o.users[0]?.email || null,
+          issueType: 'suspended',
+          amount: null,
+          currency: null,
+          lastEventAt: null,
+          actionHref: `/admin/organizations/${o.id}`,
+        });
+      }
+
+      // Recent Events
+      const recentPaymentEvents = await ctx.prisma.payment.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 15,
+        include: { org: { select: { name: true } } },
+      });
+      
+      const recentEvents: Array<{
+        id: string;
+        type: string;
+        title: string;
+        description?: string;
+        severity: "info" | "warning" | "critical";
+        createdAt: string;
+        actionHref?: string | null;
+      }> = recentPaymentEvents.map(p => ({
+        id: p.id,
+        type: 'payment_' + p.status.toLowerCase(),
+        title: `Payment ${p.status} - ${p.org.name}`,
+        description: `${p.currency} ${p.amount} via ${p.provider}`,
+        severity: p.status === 'FAILED' ? 'critical' as const : p.status === 'PENDING' ? 'warning' as const : 'info' as const,
+        createdAt: p.createdAt.toISOString(),
+        actionHref: `/admin/organizations/${p.orgId}`,
+      }));
+
+      const isDegraded = failedLast30DaysCount > successfulLast30DaysCount * 0.5 || pastDueSubs > 0;
+
+      return {
+        generatedAt: now.toISOString(),
+        overallStatus: isDegraded ? 'degraded' as const : 'healthy' as const,
+        revenue: {
+          totalRevenueLast30Days: revenue30dAgg._sum.amount || 0,
+          totalRevenueAllTime: revenueAllTimeAgg._sum.amount || 0,
+          currency: 'KES',
+        },
+        payments: {
+          successfulLast30Days: successfulLast30DaysCount,
+          failedLast30Days: failedLast30DaysCount,
+          pendingLast30Days: pendingLast30DaysCount,
+          failedAmountLast30Days: failedAmount30dAgg._sum.amount || 0,
+          pendingAmountLast30Days: pendingAmount30dAgg._sum.amount || 0,
+        },
+        subscriptions: {
+          active: activeSubs,
+          trialing: trialingSubs,
+          pastDue: pastDueSubs,
+          cancelled: cancelledSubs,
+          suspended: suspendedSubs,
+        },
+        trials: {
+          activeTrials,
+          expiringIn7Days,
+          expiredLast7Days,
+        },
+        provider: {
+          name: 'Stripe & M-Pesa',
+          status: 'unknown' as const,
+          message: 'Payment webhook health is not currently tracked.',
+          lastWebhookAt: null,
+        },
+        problemAccounts,
+        recentEvents,
+      };
+    } catch (error: any) {
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get billing operations summary', cause: error });
+    }
+  }),
 
   // --- RECENT PAYMENTS (ALL ORGS, ADMIN-ONLY) ------------------------------
 

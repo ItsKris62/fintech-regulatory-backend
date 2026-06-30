@@ -71,6 +71,10 @@ export interface AdminUpdateCorpusGapReportStatusInput {
   adminNotes?: string;
 }
 
+export interface AdminGetCorpusGapReportInput {
+  reportId: string;
+}
+
 function normalizeOptional(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
@@ -317,6 +321,105 @@ export class CorpusGapReportService {
         total,
         pages: pages(total, params.input.limit),
       },
+    };
+  }
+
+  async adminGetReport(params: {
+    input: AdminGetCorpusGapReportInput;
+  }) {
+    const report = await prisma.corpusGapReport.findUnique({
+      where: { id: params.input.reportId },
+      include: {
+        reportedByUser: { select: { id: true, email: true, fullName: true } },
+        organization: { select: { id: true, name: true, type: true, plan: true } },
+      },
+    });
+
+    if (!report) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Corpus gap report not found.' });
+    }
+
+    const recommendedActions: Array<{ id: string; label: string; description: string; severity: "info" | "warning" | "critical" }> = [];
+
+    // Rule-based recommendations
+    recommendedActions.push({
+      id: 'verify_official_source',
+      label: 'Verify Official Source',
+      description: 'Check if the suggested document is an official regulatory source.',
+      severity: 'info',
+    });
+
+    if (report.sourceUrl) {
+      recommendedActions.push({
+        id: 'review_source_url',
+        label: 'Review Source URL',
+        description: 'Review the provided source URL for relevance and accuracy.',
+        severity: 'warning',
+      });
+    }
+
+    if (report.status === CorpusGapReportStatus.PENDING) {
+      recommendedActions.push({
+        id: 'mark_under_review',
+        label: 'Mark Under Review',
+        description: 'Acknowledge the report and begin investigation.',
+        severity: 'info',
+      });
+    }
+
+    return {
+      id: report.id,
+      status: report.status,
+      priority: null, // Limitation: Priority not in schema
+      createdAt: report.createdAt.toISOString(),
+      updatedAt: report.updatedAt.toISOString(),
+      resolvedAt: report.resolvedAt?.toISOString() ?? null,
+
+      reporter: {
+        userId: report.reportedByUser.id,
+        name: report.reportedByUser.fullName,
+        email: report.reportedByUser.email,
+      },
+
+      organization: {
+        organizationId: report.organization.id,
+        name: report.organization.name,
+        type: report.organization.type,
+        plan: report.organization.plan,
+      },
+
+      // Limitation: Schema does not track query or run context directly for CorpusGapReport
+      query: {
+        queryId: null,
+        question: null,
+        answerPreview: null,
+        status: null,
+        createdAt: null,
+      },
+
+      run: {
+        runId: null,
+        route: null,
+        grounded: null,
+        verifierVerdict: null,
+        fallbackReason: null,
+        unsupportedClaims: null,
+        acceptedChunkIds: null,
+        ragSources: null,
+        createdAt: null,
+      },
+
+      report: {
+        suggestedDocument: report.documentName,
+        notes: report.description,
+        adminNotes: report.adminNotes,
+        missingArea: `${report.jurisdiction} - ${report.documentType}`,
+        sourceUrl: report.sourceUrl,
+      },
+
+      citations: [], // Limitation: Citations not tracked for gap reports without query/run linkage
+
+      recommendedActions,
     };
   }
 

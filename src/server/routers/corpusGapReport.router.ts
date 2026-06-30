@@ -97,6 +97,14 @@ export const corpusGapReportRouter = router({
       () => corpusGapReportService.adminListReports({ input }),
     )),
 
+  adminGetReport: adminProcedure
+    .input(z.object({ reportId: z.string().cuid() }))
+    .query(async ({ input, ctx }) => safe(
+      'admin_get_report',
+      { adminUserId: ctx.user!.id, reportId: input.reportId },
+      () => corpusGapReportService.adminGetReport({ input }),
+    )),
+
   adminUpdateStatus: adminProcedure
     .input(adminUpdateStatusSchema)
     .mutation(async ({ input, ctx }) => safe(
