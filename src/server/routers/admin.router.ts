@@ -1459,6 +1459,98 @@ export const adminRouter = router({
     return result;
   }),
 
+  getVaultSafetySummary: adminProcedure.query(async ({ ctx }) => {
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const [
+      total,
+      verified,
+      pending,
+      failed,
+      missingContentHash,
+      recentlyUploadedLast7d
+    ] = await Promise.all([
+      ctx.prisma.vaultDocument.count(),
+      ctx.prisma.vaultDocument.count({ where: { uploadStatus: 'VERIFIED' } }),
+      ctx.prisma.vaultDocument.count({ where: { uploadStatus: 'PENDING' } }),
+      ctx.prisma.vaultDocument.count({ where: { uploadStatus: 'FAILED' } }),
+      ctx.prisma.vaultDocument.count({ where: { contentHash: null } }),
+      ctx.prisma.vaultDocument.count({ where: { createdAt: { gte: sevenDaysAgo } } })
+    ]);
+
+    const malwareEnabled = appConfig.malwareScanEnabled;
+    const malwareConfigured = !!appConfig.clamav.host;
+    
+    let malwareStatus: 'healthy' | 'degraded' | 'not_configured' = 'not_configured';
+    let malwareMessage = 'Malware scanning is not configured or disabled.';
+    
+    if (malwareEnabled && malwareConfigured) {
+      malwareStatus = 'healthy';
+      malwareMessage = 'Malware scanning is enabled and configured.';
+    } else if (malwareEnabled && !malwareConfigured) {
+      malwareStatus = 'degraded';
+      malwareMessage = 'Malware scanning is enabled but no scanner (CLAMAV_HOST) is configured.';
+    }
+
+    const baseHealth = await adminModule.getSystemHealth().catch(() => ({
+      status: 'degraded' as const,
+      services: { storage: { status: 'unknown' as const } }
+    }));
+
+    return {
+      generatedAt: now.toISOString(),
+      overallStatus: baseHealth.status,
+      malwareScanning: {
+        status: malwareStatus,
+        enabled: malwareEnabled,
+        configured: malwareConfigured,
+        message: malwareMessage,
+        skippedScanCountLast7d: null,
+        failedScanCountLast7d: null,
+        evidence: malwareEnabled && !malwareConfigured ? ['CLAMAV_HOST is missing'] : [],
+      },
+      vaultDocuments: {
+        total,
+        verified,
+        pending,
+        failed,
+        unverified: total - verified,
+        missingContentHash,
+        recentlyUploadedLast7d,
+      },
+      reconciliation: {
+        status: 'not_configured' as const,
+        dryRun: null,
+        lastRunAt: null,
+        lastSuccessfulRunAt: null,
+        r2OrphansDetected: null,
+        dbOrphansDetected: null,
+        message: 'Vault reconciliation runs as a cron job and its telemetry is only written to Pino logs, not persisted in the database.',
+      },
+      storage: {
+        status: baseHealth.services.storage.status as 'healthy' | 'degraded' | 'down' | 'unknown' | 'not_configured',
+        message: baseHealth.services.storage.status === 'healthy' ? 'Storage service is reachable.' : 'Storage service issues detected.',
+        evidence: [],
+      },
+      warnings: [] as Array<{
+        id: string;
+        severity: 'info' | 'warning' | 'critical';
+        title: string;
+        message: string;
+        actionHref?: string | null;
+      }>,
+      recentEvents: [] as Array<{
+        id: string;
+        type: string;
+        title: string;
+        severity: 'info' | 'warning' | 'critical';
+        createdAt: string;
+        description?: string;
+      }>,
+    };
+  }),
+
   getSecuritySummary: adminProcedure.query(async ({ ctx }) => {
     const now = new Date();
     const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
