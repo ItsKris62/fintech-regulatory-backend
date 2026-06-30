@@ -356,10 +356,15 @@ export interface PaginatedErrorLog {
 
 export interface AuditLogFilters {
   userId?: string;
+  actorEmail?: string;
+  organizationId?: string;
   action?: string;
   entityType?: string;
+  entityId?: string;
+  severity?: 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
   dateFrom?: Date;
   dateTo?: Date;
+  search?: string;
   page?: number;
   limit?: number;
 }
@@ -367,9 +372,13 @@ export interface AuditLogFilters {
 export interface AuditLogEntry {
   id: string;
   userId: string | null;
+  actorEmail?: string | null;
+  actorName?: string | null;
+  actorOrganization?: string | null;
   action: string;
   entityType: string | null;
   entityId: string | null;
+  severity?: 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
   metadata: unknown;
   ipAddress: string | null;
   createdAt: Date;
@@ -592,10 +601,15 @@ export interface SessionSummary {
  */
 export interface AuditLogExportFilters {
   userId?: string;
+  actorEmail?: string;
+  organizationId?: string;
   action?: string;
   entityType?: string;
+  entityId?: string;
+  severity?: 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
   dateFrom?: Date;
   dateTo?: Date;
+  search?: string;
 }
 
 // ============================================================================

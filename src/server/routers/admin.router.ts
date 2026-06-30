@@ -508,8 +508,13 @@ export const adminRouter = router({
         page: z.number().min(1).default(1),
         limit: z.number().min(1).max(200).default(50),
         userId: z.string().optional(),
+        actorEmail: z.string().optional(),
+        organizationId: z.string().optional(),
         action: z.string().optional(),
         entityType: z.string().optional(),
+        entityId: z.string().optional(),
+        severity: z.enum(['HIGH', 'MEDIUM', 'LOW', 'INFO']).optional(),
+        search: z.string().optional(),
         dateFrom: z.string().datetime().optional(),
         dateTo: z.string().datetime().optional(),
       })
@@ -526,23 +531,37 @@ export const adminRouter = router({
           page: input.page,
           limit: input.limit,
           userId: input.userId,
+          actorEmail: input.actorEmail,
+          organizationId: input.organizationId,
           action: input.action,
           entityType: input.entityType,
+          entityId: input.entityId,
+          severity: input.severity,
+          search: input.search,
           dateFrom: input.dateFrom ? new Date(input.dateFrom) : undefined,
           dateTo: input.dateTo ? new Date(input.dateTo) : undefined,
         });
 
         return result;
       } catch (error: any) {
-        logger.error({
-          type: 'admin_get_logs_error',
-          userId: ctx.user!.id,
-          error: error.message,
-        });
-
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to retrieve audit logs',
+          cause: error,
+        });
+      }
+    }),
+
+  getAuditLogDetail: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ input }) => {
+      try {
+        return await adminModule.getAuditLogDetail(input.id);
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to retrieve audit log detail',
           cause: error,
         });
       }
@@ -2933,8 +2952,13 @@ export const adminRouter = router({
       z.object({
         format:     z.enum(['csv', 'docx']),
         userId:     z.string().optional(),
+        actorEmail: z.string().optional(),
+        organizationId: z.string().optional(),
         action:     z.string().optional(),
         entityType: z.string().optional(),
+        entityId:   z.string().optional(),
+        severity:   z.enum(['HIGH', 'MEDIUM', 'LOW', 'INFO']).optional(),
+        search:     z.string().optional(),
         dateFrom:   z.string().datetime().optional(),
         dateTo:     z.string().datetime().optional(),
       })
@@ -2944,8 +2968,13 @@ export const adminRouter = router({
         const { format, ...rawFilters } = input;
         const filters = {
           userId:     rawFilters.userId,
+          actorEmail: rawFilters.actorEmail,
+          organizationId: rawFilters.organizationId,
           action:     rawFilters.action,
           entityType: rawFilters.entityType,
+          entityId:   rawFilters.entityId,
+          severity:   rawFilters.severity,
+          search:     rawFilters.search,
           dateFrom:   rawFilters.dateFrom ? new Date(rawFilters.dateFrom) : undefined,
           dateTo:     rawFilters.dateTo   ? new Date(rawFilters.dateTo)   : undefined,
         };

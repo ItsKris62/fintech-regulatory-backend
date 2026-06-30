@@ -1302,8 +1302,10 @@ class AdminModule {
 
     const where: Record<string, unknown> = {
       ...(filters.userId && { userId: filters.userId }),
-      ...(filters.action && { action: { contains: filters.action } }),
       ...(filters.entityType && { entityType: filters.entityType }),
+      ...(filters.entityId && { entityId: filters.entityId }),
+      ...(filters.action && { action: { contains: filters.action } }),
+      ...(filters.actorEmail && { user: { email: { contains: filters.actorEmail, mode: 'insensitive' } } }),
       ...(filters.dateFrom || filters.dateTo
         ? {
             createdAt: {
@@ -1314,25 +1316,84 @@ class AdminModule {
         : {}),
     };
 
-    const [logs, total] = await Promise.all([
-      prisma.auditLog.findMany({
+    const andConditions = [];
+    if (filters.organizationId) {
+      andConditions.push({
+        OR: [
+          { entityType: 'Organization', entityId: filters.organizationId },
+          { user: { organizationId: filters.organizationId } }
+        ]
+      });
+    }
+    if (filters.search) {
+      andConditions.push({
+        OR: [
+          { action: { contains: filters.search, mode: 'insensitive' } },
+          { entityId: { contains: filters.search, mode: 'insensitive' } },
+          { user: { email: { contains: filters.search, mode: 'insensitive' } } },
+          { user: { fullName: { contains: filters.search, mode: 'insensitive' } } },
+        ]
+      });
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
+    }
+
+    let items: AuditLogEntry[];
+    let total: number;
+
+    if (filters.severity) {
+      // Memory pagination: fetch candidate logs and filter by derived severity.
+      // Note: Pagination limited to first 2000 candidate records.
+      const candidateLogs = await prisma.auditLog.findMany({
         where: where as any,
+        include: { user: { include: { organization: true } } },
         orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      prisma.auditLog.count({
-        where: where as any,
-      }),
-    ]);
+        take: 2000,
+      });
+      const mapped = candidateLogs.map((l) => toAuditLogEntry(l as unknown as Record<string, unknown>));
+      const filtered = mapped.filter((l) => l.severity === filters.severity);
+      total = filtered.length;
+      items = filtered.slice(skip, skip + limit);
+    } else {
+      // Standard DB pagination
+      const [dbLogs, dbTotal] = await Promise.all([
+        prisma.auditLog.findMany({
+          where: where as any,
+          include: { user: { include: { organization: true } } },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+        }),
+        prisma.auditLog.count({
+          where: where as any,
+        }),
+      ]);
+      items = dbLogs.map((l) => toAuditLogEntry(l as unknown as Record<string, unknown>));
+      total = dbTotal;
+    }
 
     return {
-      items: logs.map((l) => toAuditLogEntry(l as unknown as Record<string, unknown>)),
-      nextCursor: logs.length === limit ? String(page + 1) : null,
+      items,
+      nextCursor: items.length === limit ? String(page + 1) : null,
       total,
       page,
       limit,
     };
+  }
+
+  async getAuditLogDetail(id: string): Promise<AuditLogEntry> {
+    const log = await prisma.auditLog.findUnique({
+      where: { id },
+      include: { user: { include: { organization: true } } },
+    });
+    
+    if (!log) {
+      throw new NotFoundError('Audit log entry not found');
+    }
+
+    return toAuditLogEntry(log as unknown as Record<string, unknown>);
   }
 
   // ==========================================================================
@@ -2267,9 +2328,11 @@ class AdminModule {
       : AdminModule.AUDIT_LOG_DOCX_MAX_ROWS;
 
     const where: Record<string, unknown> = {
-      ...(filters.userId     && { userId:     filters.userId }),
-      ...(filters.action     && { action:     { contains: filters.action } }),
+      ...(filters.userId && { userId: filters.userId }),
       ...(filters.entityType && { entityType: filters.entityType }),
+      ...(filters.entityId && { entityId: filters.entityId }),
+      ...(filters.action && { action: { contains: filters.action } }),
+      ...(filters.actorEmail && { user: { email: { contains: filters.actorEmail, mode: 'insensitive' } } }),
       ...((filters.dateFrom || filters.dateTo) && {
         createdAt: {
           ...(filters.dateFrom && { gte: filters.dateFrom }),
@@ -2278,15 +2341,44 @@ class AdminModule {
       }),
     };
 
+    const andConditions = [];
+    if (filters.organizationId) {
+      andConditions.push({
+        OR: [
+          { entityType: 'Organization', entityId: filters.organizationId },
+          { user: { organizationId: filters.organizationId } }
+        ]
+      });
+    }
+    if (filters.search) {
+      andConditions.push({
+        OR: [
+          { action: { contains: filters.search, mode: 'insensitive' } },
+          { entityId: { contains: filters.search, mode: 'insensitive' } },
+          { user: { email: { contains: filters.search, mode: 'insensitive' } } },
+          { user: { fullName: { contains: filters.search, mode: 'insensitive' } } },
+        ]
+      });
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
+    }
+
     const rows = await prisma.auditLog.findMany({
       where: where as never,
+      include: { user: { include: { organization: true } } },
       orderBy: { createdAt: 'desc' },
       take: maxRows,
     });
 
-    const logs: AuditLogEntry[] = rows.map((l) =>
+    let logs: AuditLogEntry[] = rows.map((l) =>
       toAuditLogEntry(l as unknown as Record<string, unknown>)
     );
+
+    if (filters.severity) {
+      logs = logs.filter(l => l.severity === filters.severity);
+    }
 
     const buffer = format === 'csv'
       ? this.buildAuditLogCsv(logs)
@@ -2424,15 +2516,20 @@ class AdminModule {
         : s;
     };
 
-    const header = ['Timestamp', 'Action', 'Entity Type', 'Entity ID', 'User ID', 'IP Address'].join(',');
+    const header = ['Timestamp', 'Action', 'Severity', 'Entity Type', 'Entity ID', 'User ID', 'Actor Name', 'Actor Email', 'Actor Organization', 'IP Address', 'Metadata'].join(',');
     const lines = logs.map((l) =>
       [
         esc(l.createdAt.toISOString()),
         esc(l.action),
+        esc(l.severity),
         esc(l.entityType),
         esc(l.entityId),
         esc(l.userId),
+        esc(l.actorName),
+        esc(l.actorEmail),
+        esc(l.actorOrganization),
         esc(l.ipAddress),
+        esc(typeof l.metadata === 'object' ? JSON.stringify(l.metadata) : String(l.metadata ?? '')),
       ].join(',')
     );
 
@@ -2450,9 +2547,9 @@ class AdminModule {
       left: CELL_BORDER, right: CELL_BORDER,
     } as const;
 
-    const COL_WIDTHS = [2000, 2400, 1200, 1200, 1226, 1000]; // sum = CONTENT_W
+    const COL_WIDTHS = [1000, 1200, 600, 800, 800, 800, 800, 800, 800, 626, 800]; // sum = CONTENT_W
 
-    const COLUMNS = ['Timestamp', 'Action', 'Entity Type', 'Entity ID', 'User ID', 'IP Address'];
+    const COLUMNS = ['Timestamp', 'Action', 'Severity', 'Entity Type', 'Entity ID', 'User ID', 'Actor Name', 'Actor Email', 'Actor Organization', 'IP Address', 'Metadata'];
 
     const headerRow = new TableRow({
       tableHeader: true,
@@ -2475,10 +2572,15 @@ class AdminModule {
       const cells = [
         log.createdAt.toISOString(),
         log.action,
+        log.severity ?? '',
         log.entityType ?? '',
         log.entityId   ?? '',
         log.userId     ?? '',
+        log.actorName  ?? '',
+        log.actorEmail ?? '',
+        log.actorOrganization ?? '',
         log.ipAddress  ?? '',
+        typeof log.metadata === 'object' ? JSON.stringify(log.metadata) : String(log.metadata ?? ''),
       ];
       return new TableRow({
         children: cells.map((text, i) =>

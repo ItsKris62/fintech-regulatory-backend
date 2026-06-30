@@ -5,6 +5,7 @@
 import { z } from 'zod';
 import type { AdminUserDetail, AdminOrgDetail, AuditLogEntry } from './admin.types';
 import { subscriptionTierToPlan } from '@/utils/plan-mapping';
+import { deriveSeverity, redactAuditMetadata } from '@/utils/audit-redaction';
 
 // ============================================================================
 // Validation Schemas
@@ -49,8 +50,13 @@ export const frameworkSchema = z.object({
 
 export const auditLogFiltersSchema = z.object({
   userId: z.string().optional(),
+  actorEmail: z.string().optional(),
+  organizationId: z.string().optional(),
   action: z.string().optional(),
   entityType: z.string().optional(),
+  entityId: z.string().optional(),
+  severity: z.string().optional(),
+  search: z.string().optional(),
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
   page: z.number().int().positive().default(1),
@@ -178,13 +184,20 @@ function resolveOrganizationPlan(org: Record<string, unknown>): string {
 }
 
 export function toAuditLogEntry(log: Record<string, unknown>): AuditLogEntry {
+  const user = log.user as Record<string, unknown> | undefined;
+  const organization = user?.organization as Record<string, unknown> | undefined;
+
   return {
     id: log.id as string,
     userId: log.userId as string | null,
+    actorEmail: (user?.email as string) || null,
+    actorName: (user?.fullName as string) || null,
+    actorOrganization: (organization?.name as string) || null,
     action: log.action as string,
     entityType: log.entityType as string | null,
     entityId: log.entityId as string | null,
-    metadata: log.metadata,
+    severity: deriveSeverity(log.action as string),
+    metadata: redactAuditMetadata(log.metadata),
     ipAddress: log.ipAddress as string | null,
     createdAt: log.createdAt as Date,
   };
