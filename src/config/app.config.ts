@@ -40,6 +40,14 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-', 'Invalid Anthropic API key'),
   ANTHROPIC_MODEL: z.string().default('claude-3-haiku-20240307'),
 
+  // OpenAI
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().default('gpt-4o'),
+
+  // Gemini
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
+
   // Pinecone
   PINECONE_API_KEY: z.string().min(1, 'Pinecone API key is required'),
   PINECONE_ENVIRONMENT: z.string().default('us-east-1-aws'),
@@ -204,6 +212,14 @@ export const appConfig = {
   ai: {
     apiKey: env.ANTHROPIC_API_KEY,
     model: env.ANTHROPIC_MODEL,
+  },
+  openai: {
+    apiKey: env.OPENAI_API_KEY,
+    model: env.OPENAI_MODEL,
+  },
+  gemini: {
+    apiKey: env.GEMINI_API_KEY,
+    model: env.GEMINI_MODEL,
   },
 
   // Vector Database

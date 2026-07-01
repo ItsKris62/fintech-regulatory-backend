@@ -143,12 +143,7 @@ export const aiConfig = {
     // Enable cost tracking
     enabled: true,
 
-    // Model pricing (USD per 1M tokens)
-    pricing: {
-      'claude-opus-4-6': { input: 15.0, output: 75.0 },
-      'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
-      'claude-haiku-4-5-20251001': { input: 0.8, output: 4.0 },
-    },
+    // Pricing has been moved to src/lib/ai/gateway/pricing.ts
 
     // Warning threshold (USD)
     warningThreshold: 100,
@@ -292,30 +287,7 @@ export function isRetryableError(error: any): boolean {
   return false;
 }
 
-/**
- * Calculate cost for token usage
- * @param model Model ID
- * @param inputTokens Number of input tokens
- * @param outputTokens Number of output tokens
- * @returns Cost in USD
- */
-export function calculateCost(
-  model: string,
-  inputTokens: number,
-  outputTokens: number
-): number {
-  const pricing = aiConfig.costs.pricing[model as keyof typeof aiConfig.costs.pricing];
-
-  if (!pricing) {
-    console.warn(`No pricing info for model: ${model}`);
-    return 0;
-  }
-
-  const inputCost = (inputTokens / 1000000) * pricing.input;
-  const outputCost = (outputTokens / 1000000) * pricing.output;
-
-  return inputCost + outputCost;
-}
+// calculateCost has been moved to src/lib/ai/gateway/pricing.ts
 
 /**
  * Export type

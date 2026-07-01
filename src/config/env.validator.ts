@@ -59,9 +59,13 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().startsWith('re_', 'RESEND_API_KEY must start with re_'),
   FROM_EMAIL: z.string().email('FROM_EMAIL must be a valid email address'),
 
-  // -- AI (Anthropic Claude) ------------------------------------------------
+  // -- AI (Anthropic Claude, OpenAI, Gemini) --------------------------------
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-', 'ANTHROPIC_API_KEY must start with sk-ant-'),
   ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().default('gpt-4o'),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
 
   // -- Vector Database (Pinecone) ------------------------------------------
   PINECONE_API_KEY: z.string().min(1, 'PINECONE_API_KEY is required'),
