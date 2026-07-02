@@ -1504,6 +1504,52 @@ count/content is unchanged rather than re-diagnosing it each time.
 
 ---
 
+### Working tree actively modified during B6 pre-flight verification [RESOLVED]
+
+| Field        | Value |
+|--------------|-------|
+| Severity     | Process, not code |
+| Status       | **Resolved** -- 2026-07-03 |
+| Observed during | Phase B Batch B6 pre-flight commit/verification pass |
+
+**Symptom:** During B6 pre-flight verification (post-commit gate for B4/B5/the
+multi-principal credential refactor), `git status --porcelain` showed new
+untracked files appearing in `src/modules/agents/automation/` and
+`src/lib/redis/` between consecutive checks, including some (`wire-format.test.ts`,
+`import-probe.test.ts`) that were not present moments earlier. A first pass of
+`tsc`/Vitest results was discarded because the tree changed mid-run; a
+`rate-limiter.automation.test.ts` full-suite-only failure was observed once and
+initially suspected to be a shared/module-level state leak in the rate limiter
+across test files.
+
+**Root cause:** identified via OS-level process inspection (`Get-CimInstance
+Win32_Process`) -- three `claude.exe` processes were running against the same
+Antigravity IDE instance, not one. Two were full interactive Claude Code
+sessions (both children of the same IDE process), confirming a second,
+independent Claude Code session was open on this same repository and actively
+scaffolding files in the automation module concurrently with this session's
+work. Not a background task belonging to this session (verified via `TaskOutput`
+against every known task ID -- all already completed/cleaned up), not a cron
+job (`CronList` empty), not an unrelated OS-level watcher.
+
+**Resolution:** the second session was identified and closed by the operator.
+Two subsequent `git status --porcelain` checks 65 seconds apart returned
+identical output, confirming the tree had genuinely stopped changing. A clean
+single-pass `tsc --noEmit` (0 errors) and full Vitest run (2 failed / 562
+passed -- exactly the pre-existing enterprise-policy baseline above, nothing
+else) followed. `rate-limiter.automation.test.ts` passed both in the full
+suite and in isolation on the settled tree (3/3 both ways) -- the earlier
+full-suite-only failure did not reproduce, so it is attributed to reading/
+executing the file while the second session was still writing it, not a real
+test-isolation bug in the rate limiter. No code fix required.
+
+**Process note:** when multiple Claude Code sessions may be open against the
+same working directory, a single `git status` check is not sufficient proof of
+a stable tree -- confirm with at least two checks 60+ seconds apart before
+trusting any `tsc`/test run as a final verification result.
+
+---
+
 ## Next Sprint Priorities (in order)
 
 1. **Automated test coverage** -- Vitest setup, integration tests for
