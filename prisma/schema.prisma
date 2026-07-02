@@ -982,6 +982,7 @@ enum UserRole {
   STARTUP
   ENTERPRISE
   ADMIN
+  SERVICE
 }
 
 enum UserStatus {
@@ -3358,6 +3359,36 @@ model BlogSuggestionSource {
   @@id([suggestionId, sourceItemId])
   @@index([sourceItemId])
 }
+
+model AgentRun {
+  id             String        @id
+  agentType      String
+  status         String        @default("RUNNING")
+  idempotencyKey String        @unique
+  organizationId String?
+  inputTokens    Int           @default(0)
+  outputTokens   Int           @default(0)
+  costUsd        Decimal       @default(0) @db.Decimal(12, 6)
+  iterations     Int           @default(0)
+  startedAt      DateTime      @default(now())
+  completedAt    DateTime?
+  error          String?
+  metadata       Json?
+  reports        AgentReport[]
+}
+
+model AgentReport {
+  id                 String   @id
+  agentRunId         String
+  summary            String?
+  signals            Json?
+  recommendedActions Json?
+  risks              Json?
+  humanApproved      Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  run                AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
 enum BlogDraftGenerationStatus {
   PENDING
   RUNNING

@@ -75,6 +75,13 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  AGENTS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  AGENT_MAX_COST_PER_RUN_USD: z.coerce.number().positive().default(2),
+  AGENT_MAX_COST_PER_DAY_USD: z.coerce.number().positive().default(20),
+  AGENT_MAX_ITERATIONS_PER_RUN: z.coerce.number().int().positive().default(25),
 
   // Cloudflare R2  -  public bucket (avatars, logos, branding)
   R2_PUBLIC_ACCESS_KEY_ID: z.string().min(1, 'R2 public bucket access key is required'),
@@ -171,6 +178,12 @@ export const appConfig = {
   // Feature flags
   features: {
     orchestratorEnabled: env.ORCHESTRATOR_ENABLED,
+    agentsEnabled: env.AGENTS_ENABLED,
+  },
+  agents: {
+    maxCostPerRunUsd: env.AGENT_MAX_COST_PER_RUN_USD,
+    maxCostPerDayUsd: env.AGENT_MAX_COST_PER_DAY_USD,
+    maxIterationsPerRun: env.AGENT_MAX_ITERATIONS_PER_RUN,
   },
 
   // Server

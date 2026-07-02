@@ -21,6 +21,13 @@ import {
   incrementTrialUsageAtomic,
 } from '@/modules/trial';
 import { resolveEffectivePlan } from '@/modules/billing/resolve-effective-plan';
+import { hashIp } from '@/utils/request-identifiers';
+import {
+  AGENT_CREDENTIAL_HEADER,
+  agentCredentialService,
+  AgentCredentialError,
+  isAgentCapability,
+} from '@/modules/agents/agent-credential.service';
 
 /**
  * Logging Middleware (Fixed Error Handling)
@@ -790,4 +797,110 @@ export const checkUsageLimit = (
     return next({
       ctx: { ...ctx, user, usageInfo: { metric, current: current + 1, limit } },
     });
+  });
+
+// ============================================================================
+// Agent Machine Identity Middleware
+// ============================================================================
+
+function getAgentCredentialHeaderValue(rawHeader: string | string[] | undefined): string | null {
+  if (Array.isArray(rawHeader)) return rawHeader[0] ?? null;
+  return rawHeader ?? null;
+}
+
+function agentRequestMetadata(ctx: { req: { ip?: string; headers: Record<string, string | string[] | undefined> } }): {
+  ipAddress: string | null;
+  userAgent: string | null;
+} {
+  return {
+    ipAddress: ctx.req.ip ?? null,
+    userAgent: (ctx.req.headers['user-agent'] as string | undefined)?.substring(0, 500) ?? null,
+  };
+}
+
+function auditAgentAuthorization(args: {
+  userId?: string | null;
+  action: 'authorization.granted' | 'authorization.denied';
+  capability: string;
+  reason?: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+}): void {
+  void prisma.auditLog.create({
+    data: {
+      userId: args.userId ?? null,
+      action: args.action,
+      entityType: 'AgentCredential',
+      metadata: {
+        capability: args.capability,
+        reason: args.reason ?? null,
+      },
+      ipAddress: args.ipAddress,
+      userAgent: args.userAgent,
+    },
+  }).catch((error: unknown) => {
+    logger.error({
+      type: 'agent_authorization_audit_failed',
+      action: args.action,
+      capability: args.capability,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
+export const requireAgentCapability = (capability: string) =>
+  middleware(async ({ ctx, next }) => {
+    const requestMetadata = agentRequestMetadata(ctx);
+    const identifier = hashIp(ctx.req.ip);
+    const rateLimit = await rateLimiter.check(identifier, 'agent-auth', 20, 60, { failClosed: true });
+
+    if (!rateLimit.allowed) {
+      logger.warn({ type: 'agent_auth_rate_limited', capability, reason: rateLimit.reason ?? 'rate_limit_exceeded' });
+      auditAgentAuthorization({
+        action: 'authorization.denied',
+        capability,
+        reason: rateLimit.reason ?? 'rate_limit_exceeded',
+        ...requestMetadata,
+      });
+      throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'Too many agent authentication attempts.' });
+    }
+
+    const credential = getAgentCredentialHeaderValue(ctx.req.headers[AGENT_CREDENTIAL_HEADER]);
+    let agentIdentity: Awaited<ReturnType<typeof agentCredentialService.verifyCredential>>;
+
+    try {
+      agentIdentity = await agentCredentialService.verifyCredential(credential);
+    } catch (error: unknown) {
+      const reason = error instanceof AgentCredentialError ? error.reason : 'service_unavailable';
+      logger.warn({ type: 'agent_auth_attempt', capability, success: false, reason });
+      auditAgentAuthorization({
+        action: 'authorization.denied',
+        capability,
+        reason,
+        ...requestMetadata,
+      });
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid agent credential.' });
+    }
+
+    if (!isAgentCapability(capability) || !agentIdentity.capabilities.includes(capability)) {
+      logger.warn({ type: 'authorization.denied', userId: agentIdentity.userId, capability, reason: 'capability_not_allowed' });
+      auditAgentAuthorization({
+        userId: agentIdentity.userId,
+        action: 'authorization.denied',
+        capability,
+        reason: 'capability_not_allowed',
+        ...requestMetadata,
+      });
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Agent capability not allowed.' });
+    }
+
+    logger.info({ type: 'agent_auth_attempt', userId: agentIdentity.userId, capability, success: true });
+    auditAgentAuthorization({
+      userId: agentIdentity.userId,
+      action: 'authorization.granted',
+      capability,
+      ...requestMetadata,
+    });
+
+    return next({ ctx: { ...ctx, agent: agentIdentity } });
   });

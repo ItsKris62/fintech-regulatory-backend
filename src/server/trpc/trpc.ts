@@ -10,8 +10,10 @@ import {
   logged,
   requireOrgMembership,
   requireOrgMembershipRole,
+  requireAgentCapability,
 } from './middleware';
 import { loadSystemConfig } from '@/lib/system-config';
+import type { AgentCapability } from '@/modules/agents/agent-credential.service';
 
 // Export router builder for use in your controllers
 export { router };
@@ -86,6 +88,13 @@ export const enterpriseProcedure = protectedProcedure.use(isEnterprise);
  * Attaches ctx.orgMembership for downstream handlers.
  */
 export const orgMemberProcedure = protectedProcedure.use(requireOrgMembership);
+
+/**
+ * Agent procedure.
+ * Requires X-Agent-Credential machine authentication and an explicit capability.
+ */
+export const agentProcedure = (capability: AgentCapability) =>
+  publicProcedure.use(requireAgentCapability(capability));
 
 /**
  * Factory: orgMemberProcedure + minimum role enforcement.

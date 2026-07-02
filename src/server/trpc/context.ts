@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { createHash } from 'crypto';
 import type { MemberRole, MemberStatus, OrganizationMember } from '@prisma/client';
+
 import type { EffectivePlan } from '@/types/plan.types';
 import type { EffectivePlanSource, PilotEntitlementProfile, PilotPlanState } from '@/types/plan.types';
 import type { TrialContextState } from '@/modules/trial/trial.types';

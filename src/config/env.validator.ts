@@ -83,6 +83,12 @@ const envSchema = z.object({
   CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
   CLAMAV_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
 
+  // -- Agent workforce -------------------------------------------------------
+  AGENTS_ENABLED: z.coerce.boolean().default(false),
+  AGENT_MAX_COST_PER_RUN_USD: z.coerce.number().positive().default(2),
+  AGENT_MAX_COST_PER_DAY_USD: z.coerce.number().positive().default(20),
+  AGENT_MAX_ITERATIONS_PER_RUN: z.coerce.number().int().positive().default(25),
+
   // -- Rate Limiting --------------------------------------------------------
   RATE_LIMIT_MAX: z.string().default('100').transform(Number).pipe(z.number().positive()),
   RATE_LIMIT_WINDOW: z.string().default('15m'),
