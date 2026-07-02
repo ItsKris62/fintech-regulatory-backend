@@ -83,6 +83,14 @@ const envSchema = z.object({
   AGENT_MAX_COST_PER_DAY_USD: z.coerce.number().positive().default(20),
   AGENT_MAX_ITERATIONS_PER_RUN: z.coerce.number().int().positive().default(25),
 
+  // n8n automation surface (agents.automation.*)  -  rate limits are separate
+  // from the agent-auth rate limit in requireAgentCapability, which only
+  // throttles credential-verification attempts, not per-capability throughput.
+  AUTOMATION_LOG_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
+  AUTOMATION_LOG_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  AUTOMATION_GENERATE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  AUTOMATION_GENERATE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // PostHog read-only query access (HogQL query API). Optional - the
   // sales/growth agent's engagement lookup degrades to unavailable when unset.
   // POSTHOG_PERSONAL_API_KEY is a query-scoped Personal API Key, distinct from
@@ -192,6 +200,12 @@ export const appConfig = {
     maxCostPerRunUsd: env.AGENT_MAX_COST_PER_RUN_USD,
     maxCostPerDayUsd: env.AGENT_MAX_COST_PER_DAY_USD,
     maxIterationsPerRun: env.AGENT_MAX_ITERATIONS_PER_RUN,
+    automation: {
+      logRateLimitMax: env.AUTOMATION_LOG_RATE_LIMIT_MAX,
+      logRateLimitWindowSeconds: env.AUTOMATION_LOG_RATE_LIMIT_WINDOW_SECONDS,
+      generateRateLimitMax: env.AUTOMATION_GENERATE_RATE_LIMIT_MAX,
+      generateRateLimitWindowSeconds: env.AUTOMATION_GENERATE_RATE_LIMIT_WINDOW_SECONDS,
+    },
   },
   posthog: {
     personalApiKey: env.POSTHOG_PERSONAL_API_KEY,

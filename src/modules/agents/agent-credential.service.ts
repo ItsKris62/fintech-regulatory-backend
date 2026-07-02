@@ -7,10 +7,11 @@ import { logger } from '@/utils/logger';
 
 export const AGENT_CREDENTIAL_HEADER = 'x-agent-credential' as const;
 export const AGENT_CREDENTIAL_HEADER_DISPLAY = 'X-Agent-Credential' as const;
+// Retained for backward compatibility with callers importing the legacy
+// single-principal constants directly.
 export const AGENT_SERVICE_USER_ID = 'sys-agent-orchestrator' as const;
 export const AGENT_SERVICE_EMAIL = 'sys-agent-orchestrator@sheriabot.internal' as const;
 
-const ACTIVE_CREDENTIAL_CONFIG_KEY = 'agent.orchestrator.activeCredential' as const;
 const REVOKED_CREDENTIAL_TTL_SECONDS = 365 * 24 * 60 * 60;
 const CREDENTIAL_PREFIX = 'sb_agent_';
 
@@ -25,15 +26,60 @@ export const AGENT_CAPABILITIES = [
   'agents.marketing.draft.read',
   'agents.sales.draft.create',
   'agents.sales.draft.read',
+  'agents.automation.log.create',
+  'agents.automation.generate',
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
 
 const AGENT_CAPABILITY_SET: ReadonlySet<string> = new Set<string>(AGENT_CAPABILITIES);
 
+// Capabilities granted to the n8n automation surface only. Deliberately
+// excluded from the general orchestrator principal below so a leaked
+// automation secret can never call the broader agent-run/marketing/sales API.
+const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
+  'agents.automation.log.create',
+  'agents.automation.generate',
+];
+
+export type AgentPrincipalId = 'sys-agent-orchestrator' | 'sys-automation-orchestrator';
+
+interface AgentPrincipalDefinition {
+  principalId: AgentPrincipalId;
+  email: string;
+  fullName: string;
+  configKey: string;
+  capabilities: readonly AgentCapability[];
+}
+
+/**
+ * Distinct service principals, each with its own hashed secret (stored
+ * under its own SystemConfig key) and its own fixed capability grant.
+ * verifyCredential() matches a presented secret against every principal
+ * and returns only the matched principal's own capabilities  -  capabilities
+ * are never unioned across principals, and issuing/revoking one principal's
+ * credential never touches another's.
+ */
+export const AGENT_PRINCIPALS: Record<AgentPrincipalId, AgentPrincipalDefinition> = {
+  'sys-agent-orchestrator': {
+    principalId: 'sys-agent-orchestrator',
+    email: AGENT_SERVICE_EMAIL,
+    fullName: 'SheriaBot Agent Orchestrator',
+    configKey: 'agent.orchestrator.activeCredential',
+    capabilities: AGENT_CAPABILITIES.filter((c) => !AUTOMATION_CAPABILITIES.includes(c)),
+  },
+  'sys-automation-orchestrator': {
+    principalId: 'sys-automation-orchestrator',
+    email: 'sys-automation-orchestrator@sheriabot.internal',
+    fullName: 'SheriaBot Automation Orchestrator (n8n)',
+    configKey: 'agent.automationOrchestrator.activeCredential',
+    capabilities: AUTOMATION_CAPABILITIES,
+  },
+};
+
 export interface AgentIdentity {
-  userId: typeof AGENT_SERVICE_USER_ID;
-  email: typeof AGENT_SERVICE_EMAIL;
+  userId: AgentPrincipalId;
+  email: string;
   role: 'SERVICE';
   capabilities: readonly AgentCapability[];
 }
@@ -130,13 +176,14 @@ export class AgentCredentialService {
     this.redis = dependencies.redis ?? defaultRedis;
   }
 
-  async ensureServiceUser(): Promise<void> {
+  async ensureServiceUser(principalId: AgentPrincipalId = 'sys-agent-orchestrator'): Promise<void> {
+    const principal = AGENT_PRINCIPALS[principalId];
     await this.prisma.user.upsert({
-      where: { id: AGENT_SERVICE_USER_ID },
+      where: { id: principal.principalId },
       create: {
-        id: AGENT_SERVICE_USER_ID,
-        email: AGENT_SERVICE_EMAIL,
-        fullName: 'SheriaBot Agent Orchestrator',
+        id: principal.principalId,
+        email: principal.email,
+        fullName: principal.fullName,
         role: UserRole.SERVICE,
         status: UserStatus.ACTIVE,
         accountStatus: 'active',
@@ -144,8 +191,8 @@ export class AgentCredentialService {
         emailVerifiedAt: new Date(),
       },
       update: {
-        email: AGENT_SERVICE_EMAIL,
-        fullName: 'SheriaBot Agent Orchestrator',
+        email: principal.email,
+        fullName: principal.fullName,
         role: UserRole.SERVICE,
         status: UserStatus.ACTIVE,
         accountStatus: 'active',
@@ -155,11 +202,14 @@ export class AgentCredentialService {
     });
   }
 
-  async issueNewCredential(): Promise<{ secret: string; credentialHash: string; issuedAt: string; version: number }> {
-    await this.ensureServiceUser();
-    const previous = await this.getStoredCredential();
+  async issueNewCredential(
+    principalId: AgentPrincipalId = 'sys-agent-orchestrator',
+  ): Promise<{ secret: string; credentialHash: string; issuedAt: string; version: number }> {
+    const principal = AGENT_PRINCIPALS[principalId];
+    await this.ensureServiceUser(principalId);
+    const previous = await this.getStoredCredential(principal.configKey);
     if (previous) {
-      await this.revokeCredentialHash(previous.credentialHash);
+      await this.revokeCredentialHash(previous.credentialHash, principalId);
     }
 
     const secret = createSecret();
@@ -169,45 +219,62 @@ export class AgentCredentialService {
     const payload: StoredAgentCredential = { credentialHash, issuedAt, version };
 
     await this.prisma.systemConfig.upsert({
-      where: { key: ACTIVE_CREDENTIAL_CONFIG_KEY },
+      where: { key: principal.configKey },
       create: {
-        key: ACTIVE_CREDENTIAL_CONFIG_KEY,
+        key: principal.configKey,
         value: JSON.stringify(payload),
         type: 'json',
         category: 'security',
-        description: 'Active hashed credential for the autonomous agent service identity.',
-        updatedBy: AGENT_SERVICE_USER_ID,
+        description: `Active hashed credential for the ${principal.principalId} service identity.`,
+        updatedBy: principal.principalId,
       },
       update: {
         value: JSON.stringify(payload),
         type: 'json',
         category: 'security',
-        description: 'Active hashed credential for the autonomous agent service identity.',
-        updatedBy: AGENT_SERVICE_USER_ID,
+        description: `Active hashed credential for the ${principal.principalId} service identity.`,
+        updatedBy: principal.principalId,
       },
     });
 
-    logger.info({ type: 'agent_credential_issued', serviceUserId: AGENT_SERVICE_USER_ID, version });
+    logger.info({ type: 'agent_credential_issued', serviceUserId: principal.principalId, version });
     return { secret, credentialHash, issuedAt, version };
   }
 
-  async revokeActiveCredential(): Promise<void> {
-    const active = await this.getStoredCredential();
+  async revokeActiveCredential(principalId: AgentPrincipalId = 'sys-agent-orchestrator'): Promise<void> {
+    const principal = AGENT_PRINCIPALS[principalId];
+    const active = await this.getStoredCredential(principal.configKey);
     if (!active) return;
-    await this.revokeCredentialHash(active.credentialHash);
+    await this.revokeCredentialHash(active.credentialHash, principalId);
   }
 
   async verifyCredential(secret: string | null): Promise<AgentIdentity> {
     if (!secret) throw new AgentCredentialError('missing');
     if (!isPlausibleCredential(secret)) throw new AgentCredentialError('malformed');
 
-    const active = await this.getStoredCredential();
-    if (!active) throw new AgentCredentialError('not_configured');
-
     const presentedHash = sha256Hex(secret);
-    if (!constantTimeHexEqual(active.credentialHash, presentedHash)) {
-      throw new AgentCredentialError('invalid');
+    const principals = Object.values(AGENT_PRINCIPALS);
+    const stored = await Promise.all(
+      principals.map((principal) => this.getStoredCredential(principal.configKey)),
+    );
+
+    if (stored.every((candidate) => candidate === null)) {
+      throw new AgentCredentialError('not_configured');
     }
+
+    // Evaluate every principal (no early exit) so a mismatch on principal A
+    // doesn't take a measurably different code path than a match  -  presenting
+    // an invalid secret and presenting a secret for the "wrong" principal
+    // should be indistinguishable from timing alone.
+    let matched: AgentPrincipalDefinition | null = null;
+    for (let i = 0; i < principals.length; i++) {
+      const candidate = stored[i];
+      if (candidate && constantTimeHexEqual(candidate.credentialHash, presentedHash)) {
+        matched = principals[i];
+      }
+    }
+
+    if (!matched) throw new AgentCredentialError('invalid');
 
     let revoked: number;
     try {
@@ -219,26 +286,26 @@ export class AgentCredentialService {
 
     if (revoked === 1) throw new AgentCredentialError('revoked');
 
-    await this.ensureServiceUser();
+    await this.ensureServiceUser(matched.principalId);
     return {
-      userId: AGENT_SERVICE_USER_ID,
-      email: AGENT_SERVICE_EMAIL,
+      userId: matched.principalId,
+      email: matched.email,
       role: 'SERVICE',
-      capabilities: AGENT_CAPABILITIES,
+      capabilities: matched.capabilities,
     };
   }
 
-  private async getStoredCredential(): Promise<StoredAgentCredential | null> {
+  private async getStoredCredential(configKey: string): Promise<StoredAgentCredential | null> {
     const row = await this.prisma.systemConfig.findUnique({
-      where: { key: ACTIVE_CREDENTIAL_CONFIG_KEY },
+      where: { key: configKey },
       select: { value: true },
     });
     return parseStoredCredential(row?.value ?? null);
   }
 
-  private async revokeCredentialHash(credentialHash: string): Promise<void> {
+  private async revokeCredentialHash(credentialHash: string, principalId: AgentPrincipalId): Promise<void> {
     await this.redis.set(credentialRevocationKey(credentialHash), 'rotated', { ex: REVOKED_CREDENTIAL_TTL_SECONDS });
-    logger.info({ type: 'agent_credential_revoked', serviceUserId: AGENT_SERVICE_USER_ID });
+    logger.info({ type: 'agent_credential_revoked', serviceUserId: principalId });
   }
 }
 
