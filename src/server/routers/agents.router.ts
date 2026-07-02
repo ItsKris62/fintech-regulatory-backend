@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { router, agentProcedure } from '../trpc/trpc';
 import { agentRunService } from '@/modules/agents/agent-run.service';
+import { regulatoryIntelligenceAgent } from '@/modules/agents/regulatory-intelligence/reg-intel.agent';
 
 type JsonInputValue = string | number | boolean | JsonInputValue[] | { [key: string]: JsonInputValue };
 
@@ -66,4 +67,30 @@ export const agentsRouter = router({
       humanApproved: z.boolean().optional(),
     }))
     .mutation(async ({ input }) => agentRunService.createReport(input)),
+  regIntel: router({
+    runScan: agentProcedure('agents.run.create')
+      .input(z.object({
+        idempotencyKey: z.string().min(8).max(200).optional(),
+        maxItems: z.number().int().positive().max(100).optional(),
+      }).optional())
+      .mutation(async ({ input }) => regulatoryIntelligenceAgent.runScan(input ?? {})),
+
+    getLatestReport: agentProcedure('agents.run.read')
+      .query(async () => regulatoryIntelligenceAgent.getLatestReport()),
+
+    listSignals: agentProcedure('agents.run.read')
+      .input(z.object({
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().positive().max(100).default(20),
+        jurisdiction: z.string().min(1).optional(),
+        severity: z.string().min(1).optional(),
+        corpusGap: z.boolean().optional(),
+        status: z.string().min(1).optional(),
+      }))
+      .query(async ({ input }) => regulatoryIntelligenceAgent.listSignals(input)),
+
+    acknowledgeSignal: agentProcedure('agents.run.advance')
+      .input(z.object({ signalId: z.string().min(1) }))
+      .mutation(async ({ input }) => regulatoryIntelligenceAgent.acknowledgeSignal(input.signalId)),
+  }),
 });
