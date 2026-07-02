@@ -1479,6 +1479,31 @@ internal `xml-builder` dep alignment. Monitor `@aws-sdk/client-s3` release notes
 
 ---
 
+## Known Test Failures (pre-existing, unrelated to security audit)
+
+### Enterprise Policy Generator export message assertions [PRE-EXISTING]
+
+| Field        | Value |
+|--------------|-------|
+| Severity     | Low (test-only, not a runtime defect) |
+| Status       | **Open** -- pre-existing, first observed during Phase B Batch B5 verification |
+| Found in     | `src/server/routers/enterprise-policy.router.test.ts` |
+
+**Symptom:** 2 of 20 tests fail in `enterprise-policy.router.test.ts` /
+`enterprise-policy-frontend-wiring.test.ts`. Both failures are string
+assertions against the PDF-export rejection message (`exportBody.toContain(...)`
+against `"message: 'PDF export is not availab..."`) not matching the current
+router source. Not related to any B-batch agent work; verified independently by
+running the suite in isolation before and after Batch B5 changes with an
+identical 2-failed/18-passed result.
+
+**Action:** Update the test assertions to match the current PDF-export
+rejection message, or confirm the message text is correct and adjust the
+`toContain` expectations. Tracked here so future batches can confirm this
+count/content is unchanged rather than re-diagnosing it each time.
+
+---
+
 ## Next Sprint Priorities (in order)
 
 1. **Automated test coverage** -- Vitest setup, integration tests for

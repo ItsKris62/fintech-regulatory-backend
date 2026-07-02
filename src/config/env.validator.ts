@@ -89,6 +89,15 @@ const envSchema = z.object({
   AGENT_MAX_COST_PER_DAY_USD: z.coerce.number().positive().default(20),
   AGENT_MAX_ITERATIONS_PER_RUN: z.coerce.number().int().positive().default(25),
 
+  // -- Analytics (PostHog, read-only HogQL query API) ------------------------
+  // Optional: the sales/growth agent degrades to unavailable engagement data
+  // when these are unset. POSTHOG_PERSONAL_API_KEY is a query-scoped Personal
+  // API Key, distinct from a project capture key. No event capture ever uses
+  // these values.
+  POSTHOG_PERSONAL_API_KEY: z.string().optional(),
+  POSTHOG_HOST: z.string().url().optional(),
+  POSTHOG_PROJECT_ID: z.string().optional(),
+
   // -- Rate Limiting --------------------------------------------------------
   RATE_LIMIT_MAX: z.string().default('100').transform(Number).pipe(z.number().positive()),
   RATE_LIMIT_WINDOW: z.string().default('15m'),

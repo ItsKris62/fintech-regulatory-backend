@@ -244,6 +244,7 @@ model Organization {
   corpusGapReports    CorpusGapReport[]
   customFrameworks    CustomFramework[]
   enterpriseContracts EnterpriseContract[]
+  salesOutreachDrafts SalesOutreachDraft[]
 
   @@index([name])
   @@index([verificationStatus])
@@ -3377,6 +3378,7 @@ model AgentRun {
   reports        AgentReport[]
   regulatorySignals RegulatorySignal[]
   marketingDrafts MarketingDraft[]
+  salesOutreachDrafts SalesOutreachDraft[]
 }
 
 model AgentReport {
@@ -3445,6 +3447,7 @@ model RegulatorySignal {
   reviewedAt            DateTime?
 
   agentRun              AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  salesOutreachDrafts   SalesOutreachDraft[]
 
   @@unique([sourceUrl, contentHash])
   @@index([normalizedUrl])
@@ -3456,6 +3459,38 @@ model RegulatorySignal {
   @@index([agentRunId])
   @@index([createdAt])
 }
+
+model SalesOutreachDraft {
+  id                String   @id @default(cuid())
+  sourceSignalId    String
+  organizationId    String
+  triggerReason     String   @db.Text
+  engagementContext Json?
+  subject           String
+  body              String   @db.Text
+  priority          String
+  status            String   @default("DRAFT")
+  agentRunId        String
+  generatedAt       DateTime @default(now())
+  reviewedAt        DateTime?
+  reviewedBy        String?
+  editedBody        String?  @db.Text
+  sourceFingerprint String
+  metadata          Json?
+
+  sourceSignal      RegulatorySignal @relation(fields: [sourceSignalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agentRun          AgentRun         @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([sourceFingerprint])
+  @@index([organizationId])
+  @@index([status])
+  @@index([priority])
+  @@index([agentRunId])
+  @@index([sourceSignalId])
+  @@index([generatedAt])
+}
+
 enum BlogDraftGenerationStatus {
   PENDING
   RUNNING

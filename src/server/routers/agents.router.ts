@@ -4,6 +4,8 @@ import { agentRunService } from '@/modules/agents/agent-run.service';
 import { regulatoryIntelligenceAgent } from '@/modules/agents/regulatory-intelligence/reg-intel.agent';
 import { marketingAgent } from '@/modules/agents/marketing/marketing.agent';
 import { MARKETING_CONTENT_TYPES, MARKETING_DRAFT_STATUSES } from '@/modules/agents/marketing/types';
+import { salesGrowthAgent } from '@/modules/agents/sales/sales-growth.agent';
+import { SALES_DRAFT_STATUSES } from '@/modules/agents/sales/types';
 
 type JsonInputValue = string | number | boolean | JsonInputValue[] | { [key: string]: JsonInputValue };
 
@@ -128,5 +130,38 @@ export const agentsRouter = router({
     acknowledgeSignal: agentProcedure('agents.run.advance')
       .input(z.object({ signalId: z.string().min(1) }))
       .mutation(async ({ input }) => regulatoryIntelligenceAgent.acknowledgeSignal(input.signalId)),
+  }),
+  sales: router({
+    runDrafting: agentProcedure('agents.sales.draft.create')
+      .input(z.object({
+        idempotencyKey: z.string().min(8).max(200).optional(),
+        maxProspects: z.number().int().positive().max(50).optional(),
+      }).optional())
+      .mutation(async ({ input }) => salesGrowthAgent.runDrafting(input ?? {})),
+
+    listDrafts: agentProcedure('agents.sales.draft.read')
+      .input(z.object({
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().positive().max(100).default(20),
+        status: z.enum(SALES_DRAFT_STATUSES).optional(),
+      }))
+      .query(async ({ input }) => salesGrowthAgent.listDrafts(input)),
+
+    getDraft: agentProcedure('agents.sales.draft.read')
+      .input(z.object({ draftId: z.string().min(1) }))
+      .query(async ({ input }) => salesGrowthAgent.getDraft(input.draftId)),
+
+    reviewDraft: adminProcedure
+      .input(z.object({
+        draftId: z.string().min(1),
+        status: z.enum(['REVIEWED', 'DISMISSED']),
+        editedBody: z.string().max(10000).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => salesGrowthAgent.reviewDraft({
+        draftId: input.draftId,
+        status: input.status,
+        editedBody: input.editedBody,
+        reviewedBy: ctx.user!.id,
+      })),
   }),
 });

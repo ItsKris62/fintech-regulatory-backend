@@ -83,6 +83,14 @@ const envSchema = z.object({
   AGENT_MAX_COST_PER_DAY_USD: z.coerce.number().positive().default(20),
   AGENT_MAX_ITERATIONS_PER_RUN: z.coerce.number().int().positive().default(25),
 
+  // PostHog read-only query access (HogQL query API). Optional - the
+  // sales/growth agent's engagement lookup degrades to unavailable when unset.
+  // POSTHOG_PERSONAL_API_KEY is a query-scoped Personal API Key, distinct from
+  // a project capture key. Never used for event capture or property writes.
+  POSTHOG_PERSONAL_API_KEY: z.string().optional(),
+  POSTHOG_HOST: z.string().url().optional(),
+  POSTHOG_PROJECT_ID: z.string().optional(),
+
   // Cloudflare R2  -  public bucket (avatars, logos, branding)
   R2_PUBLIC_ACCESS_KEY_ID: z.string().min(1, 'R2 public bucket access key is required'),
   R2_PUBLIC_SECRET_ACCESS_KEY: z.string().min(1, 'R2 public bucket secret key is required'),
@@ -184,6 +192,11 @@ export const appConfig = {
     maxCostPerRunUsd: env.AGENT_MAX_COST_PER_RUN_USD,
     maxCostPerDayUsd: env.AGENT_MAX_COST_PER_DAY_USD,
     maxIterationsPerRun: env.AGENT_MAX_ITERATIONS_PER_RUN,
+  },
+  posthog: {
+    personalApiKey: env.POSTHOG_PERSONAL_API_KEY,
+    host: env.POSTHOG_HOST,
+    projectId: env.POSTHOG_PROJECT_ID,
   },
 
   // Server
