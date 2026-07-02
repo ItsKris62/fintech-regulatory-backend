@@ -1,7 +1,9 @@
 import { z } from 'zod';
-import { router, agentProcedure } from '../trpc/trpc';
+import { router, agentProcedure, adminProcedure } from '../trpc/trpc';
 import { agentRunService } from '@/modules/agents/agent-run.service';
 import { regulatoryIntelligenceAgent } from '@/modules/agents/regulatory-intelligence/reg-intel.agent';
+import { marketingAgent } from '@/modules/agents/marketing/marketing.agent';
+import { MARKETING_CONTENT_TYPES, MARKETING_DRAFT_STATUSES } from '@/modules/agents/marketing/types';
 
 type JsonInputValue = string | number | boolean | JsonInputValue[] | { [key: string]: JsonInputValue };
 
@@ -67,6 +69,40 @@ export const agentsRouter = router({
       humanApproved: z.boolean().optional(),
     }))
     .mutation(async ({ input }) => agentRunService.createReport(input)),
+  marketing: router({
+    runDrafting: agentProcedure('agents.marketing.draft.create')
+      .input(z.object({
+        idempotencyKey: z.string().min(8).max(200).optional(),
+        maxSignals: z.number().int().positive().max(50).optional(),
+      }).optional())
+      .mutation(async ({ input }) => marketingAgent.runDrafting(input ?? {})),
+
+    listDrafts: agentProcedure('agents.marketing.draft.read')
+      .input(z.object({
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().positive().max(100).default(20),
+        status: z.enum(MARKETING_DRAFT_STATUSES).optional(),
+        contentType: z.enum(MARKETING_CONTENT_TYPES).optional(),
+      }))
+      .query(async ({ input }) => marketingAgent.listDrafts(input)),
+
+    getDraft: agentProcedure('agents.marketing.draft.read')
+      .input(z.object({ draftId: z.string().min(1) }))
+      .query(async ({ input }) => marketingAgent.getDraft(input.draftId)),
+
+    reviewDraft: adminProcedure
+      .input(z.object({
+        draftId: z.string().min(1),
+        status: z.enum(['REVIEWED', 'DISMISSED']),
+        editedBody: z.string().max(10000).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => marketingAgent.reviewDraft({
+        draftId: input.draftId,
+        status: input.status,
+        editedBody: input.editedBody,
+        reviewedBy: ctx.user!.id,
+      })),
+  }),
   regIntel: router({
     runScan: agentProcedure('agents.run.create')
       .input(z.object({
