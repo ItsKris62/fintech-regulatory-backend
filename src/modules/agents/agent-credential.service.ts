@@ -21,6 +21,8 @@ export const AGENT_CAPABILITIES = [
   'agents.run.complete',
   'agents.run.fail',
   'agents.report.create',
+  'agents.marketing.draft.create',
+  'agents.marketing.draft.read',
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

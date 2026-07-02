@@ -3375,6 +3375,8 @@ model AgentRun {
   error          String?
   metadata       Json?
   reports        AgentReport[]
+  regulatorySignals RegulatorySignal[]
+  marketingDrafts MarketingDraft[]
 }
 
 model AgentReport {
@@ -3389,6 +3391,71 @@ model AgentReport {
   run                AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
+model MarketingDraft {
+  id                String   @id @default(cuid())
+  contentType       String
+  sourceSignalIds   Json     @default("[]")
+  sourceFingerprint String
+  title             String
+  body              String   @db.Text
+  brief             String?  @db.Text
+  status            String   @default("DRAFT")
+  agentRunId        String
+  generatedAt       DateTime @default(now())
+  reviewedAt        DateTime?
+  reviewedBy        String?
+  editedBody        String?  @db.Text
+  metadata          Json?
+
+  agentRun          AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([contentType, sourceFingerprint])
+  @@index([contentType])
+  @@index([status])
+  @@index([agentRunId])
+  @@index([generatedAt])
+}
+
+model RegulatorySignal {
+  id                    String   @id @default(cuid())
+  sourceUrl             String
+  normalizedUrl         String
+  contentHash           String
+  sourceItemId          String?
+  sourceMonitorId       String?
+  jurisdiction          String
+  regulatoryBody        String
+  documentType          String
+  title                 String
+  summary               String   @db.Text
+  severity              String
+  affectedSectors       Json     @default("[]")
+  affectedObligations   Json     @default("[]")
+  effectiveDate         DateTime?
+  complianceWindowDays  Int?
+  corpusGapDetected     Boolean  @default(false)
+  corpusGapDetails      Json?
+  pilotFintechsAffected Json     @default("[]")
+  rawContent            String?  @db.Text
+  agentRunId            String
+  status                String   @default("NEW")
+  providerTrace         Json?
+  createdAt             DateTime @default(now())
+  processedAt           DateTime?
+  reviewedAt            DateTime?
+
+  agentRun              AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([sourceUrl, contentHash])
+  @@index([normalizedUrl])
+  @@index([jurisdiction])
+  @@index([regulatoryBody])
+  @@index([severity])
+  @@index([status])
+  @@index([corpusGapDetected])
+  @@index([agentRunId])
+  @@index([createdAt])
+}
 enum BlogDraftGenerationStatus {
   PENDING
   RUNNING
