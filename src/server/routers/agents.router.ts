@@ -9,6 +9,7 @@ import { salesGrowthAgent } from '@/modules/agents/sales/sales-growth.agent';
 import { SALES_DRAFT_STATUSES } from '@/modules/agents/sales/types';
 import { automationService } from '@/modules/agents/automation/automation.service';
 import { appConfig } from '@/config/app.config';
+import { productBiAgent } from '@/modules/agents/product-bi/product-bi.agent';
 
 type JsonInputValue = string | number | boolean | JsonInputValue[] | { [key: string]: JsonInputValue };
 
@@ -202,5 +203,26 @@ export const agentsRouter = router({
         maxTokens: z.number().int().positive().max(4000),
       }))
       .mutation(async ({ input }) => automationService.generate(input)),
+  }),
+  productBi: router({
+    // Read-only synthesis across ALL organizations, not one tenant - deliberately
+    // reachable only via agentProcedure, never orgMemberProcedure or any other
+    // tenant-scoped procedure. See product-bi.safety.test.ts.
+    runReport: agentProcedure('agents.productBi.report.create')
+      .input(z.object({
+        idempotencyKey: z.string().min(8).max(200).optional(),
+        windowDays: z.number().int().positive().max(90).optional(),
+      }).optional())
+      .mutation(async ({ input }) => productBiAgent.runReport(input ?? {})),
+
+    getLatestReport: agentProcedure('agents.productBi.report.read')
+      .query(async () => productBiAgent.getLatestReport()),
+
+    listReports: agentProcedure('agents.productBi.report.read')
+      .input(z.object({
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().positive().max(100).default(20),
+      }))
+      .query(async ({ input }) => productBiAgent.listReports(input)),
   }),
 });

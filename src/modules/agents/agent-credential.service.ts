@@ -28,6 +28,8 @@ export const AGENT_CAPABILITIES = [
   'agents.sales.draft.read',
   'agents.automation.log.create',
   'agents.automation.generate',
+  'agents.productBi.report.create',
+  'agents.productBi.report.read',
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
