@@ -1481,26 +1481,61 @@ internal `xml-builder` dep alignment. Monitor `@aws-sdk/client-s3` release notes
 
 ## Known Test Failures (pre-existing, unrelated to security audit)
 
-### Enterprise Policy Generator export message assertions [PRE-EXISTING]
+### Enterprise Policy Generator test/source drift [PRE-EXISTING]
 
 | Field        | Value |
 |--------------|-------|
 | Severity     | Low (test-only, not a runtime defect) |
-| Status       | **Open** -- pre-existing, first observed during Phase B Batch B5 verification |
-| Found in     | `src/server/routers/enterprise-policy.router.test.ts` |
+| Status       | **Open** -- pre-existing, first observed during Phase B Batch B5 verification, re-confirmed through Batch B9 (2026-07-03), still 2 failures, same root causes |
+| Found in     | `src/server/routers/enterprise-policy.router.test.ts`, `src/server/routers/enterprise-policy-frontend-wiring.test.ts` |
 
-**Symptom:** 2 of 20 tests fail in `enterprise-policy.router.test.ts` /
-`enterprise-policy-frontend-wiring.test.ts`. Both failures are string
-assertions against the PDF-export rejection message (`exportBody.toContain(...)`
-against `"message: 'PDF export is not availab..."`) not matching the current
-router source. Not related to any B-batch agent work; verified independently by
-running the suite in isolation before and after Batch B5 changes with an
-identical 2-failed/18-passed result.
+**Symptom:** 2 of 20 tests fail across these two files. Corrected 2026-07-03
+during B9's follow-up check -- **the two failures have two distinct, unrelated
+root causes**, not one shared cause as previously described here:
 
-**Action:** Update the test assertions to match the current PDF-export
-rejection message, or confirm the message text is correct and adjust the
-`toContain` expectations. Tracked here so future batches can confirm this
-count/content is unchanged rather than re-diagnosing it each time.
+1. `enterprise-policy.router.test.ts` > `'returns a clean BAD_REQUEST for PDF
+   export without logging or updating format'`: a genuine string mismatch
+   between the test's expected PDF-rejection message and the router's actual
+   one. Router (`enterprise-policy.router.ts:738`) currently says
+   `'PDF export is not available yet. Please export DOCX.'`; the test asserts
+   `'PDF export is not available in this environment. Please export as
+   DOCX.'`. Backend-only, single-repo.
+2. `enterprise-policy-frontend-wiring.test.ts` > `'detail page presents real
+   DOCX export and section editing workflow'`: **not** a message-text issue --
+   this test reads live source out of the sibling `fintech-regulatory-platform`
+   repo (`frontendRoot = resolve(repoRoot, 'fintech-regulatory-platform')`,
+   `enterprise-policy-frontend-wiring.test.ts:5-9`) and asserts the literal
+   string `'Export DOCX'` appears on the policy detail page. That frontend's
+   export control has since become a dropdown menu (`Export as DOCX` /
+   `Export as PDF` menu items under a single `Export`/`Exporting...` button --
+   confirmed directly in
+   `fintech-regulatory-platform/app/(dashboard)/regulator/policy-generator/[id]/page.tsx`
+   lines ~286-297), so the literal substring this test looks for no longer
+   exists anywhere in that file. This is cross-repo drift: the frontend
+   changed independently of any backend batch, and this backend test's
+   assertion was never updated to match.
+
+Neither failure is related to any B-batch agent work; verified independently
+by running the suite in isolation before and after Batch B5's changes (2f/18p)
+and again on B9's committed HEAD (2f/644p full suite, `git stash` confirmed
+identical failures reproduce with zero B9 changes applied).
+
+**Action:** Two separate fixes needed, not one:
+1. Update the router test's expected string to match the current rejection
+   message (or update the router's message and confirm the test's wording was
+   the intended one -- whichever is actually correct product copy).
+2. Update the frontend-wiring test's assertion to match the current dropdown-
+   based export UI (e.g. assert `'Export as DOCX'` and `'Export as PDF'`
+   instead of the old single-button `'Export DOCX'`), or -- given this is a
+   cross-repo assertion that broke silently once already -- consider whether
+   asserting on frontend button copy from the backend repo is worth keeping
+   at all versus a coarser invariant (e.g. "some DOCX export affordance
+   exists") that's less brittle to copy changes.
+
+This has now surfaced across 4+ Phase B batches (B5 through B9) as a standing
+baseline exception every batch has had to re-verify rather than re-diagnose.
+Worth a permanent fix in its own small pass rather than continuing to carry it
+forward -- flagged by Chris during B9 sign-off as not urgent, but due.
 
 ---
 
