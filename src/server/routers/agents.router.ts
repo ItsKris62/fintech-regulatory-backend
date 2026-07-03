@@ -11,6 +11,7 @@ import { automationService } from '@/modules/agents/automation/automation.servic
 import { appConfig } from '@/config/app.config';
 import { productBiAgent } from '@/modules/agents/product-bi/product-bi.agent';
 import { securityOpsAgent } from '@/modules/agents/security-ops/security-ops.agent';
+import { chiefOfStaffAgent } from '@/modules/agents/chief-of-staff/chief-of-staff.agent';
 
 type JsonInputValue = string | number | boolean | JsonInputValue[] | { [key: string]: JsonInputValue };
 
@@ -246,5 +247,25 @@ export const agentsRouter = router({
         limit: z.number().int().positive().max(100).default(20),
       }))
       .query(async ({ input }) => securityOpsAgent.listReports(input)),
+  }),
+  chiefOfStaff: router({
+    // Reads the latest AgentReport from B3-B7 and synthesizes one weekly
+    // brief - deliberately reachable only via agentProcedure. See
+    // chief-of-staff.safety.test.ts.
+    runBrief: agentProcedure('agents.chiefOfStaff.report.create')
+      .input(z.object({
+        idempotencyKey: z.string().min(8).max(200).optional(),
+      }).optional())
+      .mutation(async ({ input }) => chiefOfStaffAgent.runBrief(input ?? {})),
+
+    getLatestReport: agentProcedure('agents.chiefOfStaff.report.read')
+      .query(async () => chiefOfStaffAgent.getLatestReport()),
+
+    listReports: agentProcedure('agents.chiefOfStaff.report.read')
+      .input(z.object({
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().positive().max(100).default(20),
+      }))
+      .query(async ({ input }) => chiefOfStaffAgent.listReports(input)),
   }),
 });
