@@ -10,6 +10,7 @@ import { SALES_DRAFT_STATUSES } from '@/modules/agents/sales/types';
 import { automationService } from '@/modules/agents/automation/automation.service';
 import { appConfig } from '@/config/app.config';
 import { productBiAgent } from '@/modules/agents/product-bi/product-bi.agent';
+import { securityOpsAgent } from '@/modules/agents/security-ops/security-ops.agent';
 
 type JsonInputValue = string | number | boolean | JsonInputValue[] | { [key: string]: JsonInputValue };
 
@@ -224,5 +225,26 @@ export const agentsRouter = router({
         limit: z.number().int().positive().max(100).default(20),
       }))
       .query(async ({ input }) => productBiAgent.listReports(input)),
+  }),
+  securityOps: router({
+    // Read-only synthesis across ALL organizations' agent-workforce spend plus
+    // process-level service health, not one tenant - deliberately reachable
+    // only via agentProcedure. See security-ops.safety.test.ts.
+    runReport: agentProcedure('agents.securityOps.report.create')
+      .input(z.object({
+        idempotencyKey: z.string().min(8).max(200).optional(),
+        windowDays: z.number().int().positive().max(30).optional(),
+      }).optional())
+      .mutation(async ({ input }) => securityOpsAgent.runReport(input ?? {})),
+
+    getLatestReport: agentProcedure('agents.securityOps.report.read')
+      .query(async () => securityOpsAgent.getLatestReport()),
+
+    listReports: agentProcedure('agents.securityOps.report.read')
+      .input(z.object({
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().positive().max(100).default(20),
+      }))
+      .query(async ({ input }) => securityOpsAgent.listReports(input)),
   }),
 });
