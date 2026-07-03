@@ -91,6 +91,17 @@ const envSchema = z.object({
   AUTOMATION_GENERATE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
   AUTOMATION_GENERATE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // n8n scheduler/trigger surface (agents.regIntel.runScan, agents.marketing.
+  // runDrafting, agents.sales.runDrafting, agents.productBi.runReport, agents.
+  // securityOps.runReport, agents.chiefOfStaff.runBrief)  -  one shared bucket
+  // per procedure (distinct action keys, same ceiling), separate from the
+  // agent-auth rate limit in requireAgentCapability and from the automation
+  // buckets above. Expected call volume is at most once per cadence window
+  // (daily or twice-weekly per docs/sprints/b9-n8n-trigger-wiring-stage1-audit.md),
+  // so the default only needs to absorb retries/overlap, not steady throughput.
+  AGENT_TRIGGER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  AGENT_TRIGGER_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // PostHog read-only query access (HogQL query API). Optional - the
   // sales/growth agent's engagement lookup degrades to unavailable when unset.
   // POSTHOG_PERSONAL_API_KEY is a query-scoped Personal API Key, distinct from
@@ -205,6 +216,10 @@ export const appConfig = {
       logRateLimitWindowSeconds: env.AUTOMATION_LOG_RATE_LIMIT_WINDOW_SECONDS,
       generateRateLimitMax: env.AUTOMATION_GENERATE_RATE_LIMIT_MAX,
       generateRateLimitWindowSeconds: env.AUTOMATION_GENERATE_RATE_LIMIT_WINDOW_SECONDS,
+    },
+    trigger: {
+      rateLimitMax: env.AGENT_TRIGGER_RATE_LIMIT_MAX,
+      rateLimitWindowSeconds: env.AGENT_TRIGGER_RATE_LIMIT_WINDOW_SECONDS,
     },
   },
   posthog: {

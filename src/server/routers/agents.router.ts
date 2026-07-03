@@ -85,7 +85,14 @@ export const agentsRouter = router({
     }))
     .mutation(async ({ input }) => agentRunService.createReport(input)),
   marketing: router({
+    // Callable only by sys-scheduler-orchestrator (n8n trigger surface, Tue/Fri
+    // per docs/sprints/b9-n8n-trigger-wiring-stage1-audit.md). sys-agent-orchestrator
+    // does NOT hold this capability - trigger capabilities are disjoint from its
+    // grant, same pattern as AUTOMATION_CAPABILITIES.
     runDrafting: agentProcedure('agents.marketing.draft.create')
+      .use(rateLimited('agent-trigger-marketing-runDrafting', appConfig.agents.trigger.rateLimitMax, {
+        window: appConfig.agents.trigger.rateLimitWindowSeconds,
+      }))
       .input(z.object({
         idempotencyKey: z.string().min(8).max(200).optional(),
         maxSignals: z.number().int().positive().max(50).optional(),
@@ -119,7 +126,16 @@ export const agentsRouter = router({
       })),
   }),
   regIntel: router({
-    runScan: agentProcedure('agents.run.create')
+    // Callable only by sys-scheduler-orchestrator (n8n trigger surface, daily
+    // per docs/sprints/b9-n8n-trigger-wiring-stage1-audit.md). sys-agent-orchestrator
+    // does NOT hold this capability - trigger capabilities are disjoint from its
+    // grant, same pattern as AUTOMATION_CAPABILITIES. Deliberately its own
+    // dedicated capability, not the shared agents.run.create the generic
+    // beginRun mutation uses  -  see that audit's Section 2.
+    runScan: agentProcedure('agents.regIntel.run.create')
+      .use(rateLimited('agent-trigger-regIntel-runScan', appConfig.agents.trigger.rateLimitMax, {
+        window: appConfig.agents.trigger.rateLimitWindowSeconds,
+      }))
       .input(z.object({
         idempotencyKey: z.string().min(8).max(200).optional(),
         maxItems: z.number().int().positive().max(100).optional(),
@@ -145,7 +161,14 @@ export const agentsRouter = router({
       .mutation(async ({ input }) => regulatoryIntelligenceAgent.acknowledgeSignal(input.signalId)),
   }),
   sales: router({
+    // Callable only by sys-scheduler-orchestrator (n8n trigger surface, Tue/Fri
+    // per docs/sprints/b9-n8n-trigger-wiring-stage1-audit.md). sys-agent-orchestrator
+    // does NOT hold this capability - trigger capabilities are disjoint from its
+    // grant, same pattern as AUTOMATION_CAPABILITIES.
     runDrafting: agentProcedure('agents.sales.draft.create')
+      .use(rateLimited('agent-trigger-sales-runDrafting', appConfig.agents.trigger.rateLimitMax, {
+        window: appConfig.agents.trigger.rateLimitWindowSeconds,
+      }))
       .input(z.object({
         idempotencyKey: z.string().min(8).max(200).optional(),
         maxProspects: z.number().int().positive().max(50).optional(),
@@ -210,7 +233,14 @@ export const agentsRouter = router({
     // Read-only synthesis across ALL organizations, not one tenant - deliberately
     // reachable only via agentProcedure, never orgMemberProcedure or any other
     // tenant-scoped procedure. See product-bi.safety.test.ts.
+    // Callable only by sys-scheduler-orchestrator (n8n trigger surface, Fri only
+    // per docs/sprints/b9-n8n-trigger-wiring-stage1-audit.md). sys-agent-orchestrator
+    // does NOT hold this capability - trigger capabilities are disjoint from its
+    // grant, same pattern as AUTOMATION_CAPABILITIES.
     runReport: agentProcedure('agents.productBi.report.create')
+      .use(rateLimited('agent-trigger-productBi-runReport', appConfig.agents.trigger.rateLimitMax, {
+        window: appConfig.agents.trigger.rateLimitWindowSeconds,
+      }))
       .input(z.object({
         idempotencyKey: z.string().min(8).max(200).optional(),
         windowDays: z.number().int().positive().max(90).optional(),
@@ -231,7 +261,14 @@ export const agentsRouter = router({
     // Read-only synthesis across ALL organizations' agent-workforce spend plus
     // process-level service health, not one tenant - deliberately reachable
     // only via agentProcedure. See security-ops.safety.test.ts.
+    // Callable only by sys-scheduler-orchestrator (n8n trigger surface, daily
+    // per docs/sprints/b9-n8n-trigger-wiring-stage1-audit.md). sys-agent-orchestrator
+    // does NOT hold this capability - trigger capabilities are disjoint from its
+    // grant, same pattern as AUTOMATION_CAPABILITIES.
     runReport: agentProcedure('agents.securityOps.report.create')
+      .use(rateLimited('agent-trigger-securityOps-runReport', appConfig.agents.trigger.rateLimitMax, {
+        window: appConfig.agents.trigger.rateLimitWindowSeconds,
+      }))
       .input(z.object({
         idempotencyKey: z.string().min(8).max(200).optional(),
         windowDays: z.number().int().positive().max(30).optional(),
@@ -252,7 +289,15 @@ export const agentsRouter = router({
     // Reads the latest AgentReport from B3-B7 and synthesizes one weekly
     // brief - deliberately reachable only via agentProcedure. See
     // chief-of-staff.safety.test.ts.
+    // Callable only by sys-scheduler-orchestrator (n8n trigger surface, Fri
+    // only, scheduled last per docs/sprints/b9-n8n-trigger-wiring-stage1-audit.md).
+    // sys-agent-orchestrator does NOT hold this capability - trigger
+    // capabilities are disjoint from its grant, same pattern as
+    // AUTOMATION_CAPABILITIES.
     runBrief: agentProcedure('agents.chiefOfStaff.report.create')
+      .use(rateLimited('agent-trigger-chiefOfStaff-runBrief', appConfig.agents.trigger.rateLimitMax, {
+        window: appConfig.agents.trigger.rateLimitWindowSeconds,
+      }))
       .input(z.object({
         idempotencyKey: z.string().min(8).max(200).optional(),
       }).optional())

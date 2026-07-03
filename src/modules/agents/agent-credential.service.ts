@@ -22,6 +22,7 @@ export const AGENT_CAPABILITIES = [
   'agents.run.complete',
   'agents.run.fail',
   'agents.report.create',
+  'agents.regIntel.run.create',
   'agents.marketing.draft.create',
   'agents.marketing.draft.read',
   'agents.sales.draft.create',
@@ -48,7 +49,24 @@ const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
   'agents.automation.generate',
 ];
 
-export type AgentPrincipalId = 'sys-agent-orchestrator' | 'sys-automation-orchestrator';
+// Capabilities granted to the n8n scheduler surface only  -  exactly one per
+// B3-B8 `run*` mutation, nothing else. Deliberately excluded from the general
+// orchestrator principal below (same disjoint pattern as AUTOMATION_CAPABILITIES)
+// so a leaked scheduler secret can only kick off scheduled work, never read
+// drafts/reports/signals or advance/complete/fail a run directly.
+const TRIGGER_CAPABILITIES: readonly AgentCapability[] = [
+  'agents.regIntel.run.create',
+  'agents.marketing.draft.create',
+  'agents.sales.draft.create',
+  'agents.productBi.report.create',
+  'agents.securityOps.report.create',
+  'agents.chiefOfStaff.report.create',
+];
+
+export type AgentPrincipalId =
+  | 'sys-agent-orchestrator'
+  | 'sys-automation-orchestrator'
+  | 'sys-scheduler-orchestrator';
 
 interface AgentPrincipalDefinition {
   principalId: AgentPrincipalId;
@@ -72,7 +90,9 @@ export const AGENT_PRINCIPALS: Record<AgentPrincipalId, AgentPrincipalDefinition
     email: AGENT_SERVICE_EMAIL,
     fullName: 'SheriaBot Agent Orchestrator',
     configKey: 'agent.orchestrator.activeCredential',
-    capabilities: AGENT_CAPABILITIES.filter((c) => !AUTOMATION_CAPABILITIES.includes(c)),
+    capabilities: AGENT_CAPABILITIES.filter(
+      (c) => !AUTOMATION_CAPABILITIES.includes(c) && !TRIGGER_CAPABILITIES.includes(c),
+    ),
   },
   'sys-automation-orchestrator': {
     principalId: 'sys-automation-orchestrator',
@@ -80,6 +100,13 @@ export const AGENT_PRINCIPALS: Record<AgentPrincipalId, AgentPrincipalDefinition
     fullName: 'SheriaBot Automation Orchestrator (n8n)',
     configKey: 'agent.automationOrchestrator.activeCredential',
     capabilities: AUTOMATION_CAPABILITIES,
+  },
+  'sys-scheduler-orchestrator': {
+    principalId: 'sys-scheduler-orchestrator',
+    email: 'sys-scheduler-orchestrator@sheriabot.internal',
+    fullName: 'SheriaBot Scheduler Orchestrator (n8n)',
+    configKey: 'agent.schedulerOrchestrator.activeCredential',
+    capabilities: TRIGGER_CAPABILITIES,
   },
 };
 

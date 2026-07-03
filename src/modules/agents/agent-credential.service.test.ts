@@ -14,6 +14,7 @@ function hash(value: string): string {
 
 const ORCHESTRATOR_KEY = AGENT_PRINCIPALS['sys-agent-orchestrator'].configKey;
 const AUTOMATION_KEY = AGENT_PRINCIPALS['sys-automation-orchestrator'].configKey;
+const SCHEDULER_KEY = AGENT_PRINCIPALS['sys-scheduler-orchestrator'].configKey;
 
 /**
  * @param stored - map of SystemConfig key -> secret whose hash should be considered active for that key
@@ -135,6 +136,75 @@ describe('AgentCredentialService', () => {
       const service = new AgentCredentialService({ prisma, redis } as unknown as AgentCredentialServiceDependencies);
 
       await expectCredentialReason(service.verifyCredential(automationSecret), 'revoked');
+      const orchestratorIdentity = await service.verifyCredential(orchestratorSecret);
+      expect(orchestratorIdentity.userId).toBe('sys-agent-orchestrator');
+    });
+  });
+
+  describe('multi-principal scoping (sys-scheduler-orchestrator)', () => {
+    const orchestratorSecret = 'sb_agent_orchestrator_secret_with_enough_entropy_003';
+    const schedulerSecret = 'sb_agent_scheduler_secret_with_enough_entropy_004';
+
+    const TRIGGER_CAPABILITIES = [
+      'agents.regIntel.run.create',
+      'agents.marketing.draft.create',
+      'agents.sales.draft.create',
+      'agents.productBi.report.create',
+      'agents.securityOps.report.create',
+      'agents.chiefOfStaff.report.create',
+    ];
+
+    function bothPrincipalsService(): AgentCredentialService {
+      return serviceFor({
+        stored: {
+          [ORCHESTRATOR_KEY]: orchestratorSecret,
+          [SCHEDULER_KEY]: schedulerSecret,
+        },
+      });
+    }
+
+    it('grants the scheduler principal exactly the six trigger capabilities, nothing broader', async () => {
+      const identity = await bothPrincipalsService().verifyCredential(schedulerSecret);
+
+      expect(identity.userId).toBe('sys-scheduler-orchestrator');
+      expect([...identity.capabilities].sort()).toEqual([...TRIGGER_CAPABILITIES].sort());
+    });
+
+    it('never grants the orchestrator principal the trigger capabilities (fully disjoint)', async () => {
+      const identity = await bothPrincipalsService().verifyCredential(orchestratorSecret);
+
+      expect(identity.userId).toBe('sys-agent-orchestrator');
+      for (const capability of TRIGGER_CAPABILITIES) {
+        expect(identity.capabilities).not.toContain(capability);
+      }
+    });
+
+    it('does not let one principal authenticate using the other principal secret', async () => {
+      const service = serviceFor({ stored: { [SCHEDULER_KEY]: schedulerSecret } });
+
+      await expectCredentialReason(service.verifyCredential(orchestratorSecret), 'invalid');
+    });
+
+    it('revoking the scheduler credential does not affect the orchestrator credential', async () => {
+      const storedHashes = { [ORCHESTRATOR_KEY]: hash(orchestratorSecret), [SCHEDULER_KEY]: hash(schedulerSecret) };
+      const prisma = {
+        systemConfig: {
+          findUnique: vi.fn(({ where }: { where: { key: string } }) => {
+            const credentialHash = storedHashes[where.key as keyof typeof storedHashes];
+            if (!credentialHash) return Promise.resolve(null);
+            return Promise.resolve({ value: JSON.stringify({ credentialHash, issuedAt: new Date().toISOString(), version: 1 }) });
+          }),
+          upsert: vi.fn(),
+        },
+        user: { upsert: vi.fn().mockResolvedValue({}) },
+      };
+      const redis = {
+        exists: vi.fn((key: string) => Promise.resolve(key.includes(hash(schedulerSecret)) ? 1 : 0)),
+        set: vi.fn().mockResolvedValue('OK'),
+      };
+      const service = new AgentCredentialService({ prisma, redis } as unknown as AgentCredentialServiceDependencies);
+
+      await expectCredentialReason(service.verifyCredential(schedulerSecret), 'revoked');
       const orchestratorIdentity = await service.verifyCredential(orchestratorSecret);
       expect(orchestratorIdentity.userId).toBe('sys-agent-orchestrator');
     });
