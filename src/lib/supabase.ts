@@ -13,6 +13,10 @@ export const supabaseAdmin = createClient(
       autoRefreshToken: false,
       persistSession: false,
     },
+    global: { fetch },
+    realtime: {
+      transport: require('ws'),
+    },
   }
 );
 
@@ -25,6 +29,8 @@ export const supabaseClient = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_ANON_KEY!,
   {
+    global: { fetch },
+    realtime: { transport: require('ws') },
     auth: {
       autoRefreshToken: false,
       persistSession: false,

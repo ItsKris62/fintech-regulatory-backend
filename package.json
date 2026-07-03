@@ -73,6 +73,7 @@
     "@supabase/supabase-js": "^2.99.0",
     "@trpc/client": "^11.9.0",
     "@trpc/server": "^11.9.0",
+    "@types/ws": "^8.18.1",
     "@upstash/redis": "^1.36.4",
     "bcryptjs": "^3.0.3",
     "cheerio": "^1.2.0",
@@ -96,6 +97,7 @@
     "resend": "^6.9.1",
     "rss-parser": "^3.13.0",
     "stripe": "^20.4.1",
+    "ws": "^8.21.0",
     "zod": "^4.3.6",
     "zod-to-json-schema": "^3.25.1"
   },
