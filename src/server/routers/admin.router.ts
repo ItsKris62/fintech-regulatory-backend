@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
+import { MemberRole } from '@prisma/client';
 import { router, adminProcedure } from '../trpc/trpc';
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
@@ -55,6 +56,7 @@ const createAdminUserSchema = z.object({
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.string().trim().min(2).max(120).optional(),
   ),
+  orgRole: z.nativeEnum(MemberRole).optional().default('MEMBER'),
   isPilot: z.boolean().default(false),
   sendWelcomeEmail: z.boolean().default(false),
 }).superRefine((value, ctx) => {
@@ -121,10 +123,8 @@ export const adminRouter = router({
         ctx.prisma.user.count(),
         ctx.prisma.user.count({
           where: {
-            lastLoginAt: {
-              gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-            },
-          } as any,
+            accountStatus: 'active',
+          },
         }),
         ctx.prisma.organization.count(),
         ctx.prisma.complianceQuery.count(),
@@ -273,12 +273,13 @@ export const adminRouter = router({
         limit: z.number().min(1).max(100).default(20),
         role: z.enum(['ADMIN', 'REGULATOR', 'STARTUP', 'ENTERPRISE']).optional(),
         status: z.enum(['active', 'inactive']).optional(),
+        recentlyActive: z.boolean().optional(),
         search: z.string().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
       try {
-        const { page, limit, role, status, search } = input;
+        const { page, limit, role, status, recentlyActive, search } = input;
         const skip = (page - 1) * limit;
 
         const where: any = {};
@@ -288,11 +289,18 @@ export const adminRouter = router({
         }
 
         if (status === 'active') {
+          where.accountStatus = 'active';
+        } else if (status === 'inactive') {
+          where.accountStatus = { not: 'active' };
+        }
+
+        if (recentlyActive === true) {
           where.lastLoginAt = {
             gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
           };
-        } else if (status === 'inactive') {
+        } else if (recentlyActive === false) {
           where.OR = [
+            ...(where.OR || []),
             { lastLoginAt: null },
             {
               lastLoginAt: {
@@ -303,10 +311,22 @@ export const adminRouter = router({
         }
 
         if (search) {
-          where.OR = [
-            { fullName: { contains: search, mode: 'insensitive' } },
-            { email: { contains: search, mode: 'insensitive' } },
-          ];
+          // If where.OR already has conditions from recentlyActive=false, we must use AND to combine them
+          if (where.OR) {
+            where.AND = [
+              { OR: where.OR },
+              { OR: [
+                { fullName: { contains: search, mode: 'insensitive' } },
+                { email: { contains: search, mode: 'insensitive' } },
+              ]}
+            ];
+            delete where.OR;
+          } else {
+            where.OR = [
+              { fullName: { contains: search, mode: 'insensitive' } },
+              { email: { contains: search, mode: 'insensitive' } },
+            ];
+          }
         }
 
         const [users, total] = await Promise.all([

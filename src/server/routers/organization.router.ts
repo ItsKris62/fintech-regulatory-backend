@@ -619,31 +619,45 @@ export const organizationRouter = router({
 
         await assertActiveOrganizationMember(ctx, organizationId);
 
-        const [members, total] = await Promise.all([
-          ctx.prisma.user.findMany({
+        const [membersResult, total] = await Promise.all([
+          ctx.prisma.organizationMember.findMany({
             where: {
               organizationId,
-            } as any,
+            },
             skip,
             take: limit,
             select: {
-              id: true,
-              fullName: true,
-              email: true,
               role: true,
-              phone: true,
-              emailVerified: true,
               createdAt: true,
-              lastLoginAt: true,
+              user: {
+                select: {
+                  id: true,
+                  fullName: true,
+                  email: true,
+                  role: true,
+                  phone: true,
+                  emailVerified: true,
+                  createdAt: true,
+                  lastLoginAt: true,
+                }
+              }
             },
             orderBy: { createdAt: 'desc' },
           }),
-          ctx.prisma.user.count({
+          ctx.prisma.organizationMember.count({
             where: {
               organizationId,
-            } as any,
+            },
           }),
         ]);
+
+        const members = membersResult.map((m) => ({
+          ...m.user,
+          role: m.role, // KEEP LEGACY: Prevents breaking current frontend RBAC.
+          platformRole: m.user.role, // NEW: Explicit Platform Role.
+          orgRole: m.role, // NEW: Explicit Organization Role.
+          joinedAt: m.createdAt,
+        }));
 
         return {
           members,

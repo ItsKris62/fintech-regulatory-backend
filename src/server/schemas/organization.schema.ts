@@ -135,3 +135,20 @@ export const updateOrganizationSettingsSchema = z.object({
 });
 
 export type UpdateOrganizationSettingsInput = z.infer<typeof updateOrganizationSettingsSchema>;
+
+/**
+ * Shared DTO for Organization Members
+ */
+export interface OrganizationMemberDTO {
+  id: string;
+  fullName: string;
+  email: string;
+  /**
+   * @deprecated Use platformRole or orgRole instead
+   */
+  role: string;
+  platformRole: string;
+  orgRole: string;
+  joinedAt: Date;
+  [key: string]: any;
+}

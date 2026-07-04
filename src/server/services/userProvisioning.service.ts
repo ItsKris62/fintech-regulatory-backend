@@ -39,6 +39,7 @@ export const createUserWithOrganizationInputSchema = z.object({
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.string().trim().min(2).max(120).optional(),
   ),
+  orgRole: z.nativeEnum(MemberRole).optional().default('MEMBER'),
   supabaseAuthId: z.string().trim().min(1),
   adminId: z.string().trim().min(1),
   requestId: z.string().trim().min(1),
@@ -57,6 +58,7 @@ export interface CreateUserWithOrganizationInput {
   isPilot?: boolean;
   organizationId?: string;
   organizationName?: string;
+  orgRole?: 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
   supabaseAuthId: string;
   adminId: string;
   requestId: string;
@@ -222,6 +224,8 @@ export async function createUserWithOrganization(
           },
         });
 
+        const orgRole = input.orgRole ?? (input.organizationName ? MemberRole.OWNER : MemberRole.MEMBER);
+
         await tx.organizationMember.upsert({
           where: {
             userId_organizationId: { userId: user.id, organizationId: organization.id },
@@ -229,13 +233,13 @@ export async function createUserWithOrganization(
           create: {
             userId: user.id,
             organizationId: organization.id,
-            role: MemberRole.OWNER,
+            role: orgRole,
             status: MemberStatus.ACTIVE,
             invitedBy: input.adminId,
           },
           update: {
             status: MemberStatus.ACTIVE,
-            role: MemberRole.OWNER,
+            role: orgRole,
           },
         });
       }
