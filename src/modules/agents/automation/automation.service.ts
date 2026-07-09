@@ -89,6 +89,7 @@ export class AutomationService {
       idempotencyKey,
       metadata: toJsonValue({ workflowKey: input.workflowKey, taskType: input.taskType }),
       estimatedCostUsd: 0,
+      retryFailed: true,
     });
 
     if (!begin.started) {

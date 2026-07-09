@@ -28,7 +28,8 @@ function serviceFor(args: {
   dailyCost?: string | null;
   budgetThrows?: boolean;
   existingRun?: AgentRun;
-}): { service: AgentRunService; prisma: { agentRun: { create: ReturnType<typeof vi.fn>; findUnique: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> } } } {
+  retryUpdateCount?: number;
+}): { service: AgentRunService; prisma: { agentRun: { create: ReturnType<typeof vi.fn>; findUnique: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; updateMany: ReturnType<typeof vi.fn> } } } {
   const createdRun = makeRun();
   const updatedRun = makeRun({ status: 'HALTED_BUDGET', completedAt: new Date('2026-07-01T00:00:00.000Z'), error: 'daily_cost_exceeded' });
   const prisma = {
@@ -36,6 +37,7 @@ function serviceFor(args: {
       create: vi.fn().mockResolvedValue(createdRun),
       findUnique: vi.fn().mockResolvedValue(args.existingRun ?? createdRun),
       update: vi.fn().mockResolvedValue(updatedRun),
+      updateMany: vi.fn().mockResolvedValue({ count: args.retryUpdateCount ?? 1 }),
     },
     agentReport: {
       create: vi.fn(),
@@ -102,5 +104,40 @@ describe('AgentRunService guards', () => {
 
     expect(result).toEqual({ started: true, duplicate: true, run: existingRun });
     expect(prisma.agentRun.create).not.toHaveBeenCalled();
+  });
+
+  it('restarts a failed duplicate run when retryFailed is enabled', async () => {
+    const failedRun = makeRun({ id: 'failed-run', status: 'FAILED', completedAt: new Date('2026-07-01T00:00:01.000Z'), error: 'provider failed' });
+    const restartedRun = makeRun({ id: 'failed-run', status: 'RUNNING', completedAt: null, error: null });
+    const { service, prisma } = serviceFor({ redisSetResult: null, existingRun: failedRun });
+    prisma.agentRun.findUnique
+      .mockResolvedValueOnce(failedRun)
+      .mockResolvedValueOnce(restartedRun);
+
+    const result = await service.beginRun({
+      agentType: 'automation-generation',
+      idempotencyKey: failedRun.idempotencyKey,
+      retryFailed: true,
+    });
+
+    expect(result).toEqual({ started: true, duplicate: false, run: restartedRun });
+    expect(prisma.agentRun.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: failedRun.id, status: 'FAILED' },
+      data: expect.objectContaining({ status: 'RUNNING', completedAt: null, error: null }),
+    }));
+  });
+
+  it('does not restart an active duplicate run when retryFailed is enabled', async () => {
+    const activeRun = makeRun({ id: 'active-run', status: 'RUNNING' });
+    const { service, prisma } = serviceFor({ redisSetResult: null, existingRun: activeRun });
+
+    const result = await service.beginRun({
+      agentType: 'automation-generation',
+      idempotencyKey: activeRun.idempotencyKey,
+      retryFailed: true,
+    });
+
+    expect(result).toEqual({ started: true, duplicate: true, run: activeRun });
+    expect(prisma.agentRun.updateMany).not.toHaveBeenCalled();
   });
 });

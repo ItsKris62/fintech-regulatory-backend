@@ -25,7 +25,7 @@ function baseGenerateInput(overrides: Partial<GenerateAutomationContentInput> = 
  */
 function createRealAgentRunService(args: { enabled?: boolean } = {}): {
   service: AgentRunService;
-  prisma: { agentRun: { create: ReturnType<typeof vi.fn>; findUnique: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> } };
+  prisma: { agentRun: { create: ReturnType<typeof vi.fn>; findUnique: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; updateMany: ReturnType<typeof vi.fn> } };
 } {
   // Keyed by idempotencyKey, so distinct requests within one test don't
   // collide  -  each idempotencyKey gets its own SET-NX lock and its own row.
@@ -69,6 +69,16 @@ function createRealAgentRunService(args: { enabled?: boolean } = {}): {
         runsById.set(updated.id, updated);
         runsByIdempotencyKey.set(updated.idempotencyKey, updated);
         return Promise.resolve(updated);
+      }),
+      updateMany: vi.fn().mockImplementation(({ where, data }: { where: { id: string; status?: string }; data: Partial<AgentRun> }) => {
+        const existing = runsById.get(where.id);
+        if (!existing || (where.status && existing.status !== where.status)) {
+          return Promise.resolve({ count: 0 });
+        }
+        const updated = { ...existing, ...data } as AgentRun;
+        runsById.set(updated.id, updated);
+        runsByIdempotencyKey.set(updated.idempotencyKey, updated);
+        return Promise.resolve({ count: 1 });
       }),
     },
     agentReport: { create: vi.fn() },
@@ -234,5 +244,24 @@ describe('AutomationService.generate', () => {
 
     const updateCalls = prisma.agentRun.update.mock.calls as Array<[{ data: { status?: string } }]>;
     expect(updateCalls.some(([args]) => args.data.status === 'FAILED')).toBe(true);
+  });
+  it('allows the same request to retry after a failed provider call', async () => {
+    const { service: agentRuns } = createRealAgentRunService();
+    const llmGateway = {
+      complete: vi.fn()
+        .mockRejectedValueOnce(new Error('provider rejected request'))
+        .mockResolvedValueOnce(fakeLlmResult('Recovered content.')),
+    };
+    const service = new AutomationService({ agentRuns, llmGateway });
+    const input = baseGenerateInput();
+
+    await expect(service.generate(input)).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+    await expect(service.generate(input)).resolves.toEqual({
+      result: 'Recovered content.',
+      providerUsed: 'anthropic',
+      modelUsed: 'claude-sonnet-4-6',
+    });
+
+    expect(llmGateway.complete).toHaveBeenCalledTimes(2);
   });
 });

@@ -2,6 +2,13 @@ import Anthropic from '@anthropic-ai/sdk';
 import { appConfig } from '@/config/app.config';
 import { ILLMProvider, LLMCompletionRequest, LLMCompletionResult, LLMStreamOptions, LLMProviderError, LLMProviderNotConfiguredError } from '../types';
 
+function sanitizeAnthropicMetadata(metadata: LLMCompletionRequest['metadata']): Anthropic.Messages.Metadata | undefined {
+  if (!metadata) return undefined;
+  const userId = metadata.user_id;
+  if (typeof userId !== 'string' || userId.trim().length === 0) return undefined;
+  return { user_id: userId };
+}
+
 export class AnthropicProvider implements ILLMProvider {
   readonly name = 'anthropic';
   private client: Anthropic | null = null;
@@ -35,6 +42,7 @@ export class AnthropicProvider implements ILLMProvider {
         ? (req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(req.overrideTimeoutMs)]) : AbortSignal.timeout(req.overrideTimeoutMs))
         : req.signal;
 
+      const metadata = sanitizeAnthropicMetadata(req.metadata);
       const response = await client.messages.create(
         {
           model: req.model!,
@@ -43,7 +51,7 @@ export class AnthropicProvider implements ILLMProvider {
           system: req.systemPrompt,
           messages,
           stop_sequences: req.stopSequences,
-          metadata: req.metadata,
+          ...(metadata ? { metadata } : {}),
         },
         { signal: abortSignal }
       );

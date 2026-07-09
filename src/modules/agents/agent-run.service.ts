@@ -35,6 +35,7 @@ export interface BeginAgentRunInput {
   organizationId?: string;
   metadata?: Prisma.InputJsonValue;
   estimatedCostUsd?: number;
+  retryFailed?: boolean;
 }
 
 export interface AdvanceAgentRunInput {
@@ -77,7 +78,10 @@ interface LLMCostGuard {
 }
 
 type SendEmail = (options: EmailOptions) => Promise<EmailResult>;
-type AgentRunPrisma = Pick<typeof defaultPrisma, 'agentRun' | 'agentReport'>;
+type AgentRunPrisma = {
+  agentRun: Pick<typeof defaultPrisma.agentRun, 'create' | 'findUnique' | 'update' | 'updateMany'>;
+  agentReport: Pick<typeof defaultPrisma.agentReport, 'create'>;
+};
 type AgentRunRedis = Pick<Redis, 'get' | 'set' | 'incrbyfloat' | 'expire'>;
 
 export interface AgentRunServiceDependencies {
@@ -187,6 +191,36 @@ export class AgentRunService {
     if (acquired === null) {
       const existing = await this.prisma.agentRun.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
       if (!existing) throw new Error('Agent run idempotency key exists without a persisted run.');
+
+      if (input.retryFailed && existing.status === 'FAILED') {
+        const retry = await this.prisma.agentRun.updateMany({
+          where: { id: existing.id, status: 'FAILED' },
+          data: {
+            status: 'RUNNING',
+            completedAt: null,
+            error: null,
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: new Prisma.Decimal(0),
+            iterations: 0,
+            metadata: input.metadata,
+          },
+        });
+
+        if (retry.count === 1) {
+          const restarted = await this.prisma.agentRun.findUnique({ where: { id: existing.id } });
+          if (!restarted) throw new Error(`Agent run disappeared during retry: ${existing.id}`);
+          logger.info({ type: 'agent_run_failed_retry_started', agentRunId: restarted.id, idempotencyKey: input.idempotencyKey });
+          return { started: true, duplicate: false, run: restarted };
+        }
+
+        const active = await this.prisma.agentRun.findUnique({ where: { id: existing.id } });
+        if (active) {
+          logger.info({ type: 'agent_run_duplicate_noop', agentRunId: active.id, idempotencyKey: input.idempotencyKey });
+          return { started: true, duplicate: true, run: active };
+        }
+      }
+
       logger.info({ type: 'agent_run_duplicate_noop', agentRunId: existing.id, idempotencyKey: input.idempotencyKey });
       return { started: true, duplicate: true, run: existing };
     }
