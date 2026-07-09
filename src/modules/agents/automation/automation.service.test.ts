@@ -194,6 +194,7 @@ describe('AutomationService.generate', () => {
     expect(llmGateway.complete).toHaveBeenCalledWith(
       expect.objectContaining({ useCase: 'analysis', maxTokens: 800, allowFallback: false }),
     );
+    expect(llmGateway.complete.mock.calls[0][0]).not.toHaveProperty('metadata');
   });
 
   it('does not double-spend: a retried identical request replays the cached result with zero new LLM calls', async () => {
@@ -240,7 +241,10 @@ describe('AutomationService.generate', () => {
     const llmGateway = { complete: vi.fn().mockRejectedValue(new Error('upstream provider exploded: sk-ant-abc123')) };
     const service = new AutomationService({ agentRuns, llmGateway });
 
-    await expect(service.generate(baseGenerateInput())).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+    await expect(service.generate(baseGenerateInput())).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'Automation generation failed.',
+    });
 
     const updateCalls = prisma.agentRun.update.mock.calls as Array<[{ data: { status?: string } }]>;
     expect(updateCalls.some(([args]) => args.data.status === 'FAILED')).toBe(true);

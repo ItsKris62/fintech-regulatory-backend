@@ -118,7 +118,6 @@ export class AutomationService {
         systemPrompt: input.systemPrompt,
         prompt: input.userPrompt,
         maxTokens: input.maxTokens,
-        metadata: { agent: AUTOMATION_AGENT_TYPE, workflowKey: input.workflowKey, taskType: input.taskType },
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);

@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { appConfig } from '@/config/app.config';
+import { logger } from '@/utils/logger';
 import { ILLMProvider, LLMCompletionRequest, LLMCompletionResult, LLMStreamOptions, LLMProviderError, LLMProviderNotConfiguredError } from '../types';
 
 function sanitizeAnthropicMetadata(metadata: LLMCompletionRequest['metadata']): Anthropic.Messages.Metadata | undefined {
@@ -7,6 +8,88 @@ function sanitizeAnthropicMetadata(metadata: LLMCompletionRequest['metadata']): 
   const userId = metadata.user_id;
   if (typeof userId !== 'string' || userId.trim().length === 0) return undefined;
   return { user_id: userId };
+}
+
+function assertUsableAnthropicModel(model: string | undefined): string {
+  const normalized = model?.trim();
+  if (!normalized) {
+    logger.error({ type: 'anthropic_model_config_invalid', reason: 'missing_model' });
+    throw new LLMProviderError('anthropic', 'Anthropic model is not configured.', 400, false);
+  }
+
+  if (!/^claude-[a-z0-9][a-z0-9-]*(?:-\d{8})?$/.test(normalized)) {
+    logger.error({ type: 'anthropic_model_config_invalid', reason: 'invalid_model_id_shape', model: normalized });
+    throw new LLMProviderError('anthropic', 'Anthropic model is invalid.', 400, false);
+  }
+
+  return normalized;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function parseAnthropicErrorBody(message: string): Record<string, unknown> | null {
+  const jsonStart = message.indexOf('{');
+  if (jsonStart < 0) return null;
+  try {
+    return asRecord(JSON.parse(message.slice(jsonStart)));
+  } catch {
+    return null;
+  }
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function getHeaderValue(headers: unknown, name: string): string | undefined {
+  const getter = asRecord(headers)?.get;
+  if (typeof getter === 'function') {
+    const value = getter.call(headers, name);
+    return readString(value);
+  }
+
+  const record = asRecord(headers);
+  return readString(record?.[name]) ?? readString(record?.[name.toLowerCase()]);
+}
+
+function getAnthropicErrorDetails(error: unknown): {
+  status?: number;
+  providerErrorType?: string;
+  providerMessage?: string;
+  providerRequestId?: string;
+} {
+  const record = asRecord(error);
+  const message = error instanceof Error ? error.message : String(error);
+  const body = asRecord(record?.error) ?? parseAnthropicErrorBody(message);
+  const nestedError = asRecord(body?.error);
+
+  return {
+    status: typeof record?.status === 'number' ? record.status : undefined,
+    providerErrorType: readString(nestedError?.type) ?? readString(body?.type),
+    providerMessage: readString(nestedError?.message) ?? readString(record?.message) ?? message,
+    providerRequestId: readString(record?.request_id)
+      ?? readString(record?.requestId)
+      ?? readString(body?.request_id)
+      ?? getHeaderValue(record?.headers, 'request-id')
+      ?? getHeaderValue(record?.headers, 'x-request-id'),
+  };
+}
+
+function logAnthropicProviderError(error: unknown, model: string | undefined, operation: 'complete' | 'stream'): void {
+  const details = getAnthropicErrorDetails(error);
+  logger.error({
+    type: 'anthropic_provider_error',
+    operation,
+    status: details.status,
+    providerErrorType: details.providerErrorType,
+    providerMessage: details.providerMessage,
+    providerRequestId: details.providerRequestId,
+    model,
+  });
 }
 
 export class AnthropicProvider implements ILLMProvider {
@@ -32,6 +115,7 @@ export class AnthropicProvider implements ILLMProvider {
 
   async complete(req: LLMCompletionRequest): Promise<LLMCompletionResult> {
     const client = this.getClient();
+    const model = assertUsableAnthropicModel(req.model);
 
     const messages: Anthropic.MessageParam[] = [
       { role: 'user', content: req.prompt },
@@ -45,7 +129,7 @@ export class AnthropicProvider implements ILLMProvider {
       const metadata = sanitizeAnthropicMetadata(req.metadata);
       const response = await client.messages.create(
         {
-          model: req.model!,
+          model,
           max_tokens: req.maxTokens!,
           temperature: req.temperature,
           system: req.systemPrompt,
@@ -64,24 +148,28 @@ export class AnthropicProvider implements ILLMProvider {
       return {
         content,
         provider: this.name,
-        model: req.model!,
+        model,
         usage: {
           inputTokens: response.usage.input_tokens,
           outputTokens: response.usage.output_tokens,
         },
         stopReason: response.stop_reason,
       };
-    } catch (error: any) {
-      if (error.name === 'AbortError') {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
         throw error;
       }
-      const isRetryable = error.status ? [408, 429, 500, 502, 503, 504, 529].includes(error.status) : false;
-      throw new LLMProviderError(this.name, error.message, error.status, isRetryable);
+      logAnthropicProviderError(error, model, 'complete');
+      const details = getAnthropicErrorDetails(error);
+      const isRetryable = details.status ? [408, 429, 500, 502, 503, 504, 529].includes(details.status) : false;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new LLMProviderError(this.name, message, details.status, isRetryable);
     }
   }
 
   async stream(opts: LLMStreamOptions): Promise<LLMCompletionResult> {
     const client = this.getClient();
+    const model = assertUsableAnthropicModel(opts.model);
 
     const messages: Anthropic.MessageParam[] = [
       { role: 'user', content: opts.prompt },
@@ -94,7 +182,7 @@ export class AnthropicProvider implements ILLMProvider {
 
       const streamResponse = await client.messages.create(
         {
-          model: opts.model!,
+          model,
           max_tokens: opts.maxTokens!,
           temperature: opts.temperature,
           system: opts.systemPrompt,
@@ -132,19 +220,22 @@ export class AnthropicProvider implements ILLMProvider {
       return {
         content: fullContent,
         provider: this.name,
-        model: opts.model!,
+        model,
         usage: {
           inputTokens,
           outputTokens,
         },
         stopReason,
       };
-    } catch (error: any) {
-      if (error.name === 'AbortError') {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
         throw error;
       }
-      const isRetryable = error.status ? [408, 429, 500, 502, 503, 504, 529].includes(error.status) : false;
-      throw new LLMProviderError(this.name, error.message, error.status, isRetryable);
+      logAnthropicProviderError(error, model, 'stream');
+      const details = getAnthropicErrorDetails(error);
+      const isRetryable = details.status ? [408, 429, 500, 502, 503, 504, 529].includes(details.status) : false;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new LLMProviderError(this.name, message, details.status, isRetryable);
     }
   }
 }
