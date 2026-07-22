@@ -1,0 +1,6 @@
+
+// From src/server/routers/agents.router.ts:146-149
+.input(z.object({
+  idempotencyKey: z.string().min(8).max(200).optional(),
+  maxItems: z.number().int().positive().max(100).optional(),
+}).optional())
