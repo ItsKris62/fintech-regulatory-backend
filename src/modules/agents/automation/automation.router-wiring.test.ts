@@ -26,6 +26,15 @@ describe('automation router rate-limit wiring', () => {
     expect(block).toContain('window: appConfig.agents.automation.generateRateLimitWindowSeconds');
   });
 
+  it('chains a capability-scoped rate limiter, distinct from the shared agent-auth bucket, onto getMetrics', () => {
+    const start = routerSource.indexOf("getMetrics: agentProcedure('agents.automation.metrics.read')");
+    expect(start).toBeGreaterThan(-1);
+    const block = routerSource.slice(start, start + 300);
+
+    expect(block).toContain("rateLimited('automation-metrics', appConfig.agents.automation.metricsRateLimitMax");
+    expect(block).toContain('window: appConfig.agents.automation.metricsRateLimitWindowSeconds');
+  });
+
   it('uses action keys distinct from the shared agent-auth bucket used by requireAgentCapability', () => {
     const middlewareSource = readFileSync(
       resolve(__dirname, '..', '..', '..', 'server', 'trpc', 'middleware.ts'),

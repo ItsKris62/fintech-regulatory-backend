@@ -29,6 +29,7 @@ export const AGENT_CAPABILITIES = [
   'agents.sales.draft.read',
   'agents.automation.log.create',
   'agents.automation.generate',
+  'agents.automation.metrics.read',
   'agents.productBi.report.create',
   'agents.productBi.report.read',
   'agents.securityOps.report.create',
@@ -47,6 +48,7 @@ const AGENT_CAPABILITY_SET: ReadonlySet<string> = new Set<string>(AGENT_CAPABILI
 const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
   'agents.automation.log.create',
   'agents.automation.generate',
+  'agents.automation.metrics.read',
 ];
 
 // Capabilities granted to the n8n scheduler surface only  -  exactly one per

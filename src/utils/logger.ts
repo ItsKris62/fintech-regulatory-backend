@@ -45,6 +45,13 @@ const loggerConfig = {
       'secret',
       'cookie',
       'supabaseAuthId',
+      // Agent/automation credentials (X-Agent-Credential header, issued
+      // service-principal secrets, HMAC signing secrets, webhook ingress
+      // secrets) - none of these should ever reach a log sink in plaintext.
+      'credential',
+      'agentCredential',
+      'hmacSecret',
+      'webhookIngressSecret',
       // Wildcard one-level-nested
       '*.email',
       '*.password',
@@ -63,11 +70,16 @@ const loggerConfig = {
       '*.secret',
       '*.cookie',
       '*.supabaseAuthId',
+      '*.credential',
+      '*.agentCredential',
+      '*.hmacSecret',
+      '*.webhookIngressSecret',
       // Common request and parameter envelopes
       'user.email',
       'params.email',
       'req.headers.authorization',
       'req.headers.cookie',
+      'req.headers["x-agent-credential"]',
     ],
     censor: '[REDACTED]',
   },

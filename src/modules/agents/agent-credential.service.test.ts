@@ -92,12 +92,12 @@ describe('AgentCredentialService', () => {
       });
     }
 
-    it('grants the automation principal exactly the two automation capabilities, nothing broader', async () => {
+    it('grants the automation principal exactly the three automation capabilities, nothing broader', async () => {
       const identity = await bothPrincipalsService().verifyCredential(automationSecret);
 
       expect(identity.userId).toBe('sys-automation-orchestrator');
       expect([...identity.capabilities].sort()).toEqual(
-        ['agents.automation.generate', 'agents.automation.log.create'].sort(),
+        ['agents.automation.generate', 'agents.automation.log.create', 'agents.automation.metrics.read'].sort(),
       );
     });
 
@@ -107,6 +107,7 @@ describe('AgentCredentialService', () => {
       expect(identity.userId).toBe('sys-agent-orchestrator');
       expect(identity.capabilities).not.toContain('agents.automation.log.create');
       expect(identity.capabilities).not.toContain('agents.automation.generate');
+      expect(identity.capabilities).not.toContain('agents.automation.metrics.read');
     });
 
     it('does not let one principal authenticate using the other principal secret', async () => {

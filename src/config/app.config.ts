@@ -90,6 +90,17 @@ const envSchema = z.object({
   AUTOMATION_LOG_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   AUTOMATION_GENERATE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
   AUTOMATION_GENERATE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  // Signs agents.automation.recordApprovalDecision's callback POST back to n8n
+  // (HMAC-SHA256 over "${approvalId}.${decision}.${timestamp}"). Distinct trust
+  // boundary from the X-Agent-Credential principal secrets above - this signs
+  // outbound backend->n8n callbacks, not inbound n8n->backend auth - so it is
+  // never reused from AGENT_PRINCIPALS' hashed credentials.
+  AUTOMATION_HMAC_SECRET: z.string().min(64, 'AUTOMATION_HMAC_SECRET must be at least 64 chars'),
+  // Shared bucket for agents.automation.getMetrics - Monday Board Brief calls
+  // this up to 6x in quick succession (one per department), so the ceiling is
+  // higher than the single-call automation buckets above.
+  AUTOMATION_METRICS_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  AUTOMATION_METRICS_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // n8n scheduler/trigger surface (agents.regIntel.runScan, agents.marketing.
   // runDrafting, agents.sales.runDrafting, agents.productBi.runReport, agents.
@@ -216,6 +227,9 @@ export const appConfig = {
       logRateLimitWindowSeconds: env.AUTOMATION_LOG_RATE_LIMIT_WINDOW_SECONDS,
       generateRateLimitMax: env.AUTOMATION_GENERATE_RATE_LIMIT_MAX,
       generateRateLimitWindowSeconds: env.AUTOMATION_GENERATE_RATE_LIMIT_WINDOW_SECONDS,
+      hmacSecret: env.AUTOMATION_HMAC_SECRET,
+      metricsRateLimitMax: env.AUTOMATION_METRICS_RATE_LIMIT_MAX,
+      metricsRateLimitWindowSeconds: env.AUTOMATION_METRICS_RATE_LIMIT_WINDOW_SECONDS,
     },
     trigger: {
       rateLimitMax: env.AGENT_TRIGGER_RATE_LIMIT_MAX,

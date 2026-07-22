@@ -8,6 +8,7 @@ import { MARKETING_CONTENT_TYPES, MARKETING_DRAFT_STATUSES } from '@/modules/age
 import { salesGrowthAgent } from '@/modules/agents/sales/sales-growth.agent';
 import { SALES_DRAFT_STATUSES } from '@/modules/agents/sales/types';
 import { automationService } from '@/modules/agents/automation/automation.service';
+import { automationMetricsService } from '@/modules/agents/automation/metrics.service';
 import { appConfig } from '@/config/app.config';
 import { productBiAgent } from '@/modules/agents/product-bi/product-bi.agent';
 import { securityOpsAgent } from '@/modules/agents/security-ops/security-ops.agent';
@@ -228,6 +229,22 @@ export const agentsRouter = router({
         maxTokens: z.number().int().positive().max(4000),
       }))
       .mutation(async ({ input }) => automationService.generate(input)),
+
+    // department-specific metrics for the n8n automation surface (Daily
+    // Product Pulse, Monday Board Brief, Conversion Signal Scan, Sentry
+    // Watcher, Uptime & Budget Watch). Only 'product' | 'sales' | 'security'
+    // are implemented today - see metrics-types.ts SUPPORTED_METRICS_DEPARTMENTS.
+    getMetrics: agentProcedure('agents.automation.metrics.read')
+      .use(rateLimited('automation-metrics', appConfig.agents.automation.metricsRateLimitMax, {
+        window: appConfig.agents.automation.metricsRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        department: z.string().min(1).max(50),
+        window: z.string().min(1).max(20),
+        jurisdictions: z.string().max(500).optional(),
+        detail: z.string().max(50).optional(),
+      }))
+      .mutation(async ({ input }) => automationMetricsService.getMetrics(input)),
   }),
   productBi: router({
     // Read-only synthesis across ALL organizations, not one tenant - deliberately

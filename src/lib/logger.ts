@@ -32,8 +32,13 @@ const REDACTED_PATHS = [
   'R2_SECRET_ACCESS_KEY',
   'JWT_SECRET',
   'REFRESH_TOKEN_SECRET',
+  'credential',
+  'agentCredential',
+  'hmacSecret',
+  'webhookIngressSecret',
   'req.headers.authorization',
   'req.headers.cookie',
+  'req.headers["x-agent-credential"]',
 ];
 
 const productionLogger = pino({
