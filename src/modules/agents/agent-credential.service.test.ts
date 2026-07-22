@@ -92,12 +92,29 @@ describe('AgentCredentialService', () => {
       });
     }
 
-    it('grants the automation principal exactly the three automation capabilities, nothing broader', async () => {
+    it('grants the automation principal exactly its automation capabilities, nothing broader', async () => {
       const identity = await bothPrincipalsService().verifyCredential(automationSecret);
 
       expect(identity.userId).toBe('sys-automation-orchestrator');
       expect([...identity.capabilities].sort()).toEqual(
-        ['agents.automation.generate', 'agents.automation.log.create', 'agents.automation.metrics.read'].sort(),
+        [
+          'agents.automation.generate',
+          'agents.automation.log.create',
+          'agents.automation.metrics.read',
+          'agents.automation.approval.create',
+          'agents.automation.approval.read',
+          'agents.automation.content.publish',
+          'agents.automation.content.queueCandidate',
+          'agents.automation.regulatoryItems.read',
+          'agents.automation.approvedContent.read',
+          'agents.automation.newsletter.send',
+          'agents.automation.outreach.queue',
+          'agents.automation.sources.read',
+          'agents.automation.sources.fetch',
+          'agents.automation.sources.dedupe',
+          'agents.automation.pilotCohort.read',
+          'agents.automation.dpaVendor.read',
+        ].sort(),
       );
     });
 

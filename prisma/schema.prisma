@@ -3583,3 +3583,34 @@ model BlogEditorialDigest {
   @@index([status])
 }
 
+// Backend-owned approval gate for n8n automation workflows that reach a
+// customer (content publish, newsletter, sales outreach). n8n creates the
+// row via agents.automation.createApproval, a human decision later fires
+// agents.automation.recordApprovalDecision (adminProcedure, not agent-
+// credential - see agents.router.ts), which signs and POSTs the decision
+// back to the callbackUrl n8n supplied at creation time. status is
+// deliberately lowercase ('pending' | 'approved' | 'rejected') to match the
+// exact wire contract n8n polls via getApproval, not this codebase's usual
+// UPPERCASE status convention.
+model AutomationApproval {
+  id                  String    @id @default(cuid())
+  department          String
+  workflow            String
+  kind                String
+  summary             String    @db.Text
+  callbackUrl         String
+  metadata            Json?
+  status              String    @default("pending")
+  decidedBy           String?
+  decidedAt           DateTime?
+  callbackDeliveredAt DateTime?
+  callbackError       String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([status])
+  @@index([department])
+  @@index([workflow])
+  @@index([createdAt])
+}
+

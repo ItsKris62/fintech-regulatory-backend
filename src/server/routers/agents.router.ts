@@ -9,6 +9,12 @@ import { salesGrowthAgent } from '@/modules/agents/sales/sales-growth.agent';
 import { SALES_DRAFT_STATUSES } from '@/modules/agents/sales/types';
 import { automationService } from '@/modules/agents/automation/automation.service';
 import { automationMetricsService } from '@/modules/agents/automation/metrics.service';
+import { automationApprovalService } from '@/modules/agents/automation/approval.service';
+import { automationContentService } from '@/modules/agents/automation/content.service';
+import { automationSourcesService } from '@/modules/agents/automation/sources.service';
+import { automationPilotVendorService } from '@/modules/agents/automation/pilot-vendor.service';
+import { automationOutreachService } from '@/modules/agents/automation/outreach.service';
+import { automationNewsletterService } from '@/modules/agents/automation/newsletter.service';
 import { appConfig } from '@/config/app.config';
 import { productBiAgent } from '@/modules/agents/product-bi/product-bi.agent';
 import { securityOpsAgent } from '@/modules/agents/security-ops/security-ops.agent';
@@ -245,6 +251,147 @@ export const agentsRouter = router({
         detail: z.string().max(50).optional(),
       }))
       .mutation(async ({ input }) => automationMetricsService.getMetrics(input)),
+
+    // Approval trio - backend-owned gate for customer-facing n8n workflows
+    // (content publish/newsletter/LinkedIn/sales outreach). createApproval and
+    // getApproval are called by n8n (agentProcedure, sys-automation-orchestrator).
+    // recordApprovalDecision is NOT - it's the human (founder) decision, so it
+    // runs as adminProcedure and derives `by` from the session, the same
+    // pattern as marketing.reviewDraft/sales.reviewDraft above - never a
+    // client-supplied identity string.
+    createApproval: agentProcedure('agents.automation.approval.create')
+      .use(rateLimited('automation-approval-create', appConfig.agents.automation.approvalCreateRateLimitMax, {
+        window: appConfig.agents.automation.approvalCreateRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        department: z.string().min(1).max(100),
+        workflow: z.string().min(1).max(100),
+        kind: z.string().min(1).max(100),
+        summary: z.string().min(1).max(5000),
+        callbackUrl: z.string().url().max(2000),
+        metadata: jsonObjectSchema,
+      }))
+      .mutation(async ({ input }) => automationApprovalService.createApproval(input)),
+
+    getApproval: agentProcedure('agents.automation.approval.read')
+      .use(rateLimited('automation-approval-read', appConfig.agents.automation.approvalReadRateLimitMax, {
+        window: appConfig.agents.automation.approvalReadRateLimitWindowSeconds,
+      }))
+      .input(z.object({ approvalId: z.string().min(1) }))
+      .mutation(async ({ input }) => automationApprovalService.getApproval(input)),
+
+    recordApprovalDecision: adminProcedure
+      .input(z.object({
+        approvalId: z.string().min(1),
+        decision: z.enum(['approved', 'rejected']),
+      }))
+      .mutation(async ({ input, ctx }) => automationApprovalService.recordApprovalDecision({
+        approvalId: input.approvalId,
+        decision: input.decision,
+        by: ctx.user!.id,
+      })),
+
+    // Backs the admin approvals dashboard (not n8n-facing, same as
+    // recordApprovalDecision above) - a plain read, so adminProcedure +
+    // .query(), unlike every agentProcedure automation.* mutation above
+    // (those are POST-only to match n8n's calling convention; this is
+    // browser-called via the normal tRPC client, which handles queries fine).
+    listApprovals: adminProcedure
+      .input(z.object({
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().positive().max(100).default(20),
+        department: z.string().min(1).max(100).optional(),
+        workflow: z.string().min(1).max(100).optional(),
+        status: z.enum(['pending', 'approved', 'rejected']).optional(),
+      }))
+      .query(async ({ input }) => automationApprovalService.listApprovals(input)),
+
+    // Phase 3 - single-workflow procedures, no shared dependencies between
+    // them. All share one rate-limit bucket (appConfig.agents.automation.
+    // workflow*) - same precedent as appConfig.agents.trigger (B9): these are
+    // once-per-workflow-run calls with no reason for distinct ceilings.
+    publishContent: agentProcedure('agents.automation.content.publish')
+      .use(rateLimited('automation-publish-content', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ approvalId: z.string().min(1), content: z.string().min(1) }))
+      .mutation(async ({ input }) => automationContentService.publishContent(input)),
+
+    queueContentCandidate: agentProcedure('agents.automation.content.queueCandidate')
+      .use(rateLimited('automation-queue-content-candidate', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        sourceItemId: z.string().min(1),
+        title: z.string().min(1).max(500),
+        score: z.number(),
+        jurisdiction: z.string().min(1),
+      }))
+      .mutation(async ({ input }) => automationContentService.queueContentCandidate(input)),
+
+    getRecentHighImpactRegulatoryItems: agentProcedure('agents.automation.regulatoryItems.read')
+      .use(rateLimited('automation-recent-high-impact-items', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ window: z.string().min(1).max(20), jurisdictions: z.string().max(500) }))
+      .mutation(async ({ input }) => automationContentService.getRecentHighImpactRegulatoryItems(input)),
+
+    getApprovedContentThisWeek: agentProcedure('agents.automation.approvedContent.read')
+      .use(rateLimited('automation-approved-content-this-week', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ jurisdictions: z.string().max(500) }))
+      .mutation(async ({ input }) => automationContentService.getApprovedContentThisWeek(input)),
+
+    // NOT wired to a real send - see newsletter.service.ts. Approval gate is
+    // real; the send itself throws NOT_IMPLEMENTED with a clear explanation.
+    sendNewsletter: agentProcedure('agents.automation.newsletter.send')
+      .use(rateLimited('automation-send-newsletter', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ approvalId: z.string().min(1), html: z.string().min(1) }))
+      .mutation(async ({ input }) => automationNewsletterService.sendNewsletter(input)),
+
+    queueOutreach: agentProcedure('agents.automation.outreach.queue')
+      .use(rateLimited('automation-queue-outreach', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ approvalId: z.string().min(1), orgId: z.string().min(1), content: z.string().min(1) }))
+      .mutation(async ({ input }) => automationOutreachService.queueOutreach(input)),
+
+    getSources: agentProcedure('agents.automation.sources.read')
+      .use(rateLimited('automation-get-sources', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ jurisdictions: z.string().max(500) }))
+      .mutation(async ({ input }) => automationSourcesService.getSources(input)),
+
+    fetchSource: agentProcedure('agents.automation.sources.fetch')
+      .use(rateLimited('automation-fetch-source', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ url: z.string().url(), sourceId: z.string().min(1), jurisdiction: z.string().min(1) }))
+      .mutation(async ({ input }) => automationSourcesService.fetchSource(input)),
+
+    dedupeSource: agentProcedure('agents.automation.sources.dedupe')
+      .use(rateLimited('automation-dedupe-source', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ contentHash: z.string().min(1), jurisdiction: z.string().min(1) }))
+      .mutation(async ({ input }) => automationSourcesService.dedupeSource(input)),
+
+    getPilotCohortStatus: agentProcedure('agents.automation.pilotCohort.read')
+      .use(rateLimited('automation-pilot-cohort-status', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ cohort: z.string().min(1), jurisdictions: z.string().max(500) }))
+      .mutation(async ({ input }) => automationPilotVendorService.getPilotCohortStatus(input)),
+
+    getDpaVendorStatus: agentProcedure('agents.automation.dpaVendor.read')
+      .use(rateLimited('automation-dpa-vendor-status', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .mutation(async () => automationPilotVendorService.getDpaVendorStatus()),
   }),
   productBi: router({
     // Read-only synthesis across ALL organizations, not one tenant - deliberately

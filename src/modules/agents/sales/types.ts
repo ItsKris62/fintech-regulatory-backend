@@ -2,7 +2,10 @@ import type { Prisma } from '@prisma/client';
 
 export const SALES_AGENT_TYPE = 'sales-growth' as const;
 
-export const SALES_DRAFT_STATUSES = ['DRAFT', 'REVIEWED', 'DISMISSED'] as const;
+// QUEUED added for agents.automation.queueOutreach (the automation module's
+// approval-gated real send) - set after a human-approved draft is actually
+// sent, distinct from REVIEWED (reviewed but not necessarily sent yet).
+export const SALES_DRAFT_STATUSES = ['DRAFT', 'REVIEWED', 'DISMISSED', 'QUEUED'] as const;
 export type SalesDraftStatus = (typeof SALES_DRAFT_STATUSES)[number];
 
 export const SALES_DRAFT_PRIORITIES = ['high', 'medium', 'low'] as const;

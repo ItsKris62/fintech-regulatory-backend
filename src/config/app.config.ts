@@ -101,6 +101,30 @@ const envSchema = z.object({
   // higher than the single-call automation buckets above.
   AUTOMATION_METRICS_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
   AUTOMATION_METRICS_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  AUTOMATION_APPROVAL_CREATE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  AUTOMATION_APPROVAL_CREATE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  // Higher ceiling than the other automation buckets - n8n polls getApproval
+  // as its 30-minute-timeout fallback, potentially across several pending
+  // approvals concurrently.
+  AUTOMATION_APPROVAL_READ_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+  AUTOMATION_APPROVAL_READ_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+  // Outbound backend -> n8n webhook fan-out (agents.automation.queueContentCandidate).
+  // Distinct trust boundary from X-Agent-Credential (inbound n8n -> backend) and from
+  // AUTOMATION_HMAC_SECRET (approval callback signing) - this signs/authenticates a
+  // call this backend makes TO n8n's own webhook ingress, using n8n's shared secret.
+  SHERIABOT_WEBHOOK_INGRESS_HEADER: z.string().min(1).default('X-Sheriabot-Ingress-Key'),
+  SHERIABOT_WEBHOOK_INGRESS_SECRET: z.string().min(32, 'SHERIABOT_WEBHOOK_INGRESS_SECRET must be at least 32 chars'),
+
+  // Shared bucket for Phase 3's remaining single-workflow automation procedures
+  // (publishContent, queueContentCandidate, getRecentHighImpactRegulatoryItems,
+  // getApprovedContentThisWeek, sendNewsletter, queueOutreach, getSources,
+  // fetchSource, dedupeSource, getPilotCohortStatus, getDpaVendorStatus) - one
+  // config pair, distinct per-procedure action keys, same precedent as
+  // appConfig.agents.trigger (B9): no reason for different ceilings across
+  // these low-frequency, once-per-workflow-run procedures.
+  AUTOMATION_WORKFLOW_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  AUTOMATION_WORKFLOW_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // n8n scheduler/trigger surface (agents.regIntel.runScan, agents.marketing.
   // runDrafting, agents.sales.runDrafting, agents.productBi.runReport, agents.
@@ -230,6 +254,16 @@ export const appConfig = {
       hmacSecret: env.AUTOMATION_HMAC_SECRET,
       metricsRateLimitMax: env.AUTOMATION_METRICS_RATE_LIMIT_MAX,
       metricsRateLimitWindowSeconds: env.AUTOMATION_METRICS_RATE_LIMIT_WINDOW_SECONDS,
+      approvalCreateRateLimitMax: env.AUTOMATION_APPROVAL_CREATE_RATE_LIMIT_MAX,
+      approvalCreateRateLimitWindowSeconds: env.AUTOMATION_APPROVAL_CREATE_RATE_LIMIT_WINDOW_SECONDS,
+      approvalReadRateLimitMax: env.AUTOMATION_APPROVAL_READ_RATE_LIMIT_MAX,
+      approvalReadRateLimitWindowSeconds: env.AUTOMATION_APPROVAL_READ_RATE_LIMIT_WINDOW_SECONDS,
+      webhookIngress: {
+        header: env.SHERIABOT_WEBHOOK_INGRESS_HEADER,
+        secret: env.SHERIABOT_WEBHOOK_INGRESS_SECRET,
+      },
+      workflowRateLimitMax: env.AUTOMATION_WORKFLOW_RATE_LIMIT_MAX,
+      workflowRateLimitWindowSeconds: env.AUTOMATION_WORKFLOW_RATE_LIMIT_WINDOW_SECONDS,
     },
     trigger: {
       rateLimitMax: env.AGENT_TRIGGER_RATE_LIMIT_MAX,

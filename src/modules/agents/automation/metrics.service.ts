@@ -3,6 +3,7 @@ import { prisma as defaultPrisma } from '@/lib/prisma/client';
 import { appConfig } from '@/config/app.config';
 import { logger } from '@/utils/logger';
 import { salesEngagementLookupService as defaultSalesEngagementLookupService, type SalesEngagementLookupService } from '@/modules/agents/sales/engagement-lookup.service';
+import { parseWindowDays, parseJurisdictionFilter } from './duration';
 import {
   isSupportedMetricsDepartment,
   SUPPORTED_METRICS_DEPARTMENTS,
@@ -31,28 +32,6 @@ export interface AutomationMetricsServiceDependencies {
   now?: () => Date;
 }
 
-function parseWindowDays(window: string): number {
-  const match = /^(\d+)\s*([dh])$/i.exec(window.trim());
-  if (!match) {
-    throw new TRPCError({
-      code: 'BAD_REQUEST',
-      message: `Unrecognized window "${window}". Expected a duration like "1d" or "24h".`,
-    });
-  }
-  const value = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  const days = unit === 'h' ? value / 24 : value;
-  if (!(days > 0)) {
-    throw new TRPCError({ code: 'BAD_REQUEST', message: `window "${window}" must resolve to a positive duration.` });
-  }
-  return days;
-}
-
-function parseJurisdictionFilter(jurisdictions: string | undefined): string[] | null {
-  if (!jurisdictions) return null;
-  const list = jurisdictions.split(',').map((j) => j.trim()).filter(Boolean);
-  return list.length > 0 ? list : null;
-}
 
 export class AutomationMetricsService {
   private readonly prisma: MetricsPrisma;

@@ -1,0 +1,270 @@
+import { TRPCError } from '@trpc/server';
+import { prisma as defaultPrisma } from '@/lib/prisma/client';
+import { appConfig } from '@/config/app.config';
+import { logger } from '@/utils/logger';
+import { automationApprovalService as defaultAutomationApprovalService, type AutomationApprovalService } from './approval.service';
+import { parseWindowDays, parseJurisdictionFilter } from './duration';
+
+const APPROVED_CONTENT_WINDOW_DAYS = 7;
+const HIGH_IMPACT_SEVERITIES = ['critical', 'high'] as const;
+const HIGH_IMPACT_MAX_ITEMS = 50;
+
+// Real severity -> score mapping (lowercase values confirmed against
+// signal-classifier.service.ts's SEVERITIES union) - RegulatorySignal has no
+// numeric score field, so this is a documented derived value, not a stored one.
+const SEVERITY_SCORE: Record<string, number> = {
+  critical: 100,
+  high: 75,
+  medium: 50,
+  low: 25,
+  informational: 10,
+};
+
+type ContentPrisma = Pick<typeof defaultPrisma, 'blogPost' | 'blogSourceItem' | 'regulatorySignal'>;
+
+export interface PublishContentInput {
+  approvalId: string;
+  content: string;
+}
+
+export interface QueueContentCandidateInput {
+  sourceItemId: string;
+  title: string;
+  score: number;
+  jurisdiction: string;
+}
+
+export interface GetRecentHighImpactRegulatoryItemsInput {
+  window: string;
+  jurisdictions: string;
+}
+
+export interface GetApprovedContentThisWeekInput {
+  jurisdictions: string;
+}
+
+export interface RegulatoryItem {
+  id: string;
+  title: string;
+  score: number;
+  jurisdiction: string;
+  summary?: string;
+}
+
+export interface ApprovedContentItem {
+  id: string;
+  title: string;
+  jurisdiction: string;
+  publishedAt: string;
+}
+
+type FetchLike = typeof fetch;
+
+export interface AutomationContentServiceDependencies {
+  prisma?: ContentPrisma;
+  approvalService?: AutomationApprovalService;
+  fetchImpl?: FetchLike;
+  now?: () => Date;
+}
+
+export class AutomationContentService {
+  private readonly prisma: ContentPrisma;
+  private readonly approvalService: AutomationApprovalService;
+  private readonly fetchImpl: FetchLike;
+  private readonly now: () => Date;
+
+  constructor(dependencies: AutomationContentServiceDependencies = {}) {
+    this.prisma = dependencies.prisma ?? (defaultPrisma as unknown as ContentPrisma);
+    this.approvalService = dependencies.approvalService ?? defaultAutomationApprovalService;
+    this.fetchImpl = dependencies.fetchImpl ?? fetch;
+    this.now = dependencies.now ?? (() => new Date());
+  }
+
+  /**
+   * approval.metadata carries { blogPostId } (createApproval's own caller sets
+   * this) - publishContent itself only receives {approvalId, content} per the
+   * n8n wire contract, so the BlogPost link has to travel through metadata,
+   * the same pattern used for every other "approval gates a pre-existing
+   * backend row" case in this module. Applies input.content as the post's
+   * final body, then runs the exact same publish gates as blog.router.ts's
+   * adminSetStatus('PUBLISHED') (title/slug/excerpt/category present, >=1
+   * source, category-specific source-type rule, verification not BLOCKED/stale)
+   * - duplicated here rather than calling into blog.router.ts directly, since
+   * that logic lives inline in the router, not a separately exported service.
+   */
+  async publishContent(input: PublishContentInput): Promise<{ blogPostId: string; publishedAt: string }> {
+    const approval = await this.approvalService.getApproval({ approvalId: input.approvalId });
+    if (approval.status !== 'approved') {
+      throw new TRPCError({ code: 'FORBIDDEN', message: `Approval ${input.approvalId} is not approved (status: ${approval.status}).` });
+    }
+
+    const blogPostId = await this.approvalService.requireMetadataField(input.approvalId, 'blogPostId');
+
+    const post = await this.prisma.blogPost.findUnique({
+      where: { id: blogPostId },
+      include: {
+        sources: true,
+        verificationRuns: { orderBy: { createdAt: 'desc' }, take: 1 },
+        draftGenerationRuns: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+    });
+    if (!post || post.deletedAt) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: `BlogPost ${blogPostId} not found.` });
+    }
+
+    if (!post.title || !post.slug || !post.excerpt || !post.category) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing required fields for publishing (title/slug/excerpt/category).' });
+    }
+    if (post.sources.length === 0) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'At least one source is required for publishing.' });
+    }
+    if (['Regulatory Updates', 'Enforcement & Penalties'].includes(post.category)) {
+      if (!post.sources.some((s) => s.sourceType === 'OFFICIAL')) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `${post.category} requires an OFFICIAL source.` });
+      }
+    } else if (post.category === 'International Standards') {
+      if (!post.sources.some((s) => ['OFFICIAL', 'INTERNATIONAL_STANDARD'].includes(s.sourceType))) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'International Standards requires an OFFICIAL or INTERNATIONAL_STANDARD source.' });
+      }
+    }
+
+    const latestVerification = post.verificationRuns[0];
+    const latestAiDraft = post.draftGenerationRuns[0];
+    if (latestVerification?.status === 'BLOCKED') {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: Source and Claim Verification is BLOCKED.' });
+    }
+    if (latestAiDraft) {
+      const verificationTime = latestVerification ? (latestVerification.completedAt ?? latestVerification.createdAt) : null;
+      if (!verificationTime || latestAiDraft.createdAt > verificationTime) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: an AI draft was generated but no verification has been run since then.' });
+      }
+    }
+
+    const publishedAt = post.publishedAt ?? this.now();
+    await this.prisma.blogPost.update({
+      where: { id: blogPostId },
+      data: {
+        content: input.content,
+        status: 'PUBLISHED',
+        publishedAt,
+        lastReviewedAt: post.lastReviewedAt ?? this.now(),
+      },
+    });
+
+    logger.info({ type: 'automation_content_published', approvalId: input.approvalId, blogPostId });
+    return { blogPostId, publishedAt: publishedAt.toISOString() };
+  }
+
+  /**
+   * No new persistence layer added for the "candidate queue" itself - the
+   * brief describes this procedure's job as fanning the candidate out to n8n,
+   * and no read-back procedure for queued candidates exists anywhere else in
+   * the brief, so a DB table here would have no consumer. Logged (Pino,
+   * type field) and forwarded; if a durable queue is wanted later, that's a
+   * new requirement, not an oversight in this pass.
+   */
+  async queueContentCandidate(input: QueueContentCandidateInput): Promise<{ forwarded: boolean }> {
+    const sourceItem = await this.prisma.blogSourceItem.findUnique({
+      where: { id: input.sourceItemId },
+      select: { summary: true },
+    });
+
+    const payload = {
+      sourceItemId: input.sourceItemId,
+      title: input.title,
+      summary: sourceItem?.summary ?? undefined,
+      score: input.score,
+      jurisdiction: input.jurisdiction,
+    };
+
+    logger.info({ type: 'automation_content_candidate_queued', sourceItemId: input.sourceItemId, jurisdiction: input.jurisdiction, score: input.score });
+
+    const timestampSeconds = Math.floor(this.now().getTime() / 1000);
+    const { header, secret } = appConfig.agents.automation.webhookIngress;
+
+    try {
+      const response = await this.fetchImpl('https://agents.sheriabot.com/webhook/sheriabot-content-candidate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-sheriabot-timestamp': String(timestampSeconds),
+          [header]: secret,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        logger.warn({ type: 'automation_content_candidate_forward_failed', sourceItemId: input.sourceItemId, status: response.status });
+        return { forwarded: false };
+      }
+      return { forwarded: true };
+    } catch (error: unknown) {
+      logger.warn({ type: 'automation_content_candidate_forward_failed', sourceItemId: input.sourceItemId, error: error instanceof Error ? error.message : String(error) });
+      return { forwarded: false };
+    }
+  }
+
+  async getRecentHighImpactRegulatoryItems(input: GetRecentHighImpactRegulatoryItemsInput): Promise<{ items: RegulatoryItem[] }> {
+    const windowDays = parseWindowDays(input.window);
+    const jurisdictionFilter = parseJurisdictionFilter(input.jurisdictions);
+    const periodStart = new Date(this.now().getTime() - windowDays * 24 * 60 * 60 * 1000);
+
+    const signals = await this.prisma.regulatorySignal.findMany({
+      where: {
+        createdAt: { gte: periodStart },
+        severity: { in: [...HIGH_IMPACT_SEVERITIES] },
+        ...(jurisdictionFilter ? { jurisdiction: { in: jurisdictionFilter } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: HIGH_IMPACT_MAX_ITEMS,
+      select: { id: true, title: true, severity: true, jurisdiction: true, summary: true },
+    });
+
+    return {
+      items: signals.map((signal) => ({
+        id: signal.id,
+        title: signal.title,
+        score: SEVERITY_SCORE[signal.severity] ?? 0,
+        jurisdiction: signal.jurisdiction,
+        summary: signal.summary ?? undefined,
+      })),
+    };
+  }
+
+  /**
+   * "This week" implemented as a rolling 7-day window (matches Phase 1's
+   * BASELINE_WINDOW_DAYS convention), not a calendar ISO week - simpler and
+   * avoids a Monday-boundary edge case for a shape the brief left otherwise
+   * unspecified (`output: { items: [...] }` gave no field list - this shape
+   * is a best-effort guess, flagged for review).
+   */
+  async getApprovedContentThisWeek(input: GetApprovedContentThisWeekInput): Promise<{ items: ApprovedContentItem[] }> {
+    const jurisdictionFilter = parseJurisdictionFilter(input.jurisdictions);
+    const periodStart = new Date(this.now().getTime() - APPROVED_CONTENT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+
+    const posts = await this.prisma.blogPost.findMany({
+      where: {
+        status: 'PUBLISHED',
+        publishedAt: { gte: periodStart },
+        deletedAt: null,
+        ...(jurisdictionFilter ? { jurisdiction: { in: jurisdictionFilter } } : {}),
+      },
+      orderBy: { publishedAt: 'desc' },
+      select: { id: true, title: true, jurisdiction: true, publishedAt: true },
+    });
+
+    return {
+      items: posts
+        .filter((post): post is typeof post & { publishedAt: Date } => post.publishedAt !== null)
+        .map((post) => ({
+          id: post.id,
+          title: post.title,
+          jurisdiction: post.jurisdiction,
+          publishedAt: post.publishedAt.toISOString(),
+        })),
+    };
+  }
+
+}
+
+export const automationContentService = new AutomationContentService();
