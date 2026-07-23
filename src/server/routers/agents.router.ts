@@ -270,6 +270,7 @@ export const agentsRouter = router({
         summary: z.string().min(1).max(5000),
         callbackUrl: z.string().url().max(2000),
         metadata: jsonObjectSchema,
+        idempotencyKey: z.string().min(1).max(200),
       }))
       .mutation(async ({ input }) => automationApprovalService.createApproval(input)),
 

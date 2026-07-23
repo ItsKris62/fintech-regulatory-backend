@@ -3601,6 +3601,8 @@ model AutomationApproval {
   callbackUrl         String
   metadata            Json?
   status              String    @default("pending")
+  idempotencyKey      String?   @unique
+  expiresAt           DateTime?
   decidedBy           String?
   decidedAt           DateTime?
   callbackDeliveredAt DateTime?
@@ -3612,5 +3614,6 @@ model AutomationApproval {
   @@index([department])
   @@index([workflow])
   @@index([createdAt])
+  @@index([status, expiresAt])
 }
 

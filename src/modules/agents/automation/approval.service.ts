@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '@/lib/prisma/client';
 import { appConfig } from '@/config/app.config';
 import { logger } from '@/utils/logger';
@@ -8,9 +8,10 @@ import { signApprovalCallback } from './approval-callback-signature';
 type FetchLike = typeof fetch;
 
 const CALLBACK_TIMEOUT_MS = 5000;
+const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export type ApprovalDecision = 'approved' | 'rejected';
-export type ApprovalStatus = 'pending' | ApprovalDecision;
+export type ApprovalStatus = 'pending' | ApprovalDecision | 'expired';
 
 export interface CreateApprovalInput {
   department: string;
@@ -19,6 +20,7 @@ export interface CreateApprovalInput {
   summary: string;
   callbackUrl: string;
   metadata: Record<string, unknown>;
+  idempotencyKey: string;
 }
 
 export interface RecordApprovalDecisionInput {
@@ -70,6 +72,10 @@ function toJsonInput(value: Record<string, unknown>): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
 
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
 export class AutomationApprovalService {
   private readonly prisma: ApprovalPrisma;
   private readonly fetchImpl: FetchLike;
@@ -83,21 +89,43 @@ export class AutomationApprovalService {
     this.hmacSecret = dependencies.hmacSecret ?? appConfig.agents.automation.hmacSecret;
   }
 
+  /**
+   * Insert-then-catch-conflict, not find-then-create: a find-then-create
+   * check has a TOCTOU race under concurrent duplicate calls (two simultaneous
+   * retries can both pass the find before either insert lands). The unique
+   * index on idempotencyKey is the actual dedup guarantee; the P2002 catch
+   * just turns that DB-level rejection into an idempotent replay response.
+   */
   async createApproval(input: CreateApprovalInput): Promise<{ approvalId: string }> {
-    const approval = await this.prisma.automationApproval.create({
-      data: {
-        department: input.department,
-        workflow: input.workflow,
-        kind: input.kind,
-        summary: input.summary,
-        callbackUrl: input.callbackUrl,
-        metadata: toJsonInput(input.metadata),
-      },
-      select: { id: true },
-    });
+    try {
+      const approval = await this.prisma.automationApproval.create({
+        data: {
+          department: input.department,
+          workflow: input.workflow,
+          kind: input.kind,
+          summary: input.summary,
+          callbackUrl: input.callbackUrl,
+          metadata: toJsonInput(input.metadata),
+          idempotencyKey: input.idempotencyKey,
+          expiresAt: new Date(this.now().getTime() + APPROVAL_TTL_MS),
+        },
+        select: { id: true },
+      });
 
-    logger.info({ type: 'automation_approval_created', approvalId: approval.id, department: input.department, workflow: input.workflow, kind: input.kind });
-    return { approvalId: approval.id };
+      logger.info({ type: 'automation_approval_created', approvalId: approval.id, department: input.department, workflow: input.workflow, kind: input.kind });
+      return { approvalId: approval.id };
+    } catch (error: unknown) {
+      if (isUniqueConstraintError(error)) {
+        const existing = await this.prisma.automationApproval.findUniqueOrThrow({
+          where: { idempotencyKey: input.idempotencyKey },
+          select: { id: true },
+        });
+
+        logger.info({ type: 'automation_approval_idempotent_replay', approvalId: existing.id, idempotencyKey: input.idempotencyKey });
+        return { approvalId: existing.id };
+      }
+      throw error;
+    }
   }
 
   /**
@@ -189,6 +217,30 @@ export class AutomationApprovalService {
   async recordApprovalDecision(input: RecordApprovalDecisionInput): Promise<{ approvalId: string; status: ApprovalStatus }> {
     const decidedAt = this.now();
 
+    const preCheck = await this.prisma.automationApproval.findUnique({
+      where: { id: input.approvalId },
+      select: { status: true, expiresAt: true },
+    });
+    if (!preCheck) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Approval not found.' });
+    }
+
+    // expiresAt is null-guarded: legacy rows created before this column
+    // existed never expire. A racing decision/sweep between this check and
+    // the updateMany below is caught by that call's own `status: 'pending'`
+    // filter, which falls through to the CONFLICT branch - it never clobbers
+    // a decision (or an expiry) that landed in the meantime.
+    if (preCheck.status === 'pending' && preCheck.expiresAt && preCheck.expiresAt < decidedAt) {
+      await this.prisma.automationApproval.updateMany({
+        where: { id: input.approvalId, status: 'pending' },
+        data: { status: 'expired' },
+      });
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Approval ${input.approvalId} expired at ${preCheck.expiresAt.toISOString()}.`,
+      });
+    }
+
     const updateResult = await this.prisma.automationApproval.updateMany({
       where: { id: input.approvalId, status: 'pending' },
       data: { status: input.decision, decidedBy: input.by, decidedAt },
@@ -262,6 +314,22 @@ export class AutomationApprovalService {
       where: { id: approvalId },
       data: { callbackError: reason },
     });
+  }
+
+  /**
+   * Swept counterpart to recordApprovalDecision's defensive expiry check -
+   * ages out PENDING rows nobody ever decided on. Legacy rows with a null
+   * expiresAt are excluded by the `lt` filter itself (never matches null),
+   * so they're left PENDING indefinitely, same as before this column existed.
+   */
+  async expireStalePendingApprovals(): Promise<number> {
+    const result = await this.prisma.automationApproval.updateMany({
+      where: { status: 'pending', expiresAt: { lt: this.now() } },
+      data: { status: 'expired' },
+    });
+
+    logger.info({ type: 'automation_approval_expired_batch', count: result.count });
+    return result.count;
   }
 }
 
