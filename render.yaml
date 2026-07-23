@@ -78,6 +78,38 @@ services:
       - key: R2_PUBLIC_URL
         sync: false
 
+      # File Storage (Cloudflare R2) - public bucket (avatars, logos, branding)
+      - key: R2_PUBLIC_ACCESS_KEY_ID
+        sync: false
+      - key: R2_PUBLIC_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_PUBLIC_BUCKET_NAME
+        sync: false
+      - key: R2_PUBLIC_BUCKET_URL
+        sync: false
+
+      # n8n Automation Integration (approval gate, webhook fan-out)
+      - key: AUTOMATION_HMAC_SECRET
+        sync: false
+      - key: SHERIABOT_WEBHOOK_INGRESS_SECRET
+        sync: false
+
+      # Stripe Billing
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+
+      # Marketing & Outreach Module
+      - key: RESEND_WEBHOOK_SECRET
+        sync: false
+      - key: MARKETING_TOKEN_HMAC_SECRET
+        sync: false
+      - key: APP_PUBLIC_URL
+        sync: false
+
       # Rate Limiting
       - key: RATE_LIMIT_MAX
         value: "100"
