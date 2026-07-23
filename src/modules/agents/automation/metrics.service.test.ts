@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { AutomationMetricsService } from './metrics.service';
 import type { SalesEngagementLookupService } from '@/modules/agents/sales/engagement-lookup.service';
+import type { SentryQueryService } from '@/lib/sentry-query.service';
 
 const NOW = new Date('2026-07-22T12:00:00.000Z');
 
@@ -10,6 +11,7 @@ function buildService(overrides: {
   agentRunSpend?: string;
   organizations?: Array<{ id: string; name: string; subscriptionTier: string; contactEmail: string | null }>;
   engagementLookup?: SalesEngagementLookupService['lookup'];
+  checkCriticalIssues?: SentryQueryService['checkCriticalIssues'];
 } = {}) {
   const countMock = vi.fn();
   (overrides.complianceQueryCounts ?? []).forEach((count) => countMock.mockResolvedValueOnce(count));
@@ -28,9 +30,14 @@ function buildService(overrides: {
     lookup: overrides.engagementLookup ?? vi.fn().mockResolvedValue({ available: false, reason: 'no_contact_email' }),
   } as unknown as SalesEngagementLookupService;
 
+  const sentryQueryService = {
+    checkCriticalIssues: overrides.checkCriticalIssues ?? vi.fn().mockResolvedValue({ hasCriticalIssue: false, dataAvailable: false }),
+  } as unknown as SentryQueryService;
+
   return new AutomationMetricsService({
     prisma: prisma as never,
     salesEngagementLookupService,
+    sentryQueryService,
     now: () => NOW,
   });
 }
@@ -96,9 +103,30 @@ describe('AutomationMetricsService.getMetrics - sales', () => {
 });
 
 describe('AutomationMetricsService.getMetrics - security', () => {
-  it('computes aiSpendVsCeiling from real AgentRun spend and reports Sentry data as unavailable, not a fabricated false-negative', async () => {
-    const service = buildService({ agentRunSpend: '10' });
+  it('computes aiSpendVsCeiling from real AgentRun spend and reports Sentry data as unavailable, not a fabricated false-negative, when the Sentry check cannot be trusted', async () => {
+    const service = buildService({
+      agentRunSpend: '10',
+      checkCriticalIssues: vi.fn().mockResolvedValue({ hasCriticalIssue: false, dataAvailable: false }),
+    });
     const result = await service.getMetrics({ department: 'security', window: '1d' });
     expect(result).toEqual({ hasCriticalIssue: false, dataAvailable: false, aiSpendVsCeiling: 0.5 });
+  });
+
+  it('passes through a confirmed critical issue from the Sentry check', async () => {
+    const service = buildService({
+      agentRunSpend: '10',
+      checkCriticalIssues: vi.fn().mockResolvedValue({ hasCriticalIssue: true, dataAvailable: true }),
+    });
+    const result = await service.getMetrics({ department: 'security', window: '1d' });
+    expect(result).toEqual({ hasCriticalIssue: true, dataAvailable: true, aiSpendVsCeiling: 0.5 });
+  });
+
+  it('passes through a confirmed-clean Sentry check', async () => {
+    const service = buildService({
+      agentRunSpend: '10',
+      checkCriticalIssues: vi.fn().mockResolvedValue({ hasCriticalIssue: false, dataAvailable: true }),
+    });
+    const result = await service.getMetrics({ department: 'security', window: '1d' });
+    expect(result).toEqual({ hasCriticalIssue: false, dataAvailable: true, aiSpendVsCeiling: 0.5 });
   });
 });

@@ -49,15 +49,17 @@ export interface SalesMetrics {
 
 /**
  * hasCriticalIssue deliberately deviates from the brief's exact
- * `{ hasCriticalIssue: boolean }` shape by adding `dataAvailable` - there is no
- * Sentry API querying integration anywhere in this codebase (only outbound
- * error capture via @sentry/node in src/lib/sentry.ts; security-ops.safety.test.ts
- * explicitly asserts the security-ops agent makes no Sentry API calls). Always
- * returning a bare `false` would read as "no critical issue" to n8n's Sentry
- * Watcher when the true state is "never checked" - silently suppressing a real
- * alert path is worse than an honest, differently-shaped signal. n8n's
- * workflow needs updating to branch on `dataAvailable` until real Sentry
- * integration is built.
+ * `{ hasCriticalIssue: boolean }` shape by adding `dataAvailable`. The check
+ * is now real (see SentryQueryService.checkCriticalIssues in
+ * src/lib/sentry-query.service.ts), but the Sentry Issues API call can still
+ * fail (rate limit, timeout, missing/invalid token) - `dataAvailable: false`
+ * means "we could not reliably check," never "we checked and it's clean."
+ * Always collapsing a failed check to a bare `false` would read as "no
+ * critical issue" to n8n's Sentry Watcher when the true state is "never
+ * checked" - silently suppressing a real alert path is worse than an honest,
+ * differently-shaped signal. n8n's W-SEC-01/W-SEC-03 workflows still need to
+ * branch on `dataAvailable`, not just `hasCriticalIssue` - that wiring hasn't
+ * been done yet.
  */
 export interface SecurityMetrics {
   hasCriticalIssue: boolean;

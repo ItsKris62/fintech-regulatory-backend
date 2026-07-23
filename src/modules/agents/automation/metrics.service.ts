@@ -3,6 +3,7 @@ import { prisma as defaultPrisma } from '@/lib/prisma/client';
 import { appConfig } from '@/config/app.config';
 import { logger } from '@/utils/logger';
 import { salesEngagementLookupService as defaultSalesEngagementLookupService, type SalesEngagementLookupService } from '@/modules/agents/sales/engagement-lookup.service';
+import { sentryQueryService as defaultSentryQueryService, type SentryQueryService } from '@/lib/sentry-query.service';
 import { parseWindowDays, parseJurisdictionFilter } from './duration';
 import {
   isSupportedMetricsDepartment,
@@ -29,6 +30,7 @@ type MetricsPrisma = Pick<typeof defaultPrisma, 'complianceQuery' | 'agentRun' |
 export interface AutomationMetricsServiceDependencies {
   prisma?: MetricsPrisma;
   salesEngagementLookupService?: SalesEngagementLookupService;
+  sentryQueryService?: SentryQueryService;
   now?: () => Date;
 }
 
@@ -36,11 +38,13 @@ export interface AutomationMetricsServiceDependencies {
 export class AutomationMetricsService {
   private readonly prisma: MetricsPrisma;
   private readonly salesEngagementLookupService: SalesEngagementLookupService;
+  private readonly sentryQueryService: SentryQueryService;
   private readonly now: () => Date;
 
   constructor(dependencies: AutomationMetricsServiceDependencies = {}) {
     this.prisma = dependencies.prisma ?? (defaultPrisma as unknown as MetricsPrisma);
     this.salesEngagementLookupService = dependencies.salesEngagementLookupService ?? defaultSalesEngagementLookupService;
+    this.sentryQueryService = dependencies.sentryQueryService ?? defaultSentryQueryService;
     this.now = dependencies.now ?? (() => new Date());
   }
 
@@ -137,11 +141,11 @@ export class AutomationMetricsService {
     const totalSpend = Number(spend._sum.costUsd ?? 0);
     const aiSpendVsCeiling = ceiling > 0 ? totalSpend / ceiling : 0;
 
-    logger.info({ type: 'automation_metrics_security', totalSpend, ceiling, aiSpendVsCeiling });
+    const { hasCriticalIssue, dataAvailable } = await this.sentryQueryService.checkCriticalIssues();
 
-    // hasCriticalIssue/dataAvailable: no Sentry API integration exists in this
-    // codebase - see the SecurityMetrics doc comment in metrics-types.ts.
-    return { hasCriticalIssue: false, dataAvailable: false, aiSpendVsCeiling };
+    logger.info({ type: 'automation_metrics_security', totalSpend, ceiling, aiSpendVsCeiling, hasCriticalIssue, dataAvailable });
+
+    return { hasCriticalIssue, dataAvailable, aiSpendVsCeiling };
   }
 }
 

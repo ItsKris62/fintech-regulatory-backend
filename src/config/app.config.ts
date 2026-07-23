@@ -119,10 +119,10 @@ const envSchema = z.object({
   // Shared bucket for Phase 3's remaining single-workflow automation procedures
   // (publishContent, queueContentCandidate, getRecentHighImpactRegulatoryItems,
   // getApprovedContentThisWeek, sendNewsletter, queueOutreach, getSources,
-  // fetchSource, dedupeSource, getPilotCohortStatus, getDpaVendorStatus) - one
-  // config pair, distinct per-procedure action keys, same precedent as
-  // appConfig.agents.trigger (B9): no reason for different ceilings across
-  // these low-frequency, once-per-workflow-run procedures.
+  // fetchSource, dedupeSource, getPilotCohortStatus, getDpaVendorStatus,
+  // shouldNotify) - one config pair, distinct per-procedure action keys, same
+  // precedent as appConfig.agents.trigger (B9): no reason for different
+  // ceilings across these low-frequency, once-per-workflow-run procedures.
   AUTOMATION_WORKFLOW_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
   AUTOMATION_WORKFLOW_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
@@ -144,6 +144,16 @@ const envSchema = z.object({
   POSTHOG_PERSONAL_API_KEY: z.string().optional(),
   POSTHOG_HOST: z.string().url().optional(),
   POSTHOG_PROJECT_ID: z.string().optional(),
+
+  // Sentry Issues API (read-only critical-issue check for W-SEC-01/W-SEC-03).
+  // Optional - checkCriticalIssues() degrades to dataAvailable: false when
+  // unset. Distinct from SENTRY_DSN (outbound error capture, read directly
+  // via process.env in src/lib/sentry.ts): this is an internal integration
+  // token with issue-read scope, minted separately in Sentry - do not reuse
+  // SENTRY_AUTH_TOKEN (that one is source-map upload scoped).
+  SENTRY_API_TOKEN: z.string().optional(),
+  SENTRY_ORG: z.string().optional(),
+  SENTRY_PROJECT: z.string().optional(),
 
   // Cloudflare R2  -  public bucket (avatars, logos, branding)
   R2_PUBLIC_ACCESS_KEY_ID: z.string().min(1, 'R2 public bucket access key is required'),
@@ -274,6 +284,11 @@ export const appConfig = {
     personalApiKey: env.POSTHOG_PERSONAL_API_KEY,
     host: env.POSTHOG_HOST,
     projectId: env.POSTHOG_PROJECT_ID,
+  },
+  sentry: {
+    apiToken: env.SENTRY_API_TOKEN,
+    org: env.SENTRY_ORG,
+    project: env.SENTRY_PROJECT,
   },
 
   // Server
