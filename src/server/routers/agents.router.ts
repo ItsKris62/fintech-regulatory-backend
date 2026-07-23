@@ -15,6 +15,7 @@ import { automationSourcesService } from '@/modules/agents/automation/sources.se
 import { automationPilotVendorService } from '@/modules/agents/automation/pilot-vendor.service';
 import { automationOutreachService } from '@/modules/agents/automation/outreach.service';
 import { automationNewsletterService } from '@/modules/agents/automation/newsletter.service';
+import { automationNotifyService } from '@/modules/agents/automation/notify.service';
 import { appConfig } from '@/config/app.config';
 import { productBiAgent } from '@/modules/agents/product-bi/product-bi.agent';
 import { securityOpsAgent } from '@/modules/agents/security-ops/security-ops.agent';
@@ -271,6 +272,11 @@ export const agentsRouter = router({
         callbackUrl: z.string().url().max(2000),
         metadata: jsonObjectSchema,
         idempotencyKey: z.string().min(1).max(200),
+        // Optional: when set, createApproval emails this address a signed,
+        // unauthenticated link to a confirmation page where a human can
+        // approve/reject without logging in. Best-effort - a delivery
+        // failure never fails the approval's creation.
+        reviewerEmail: z.string().email().max(320).optional(),
       }))
       .mutation(async ({ input }) => automationApprovalService.createApproval(input)),
 
@@ -393,6 +399,22 @@ export const agentsRouter = router({
         window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
       }))
       .mutation(async () => automationPilotVendorService.getDpaVendorStatus()),
+
+    // Redis-backed "have we already alerted on this in the last N seconds"
+    // gate for W-SEC-01/W-SEC-03, which re-alert every run a condition stays
+    // true (hourly / every-15-minutes respectively) with no dedup of their
+    // own. Not a data-fetch procedure - called once per workflow run before
+    // the email-send node. See notify.service.ts and lib/redis/dedupe.ts for
+    // the atomic SET NX EX gate this delegates to.
+    shouldNotify: agentProcedure('agents.automation.notify.shouldNotify')
+      .use(rateLimited('automation-should-notify', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        dedupeKey: z.string().min(1).max(200),
+        ttlSeconds: z.number().int().positive().max(86400),
+      }))
+      .mutation(async ({ input }) => automationNotifyService.shouldNotify(input)),
   }),
   productBi: router({
     // Read-only synthesis across ALL organizations, not one tenant - deliberately

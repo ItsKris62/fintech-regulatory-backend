@@ -114,6 +114,7 @@ describe('AgentCredentialService', () => {
           'agents.automation.sources.dedupe',
           'agents.automation.pilotCohort.read',
           'agents.automation.dpaVendor.read',
+          'agents.automation.notify.shouldNotify',
         ].sort(),
       );
     });

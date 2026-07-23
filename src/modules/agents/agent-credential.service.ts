@@ -43,6 +43,7 @@ export const AGENT_CAPABILITIES = [
   'agents.automation.sources.dedupe',
   'agents.automation.pilotCohort.read',
   'agents.automation.dpaVendor.read',
+  'agents.automation.notify.shouldNotify',
   'agents.productBi.report.create',
   'agents.productBi.report.read',
   'agents.securityOps.report.create',
@@ -75,6 +76,7 @@ const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
   'agents.automation.sources.dedupe',
   'agents.automation.pilotCohort.read',
   'agents.automation.dpaVendor.read',
+  'agents.automation.notify.shouldNotify',
 ];
 
 // Capabilities granted to the n8n scheduler surface only  -  exactly one per

@@ -3,12 +3,23 @@ import { Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '@/lib/prisma/client';
 import { appConfig } from '@/config/app.config';
 import { logger } from '@/utils/logger';
+import { escapeHtml } from '@/utils/html-escape';
+import { sendEmail as defaultSendEmail } from '@/lib/email/client';
+import type { EmailOptions, EmailResult } from '@/lib/email/client';
 import { signApprovalCallback } from './approval-callback-signature';
+import { signApprovalDecisionLink } from './approval-decision-link-signature';
 
 type FetchLike = typeof fetch;
+type SendEmail = (options: EmailOptions) => Promise<EmailResult>;
 
 const CALLBACK_TIMEOUT_MS = 5000;
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// The emailed decision link's own expiry is capped at the lesser of this and
+// the approval's own expiresAt - shorter than the 24h approval TTL on
+// purpose: a signed link is a bearer credential that can sit in an inbox (or
+// be auto-fetched by a scanner) for longer than a human takes to click it,
+// so its blast-radius window is kept tighter than the approval's own TTL.
+const APPROVAL_DECISION_LINK_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 export type ApprovalDecision = 'approved' | 'rejected';
 export type ApprovalStatus = 'pending' | ApprovalDecision | 'expired';
@@ -21,6 +32,7 @@ export interface CreateApprovalInput {
   callbackUrl: string;
   metadata: Record<string, unknown>;
   idempotencyKey: string;
+  reviewerEmail?: string;
 }
 
 export interface RecordApprovalDecisionInput {
@@ -66,6 +78,8 @@ export interface AutomationApprovalServiceDependencies {
   fetchImpl?: FetchLike;
   now?: () => Date;
   hmacSecret?: string;
+  decisionLinkSecret?: string;
+  sendEmail?: SendEmail;
 }
 
 function toJsonInput(value: Record<string, unknown>): Prisma.InputJsonValue {
@@ -81,12 +95,16 @@ export class AutomationApprovalService {
   private readonly fetchImpl: FetchLike;
   private readonly now: () => Date;
   private readonly hmacSecret: string;
+  private readonly decisionLinkSecret: string;
+  private readonly sendEmail: SendEmail;
 
   constructor(dependencies: AutomationApprovalServiceDependencies = {}) {
     this.prisma = dependencies.prisma ?? (defaultPrisma as unknown as ApprovalPrisma);
     this.fetchImpl = dependencies.fetchImpl ?? fetch;
     this.now = dependencies.now ?? (() => new Date());
     this.hmacSecret = dependencies.hmacSecret ?? appConfig.agents.automation.hmacSecret;
+    this.decisionLinkSecret = dependencies.decisionLinkSecret ?? appConfig.agents.automation.decisionLinkSecret;
+    this.sendEmail = dependencies.sendEmail ?? defaultSendEmail;
   }
 
   /**
@@ -97,7 +115,15 @@ export class AutomationApprovalService {
    * just turns that DB-level rejection into an idempotent replay response.
    */
   async createApproval(input: CreateApprovalInput): Promise<{ approvalId: string }> {
+    // reviewerEmail rides in the metadata JSON blob (no schema/DB column
+    // change) so the emailed link's decision route (agents/automation/
+    // approval-decision.route.ts) can recover it later via getApprovalPublicView.
+    const metadata = input.reviewerEmail
+      ? { ...input.metadata, reviewerEmail: input.reviewerEmail }
+      : input.metadata;
+
     try {
+      const expiresAt = new Date(this.now().getTime() + APPROVAL_TTL_MS);
       const approval = await this.prisma.automationApproval.create({
         data: {
           department: input.department,
@@ -105,14 +131,29 @@ export class AutomationApprovalService {
           kind: input.kind,
           summary: input.summary,
           callbackUrl: input.callbackUrl,
-          metadata: toJsonInput(input.metadata),
+          metadata: toJsonInput(metadata),
           idempotencyKey: input.idempotencyKey,
-          expiresAt: new Date(this.now().getTime() + APPROVAL_TTL_MS),
+          expiresAt,
         },
         select: { id: true },
       });
 
       logger.info({ type: 'automation_approval_created', approvalId: approval.id, department: input.department, workflow: input.workflow, kind: input.kind });
+
+      // Best-effort - never rolls back or fails createApproval on send failure.
+      // Not sent on the idempotent-replay path below: the original call
+      // already sent it, and n8n retries must not double-email the reviewer.
+      if (input.reviewerEmail) {
+        await this.sendReviewerNotification({
+          approvalId: approval.id,
+          reviewerEmail: input.reviewerEmail,
+          department: input.department,
+          workflow: input.workflow,
+          summary: input.summary,
+          approvalExpiresAt: expiresAt,
+        });
+      }
+
       return { approvalId: approval.id };
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {
@@ -126,6 +167,91 @@ export class AutomationApprovalService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Composes and sends the reviewer's approval-decision-link email. Mirrors
+   * SecurityOpsAlertService.sendAlert's shape (injectable sendEmail, try/catch
+   * that only logs - never throws, so a Resend outage can't fail the approval
+   * that gates it).
+   */
+  private async sendReviewerNotification(args: {
+    approvalId: string;
+    reviewerEmail: string;
+    department: string;
+    workflow: string;
+    summary: string;
+    approvalExpiresAt: Date;
+  }): Promise<void> {
+    try {
+      const linkExpiresAtMs = Math.min(args.approvalExpiresAt.getTime(), this.now().getTime() + APPROVAL_DECISION_LINK_TTL_MS);
+      const expiresAtSeconds = Math.floor(linkExpiresAtMs / 1000);
+      const signature = signApprovalDecisionLink(this.decisionLinkSecret, { approvalId: args.approvalId, expiresAtSeconds });
+
+      const decisionUrl = new URL('/approvals/decide', appConfig.appUrl);
+      decisionUrl.searchParams.set('approvalId', args.approvalId);
+      decisionUrl.searchParams.set('exp', String(expiresAtSeconds));
+      decisionUrl.searchParams.set('sig', signature);
+      const decisionUrlString = decisionUrl.toString();
+
+      const summaryHtml = escapeHtml(args.summary);
+      const departmentHtml = escapeHtml(args.department);
+      const workflowHtml = escapeHtml(args.workflow);
+
+      await this.sendEmail({
+        to: args.reviewerEmail,
+        subject: `Approval needed: ${args.workflow}`,
+        html: `<p>${summaryHtml}</p><p>Department: ${departmentHtml} &middot; Workflow: ${workflowHtml}</p><p><a href="${decisionUrlString}">Review this approval</a></p>`,
+        text: `${args.summary}\n\nDepartment: ${args.department}\nWorkflow: ${args.workflow}\n\nReview this approval: ${decisionUrlString}`,
+        tags: [
+          { name: 'category', value: 'automation' },
+          { name: 'type', value: 'automation_approval_notification' },
+        ],
+      });
+
+      logger.info({ type: 'automation_approval_email_sent', approvalId: args.approvalId });
+    } catch (error: unknown) {
+      logger.error({
+        type: 'automation_approval_email_failed',
+        approvalId: args.approvalId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Zero-side-effect read backing the public approval-decision GET/POST
+   * routes - no admin session exists there, so those routes can't reuse
+   * listApprovals/getApproval's implicit "caller is authenticated" framing.
+   * Returns null (not a thrown NOT_FOUND) for an unknown id so callers can
+   * render a generic "not found" page without a try/catch.
+   */
+  async getApprovalPublicView(approvalId: string): Promise<{
+    status: ApprovalStatus;
+    department: string;
+    workflow: string;
+    summary: string;
+    reviewerEmail: string | null;
+  } | null> {
+    const row = await this.prisma.automationApproval.findUnique({
+      where: { id: approvalId },
+      select: { status: true, department: true, workflow: true, summary: true, metadata: true },
+    });
+
+    if (!row) return null;
+
+    const metadata = row.metadata;
+    const reviewerEmail = metadata && typeof metadata === 'object' && !Array.isArray(metadata) && typeof (metadata as Record<string, unknown>).reviewerEmail === 'string'
+      ? ((metadata as Record<string, unknown>).reviewerEmail as string)
+      : null;
+
+    return {
+      status: row.status as ApprovalStatus,
+      department: row.department,
+      workflow: row.workflow,
+      summary: row.summary,
+      reviewerEmail,
+    };
   }
 
   /**

@@ -1,13 +1,10 @@
 import { notificationModule } from '../notification';
-import { redis } from '@/lib/redis/client';
+import { notificationDedupe } from '@/lib/redis/dedupe';
 
 
 export class BlogNotificationService {
   private async shouldNotify(dedupeKey: string, ttlSeconds: number = 86400): Promise<boolean> {
-    const exists = await redis.get(dedupeKey);
-    if (exists) return false;
-    await redis.set(dedupeKey, '1', { ex: ttlSeconds });
-    return true;
+    return notificationDedupe(dedupeKey, ttlSeconds);
   }
 
   async notifyMonitorFailure(adminId: string, monitorName: string, errorMsg: string) {

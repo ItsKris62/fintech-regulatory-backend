@@ -96,6 +96,13 @@ const envSchema = z.object({
   // outbound backend->n8n callbacks, not inbound n8n->backend auth - so it is
   // never reused from AGENT_PRINCIPALS' hashed credentials.
   AUTOMATION_HMAC_SECRET: z.string().min(64, 'AUTOMATION_HMAC_SECRET must be at least 64 chars'),
+  // Signs the emailed approval-decision link (approvalId + link expiry only,
+  // never the decision itself - see approval-decision-link-signature.ts).
+  // Distinct trust boundary from AUTOMATION_HMAC_SECRET: that secret proves an
+  // outbound callback to n8n is genuine; this one proves an inbound, publicly
+  // clickable email link is genuine. Kept separate on purpose so a leak of
+  // one secret cannot be used to forge the other kind of token.
+  APPROVAL_DECISION_LINK_SECRET: z.string().min(64, 'APPROVAL_DECISION_LINK_SECRET must be at least 64 chars'),
   // Shared bucket for agents.automation.getMetrics - Monday Board Brief calls
   // this up to 6x in quick succession (one per department), so the ceiling is
   // higher than the single-call automation buckets above.
@@ -262,6 +269,7 @@ export const appConfig = {
       generateRateLimitMax: env.AUTOMATION_GENERATE_RATE_LIMIT_MAX,
       generateRateLimitWindowSeconds: env.AUTOMATION_GENERATE_RATE_LIMIT_WINDOW_SECONDS,
       hmacSecret: env.AUTOMATION_HMAC_SECRET,
+      decisionLinkSecret: env.APPROVAL_DECISION_LINK_SECRET,
       metricsRateLimitMax: env.AUTOMATION_METRICS_RATE_LIMIT_MAX,
       metricsRateLimitWindowSeconds: env.AUTOMATION_METRICS_RATE_LIMIT_WINDOW_SECONDS,
       approvalCreateRateLimitMax: env.AUTOMATION_APPROVAL_CREATE_RATE_LIMIT_MAX,

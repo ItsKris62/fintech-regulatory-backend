@@ -91,6 +91,8 @@ services:
       # n8n Automation Integration (approval gate, webhook fan-out)
       - key: AUTOMATION_HMAC_SECRET
         sync: false
+      - key: APPROVAL_DECISION_LINK_SECRET
+        sync: false
       - key: SHERIABOT_WEBHOOK_INGRESS_SECRET
         sync: false
 

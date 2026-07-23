@@ -21,6 +21,7 @@ import type { IntaSendWebhookPayload } from './modules/intasend/intasend.types';
 import { alertPubSub } from './lib/redis/pubsub';
 import { consumeAlertStreamToken } from './lib/alerts/stream-token';
 import { registerComplianceStreamRoute } from './routes/compliance-stream.route';
+import { registerApprovalDecisionRoutes } from './routes/approval-decision.route';
 import { appConfig } from './config/app.config';
 import {
   verifyIntaSendWebhook,
@@ -633,6 +634,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Auth: Bearer token (same Supabase JWT as tRPC). Does NOT use EventSource
   // query-param tokens because fetch() streaming supports custom headers.
   await registerComplianceStreamRoute(app, allowedOrigins);
+
+  // -- Approval decision link (emailed, unauthenticated) ---------------------
+  // GET renders a confirmation page (zero side effects); POST records the
+  // decision. See src/routes/approval-decision.route.ts for the signature
+  // scheme and rate limiting.
+  registerApprovalDecisionRoutes(app);
 
   // -- Catch-all error handler ----------------------------------------------
   app.setErrorHandler<Error>((error, request, reply) => {

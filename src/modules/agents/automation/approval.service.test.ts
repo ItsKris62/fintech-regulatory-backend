@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
 import { AutomationApprovalService, type CreateApprovalInput } from './approval.service';
 import { signApprovalCallback } from './approval-callback-signature';
+import { verifyApprovalDecisionLink } from './approval-decision-link-signature';
 
 const NOW = new Date('2026-07-22T12:00:00.000Z');
 const HMAC_SECRET = 'test-hmac-secret-not-real';
@@ -21,6 +22,10 @@ function baseCreateInput(overrides: Partial<CreateApprovalInput> = {}): CreateAp
 
 interface FakeApprovalRow {
   id: string;
+  department: string;
+  workflow: string;
+  summary: string;
+  metadata: Record<string, unknown> | null;
   status: string;
   callbackUrl: string;
   callbackError: string | null;
@@ -49,7 +54,7 @@ function createFakePrisma() {
   return {
     rows,
     automationApproval: {
-      create: vi.fn().mockImplementation(({ data }: { data: { callbackUrl: string; idempotencyKey?: string | null; expiresAt?: Date | null } }) => {
+      create: vi.fn().mockImplementation(({ data }: { data: { department: string; workflow: string; summary: string; callbackUrl: string; metadata?: Record<string, unknown> | null; idempotencyKey?: string | null; expiresAt?: Date | null } }) => {
         if (data.idempotencyKey && [...rows.values()].some((r) => r.idempotencyKey === data.idempotencyKey)) {
           throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`idempotencyKey`)', {
             code: 'P2002',
@@ -59,6 +64,10 @@ function createFakePrisma() {
         const id = `appr_${++counter}`;
         rows.set(id, {
           id,
+          department: data.department,
+          workflow: data.workflow,
+          summary: data.summary,
+          metadata: data.metadata ?? null,
           status: 'pending',
           callbackUrl: data.callbackUrl,
           callbackError: null,
@@ -210,6 +219,122 @@ describe('AutomationApprovalService.createApproval / getApproval', () => {
   });
 });
 
+describe('AutomationApprovalService.createApproval - reviewerEmail notification', () => {
+  const DECISION_LINK_SECRET = 'test-decision-link-secret-not-real';
+
+  it('does not send an email when reviewerEmail is omitted', async () => {
+    const prisma = createFakePrisma();
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, messageId: 'msg_1' });
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET, decisionLinkSecret: DECISION_LINK_SECRET, sendEmail });
+
+    await service.createApproval(baseCreateInput());
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('sends a signed decision link when reviewerEmail is set, and stores it in metadata', async () => {
+    const prisma = createFakePrisma();
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, messageId: 'msg_1' });
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET, decisionLinkSecret: DECISION_LINK_SECRET, sendEmail });
+
+    const { approvalId } = await service.createApproval(baseCreateInput({ reviewerEmail: 'reviewer@example.com' }));
+
+    expect(prisma.rows.get(approvalId)?.metadata).toMatchObject({ reviewerEmail: 'reviewer@example.com' });
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+
+    const call = sendEmail.mock.calls[0][0] as { to: string; html: string; text: string };
+    expect(call.to).toBe('reviewer@example.com');
+
+    const urlMatch = call.html.match(/href="([^"]+)"/);
+    expect(urlMatch).not.toBeNull();
+    const url = new URL(urlMatch![1]);
+    expect(url.pathname).toBe('/approvals/decide');
+    expect(url.searchParams.get('approvalId')).toBe(approvalId);
+
+    const expiresAtSeconds = Number(url.searchParams.get('exp'));
+    // Capped at 6h, not the full 24h approval TTL.
+    expect(expiresAtSeconds).toBe(Math.floor(NOW.getTime() / 1000) + 6 * 60 * 60);
+
+    const verification = verifyApprovalDecisionLink(DECISION_LINK_SECRET, {
+      approvalId: approvalId,
+      expiresAtSeconds,
+      signature: url.searchParams.get('sig')!,
+      nowSeconds: Math.floor(NOW.getTime() / 1000),
+    });
+    expect(verification).toEqual({ valid: true });
+  });
+
+  it('escapes HTML-sensitive characters in summary/department/workflow in the email body', async () => {
+    const prisma = createFakePrisma();
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, messageId: 'msg_1' });
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET, decisionLinkSecret: DECISION_LINK_SECRET, sendEmail });
+
+    await service.createApproval(baseCreateInput({
+      reviewerEmail: 'reviewer@example.com',
+      summary: '<script>alert(1)</script>',
+    }));
+
+    const call = sendEmail.mock.calls[0][0] as { html: string };
+    expect(call.html).not.toContain('<script>');
+    expect(call.html).toContain('&lt;script&gt;');
+  });
+
+  it('still creates the approval and does not throw when the email send rejects', async () => {
+    const prisma = createFakePrisma();
+    const sendEmail = vi.fn().mockRejectedValue(new Error('resend unreachable'));
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET, decisionLinkSecret: DECISION_LINK_SECRET, sendEmail });
+
+    const { approvalId } = await service.createApproval(baseCreateInput({ reviewerEmail: 'reviewer@example.com' }));
+    expect(prisma.rows.get(approvalId)?.status).toBe('pending');
+  });
+
+  it('does not resend the email on an idempotent replay', async () => {
+    const prisma = createFakePrisma();
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, messageId: 'msg_1' });
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET, decisionLinkSecret: DECISION_LINK_SECRET, sendEmail });
+
+    await service.createApproval(baseCreateInput({ idempotencyKey: 'appr-exec-456', reviewerEmail: 'reviewer@example.com' }));
+    await service.createApproval(baseCreateInput({ idempotencyKey: 'appr-exec-456', reviewerEmail: 'reviewer@example.com' }));
+
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AutomationApprovalService.getApprovalPublicView', () => {
+  it('returns null for an unknown approvalId', async () => {
+    const prisma = createFakePrisma();
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    expect(await service.getApprovalPublicView('does-not-exist')).toBeNull();
+  });
+
+  it('returns department/workflow/summary/status and reviewerEmail read out of metadata', async () => {
+    const prisma = createFakePrisma();
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, messageId: 'msg_1' });
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET, sendEmail });
+
+    const { approvalId } = await service.createApproval(baseCreateInput({ reviewerEmail: 'reviewer@example.com' }));
+    const view = await service.getApprovalPublicView(approvalId);
+
+    expect(view).toEqual({
+      status: 'pending',
+      department: 'marketing',
+      workflow: 'weekly-newsletter',
+      summary: 'Weekly compliance digest ready for review.',
+      reviewerEmail: 'reviewer@example.com',
+    });
+  });
+
+  it('returns reviewerEmail: null when the approval has no reviewerEmail in metadata', async () => {
+    const prisma = createFakePrisma();
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    const { approvalId } = await service.createApproval(baseCreateInput());
+    const view = await service.getApprovalPublicView(approvalId);
+
+    expect(view?.reviewerEmail).toBeNull();
+  });
+});
+
 describe('AutomationApprovalService.recordApprovalDecision', () => {
   it('updates status, signs the callback correctly, and delivers it', async () => {
     const prisma = createFakePrisma();
@@ -317,6 +442,10 @@ describe('AutomationApprovalService.recordApprovalDecision', () => {
 
     prisma.rows.set('legacy_1', {
       id: 'legacy_1',
+      department: 'marketing',
+      workflow: 'weekly-newsletter',
+      summary: 'Legacy row from before expiresAt existed.',
+      metadata: null,
       status: 'pending',
       callbackUrl: 'https://agents.sheriabot.com/webhook/approval-callback',
       callbackError: null,
@@ -373,6 +502,10 @@ describe('AutomationApprovalService.expireStalePendingApprovals', () => {
 
     prisma.rows.set('legacy_1', {
       id: 'legacy_1',
+      department: 'marketing',
+      workflow: 'weekly-newsletter',
+      summary: 'Legacy row from before expiresAt existed.',
+      metadata: null,
       status: 'pending',
       callbackUrl: 'https://agents.sheriabot.com/webhook/approval-callback',
       callbackError: null,
