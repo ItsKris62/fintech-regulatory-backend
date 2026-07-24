@@ -24,7 +24,6 @@ type ContentPrisma = Pick<typeof defaultPrisma, 'blogPost' | 'blogSourceItem' | 
 
 export interface PublishContentInput {
   approvalId: string;
-  content: string;
 }
 
 export interface QueueContentCandidateInput {
@@ -49,6 +48,7 @@ export interface RegulatoryItem {
   score: number;
   jurisdiction: string;
   summary?: string;
+  sourceItemId?: string;
 }
 
 export interface ApprovedContentItem {
@@ -56,6 +56,7 @@ export interface ApprovedContentItem {
   title: string;
   jurisdiction: string;
   publishedAt: string;
+  excerpt?: string;
 }
 
 type FetchLike = typeof fetch;
@@ -82,11 +83,22 @@ export class AutomationContentService {
 
   /**
    * approval.metadata carries { blogPostId } (createApproval's own caller sets
-   * this) - publishContent itself only receives {approvalId, content} per the
-   * n8n wire contract, so the BlogPost link has to travel through metadata,
-   * the same pattern used for every other "approval gates a pre-existing
-   * backend row" case in this module. Applies input.content as the post's
-   * final body, then runs the exact same publish gates as blog.router.ts's
+   * this) - publishContent itself only receives {approvalId} per the n8n
+   * wire contract, so the BlogPost link has to travel through metadata, the
+   * same pattern used for every other "approval gates a pre-existing backend
+   * row" case in this module.
+   *
+   * Gap 3 stale-overwrite fix (W-CONTENT-02 Phase B, Batch 3): publishContent
+   * used to accept a caller-supplied `content` string and write it verbatim,
+   * which could silently discard a human edit made in the dashboard between
+   * draft-generation and the approval decision (the two events can be
+   * separated by an arbitrary amount of time, and n8n's own copy of the
+   * content - if it ever tried to carry one across executions - has no way
+   * to know about a later edit). publishContent now always reads and keeps
+   * the post's own live `content` column; publishing only flips
+   * status/publishedAt/lastReviewedAt, never mutates the body.
+   *
+   * Runs the exact same publish gates as blog.router.ts's
    * adminSetStatus('PUBLISHED') (title/slug/excerpt/category present, >=1
    * source, category-specific source-type rule, verification not BLOCKED/stale)
    * - duplicated here rather than calling into blog.router.ts directly, since
@@ -144,7 +156,6 @@ export class AutomationContentService {
     await this.prisma.blogPost.update({
       where: { id: blogPostId },
       data: {
-        content: input.content,
         status: 'PUBLISHED',
         publishedAt,
         lastReviewedAt: post.lastReviewedAt ?? this.now(),
@@ -217,7 +228,7 @@ export class AutomationContentService {
       },
       orderBy: { createdAt: 'desc' },
       take: HIGH_IMPACT_MAX_ITEMS,
-      select: { id: true, title: true, severity: true, jurisdiction: true, summary: true },
+      select: { id: true, title: true, severity: true, jurisdiction: true, summary: true, sourceItemId: true },
     });
 
     return {
@@ -227,6 +238,7 @@ export class AutomationContentService {
         score: SEVERITY_SCORE[signal.severity] ?? 0,
         jurisdiction: signal.jurisdiction,
         summary: signal.summary ?? undefined,
+        sourceItemId: signal.sourceItemId ?? undefined,
       })),
     };
   }
@@ -250,7 +262,7 @@ export class AutomationContentService {
         ...(jurisdictionFilter ? { jurisdiction: { in: jurisdictionFilter } } : {}),
       },
       orderBy: { publishedAt: 'desc' },
-      select: { id: true, title: true, jurisdiction: true, publishedAt: true },
+      select: { id: true, title: true, jurisdiction: true, publishedAt: true, excerpt: true },
     });
 
     return {
@@ -261,6 +273,11 @@ export class AutomationContentService {
           title: post.title,
           jurisdiction: post.jurisdiction,
           publishedAt: post.publishedAt.toISOString(),
+          // publishContent/adminSetStatus both refuse to set status: PUBLISHED unless
+          // excerpt is already non-empty, so a null here on a PUBLISHED row indicates an
+          // upstream data-integrity anomaly, not a normal case to paper over with an
+          // invented content-slice fallback.
+          excerpt: post.excerpt ?? undefined,
         })),
     };
   }

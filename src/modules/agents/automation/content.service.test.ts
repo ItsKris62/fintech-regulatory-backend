@@ -36,30 +36,32 @@ function basePost(overrides: Record<string, unknown> = {}) {
 describe('AutomationContentService.publishContent', () => {
   it('rejects when the approval is not approved', async () => {
     const service = new AutomationContentService({ approvalService: approvalServiceStub({ status: 'pending' }), now: () => NOW });
-    await expect(service.publishContent({ approvalId: 'appr_1', content: 'x' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('rejects when approval metadata has no blogPostId', async () => {
     const service = new AutomationContentService({ approvalService: approvalServiceStub({ metadata: {} }), now: () => NOW });
-    await expect(service.publishContent({ approvalId: 'appr_1', content: 'x' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
-  it('publishes a valid post, applying the given content and setting publishedAt', async () => {
+  it('publishes a valid post by flipping status/publishedAt only - never overwrites the live content column', async () => {
     const update = vi.fn();
-    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost()), update }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() } };
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost({ content: 'human-edited final content' })), update }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() } };
     const service = new AutomationContentService({
       prisma: prisma as never,
       approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
       now: () => NOW,
     });
 
-    const result = await service.publishContent({ approvalId: 'appr_1', content: 'final edited content' });
+    const result = await service.publishContent({ approvalId: 'appr_1' });
 
     expect(result).toEqual({ blogPostId: 'post_1', publishedAt: NOW.toISOString() });
     expect(update).toHaveBeenCalledWith({
       where: { id: 'post_1' },
-      data: { content: 'final edited content', status: 'PUBLISHED', publishedAt: NOW, lastReviewedAt: NOW },
+      data: { status: 'PUBLISHED', publishedAt: NOW, lastReviewedAt: NOW },
     });
+    const updateCall = update.mock.calls[0][0];
+    expect(updateCall.data).not.toHaveProperty('content');
   });
 
   it('refuses to publish when verification is BLOCKED, same gate as adminSetStatus', async () => {
@@ -71,7 +73,7 @@ describe('AutomationContentService.publishContent', () => {
       now: () => NOW,
     });
 
-    await expect(service.publishContent({ approvalId: 'appr_1', content: 'x' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
   it('refuses to publish a Regulatory Updates post without an OFFICIAL source', async () => {
@@ -83,7 +85,7 @@ describe('AutomationContentService.publishContent', () => {
       now: () => NOW,
     });
 
-    await expect(service.publishContent({ approvalId: 'appr_1', content: 'x' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });
 
@@ -124,8 +126,8 @@ describe('AutomationContentService.queueContentCandidate', () => {
 describe('AutomationContentService.getRecentHighImpactRegulatoryItems', () => {
   it('maps severity to a documented numeric score and passes through jurisdiction/summary', async () => {
     const findMany = vi.fn().mockResolvedValue([
-      { id: 'sig_1', title: 'Critical notice', severity: 'critical', jurisdiction: 'KE', summary: 'Summary text' },
-      { id: 'sig_2', title: 'High notice', severity: 'high', jurisdiction: 'KE', summary: null },
+      { id: 'sig_1', title: 'Critical notice', severity: 'critical', jurisdiction: 'KE', summary: 'Summary text', sourceItemId: null },
+      { id: 'sig_2', title: 'High notice', severity: 'high', jurisdiction: 'KE', summary: null, sourceItemId: null },
     ]);
     const prisma = { blogPost: { findUnique: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany } };
     const service = new AutomationContentService({ prisma: prisma as never, now: () => NOW });
@@ -134,10 +136,56 @@ describe('AutomationContentService.getRecentHighImpactRegulatoryItems', () => {
 
     expect(result).toEqual({
       items: [
-        { id: 'sig_1', title: 'Critical notice', score: 100, jurisdiction: 'KE', summary: 'Summary text' },
-        { id: 'sig_2', title: 'High notice', score: 75, jurisdiction: 'KE', summary: undefined },
+        { id: 'sig_1', title: 'Critical notice', score: 100, jurisdiction: 'KE', summary: 'Summary text', sourceItemId: undefined },
+        { id: 'sig_2', title: 'High notice', score: 75, jurisdiction: 'KE', summary: undefined, sourceItemId: undefined },
       ],
     });
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ severity: { in: ['critical', 'high'] } }) }));
+  });
+
+  it('exposes the BlogSourceItem.id each signal was classified from, so W-CONTENT-01 can hand a real sourceItemId to queueContentCandidate', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      { id: 'sig_1', title: 'Critical notice', severity: 'critical', jurisdiction: 'KE', summary: 'Summary text', sourceItemId: 'item_1' },
+    ]);
+    const prisma = { blogPost: { findUnique: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany } };
+    const service = new AutomationContentService({ prisma: prisma as never, now: () => NOW });
+
+    const result = await service.getRecentHighImpactRegulatoryItems({ window: '7d', jurisdictions: 'KE' });
+
+    expect(result.items[0]).toMatchObject({ id: 'sig_1', sourceItemId: 'item_1' });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ select: expect.objectContaining({ sourceItemId: true }) }));
+  });
+});
+
+describe('AutomationContentService.getApprovedContentThisWeek', () => {
+  it('passes through excerpt when present, and selects it from BlogPost', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      { id: 'post_1', title: 'CBK Circular Summary', jurisdiction: 'Kenya', publishedAt: NOW, excerpt: 'A real excerpt of the published post.' },
+    ]);
+    const prisma = { blogPost: { findUnique: vi.fn(), findMany }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() } };
+    const service = new AutomationContentService({ prisma: prisma as never, now: () => NOW });
+
+    const result = await service.getApprovedContentThisWeek({ jurisdictions: 'Kenya' });
+
+    expect(result).toEqual({
+      items: [
+        { id: 'post_1', title: 'CBK Circular Summary', jurisdiction: 'Kenya', publishedAt: NOW.toISOString(), excerpt: 'A real excerpt of the published post.' },
+      ],
+    });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ select: expect.objectContaining({ excerpt: true }) }));
+  });
+
+  it('returns excerpt: undefined (not null, not a fabricated fallback) for the anomalous case of a PUBLISHED post with no excerpt', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      { id: 'post_2', title: 'Legacy Post', jurisdiction: 'Kenya', publishedAt: NOW, excerpt: null },
+    ]);
+    const prisma = { blogPost: { findUnique: vi.fn(), findMany }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() } };
+    const service = new AutomationContentService({ prisma: prisma as never, now: () => NOW });
+
+    const result = await service.getApprovedContentThisWeek({ jurisdictions: 'Kenya' });
+
+    expect(result.items[0]).toEqual(
+      expect.objectContaining({ id: 'post_2', excerpt: undefined }),
+    );
   });
 });
