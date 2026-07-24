@@ -33,6 +33,32 @@ export type ContactWithCompany = Prisma.ContactGetPayload<{ include: { company: 
 /** Hard cap on sendable contacts per list resolution. */
 const RESOLVE_CONTACTS_CAP = 5000;
 
+/**
+ * Base send-pipeline eligibility filter -- always applied regardless of list type.
+ * Shared by resolveContacts (send time) and previewDynamic (preview time) via
+ * buildDynamicContactWhere so the two can never diverge.
+ */
+const BASE_CONTACT_WHERE: Prisma.ContactWhereInput = {
+  deletedAt:     null,
+  suppressedAt:  null,
+  consentStatus: { not: 'REVOKED' },
+  // If the contact has a company, that company must not be soft-deleted
+  OR: [
+    { companyId: null },
+    { company: { deletedAt: null } },
+  ],
+};
+
+/**
+ * Combine the base eligibility filter with a dynamic list's filterCriteria
+ * (stored, for resolveContacts, or ad-hoc, for previewDynamic).
+ */
+export function buildDynamicContactWhere(
+  filterCriteria: Prisma.ContactWhereInput,
+): Prisma.ContactWhereInput {
+  return { AND: [BASE_CONTACT_WHERE, filterCriteria] };
+}
+
 export interface CreateListParams {
   name:        string;
   description?: string;
@@ -271,25 +297,10 @@ export async function resolveContacts(listId: string): Promise<ContactWithCompan
     throw new NotFoundError('Contact list not found');
   }
 
-  // Base contact filter — always applied regardless of list type
-  const baseContactWhere: Prisma.ContactWhereInput = {
-    deletedAt:     null,
-    suppressedAt:  null,
-    consentStatus: { not: 'REVOKED' },
-    // If the contact has a company, that company must not be soft-deleted
-    OR: [
-      { companyId: null },
-      { company: { deletedAt: null } },
-    ],
-  };
-
   if (list.isDynamic) {
     // Dynamic list: merge stored filterCriteria into the base where clause
     const storedFilter = (list.filterCriteria ?? {}) as Prisma.ContactWhereInput;
-
-    const dynamicWhere: Prisma.ContactWhereInput = {
-      AND: [baseContactWhere, storedFilter],
-    };
+    const dynamicWhere = buildDynamicContactWhere(storedFilter);
 
     // Count first to enforce cap without loading all rows
     const count = await prisma.contact.count({ where: dynamicWhere });
@@ -311,7 +322,7 @@ export async function resolveContacts(listId: string): Promise<ContactWithCompan
     const count = await prisma.contactListMembership.count({
       where: {
         listId,
-        contact: baseContactWhere,
+        contact: BASE_CONTACT_WHERE,
       },
     });
 
@@ -324,7 +335,7 @@ export async function resolveContacts(listId: string): Promise<ContactWithCompan
     const memberships = await prisma.contactListMembership.findMany({
       where: {
         listId,
-        contact: baseContactWhere,
+        contact: BASE_CONTACT_WHERE,
       },
       include: {
         contact: {

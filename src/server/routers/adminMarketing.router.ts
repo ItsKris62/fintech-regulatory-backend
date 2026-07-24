@@ -27,6 +27,7 @@ import {
   MarketingCampaignStatus,
   MarketingTemplateKey,
   SuppressionReason,
+  type Prisma,
 } from '@prisma/client';
 import { router, adminProcedure } from '../trpc/trpc';
 import { prisma } from '@/lib/prisma/client';
@@ -34,6 +35,7 @@ import { campaignService, RecipientLimitError } from '@/modules/marketing/campai
 import { suppress, isSuppressed } from '@/modules/marketing/suppression.service';
 import { recordConsent } from '@/modules/marketing/consent.service';
 import { sendQueueService } from '@/modules/marketing/send-queue.service';
+import { buildDynamicContactWhere } from '@/modules/marketing/list.service';
 import { BadRequestError, NotFoundError } from '@/utils/error';
 import { logger } from '@/utils/logger';
 
@@ -696,18 +698,16 @@ const listsRouter = router({
       } catch (error: unknown) { mapServiceError(error); }
     }),
 
+  /**
+   * Preview a dynamic list's recipient count/sample using the exact same filter
+   * logic resolveContacts applies at send time (via buildDynamicContactWhere),
+   * so a previewed count can never drift from what executeSend would actually resolve.
+   */
   previewDynamic: adminProcedure
     .input(z.object({ filterCriteria: z.record(z.string(), z.unknown()) }))
     .query(async ({ input }) => {
       try {
-        const criteria = input.filterCriteria as Record<string, unknown>;
-        const where: Record<string, unknown> = { deletedAt: null };
-
-        if (criteria['consentStatus']) where['consentStatus'] = criteria['consentStatus'];
-        if (criteria['suppressedAt'] === 'null')     where['suppressedAt'] = null;
-        if (criteria['suppressedAt'] === 'not_null') where['suppressedAt'] = { not: null };
-        if (criteria['companyId'])  where['companyId'] = criteria['companyId'];
-        if (criteria['role'])       where['role'] = { contains: criteria['role'] as string, mode: 'insensitive' };
+        const where = buildDynamicContactWhere(input.filterCriteria as Prisma.ContactWhereInput);
 
         const [count, sample] = await prisma.$transaction([
           prisma.contact.count({ where }),
@@ -718,6 +718,7 @@ const listsRouter = router({
           }),
         ]);
 
+        logger.info({ type: 'marketing_list_preview_dynamic', count });
         return { count, sample };
       } catch (error: unknown) { mapServiceError(error); }
     }),
