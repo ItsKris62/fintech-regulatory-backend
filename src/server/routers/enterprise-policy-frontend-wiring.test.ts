@@ -54,7 +54,8 @@ describe('Batch 6 enterprise policy frontend wiring invariants', () => {
     const detailSource = readFrontend(detailPage);
     const historySource = readFrontend(historyPage);
     expect(detailSource).not.toContain('Export coming soon');
-    expect(detailSource).toContain('Export DOCX');
+    expect(detailSource).toContain('Export as DOCX');
+    expect(detailSource).toContain('Export as PDF');
     expect(detailSource).toContain('useEnterprisePolicyVersionHistory');
     expect(detailSource).toContain('updateSectionContent');
     expect(detailSource).toContain('updateSectionStatus');

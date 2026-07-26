@@ -105,6 +105,8 @@ describe('AgentCredentialService', () => {
           'agents.automation.approval.read',
           'agents.automation.content.publish',
           'agents.automation.content.queueCandidate',
+          'agents.automation.content.createDraft',
+          'agents.automation.content.generateDraft',
           'agents.automation.regulatoryItems.read',
           'agents.automation.approvedContent.read',
           'agents.automation.newsletter.send',

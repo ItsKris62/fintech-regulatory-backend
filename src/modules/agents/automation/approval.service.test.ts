@@ -36,9 +36,18 @@ interface FakeApprovalRow {
   expiresAt: Date | null;
 }
 
-/** In-memory fake standing in for prisma.automationApproval, keyed by id. */
-function createFakePrisma() {
+interface FakeBlogPostRow {
+  id: string;
+  title: string;
+  excerpt: string | null;
+  content: string | null;
+  status: string;
+}
+
+/** In-memory fake standing in for prisma.automationApproval (+ blogPost for the Batch 3 join), keyed by id. */
+function createFakePrisma(blogPosts: FakeBlogPostRow[] = []) {
   const rows = new Map<string, FakeApprovalRow>();
+  const blogPostRows = new Map(blogPosts.map((post) => [post.id, post]));
   let counter = 0;
 
   function matchesWhere(row: FakeApprovalRow, where: Record<string, unknown>): boolean {
@@ -104,6 +113,9 @@ function createFakePrisma() {
         Object.assign(row, data);
         return Promise.resolve(row);
       }),
+    },
+    blogPost: {
+      findUnique: vi.fn().mockImplementation(({ where }: { where: { id: string } }) => Promise.resolve(blogPostRows.get(where.id) ?? null)),
     },
   };
 }
@@ -188,7 +200,7 @@ describe('AutomationApprovalService.createApproval / getApproval', () => {
     expect(prisma.rows.get(approvalId)?.status).toBe('pending');
 
     const status = await service.getApproval({ approvalId });
-    expect(status).toEqual({ status: 'pending' });
+    expect(status).toEqual({ status: 'pending', decidedBy: null });
   });
 
   it('throws NOT_FOUND for an unknown approvalId', async () => {
@@ -196,6 +208,55 @@ describe('AutomationApprovalService.createApproval / getApproval', () => {
     const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
 
     await expect(service.getApproval({ approvalId: 'does-not-exist' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('Gap 3: joins in the live BlogPost when metadata.blogPostId is present, without duplicating content into AutomationApproval.metadata', async () => {
+    const prisma = createFakePrisma([
+      { id: 'post_1', title: 'New CBK Circular', excerpt: 'Summary', content: 'human-edited final content', status: 'DRAFT' },
+    ]);
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    const { approvalId } = await service.createApproval(baseCreateInput({ metadata: { blogPostId: 'post_1' } }));
+    const result = await service.getApproval({ approvalId });
+
+    expect(result).toEqual({
+      status: 'pending',
+      decidedBy: null,
+      blogPost: { id: 'post_1', title: 'New CBK Circular', excerpt: 'Summary', content: 'human-edited final content', status: 'DRAFT' },
+    });
+  });
+
+  it('Gap 3: omits blogPost entirely for approvals with no blogPostId in metadata (marketing/sales/outreach)', async () => {
+    const prisma = createFakePrisma();
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    const { approvalId } = await service.createApproval(baseCreateInput({ metadata: { someOtherField: 'x' } }));
+    const result = await service.getApproval({ approvalId });
+
+    expect(result).toEqual({ status: 'pending', decidedBy: null });
+    expect(result).not.toHaveProperty('blogPost');
+  });
+
+  it('Gap 3: omits blogPost when metadata.blogPostId no longer resolves to a real row, rather than throwing', async () => {
+    const prisma = createFakePrisma();
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    const { approvalId } = await service.createApproval(baseCreateInput({ metadata: { blogPostId: 'post_does_not_exist' } }));
+    const result = await service.getApproval({ approvalId });
+
+    expect(result).toEqual({ status: 'pending', decidedBy: null });
+  });
+
+  it('reflects decidedBy once a human has recorded a decision - the identity sendNewsletter attributes a send to', async () => {
+    const prisma = createFakePrisma();
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const service = new AutomationApprovalService({ prisma: prisma as never, fetchImpl, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    const { approvalId } = await service.createApproval(baseCreateInput());
+    await service.recordApprovalDecision({ approvalId, decision: 'approved', by: 'admin_user_1' });
+
+    const result = await service.getApproval({ approvalId });
+    expect(result).toEqual({ status: 'approved', decidedBy: 'admin_user_1' });
   });
 
   it('is idempotent on idempotencyKey - a duplicate call (e.g. an n8n retry) returns the same approvalId and does not create a second row', async () => {
@@ -519,5 +580,36 @@ describe('AutomationApprovalService.expireStalePendingApprovals', () => {
     const count = await service.expireStalePendingApprovals();
     expect(count).toBe(0);
     expect(prisma.rows.get('legacy_1')?.status).toBe('pending');
+  });
+});
+
+describe('AutomationApprovalService.requireMetadataObjectField', () => {
+  it('returns the object field when present', async () => {
+    const prisma = createFakePrisma();
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    const templateVariables = { editionLabel: 'Week of 21 July 2026', items: [{ title: 'x', summary: 'y' }] };
+    const { approvalId } = await service.createApproval(baseCreateInput({ metadata: { listId: 'list_1', subject: 'Subj', templateVariables } }));
+
+    const result = await service.requireMetadataObjectField(approvalId, 'templateVariables');
+    expect(result).toEqual(templateVariables);
+  });
+
+  it('throws BAD_REQUEST when the field is missing', async () => {
+    const prisma = createFakePrisma();
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    const { approvalId } = await service.createApproval(baseCreateInput({ metadata: {} }));
+
+    await expect(service.requireMetadataObjectField(approvalId, 'templateVariables')).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('throws BAD_REQUEST when the field is present but not an object (e.g. a string or array)', async () => {
+    const prisma = createFakePrisma();
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    const { approvalId } = await service.createApproval(baseCreateInput({ metadata: { templateVariables: 'not-an-object' } }));
+
+    await expect(service.requireMetadataObjectField(approvalId, 'templateVariables')).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });

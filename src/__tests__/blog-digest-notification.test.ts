@@ -2,13 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { blogNotificationService } from '../modules/blog-automation/blog-notification.service';
 import { blogEditorialDigestService } from '../modules/blog-automation/blog-editorial-digest.service';
 
-// Mock redis
-vi.mock('@/lib/redis/client', () => ({
-  redis: {
-    get: vi.fn(),
-    set: vi.fn(),
-  }
+const { notificationDedupe } = vi.hoisted(() => ({
+  notificationDedupe: vi.fn(),
 }));
+
+// Mock dedupe helper
+vi.mock('@/lib/redis/dedupe', () => ({ notificationDedupe }));
 
 // Mock notificationModule
 vi.mock('../modules/notification', () => ({
@@ -45,9 +44,8 @@ vi.mock('@/lib/prisma/client', () => ({
 describe('BlogNotificationService', () => {
   it('should deduplicate notifications', async () => {
     const { notificationModule } = await import('../modules/notification');
-    const { redis } = await import('@/lib/redis/client');
 
-    vi.mocked(redis.get).mockResolvedValueOnce(null).mockResolvedValueOnce('1');
+    notificationDedupe.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     
     await blogNotificationService.notifyMonitorFailure('admin-1', 'Test Monitor', 'Error');
     expect(notificationModule.createNotification).toHaveBeenCalledTimes(1);

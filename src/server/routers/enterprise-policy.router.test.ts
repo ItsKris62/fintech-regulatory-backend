@@ -88,7 +88,7 @@ describe('Enterprise Policy Router Security Invariants', () => {
   it('returns a clean BAD_REQUEST for PDF export without logging or updating format', () => {
     const exportBody = routerSrc.slice(routerSrc.indexOf('exportPolicy:'), routerSrc.length);
     expect(exportBody).toContain("if (input.format === 'PDF')");
-    expect(exportBody).toContain("message: 'PDF export is not available in this environment. Please export as DOCX.'");
+    expect(exportBody).toContain("message: 'PDF export is not available yet. Please export DOCX.'");
     
     // The rejection is before the actual export logging and before the date/format update
     const pdfRejectionIdx = exportBody.indexOf("if (input.format === 'PDF')");

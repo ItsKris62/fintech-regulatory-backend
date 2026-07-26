@@ -85,8 +85,9 @@ describe('PilotAccess schema and migration - audit-preserving active uniqueness'
 
   it('does not add a permanent Prisma unique constraint that blocks history', () => {
     const modelIdx = schemaSrc.indexOf('model PilotAccess');
-    const modelEndIdx = schemaSrc.indexOf('\n}\n', modelIdx);
-    const modelBody = schemaSrc.slice(modelIdx, modelEndIdx);
+    const modelSrc = schemaSrc.slice(modelIdx);
+    const modelEndIdx = modelSrc.search(/^\}\s*$/m);
+    const modelBody = modelSrc.slice(0, modelEndIdx);
     expect(modelBody).not.toContain('@@unique');
   });
 
