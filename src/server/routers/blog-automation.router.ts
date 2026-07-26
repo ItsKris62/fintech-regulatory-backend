@@ -33,7 +33,7 @@ import {
 } from '../schemas/blog-automation.schema';
 import { runSourceDiscoveryForMonitor } from '../../modules/blog-automation/source-discovery.service';
 import { createSuggestionFromSourceItem } from '../../modules/blog-automation/suggestion-builder';
-import { buildDraftSkeletonFromSuggestion } from '../../modules/blog-automation/draft-skeleton.service';
+import { createBlogDraftFromSuggestion } from '../../modules/blog-automation/draft-creation.service';
 import { generateAiDraftForBlogPost } from '../../modules/blog-automation/ai-draft-generation.service';
 import { runBlogPostVerification } from '../../modules/blog-automation/blog-verification.service';
 import { blogEditorialDigestService } from '../../modules/blog-automation/blog-editorial-digest.service';
@@ -578,108 +578,10 @@ export const blogAutomationRouter = router({
   adminCreateDraftFromSuggestion: adminProcedure
     .input(adminCreateDraftFromSuggestionSchema)
     .mutation(async ({ input, ctx }): Promise<any> => {
-      const suggestion = await ctx.prisma.blogArticleSuggestion.findUnique({
-        where: { id: input.suggestionId },
-        include: {
-          sources: {
-            include: {
-              sourceItem: {
-                include: { monitor: true }
-              }
-            }
-          }
-        }
-      });
-
-      if (!suggestion || suggestion.deletedAt) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Suggestion not found' });
-      }
-
-      if (suggestion.status !== 'APPROVED_FOR_DRAFT') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Suggestion must be APPROVED_FOR_DRAFT' });
-      }
-
-      if (suggestion.blogPostId) {
-        throw new TRPCError({ code: 'CONFLICT', message: 'A draft already exists for this suggestion' });
-      }
-
-      if (suggestion.sources.length === 0) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Suggestion has no attached sources' });
-      }
-
-      // Generate unique slug
-      let baseSlug = suggestion.suggestedSlug || suggestion.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      let uniqueSlug = baseSlug;
-      let counter = 1;
-      while (true) {
-        const existingPost = await ctx.prisma.blogPost.findUnique({ where: { slug: uniqueSlug } });
-        if (!existingPost) break;
-        uniqueSlug = `${baseSlug}-${counter}`;
-        counter++;
-      }
-
-      const sourceTitles = suggestion.sources.map(s => s.sourceItem.title);
-      const sourceUrls = suggestion.sources.map(s => s.sourceItem.url);
-
-      const skeletonContent = buildDraftSkeletonFromSuggestion({
-        title: suggestion.title,
-        jurisdiction: suggestion.jurisdiction,
-        category: suggestion.category,
-        articleType: suggestion.articleType,
-        summary: suggestion.summary,
-        sourceTitles,
-        sourceUrls,
-        targetAudience: suggestion.targetAudience,
-        recommendedTags: suggestion.recommendedTags,
-      });
-
-      return ctx.prisma.$transaction(async (tx) => {
-        const blogPost = await tx.blogPost.create({
-          data: {
-            status: 'DRAFT',
-            title: suggestion.title,
-            slug: uniqueSlug,
-            excerpt: suggestion.summary,
-            content: skeletonContent,
-            category: suggestion.category,
-            tags: suggestion.recommendedTags,
-            jurisdiction: suggestion.jurisdiction,
-            seoTitle: suggestion.title,
-            seoDescription: suggestion.summary ? suggestion.summary.substring(0, 160) : null,
-            authorId: ctx.user!.id,
-            updatedById: ctx.user!.id,
-          }
-        });
-
-        // Attach sources
-        for (const source of suggestion.sources) {
-          await tx.blogPostSource.create({
-            data: {
-              postId: blogPost.id,
-              sourceType: source.sourceItem.sourceType,
-              title: source.sourceItem.title,
-              publisher: source.sourceItem.publisher || source.sourceItem.monitor.name,
-              url: source.sourceItem.url,
-              publishedAt: source.sourceItem.publicationDate,
-              accessedAt: new Date(),
-              notes: `Created from source discovery item ${source.sourceItem.id}`,
-            }
-          });
-        }
-
-        // Update suggestion
-        await tx.blogArticleSuggestion.update({
-          where: { id: suggestion.id },
-          data: {
-            status: 'DRAFT_CREATED',
-            blogPostId: blogPost.id,
-          }
-        });
-
-        return {
-          blogPostId: blogPost.id,
-          slug: blogPost.slug,
-        };
+      return createBlogDraftFromSuggestion({
+        prisma: ctx.prisma,
+        suggestionId: input.suggestionId,
+        createdById: ctx.user!.id,
       });
     }),
 

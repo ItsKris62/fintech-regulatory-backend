@@ -3,7 +3,15 @@ import { complete } from '../../lib/ai/client';
 import { getBlogDraftUserPrompt, BLOG_DRAFT_SYSTEM_PROMPT } from './blog-draft-prompt';
 import { blogNotificationService } from './blog-notification.service';
 
-export async function generateAiDraftForBlogPost(blogPostId: string, adminUserId: string) {
+/**
+ * notifyUserId defaults to adminUserId (identical to prior behavior for the
+ * existing admin-dashboard caller, adminGenerateAiDraft, which never passes
+ * a third argument). Automation-originated callers pass a real human
+ * reviewer id separately from the FK-attribution id (adminUserId) they use,
+ * since adminUserId for an automation call is the sys-automation-orchestrator
+ * service principal - notifying that id directly would never reach a human.
+ */
+export async function generateAiDraftForBlogPost(blogPostId: string, adminUserId: string, notifyUserId?: string) {
   const post = await prisma.blogPost.findUnique({
     where: { id: blogPostId },
     include: {
@@ -118,7 +126,7 @@ export async function generateAiDraftForBlogPost(blogPostId: string, adminUserId
 
     // Notify that draft is ready for verification
     await blogNotificationService.notifyDraftReadyForVerification(
-      adminUserId,
+      notifyUserId ?? adminUserId,
       post.id
     ).catch(console.error);
 

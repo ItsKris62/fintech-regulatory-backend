@@ -11,6 +11,7 @@ import { automationService } from '@/modules/agents/automation/automation.servic
 import { automationMetricsService } from '@/modules/agents/automation/metrics.service';
 import { automationApprovalService } from '@/modules/agents/automation/approval.service';
 import { automationContentService } from '@/modules/agents/automation/content.service';
+import { automationBlogDraftService } from '@/modules/agents/automation/blog-draft.service';
 import { automationSourcesService } from '@/modules/agents/automation/sources.service';
 import { automationPilotVendorService } from '@/modules/agents/automation/pilot-vendor.service';
 import { automationOutreachService } from '@/modules/agents/automation/outreach.service';
@@ -317,11 +318,16 @@ export const agentsRouter = router({
     // them. All share one rate-limit bucket (appConfig.agents.automation.
     // workflow*) - same precedent as appConfig.agents.trigger (B9): these are
     // once-per-workflow-run calls with no reason for distinct ceilings.
+    // Gap 3 stale-overwrite fix (W-CONTENT-02 Phase B, Batch 3): no longer
+    // accepts a `content` field - publishContent always reads and keeps the
+    // post's own live content column, since a caller-supplied value could
+    // silently discard a human edit made between draft-generation and the
+    // approval decision. See content.service.ts's publishContent doc comment.
     publishContent: agentProcedure('agents.automation.content.publish')
       .use(rateLimited('automation-publish-content', appConfig.agents.automation.workflowRateLimitMax, {
         window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
       }))
-      .input(z.object({ approvalId: z.string().min(1), content: z.string().min(1) }))
+      .input(z.object({ approvalId: z.string().min(1) }))
       .mutation(async ({ input }) => automationContentService.publishContent(input)),
 
     queueContentCandidate: agentProcedure('agents.automation.content.queueCandidate')
@@ -335,6 +341,42 @@ export const agentsRouter = router({
         jurisdiction: z.string().min(1),
       }))
       .mutation(async ({ input }) => automationContentService.queueContentCandidate(input)),
+
+    // Gap 2 (W-CONTENT-02 Phase B, Batch 1). Bridges a queued candidate's
+    // sourceItemId into the existing blog-automation suggestion/draft
+    // pipeline (createSuggestionFromSourceItem + createBlogDraftFromSuggestion,
+    // both unmodified, previously admin-only). No idempotencyKey field: the
+    // sourceItemId itself is already the natural idempotency key, enforced by
+    // createSuggestionFromSourceItem's own existing-link/status checks and by
+    // createBlogDraftFromSuggestion's blogPostId conflict check - a second
+    // call with the same sourceItemId safely resolves to a 'duplicate' status
+    // or a CONFLICT, never a second suggestion or a second draft.
+    createDraftFromCandidate: agentProcedure('agents.automation.content.createDraft')
+      .use(rateLimited('automation-create-draft-from-candidate', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ sourceItemId: z.string().min(1) }))
+      .mutation(async ({ input, ctx }) => automationBlogDraftService.createDraftFromCandidate(input, ctx.agent.userId)),
+
+    // Gap 1 (W-CONTENT-02 Phase B, Batch 2). Delegates directly to
+    // generateAiDraftForBlogPost (ai-draft-generation.service.ts), the same
+    // function adminGenerateAiDraft already calls - no new templating logic
+    // here. Unlike createDraftFromCandidate above, this DOES require a
+    // client-supplied idempotencyKey body field: generateAiDraftForBlogPost
+    // has no idempotency guard of its own, so a retry without one would
+    // trigger a second real LLM call and silently re-overwrite the post's
+    // content a second time. Wrapped with the same agentRunService
+    // beginRun/completeRun/failRun primitive automation.service.ts's own
+    // generate() uses for exactly this reason.
+    generateDraftContent: agentProcedure('agents.automation.content.generateDraft')
+      .use(rateLimited('automation-generate-draft-content', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        blogPostId: z.string().min(1),
+        idempotencyKey: z.string().min(8).max(200),
+      }))
+      .mutation(async ({ input, ctx }) => automationBlogDraftService.generateDraftContent(input, ctx.agent.userId)),
 
     getRecentHighImpactRegulatoryItems: agentProcedure('agents.automation.regulatoryItems.read')
       .use(rateLimited('automation-recent-high-impact-items', appConfig.agents.automation.workflowRateLimitMax, {
@@ -350,13 +392,16 @@ export const agentsRouter = router({
       .input(z.object({ jurisdictions: z.string().max(500) }))
       .mutation(async ({ input }) => automationContentService.getApprovedContentThisWeek(input)),
 
-    // NOT wired to a real send - see newsletter.service.ts. Approval gate is
-    // real; the send itself throws NOT_IMPLEMENTED with a clear explanation.
+    // Sends via the templated MarketingCampaign pipeline (KENYAN_COMPLIANCE_BRIEF
+    // template) once the approval is confirmed - see newsletter.service.ts. No
+    // content field here: the caller only names the approval, the compiled
+    // templateVariables/listId/subject are read from the approval's own
+    // metadata (set at createApproval time), never trusted from this call.
     sendNewsletter: agentProcedure('agents.automation.newsletter.send')
       .use(rateLimited('automation-send-newsletter', appConfig.agents.automation.workflowRateLimitMax, {
         window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
       }))
-      .input(z.object({ approvalId: z.string().min(1), html: z.string().min(1) }))
+      .input(z.object({ approvalId: z.string().min(1) }))
       .mutation(async ({ input }) => automationNewsletterService.sendNewsletter(input)),
 
     queueOutreach: agentProcedure('agents.automation.outreach.queue')

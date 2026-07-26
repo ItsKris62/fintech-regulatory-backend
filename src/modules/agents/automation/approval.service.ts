@@ -24,6 +24,14 @@ const APPROVAL_DECISION_LINK_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 export type ApprovalDecision = 'approved' | 'rejected';
 export type ApprovalStatus = 'pending' | ApprovalDecision | 'expired';
 
+export interface ApprovalBlogPostSummary {
+  id: string;
+  title: string;
+  excerpt: string | null;
+  content: string | null;
+  status: string;
+}
+
 export interface CreateApprovalInput {
   department: string;
   workflow: string;
@@ -71,7 +79,7 @@ export interface ListApprovalsResult {
   limit: number;
 }
 
-type ApprovalPrisma = Pick<typeof defaultPrisma, 'automationApproval'>;
+type ApprovalPrisma = Pick<typeof defaultPrisma, 'automationApproval' | 'blogPost'>;
 
 export interface AutomationApprovalServiceDependencies {
   prisma?: ApprovalPrisma;
@@ -84,6 +92,18 @@ export interface AutomationApprovalServiceDependencies {
 
 function toJsonInput(value: Record<string, unknown>): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
+}
+
+/**
+ * Mirrors the reviewerEmail-from-metadata extraction pattern already used in
+ * getApprovalPublicView below - not a throw-on-missing helper like
+ * requireMetadataField, since most approvals (marketing/sales/outreach) have
+ * no blogPostId at all and that's expected, not an error.
+ */
+function extractOptionalBlogPostId(metadata: Prisma.JsonValue | null | undefined): string | undefined {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+  const value = (metadata as Record<string, unknown>).blogPostId;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
@@ -297,17 +317,44 @@ export class AutomationApprovalService {
     };
   }
 
-  async getApproval(input: { approvalId: string }): Promise<{ status: ApprovalStatus }> {
+  /**
+   * Gap 3 (W-CONTENT-02 Phase B, Batch 3). When metadata.blogPostId is
+   * present, joins in the live BlogPost row (application-level join, not a
+   * Prisma relation - metadata is unstructured Json, no FK exists or is
+   * being added). This is what lets the decision-webhook execution (a
+   * separate n8n run from the one that generated the draft) see the
+   * current, possibly-since-human-edited content without n8n having to
+   * carry any state of its own across executions. blogPost is omitted
+   * entirely for the common case of a non-blog approval (marketing/sales/
+   * outreach) or a blogPostId that no longer resolves to a real row.
+   */
+  async getApproval(input: { approvalId: string }): Promise<{ status: ApprovalStatus; decidedBy: string | null; blogPost?: ApprovalBlogPostSummary }> {
     const approval = await this.prisma.automationApproval.findUnique({
       where: { id: input.approvalId },
-      select: { status: true },
+      select: { status: true, metadata: true, decidedBy: true },
     });
 
     if (!approval) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Approval not found.' });
     }
 
-    return { status: approval.status as ApprovalStatus };
+    const result: { status: ApprovalStatus; decidedBy: string | null; blogPost?: ApprovalBlogPostSummary } = {
+      status: approval.status as ApprovalStatus,
+      decidedBy: approval.decidedBy,
+    };
+
+    const blogPostId = extractOptionalBlogPostId(approval.metadata);
+    if (blogPostId) {
+      const post = await this.prisma.blogPost.findUnique({
+        where: { id: blogPostId },
+        select: { id: true, title: true, excerpt: true, content: true, status: true },
+      });
+      if (post) {
+        result.blogPost = post;
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -332,6 +379,31 @@ export class AutomationApprovalService {
       });
     }
     return value;
+  }
+
+  /**
+   * Sibling to requireMetadataField for object-shaped metadata - sendNewsletter
+   * uses this to read the compiled templateVariables digest that createApproval's
+   * caller (n8n) sets when the newsletter approval is created, same "approval
+   * gates a pre-existing, already-reviewed payload" contract as blogPostId/draftId,
+   * just object-shaped instead of a single string/FK.
+   */
+  async requireMetadataObjectField(approvalId: string, field: string): Promise<Record<string, unknown>> {
+    const row = await this.prisma.automationApproval.findUnique({
+      where: { id: approvalId },
+      select: { metadata: true },
+    });
+
+    const metadata = row?.metadata;
+    const value = metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? (metadata as Record<string, unknown>)[field] : undefined;
+
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Approval ${approvalId}'s metadata is missing required object field "${field}" - createApproval must set this when the approval is created.`,
+      });
+    }
+    return value as Record<string, unknown>;
   }
 
   /**

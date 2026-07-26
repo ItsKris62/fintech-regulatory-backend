@@ -25,6 +25,7 @@ import ComplianceUpdateEmail from '@/emails/templates/marketing/ComplianceUpdate
 import WebinarInviteEmail from '@/emails/templates/marketing/WebinarInviteEmail';
 import ResourceDownloadEmail from '@/emails/templates/marketing/ResourceDownloadEmail';
 import GenericMarketingEmail from '@/emails/templates/marketing/GenericMarketingEmail';
+import KenyanComplianceBriefEmail from '@/emails/templates/marketing/KenyanComplianceBriefEmail';
 
 // ---------------------------------------------------------------------------
 // Per-template Zod schemas (validate admin-supplied templateVariables only)
@@ -84,6 +85,16 @@ const GenericMarketingVarsSchema = z.object({
   ctaText:         z.string().optional(),
 });
 
+const KenyanComplianceBriefVarsSchema = z.object({
+  editionLabel: z.string().min(1),
+  intro:        z.string().optional(),
+  items: z.array(z.object({
+    title:     z.string().min(1),
+    summary:   z.string().min(1),
+    sourceUrl: z.string().url().optional(),
+  })).min(1).max(10),
+});
+
 // ---------------------------------------------------------------------------
 // Registry entry type
 // ---------------------------------------------------------------------------
@@ -126,5 +137,9 @@ export const TEMPLATE_REGISTRY: Record<MarketingTemplateKey, TemplateRegistryEnt
   [MarketingTemplateKey.GENERIC_MARKETING]: {
     component:    GenericMarketingEmail,
     validateVars: (vars) => GenericMarketingVarsSchema.parse(vars) as Record<string, unknown>,
+  },
+  [MarketingTemplateKey.KENYAN_COMPLIANCE_BRIEF]: {
+    component:    KenyanComplianceBriefEmail,
+    validateVars: (vars) => KenyanComplianceBriefVarsSchema.parse(vars) as Record<string, unknown>,
   },
 };
