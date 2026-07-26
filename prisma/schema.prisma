@@ -2463,6 +2463,7 @@ enum MarketingTemplateKey {
   WEBINAR_INVITE
   RESOURCE_DOWNLOAD
   GENERIC_MARKETING
+  KENYAN_COMPLIANCE_BRIEF
 }
 
 enum PilotInvitationStatus {
