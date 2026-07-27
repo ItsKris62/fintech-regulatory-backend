@@ -23,6 +23,7 @@
     "cleanup:documents": "tsx src/scripts/cleanup-deleted-documents.ts",
     "verify:checklist": "tsx src/scripts/verify-checklist.ts",
     "verify:checklist:live": "tsx src/scripts/verify-checklist.ts --live",
+    "verify:content-marketing-schema": "tsx src/scripts/verify-schema.ts",
     "verify:checklist:full": "tsx src/scripts/verify-checklist.ts --live --all-tiers",
     "pilot:provision": "tsx src/scripts/provision-pilot-testers.ts",
     "pilot:provision:dry": "tsx src/scripts/provision-pilot-testers.ts",

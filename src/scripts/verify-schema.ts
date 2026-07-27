@@ -1,41 +1,79 @@
 import 'dotenv/config';
 import { prisma } from '../lib/prisma/client';
-import { verifyDatabaseSchema } from '../utils/schema-verifier';
+import { Prisma } from '@prisma/client';
+import {
+  verifyCompleteSchema,
+  VerifierMode,
+  EnvironmentIdentity,
+  QueryRunner,
+} from '../utils/schema-verifier';
 import { logger } from '../utils/logger';
 
 async function runSchemaVerificationCLI(): Promise<void> {
-  console.log('=== SheriaBot Read-Only Schema Verification ===\n');
+  const args = process.argv.slice(2);
+  let mode: VerifierMode = 'post';
+  let isJson = false;
 
-  const databaseUrl = process.env.DATABASE_URL || '';
-  const runner = {
-    async queryRaw<T = unknown>(query: string, ...params: unknown[]): Promise<T[]> {
-      return (prisma as any).$queryRawUnsafe(query, ...params);
+  for (const arg of args) {
+    if (arg === '--mode=pre') {
+      mode = 'pre';
+    } else if (arg === '--mode=post') {
+      mode = 'post';
+    } else if (arg === '--json') {
+      isJson = true;
+    }
+  }
+
+  const identity: EnvironmentIdentity = {
+    appEnv: process.env.APP_ENV || process.env.NODE_ENV,
+    databaseEnv: process.env.DATABASE_ENVIRONMENT,
+    databaseUrl: process.env.DATABASE_URL,
+  };
+
+  const runner: QueryRunner = {
+    async queryRaw<T = unknown>(query: string): Promise<T[]> {
+      return prisma.$queryRaw(Prisma.raw(query)) as Promise<T[]>;
     },
   };
 
-  const result = await verifyDatabaseSchema(runner, databaseUrl);
+  const result = await verifyCompleteSchema(mode, identity, runner);
 
-  console.log(`Target Environment : ${result.targetEnvironment}`);
-  console.log(`Gate Status        : ${result.gateStatus}`);
-  console.log(`Verification Result: ${result.success ? 'PASSED' : 'FAILED'}\n`);
+  if (isJson) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log('=== SheriaBot Content & Marketing Schema Verifier ===');
+    console.log(`Mode               : ${result.mode.toUpperCase()}`);
+    console.log(`App Environment    : ${result.environment.appEnv}`);
+    console.log(`DB Environment     : ${result.environment.databaseEnv}`);
+    console.log(`Target URL         : ${result.environment.redactedUrl}`);
+    console.log(`Gate Status        : ${result.gateStatus}`);
+    console.log(`Overall Result     : ${result.success ? 'PASSED' : 'FAILED'}\n`);
 
-  if (result.matchedTables.length > 0) {
-    console.log(`Matched Tables (${result.matchedTables.length}):`, result.matchedTables.join(', '));
-  }
+    console.log('Summary Counts:');
+    console.log(` - Total Checked    : ${result.summaryCounts.totalChecked}`);
+    console.log(` - Present          : ${result.summaryCounts.present}`);
+    console.log(` - Missing Expected : ${result.summaryCounts.missingExpected}`);
+    console.log(` - Missing Unexpect : ${result.summaryCounts.missingUnexpected}`);
+    console.log(` - Conflict         : ${result.summaryCounts.conflict}`);
+    console.log(` - Advisory Warnings: ${result.summaryCounts.warn}\n`);
 
-  if (result.details.length > 0) {
-    console.log('\nVerification Details:');
-    result.details.forEach((d) => console.log(` - ${d}`));
+    if (result.results.length > 0) {
+      console.log('Sample Object Verification Breakdown:');
+      result.results.slice(0, 20).forEach((item) => {
+        console.log(` [${item.status}] ${item.category} ${item.objectName}: ${item.reason}`);
+      });
+      if (result.results.length > 20) {
+        console.log(` ... and ${result.results.length - 20} more items.`);
+      }
+    }
   }
 
   if (!result.success) {
-    logger.error({ type: 'schema_verifier_cli_failure', result }, 'Schema verification failed or was blocked by safety gate.');
-    if (result.gateStatus === 'BLOCKED_NO_STAGING_URL' || result.gateStatus === 'BLOCKED_PRODUCTION_TARGET') {
-      console.log('\n[GATE BLOCKED] Staging credentials missing or production target protected. Halting pre-migration step.');
+    if (!isJson) {
+      logger.error({ type: 'schema_verifier_cli_failure', gateStatus: result.gateStatus }, 'Schema verification CLI failed.');
     }
     process.exit(1);
   } else {
-    console.log('\n[GATE PASSED] Database schema matches Phase 0 baseline expectations cleanly.');
     process.exit(0);
   }
 }
