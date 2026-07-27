@@ -22,6 +22,7 @@ import { alertPubSub } from './lib/redis/pubsub';
 import { consumeAlertStreamToken } from './lib/alerts/stream-token';
 import { registerComplianceStreamRoute } from './routes/compliance-stream.route';
 import { registerApprovalDecisionRoutes } from './routes/approval-decision.route';
+import { registerAutomationIncidentRoutes } from './routes/automation-incident.route';
 import { appConfig } from './config/app.config';
 import {
   verifyIntaSendWebhook,
@@ -640,6 +641,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   // decision. See src/routes/approval-decision.route.ts for the signature
   // scheme and rate limiting.
   registerApprovalDecisionRoutes(app);
+
+  // -- Automation Incident Ingestion (n8n & Backend) -------------------------
+  await app.register(registerAutomationIncidentRoutes);
 
   // -- Catch-all error handler ----------------------------------------------
   app.setErrorHandler<Error>((error, request, reply) => {

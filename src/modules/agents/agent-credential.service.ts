@@ -52,6 +52,7 @@ export const AGENT_CAPABILITIES = [
   'agents.securityOps.report.read',
   'agents.chiefOfStaff.report.create',
   'agents.chiefOfStaff.report.read',
+  'agents.automation.incident.create',
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
@@ -81,6 +82,7 @@ const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
   'agents.automation.pilotCohort.read',
   'agents.automation.dpaVendor.read',
   'agents.automation.notify.shouldNotify',
+  'agents.automation.incident.create',
 ];
 
 // Capabilities granted to the n8n scheduler surface only  -  exactly one per

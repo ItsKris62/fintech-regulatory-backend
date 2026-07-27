@@ -124,15 +124,15 @@ model User {
   sentInvitations         OrganizationMember[] @relation("OrganizationMemberInviter")
 
   // Blog CMS
-  blogPostsAuthored   BlogPost[] @relation("BlogPostAuthor")
-  blogPostsReviewed   BlogPost[] @relation("BlogPostReviewer")
-  blogPostsUpdated    BlogPost[] @relation("BlogPostUpdatedBy")
-  blogSourceMonitorsVerified BlogSourceMonitor[] @relation("BlogSourceMonitorVerifiedBy")
-  blogSourceMonitorsCreated  BlogSourceMonitor[] @relation("BlogSourceMonitorCreatedBy")
-  blogSourceMonitorsUpdated  BlogSourceMonitor[] @relation("BlogSourceMonitorUpdatedBy")
-  blogDiscoveryRunsTriggered BlogDiscoveryRun[]  @relation("BlogDiscoveryRunTriggeredBy")
-  blogSuggestionsDismissed BlogArticleSuggestion[] @relation("BlogSuggestionDismissedBy")
-  blogSuggestionsApproved  BlogArticleSuggestion[] @relation("BlogSuggestionApprovedBy")
+  blogPostsAuthored                BlogPost[]               @relation("BlogPostAuthor")
+  blogPostsReviewed                BlogPost[]               @relation("BlogPostReviewer")
+  blogPostsUpdated                 BlogPost[]               @relation("BlogPostUpdatedBy")
+  blogSourceMonitorsVerified       BlogSourceMonitor[]      @relation("BlogSourceMonitorVerifiedBy")
+  blogSourceMonitorsCreated        BlogSourceMonitor[]      @relation("BlogSourceMonitorCreatedBy")
+  blogSourceMonitorsUpdated        BlogSourceMonitor[]      @relation("BlogSourceMonitorUpdatedBy")
+  blogDiscoveryRunsTriggered       BlogDiscoveryRun[]       @relation("BlogDiscoveryRunTriggeredBy")
+  blogSuggestionsDismissed         BlogArticleSuggestion[]  @relation("BlogSuggestionDismissedBy")
+  blogSuggestionsApproved          BlogArticleSuggestion[]  @relation("BlogSuggestionApprovedBy")
   blogDraftGenerationRunsRequested BlogDraftGenerationRun[] @relation("BlogDraftGenerationRequestedBy")
   blogDraftGenerationRunsApplied   BlogDraftGenerationRun[] @relation("BlogDraftGenerationAppliedBy")
 
@@ -435,7 +435,7 @@ model DocumentChunk {
 }
 
 model ComplianceQuery {
-  id                 String               @id @default(cuid())
+  id                 String                  @id @default(cuid())
   userId             String
   organizationId     String?
   query              String
@@ -451,13 +451,13 @@ model ComplianceQuery {
   regulations        Json?
   requirements       Json?
   gaps               Json?
-  status             String               @default("processing")
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-  user               User                 @relation(fields: [userId], references: [id])
+  status             String                  @default("processing")
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  user               User                    @relation(fields: [userId], references: [id])
   feedbacks          QueryFeedback[]
   saves              SavedResponse[]
-  citationRecords    Citation[]           @relation("ComplianceQueryCitations")
+  citationRecords    Citation[]              @relation("ComplianceQueryCitations")
   runs               ComplianceQueryRun[]
   answerClaims       ComplianceAnswerClaim[]
   corpusGapFeedbacks CorpusGapFeedback[]
@@ -529,7 +529,7 @@ model ComplianceAnswerClaim {
 }
 
 model ComplianceClaimCitation {
-  id                        String                  @id @default(cuid())
+  id                        String                   @id @default(cuid())
   claimId                   String
   regulatoryDocumentChunkId String?
   documentId                String?
@@ -538,13 +538,13 @@ model ComplianceClaimCitation {
   chunkRank                 Int?
   quoteStart                Int?
   quoteEnd                  Int?
-  supportExcerpt            String                  @db.Text
+  supportExcerpt            String                   @db.Text
   supportVerdict            String
   confidence                Float?
   verifierModel             String?
   rawSource                 Json?
-  createdAt                 DateTime                @default(now())
-  claim                     ComplianceAnswerClaim   @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  createdAt                 DateTime                 @default(now())
+  claim                     ComplianceAnswerClaim    @relation(fields: [claimId], references: [id], onDelete: Cascade)
   regulatoryDocumentChunk   RegulatoryDocumentChunk? @relation(fields: [regulatoryDocumentChunkId], references: [id])
 
   @@index([claimId])
@@ -1167,42 +1167,42 @@ model TicketComment {
 }
 
 model RegulatoryDocument {
-  id              String                     @id @default(cuid())
-  title           String
-  fileName        String
-  fileType        String
-  source          String
-  category        RegulatoryDocumentCategory
-  jurisdiction    String
-  documentType    String
-  effectiveDate   DateTime?
-  version         String?
-  authorityStatus AuthorityStatus            @default(IN_FORCE)
-  isBinding       Boolean                    @default(true)
-  storageKey      String
-  status          RegulatoryDocumentStatus   @default(PENDING)
-  checksum        String?
-  officialUrl     String?
-  publicationDate DateTime?
-  retrievedAt     DateTime?
-  effectiveEndDate DateTime?
-  sourceRegistryId String?
+  id                      String                     @id @default(cuid())
+  title                   String
+  fileName                String
+  fileType                String
+  source                  String
+  category                RegulatoryDocumentCategory
+  jurisdiction            String
+  documentType            String
+  effectiveDate           DateTime?
+  version                 String?
+  authorityStatus         AuthorityStatus            @default(IN_FORCE)
+  isBinding               Boolean                    @default(true)
+  storageKey              String
+  status                  RegulatoryDocumentStatus   @default(PENDING)
+  checksum                String?
+  officialUrl             String?
+  publicationDate         DateTime?
+  retrievedAt             DateTime?
+  effectiveEndDate        DateTime?
+  sourceRegistryId        String?
   sourceDocumentVersionId String?
-  supersededByDocumentId String?
-  indexVersion    String                     @default("v1")
-  metadata        Json?
-  chunkCount      Int?
-  totalCharacters Int?
-  processedAt     DateTime?
-  errorMessage    String?
-  createdAt       DateTime                   @default(now())
-  updatedAt       DateTime                   @updatedAt
-  chunks          RegulatoryDocumentChunk[]
-  approvedSource  ApprovedSource?            @relation(fields: [sourceRegistryId], references: [id])
-  sourceDocumentVersion SourceDocumentVersion? @relation("RegulatoryDocumentCurrentSourceVersion", fields: [sourceDocumentVersionId], references: [id])
-  sourceVersions  SourceDocumentVersion[]     @relation("RegulatoryDocumentSourceVersions")
-  supersededByDocument RegulatoryDocument?     @relation("RegulatoryDocumentSupersession", fields: [supersededByDocumentId], references: [id])
-  supersedesDocuments RegulatoryDocument[]     @relation("RegulatoryDocumentSupersession")
+  supersededByDocumentId  String?
+  indexVersion            String                     @default("v1")
+  metadata                Json?
+  chunkCount              Int?
+  totalCharacters         Int?
+  processedAt             DateTime?
+  errorMessage            String?
+  createdAt               DateTime                   @default(now())
+  updatedAt               DateTime                   @updatedAt
+  chunks                  RegulatoryDocumentChunk[]
+  approvedSource          ApprovedSource?            @relation(fields: [sourceRegistryId], references: [id])
+  sourceDocumentVersion   SourceDocumentVersion?     @relation("RegulatoryDocumentCurrentSourceVersion", fields: [sourceDocumentVersionId], references: [id])
+  sourceVersions          SourceDocumentVersion[]    @relation("RegulatoryDocumentSourceVersions")
+  supersededByDocument    RegulatoryDocument?        @relation("RegulatoryDocumentSupersession", fields: [supersededByDocumentId], references: [id])
+  supersedesDocuments     RegulatoryDocument[]       @relation("RegulatoryDocumentSupersession")
 
   @@index([status])
   @@index([category])
@@ -1216,30 +1216,30 @@ model RegulatoryDocument {
 }
 
 model RegulatoryDocumentChunk {
-  id         String             @id @default(cuid())
-  documentId String
-  chunkIndex Int
-  content    String
-  section    String?
-  tokenCount Int
-  pineconeId String             @unique
-  pageStart  Int?
-  pageEnd    Int?
-  sectionNumber String?
-  clauseNumber String?
-  scheduleNumber String?
-  headingPath Json?
-  provisionId String?
-  charStart Int?
-  charEnd Int?
-  contentHash String?
+  id                      String                    @id @default(cuid())
+  documentId              String
+  chunkIndex              Int
+  content                 String
+  section                 String?
+  tokenCount              Int
+  pineconeId              String                    @unique
+  pageStart               Int?
+  pageEnd                 Int?
+  sectionNumber           String?
+  clauseNumber            String?
+  scheduleNumber          String?
+  headingPath             Json?
+  provisionId             String?
+  charStart               Int?
+  charEnd                 Int?
+  contentHash             String?
   sourceDocumentVersionId String?
-  indexVersion String           @default("v1")
-  metadata Json?
-  createdAt  DateTime           @default(now())
-  document   RegulatoryDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  sourceDocumentVersion SourceDocumentVersion? @relation(fields: [sourceDocumentVersionId], references: [id])
-  claimCitations ComplianceClaimCitation[]
+  indexVersion            String                    @default("v1")
+  metadata                Json?
+  createdAt               DateTime                  @default(now())
+  document                RegulatoryDocument        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sourceDocumentVersion   SourceDocumentVersion?    @relation(fields: [sourceDocumentVersionId], references: [id])
+  claimCitations          ComplianceClaimCitation[]
 
   @@index([documentId])
   @@index([sourceDocumentVersionId])
@@ -1249,18 +1249,18 @@ model RegulatoryDocumentChunk {
 }
 
 model ApprovedSource {
-  id             String                 @id @default(cuid())
+  id             String                  @id @default(cuid())
   jurisdiction   String
   authorityName  String
   authorityType  String
   baseUrl        String
   allowedDomains Json?
-  status         ApprovedSourceStatus   @default(ACTIVE)
+  status         ApprovedSourceStatus    @default(ACTIVE)
   reviewedBy     String?
   reviewedAt     DateTime?
-  notes          String?                @db.Text
-  createdAt      DateTime               @default(now())
-  updatedAt      DateTime               @updatedAt
+  notes          String?                 @db.Text
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
   documents      RegulatoryDocument[]
   sourceVersions SourceDocumentVersion[]
 
@@ -1270,31 +1270,31 @@ model ApprovedSource {
 }
 
 model SourceDocumentVersion {
-  id                    String                       @id @default(cuid())
-  regulatoryDocumentId  String
-  approvedSourceId      String?
-  officialUrl           String
-  publicationDate       DateTime?
-  retrievedAt           DateTime?
-  effectiveDate         DateTime?
-  effectiveEndDate      DateTime?
-  versionLabel          String?
-  checksumSha256        String?
-  authorityStatus       AuthorityStatus              @default(IN_FORCE)
-  isBinding             Boolean?
-  supersedesId          String?
-  supersededById        String?
-  status                SourceDocumentVersionStatus  @default(ACTIVE)
-  createdAt             DateTime                     @default(now())
-  updatedAt             DateTime                     @updatedAt
-  regulatoryDocument    RegulatoryDocument           @relation("RegulatoryDocumentSourceVersions", fields: [regulatoryDocumentId], references: [id], onDelete: Cascade)
-  approvedSource        ApprovedSource?              @relation(fields: [approvedSourceId], references: [id])
-  currentForDocuments   RegulatoryDocument[]         @relation("RegulatoryDocumentCurrentSourceVersion")
-  chunks                RegulatoryDocumentChunk[]
-  supersedes            SourceDocumentVersion?        @relation("SourceDocumentVersionSupersession", fields: [supersedesId], references: [id])
-  supersededBy          SourceDocumentVersion?        @relation("SourceDocumentVersionSupersededBy", fields: [supersededById], references: [id])
-  supersededVersions    SourceDocumentVersion[]       @relation("SourceDocumentVersionSupersession")
-  supersedingVersions   SourceDocumentVersion[]       @relation("SourceDocumentVersionSupersededBy")
+  id                   String                      @id @default(cuid())
+  regulatoryDocumentId String
+  approvedSourceId     String?
+  officialUrl          String
+  publicationDate      DateTime?
+  retrievedAt          DateTime?
+  effectiveDate        DateTime?
+  effectiveEndDate     DateTime?
+  versionLabel         String?
+  checksumSha256       String?
+  authorityStatus      AuthorityStatus             @default(IN_FORCE)
+  isBinding            Boolean?
+  supersedesId         String?
+  supersededById       String?
+  status               SourceDocumentVersionStatus @default(ACTIVE)
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+  regulatoryDocument   RegulatoryDocument          @relation("RegulatoryDocumentSourceVersions", fields: [regulatoryDocumentId], references: [id], onDelete: Cascade)
+  approvedSource       ApprovedSource?             @relation(fields: [approvedSourceId], references: [id])
+  currentForDocuments  RegulatoryDocument[]        @relation("RegulatoryDocumentCurrentSourceVersion")
+  chunks               RegulatoryDocumentChunk[]
+  supersedes           SourceDocumentVersion?      @relation("SourceDocumentVersionSupersession", fields: [supersedesId], references: [id])
+  supersededBy         SourceDocumentVersion?      @relation("SourceDocumentVersionSupersededBy", fields: [supersededById], references: [id])
+  supersededVersions   SourceDocumentVersion[]     @relation("SourceDocumentVersionSupersession")
+  supersedingVersions  SourceDocumentVersion[]     @relation("SourceDocumentVersionSupersededBy")
 
   @@index([regulatoryDocumentId])
   @@index([approvedSourceId])
@@ -2824,7 +2824,7 @@ enum CorpusGapReportStatus {
 }
 
 model CorpusGapReport {
-  id               String                  @id @default(cuid())
+  id               String                @id @default(cuid())
   organizationId   String
   reportedByUserId String
   documentName     String
@@ -2833,11 +2833,11 @@ model CorpusGapReport {
   jurisdiction     CorpusGapJurisdiction
   description      String?
   sourceUrl        String?
-  status           CorpusGapReportStatus   @default(PENDING)
+  status           CorpusGapReportStatus @default(PENDING)
   adminNotes       String?
   resolvedAt       DateTime?
-  createdAt        DateTime                @default(now())
-  updatedAt        DateTime                @updatedAt
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
 
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   reportedByUser User         @relation(fields: [reportedByUserId], references: [id], onDelete: Restrict)
@@ -2852,53 +2852,53 @@ model CorpusGapReport {
 }
 
 model BlogPost {
-  id                  String            @id @default(cuid())
+  id String @id @default(cuid())
 
-  title               String
-  slug                String            @unique
-  excerpt             String?           @db.Text
+  title   String
+  slug    String  @unique
+  excerpt String? @db.Text
 
   // Store markdown as the source of truth for launch.
-  content             String?           @db.Text
+  content String? @db.Text
 
   // Optional sanitized/rendered HTML cache.
-  htmlContent         String?           @db.Text
+  htmlContent String? @db.Text
 
-  coverImageUrl       String?
-  category            String
-  tags                String[]          @default([])
+  coverImageUrl String?
+  category      String
+  tags          String[] @default([])
 
-  status              BlogPostStatus    @default(DRAFT)
-  featured            Boolean           @default(false)
+  status   BlogPostStatus @default(DRAFT)
+  featured Boolean        @default(false)
 
-  jurisdiction        String            @default("Kenya")
-  relatedRegulations  String[]          @default([])
+  jurisdiction       String   @default("Kenya")
+  relatedRegulations String[] @default([])
 
-  seoTitle            String?
-  seoDescription      String?
-  canonicalUrl        String?
-  ogImageUrl          String?
+  seoTitle       String?
+  seoDescription String?
+  canonicalUrl   String?
+  ogImageUrl     String?
 
-  authorId            String
-  reviewerId          String?
-  updatedById         String?
+  authorId    String
+  reviewerId  String?
+  updatedById String?
 
-  publishedAt         DateTime?
-  lastReviewedAt      DateTime?
-  archivedAt          DateTime?
-  deletedAt           DateTime?
+  publishedAt    DateTime?
+  lastReviewedAt DateTime?
+  archivedAt     DateTime?
+  deletedAt      DateTime?
 
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  author              User              @relation("BlogPostAuthor", fields: [authorId], references: [id])
-  reviewer            User?             @relation("BlogPostReviewer", fields: [reviewerId], references: [id])
-  updatedBy           User?             @relation("BlogPostUpdatedBy", fields: [updatedById], references: [id])
+  author    User  @relation("BlogPostAuthor", fields: [authorId], references: [id])
+  reviewer  User? @relation("BlogPostReviewer", fields: [reviewerId], references: [id])
+  updatedBy User? @relation("BlogPostUpdatedBy", fields: [updatedById], references: [id])
 
-  sources             BlogPostSource[]
+  sources              BlogPostSource[]
   automationSuggestion BlogArticleSuggestion?
-  draftGenerationRuns BlogDraftGenerationRun[]
-  verificationRuns    BlogVerificationRun[]
+  draftGenerationRuns  BlogDraftGenerationRun[]
+  verificationRuns     BlogVerificationRun[]
 
   @@index([slug])
   @@index([status])
@@ -2909,22 +2909,22 @@ model BlogPost {
 }
 
 model BlogPostSource {
-  id              String              @id @default(cuid())
-  postId          String
+  id     String @id @default(cuid())
+  postId String
 
-  sourceType      BlogSourceType
-  title           String
-  publisher       String?
-  url             String?
-  publishedAt     DateTime?
-  accessedAt      DateTime            @default(now())
+  sourceType  BlogSourceType
+  title       String
+  publisher   String?
+  url         String?
+  publishedAt DateTime?
+  accessedAt  DateTime       @default(now())
 
-  notes           String?             @db.Text
+  notes String? @db.Text
 
-  post            BlogPost            @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
 
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([postId])
   @@index([sourceType])
@@ -2992,57 +2992,61 @@ enum BlogMonitorLastRunStatus {
 }
 
 model BlogSourceMonitor {
-  id                  String                   @id @default(cuid())
+  id String @id @default(cuid())
 
-  name                String
-  description         String?                  @db.Text
+  name        String
+  description String? @db.Text
 
-  jurisdiction        BlogJurisdiction
-  countryLabel        String?
-  authorityType       BlogAuthorityType
-  sourceType          BlogSourceType
-  monitoringMethod    BlogMonitoringMethod     @default(MANUAL)
+  jurisdiction     BlogJurisdiction
+  countryLabel     String?
+  authorityType    BlogAuthorityType
+  sourceType       BlogSourceType
+  monitoringMethod BlogMonitoringMethod @default(MANUAL)
 
-  baseUrl             String
-  feedUrl             String?
+  baseUrl String
+  feedUrl String?
 
-  topics              String[]                 @default([])
-  keywords            String[]                 @default([])
+  topics   String[] @default([])
+  keywords String[] @default([])
 
-  status              BlogMonitorStatus        @default(NEEDS_VERIFICATION)
-  lastRunStatus       BlogMonitorLastRunStatus @default(NEVER_RUN)
+  status        BlogMonitorStatus        @default(NEEDS_VERIFICATION)
+  lastRunStatus BlogMonitorLastRunStatus @default(NEVER_RUN)
 
-  isOfficial          Boolean                  @default(true)
-  isActive            Boolean                  @default(false)
+  isOfficial Boolean @default(true)
+  isActive   Boolean @default(false)
 
   lastCheckedAt       DateTime?
   lastSuccessfulRunAt DateTime?
   lastFailureAt       DateTime?
-  failureCount        Int                      @default(0)
-  lastFailureReason   String?                  @db.Text
+  failureCount        Int       @default(0)
+  lastFailureReason   String?   @db.Text
 
   // Discovery safety fields for future sprints.
-  maxItemsPerRun      Int                      @default(20)
-  fetchTimeoutMs      Int                      @default(15000)
-  respectRobots       Boolean                  @default(true)
+  maxItemsPerRun Int     @default(20)
+  fetchTimeoutMs Int     @default(15000)
+  respectRobots  Boolean @default(true)
 
-  verificationStatus  String                   @default("NEEDS_VERIFICATION")
-  verifiedAt          DateTime?
-  verifiedById        String?
+  verificationStatus String    @default("NEEDS_VERIFICATION")
+  verifiedAt         DateTime?
+  verifiedById       String?
 
-  notes               String?                  @db.Text
+  notes String? @db.Text
 
-  createdById         String?
-  updatedById         String?
+  createdById String?
+  updatedById String?
 
-  createdAt           DateTime                 @default(now())
-  updatedAt           DateTime                 @updatedAt
-  deletedAt           DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
-  verifiedBy          User?                    @relation("BlogSourceMonitorVerifiedBy", fields: [verifiedById], references: [id])
-  createdBy           User?                    @relation("BlogSourceMonitorCreatedBy", fields: [createdById], references: [id])
-  updatedBy           User?                    @relation("BlogSourceMonitorUpdatedBy", fields: [updatedById], references: [id])
+  verifiedBy User? @relation("BlogSourceMonitorVerifiedBy", fields: [verifiedById], references: [id])
+  createdBy  User? @relation("BlogSourceMonitorCreatedBy", fields: [createdById], references: [id])
+  updatedBy  User? @relation("BlogSourceMonitorUpdatedBy", fields: [updatedById], references: [id])
 
+  items         BlogSourceItem[]
+  discoveryRuns BlogDiscoveryRun[]
+
+  @@unique([jurisdiction, baseUrl])
   @@index([jurisdiction])
   @@index([authorityType])
   @@index([sourceType])
@@ -3050,10 +3054,6 @@ model BlogSourceMonitor {
   @@index([status])
   @@index([isActive])
   @@index([deletedAt])
-  @@unique([jurisdiction, baseUrl])
-  
-  items               BlogSourceItem[]
-  discoveryRuns       BlogDiscoveryRun[]
 }
 
 enum BlogSourceItemStatus {
@@ -3075,37 +3075,39 @@ enum BlogDiscoveryRunStatus {
 }
 
 model BlogSourceItem {
-  id                String               @id @default(cuid())
+  id String @id @default(cuid())
 
-  monitorId         String
+  monitorId String
 
-  title             String
-  url               String
-  normalizedUrl     String
-  publisher         String?
-  summary           String?              @db.Text
+  title         String
+  url           String
+  normalizedUrl String
+  publisher     String?
+  summary       String? @db.Text
 
-  jurisdiction      BlogJurisdiction
-  authorityType     BlogAuthorityType
-  sourceType        BlogSourceType
+  jurisdiction  BlogJurisdiction
+  authorityType BlogAuthorityType
+  sourceType    BlogSourceType
 
-  publicationDate   DateTime?
-  discoveredAt      DateTime             @default(now())
+  publicationDate DateTime?
+  discoveredAt    DateTime  @default(now())
 
-  contentHash       String
-  rawContentHash    String?
-  status            BlogSourceItemStatus @default(NEW)
+  contentHash    String
+  rawContentHash String?
+  status         BlogSourceItemStatus @default(NEW)
 
-  failureReason     String?              @db.Text
-  dismissedReason   String?              @db.Text
+  failureReason   String? @db.Text
+  dismissedReason String? @db.Text
 
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
-  deletedAt         DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
-  monitor           BlogSourceMonitor    @relation(fields: [monitorId], references: [id], onDelete: Cascade)
-  suggestions       BlogSuggestionSource[]
+  monitor     BlogSourceMonitor      @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  suggestions BlogSuggestionSource[]
 
+  @@unique([monitorId, normalizedUrl])
+  @@unique([contentHash])
   @@index([monitorId])
   @@index([jurisdiction])
   @@index([authorityType])
@@ -3114,33 +3116,31 @@ model BlogSourceItem {
   @@index([publicationDate])
   @@index([discoveredAt])
   @@index([deletedAt])
-  @@unique([monitorId, normalizedUrl])
-  @@unique([contentHash])
 }
 
 model BlogDiscoveryRun {
-  id                String                 @id @default(cuid())
+  id String @id @default(cuid())
 
-  monitorId          String?
-  status             BlogDiscoveryRunStatus @default(RUNNING)
+  monitorId String?
+  status    BlogDiscoveryRunStatus @default(RUNNING)
 
-  startedAt          DateTime               @default(now())
-  completedAt        DateTime?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
 
-  itemsFound         Int                    @default(0)
-  itemsCreated       Int                    @default(0)
-  duplicateCount     Int                    @default(0)
-  failureCount       Int                    @default(0)
+  itemsFound     Int @default(0)
+  itemsCreated   Int @default(0)
+  duplicateCount Int @default(0)
+  failureCount   Int @default(0)
 
-  errorMessage       String?                @db.Text
-  triggeredBy        String                 @default("ADMIN") // ADMIN, CRON, SYSTEM
-  triggeredByUserId  String?
+  errorMessage      String? @db.Text
+  triggeredBy       String  @default("ADMIN") // ADMIN, CRON, SYSTEM
+  triggeredByUserId String?
 
-  monitor            BlogSourceMonitor?     @relation(fields: [monitorId], references: [id])
-  triggeredByUser    User?                  @relation("BlogDiscoveryRunTriggeredBy", fields: [triggeredByUserId], references: [id])
+  monitor         BlogSourceMonitor? @relation(fields: [monitorId], references: [id])
+  triggeredByUser User?              @relation("BlogDiscoveryRunTriggeredBy", fields: [triggeredByUserId], references: [id])
 
-  createdAt          DateTime               @default(now())
-  updatedAt          DateTime               @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([monitorId])
   @@index([status])
@@ -3190,40 +3190,40 @@ enum BlogVerificationRunType {
 }
 
 model BlogVerificationRun {
-  id                  String                    @id @default(cuid())
+  id String @id @default(cuid())
 
   blogPostId           String
   draftGenerationRunId String?
 
-  status              BlogVerificationStatus    @default(PENDING)
-  runType             BlogVerificationRunType   @default(MANUAL)
+  status  BlogVerificationStatus  @default(PENDING)
+  runType BlogVerificationRunType @default(MANUAL)
 
-  qualityScore         Int                       @default(0)
-  sourceScore          Int                       @default(0)
-  claimRiskScore       Int                       @default(0)
-  jurisdictionScore    Int                       @default(0)
-  readinessScore       Int                       @default(0)
+  qualityScore      Int @default(0)
+  sourceScore       Int @default(0)
+  claimRiskScore    Int @default(0)
+  jurisdictionScore Int @default(0)
+  readinessScore    Int @default(0)
 
-  blockingIssueCount   Int                       @default(0)
-  warningIssueCount    Int                       @default(0)
-  infoIssueCount       Int                       @default(0)
+  blockingIssueCount Int @default(0)
+  warningIssueCount  Int @default(0)
+  infoIssueCount     Int @default(0)
 
-  summary              String?                   @db.Text
-  recommendedAction    String?                   @db.Text
+  summary           String? @db.Text
+  recommendedAction String? @db.Text
 
-  startedAt            DateTime                  @default(now())
-  completedAt          DateTime?
-  errorMessage         String?                   @db.Text
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+  errorMessage String?   @db.Text
 
-  requestedById        String?
+  requestedById String?
 
-  createdAt            DateTime                  @default(now())
-  updatedAt            DateTime                  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  blogPost             BlogPost                  @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
-  requestedBy          User?                     @relation("BlogVerificationRunRequestedBy", fields: [requestedById], references: [id])
+  blogPost    BlogPost @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
+  requestedBy User?    @relation("BlogVerificationRunRequestedBy", fields: [requestedById], references: [id])
 
-  issues               BlogVerificationIssue[]
+  issues BlogVerificationIssue[]
 
   @@index([blogPostId])
   @@index([draftGenerationRunId])
@@ -3233,27 +3233,27 @@ model BlogVerificationRun {
 }
 
 model BlogVerificationIssue {
-  id                  String                         @id @default(cuid())
+  id String @id @default(cuid())
 
-  runId               String
-  severity            BlogVerificationIssueSeverity
-  issueType            BlogVerificationIssueType
+  runId     String
+  severity  BlogVerificationIssueSeverity
+  issueType BlogVerificationIssueType
 
-  title               String
-  description         String                         @db.Text
-  recommendation      String?                        @db.Text
+  title          String
+  description    String  @db.Text
+  recommendation String? @db.Text
 
-  excerpt             String?                        @db.Text
-  paragraphIndex      Int?
-  sentenceIndex       Int?
+  excerpt        String? @db.Text
+  paragraphIndex Int?
+  sentenceIndex  Int?
 
-  sourceId            String?
-  sourceUrl           String?
-  claimText           String?                        @db.Text
+  sourceId  String?
+  sourceUrl String?
+  claimText String? @db.Text
 
-  createdAt           DateTime                       @default(now())
+  createdAt DateTime @default(now())
 
-  run                 BlogVerificationRun            @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run BlogVerificationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@index([runId])
   @@index([severity])
@@ -3293,51 +3293,51 @@ enum BlogSourceQuality {
 }
 
 model BlogArticleSuggestion {
-  id                    String                  @id @default(cuid())
+  id String @id @default(cuid())
 
-  title                 String
-  suggestedSlug          String?
-  summary               String?                 @db.Text
+  title         String
+  suggestedSlug String?
+  summary       String? @db.Text
 
-  jurisdiction           BlogJurisdiction
-  jurisdictions          BlogJurisdiction[]      @default([])
+  jurisdiction  BlogJurisdiction
+  jurisdictions BlogJurisdiction[] @default([])
 
-  category              String
-  articleType            BlogArticleType
-  priority               BlogSuggestionPriority  @default(MEDIUM)
-  status                 BlogSuggestionStatus    @default(PENDING_REVIEW)
+  category    String
+  articleType BlogArticleType
+  priority    BlogSuggestionPriority @default(MEDIUM)
+  status      BlogSuggestionStatus   @default(PENDING_REVIEW)
 
-  relevanceScore         Int                     @default(0)
-  sourceQuality          BlogSourceQuality       @default(MEDIUM)
+  relevanceScore Int               @default(0)
+  sourceQuality  BlogSourceQuality @default(MEDIUM)
 
-  recommendedTags        String[]                @default([])
-  targetAudience         String[]                @default([])
+  recommendedTags String[] @default([])
+  targetAudience  String[] @default([])
 
-  reason                 String?                 @db.Text
-  suggestedNextAction     String?                 @db.Text
+  reason              String? @db.Text
+  suggestedNextAction String? @db.Text
 
-  requiresOfficialSource Boolean                 @default(false)
-  requiresHumanReview    Boolean                 @default(true)
-  needsMoreSources       Boolean                 @default(false)
+  requiresOfficialSource Boolean @default(false)
+  requiresHumanReview    Boolean @default(true)
+  needsMoreSources       Boolean @default(false)
 
-  dismissedReason        String?                 @db.Text
-  dismissedAt            DateTime?
-  dismissedById          String?
+  dismissedReason String?   @db.Text
+  dismissedAt     DateTime?
+  dismissedById   String?
 
-  approvedAt             DateTime?
-  approvedById           String?
+  approvedAt   DateTime?
+  approvedById String?
 
-  blogPostId             String?                 @unique
-  blogPost               BlogPost?               @relation(fields: [blogPostId], references: [id])
+  blogPostId String?   @unique
+  blogPost   BlogPost? @relation(fields: [blogPostId], references: [id])
 
-  createdAt              DateTime                @default(now())
-  updatedAt              DateTime                @updatedAt
-  deletedAt              DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
-  dismissedBy            User?                   @relation("BlogSuggestionDismissedBy", fields: [dismissedById], references: [id])
-  approvedBy             User?                   @relation("BlogSuggestionApprovedBy", fields: [approvedById], references: [id])
+  dismissedBy User? @relation("BlogSuggestionDismissedBy", fields: [dismissedById], references: [id])
+  approvedBy  User? @relation("BlogSuggestionApprovedBy", fields: [approvedById], references: [id])
 
-  sources                BlogSuggestionSource[]
+  sources BlogSuggestionSource[]
 
   @@index([jurisdiction])
   @@index([category])
@@ -3350,35 +3350,35 @@ model BlogArticleSuggestion {
 }
 
 model BlogSuggestionSource {
-  suggestionId           String
-  sourceItemId            String
+  suggestionId String
+  sourceItemId String
 
-  suggestion              BlogArticleSuggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
-  sourceItem              BlogSourceItem        @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+  suggestion BlogArticleSuggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  sourceItem BlogSourceItem        @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
 
-  createdAt               DateTime              @default(now())
+  createdAt DateTime @default(now())
 
   @@id([suggestionId, sourceItemId])
   @@index([sourceItemId])
 }
 
 model AgentRun {
-  id             String        @id
-  agentType      String
-  status         String        @default("RUNNING")
-  idempotencyKey String        @unique
-  organizationId String?
-  inputTokens    Int           @default(0)
-  outputTokens   Int           @default(0)
-  costUsd        Decimal       @default(0) @db.Decimal(12, 6)
-  iterations     Int           @default(0)
-  startedAt      DateTime      @default(now())
-  completedAt    DateTime?
-  error          String?
-  metadata       Json?
-  reports        AgentReport[]
-  regulatorySignals RegulatorySignal[]
-  marketingDrafts MarketingDraft[]
+  id                  String               @id
+  agentType           String
+  status              String               @default("RUNNING")
+  idempotencyKey      String               @unique
+  organizationId      String?
+  inputTokens         Int                  @default(0)
+  outputTokens        Int                  @default(0)
+  costUsd             Decimal              @default(0) @db.Decimal(12, 6)
+  iterations          Int                  @default(0)
+  startedAt           DateTime             @default(now())
+  completedAt         DateTime?
+  error               String?
+  metadata            Json?
+  reports             AgentReport[]
+  regulatorySignals   RegulatorySignal[]
+  marketingDrafts     MarketingDraft[]
   salesOutreachDrafts SalesOutreachDraft[]
 }
 
@@ -3395,22 +3395,22 @@ model AgentReport {
 }
 
 model MarketingDraft {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   contentType       String
-  sourceSignalIds   Json     @default("[]")
+  sourceSignalIds   Json      @default("[]")
   sourceFingerprint String
   title             String
-  body              String   @db.Text
-  brief             String?  @db.Text
-  status            String   @default("DRAFT")
+  body              String    @db.Text
+  brief             String?   @db.Text
+  status            String    @default("DRAFT")
   agentRunId        String
-  generatedAt       DateTime @default(now())
+  generatedAt       DateTime  @default(now())
   reviewedAt        DateTime?
   reviewedBy        String?
-  editedBody        String?  @db.Text
+  editedBody        String?   @db.Text
   metadata          Json?
 
-  agentRun          AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agentRun AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([contentType, sourceFingerprint])
   @@index([contentType])
@@ -3420,7 +3420,7 @@ model MarketingDraft {
 }
 
 model RegulatorySignal {
-  id                    String   @id @default(cuid())
+  id                    String    @id @default(cuid())
   sourceUrl             String
   normalizedUrl         String
   contentHash           String
@@ -3430,25 +3430,25 @@ model RegulatorySignal {
   regulatoryBody        String
   documentType          String
   title                 String
-  summary               String   @db.Text
+  summary               String    @db.Text
   severity              String
-  affectedSectors       Json     @default("[]")
-  affectedObligations   Json     @default("[]")
+  affectedSectors       Json      @default("[]")
+  affectedObligations   Json      @default("[]")
   effectiveDate         DateTime?
   complianceWindowDays  Int?
-  corpusGapDetected     Boolean  @default(false)
+  corpusGapDetected     Boolean   @default(false)
   corpusGapDetails      Json?
-  pilotFintechsAffected Json     @default("[]")
-  rawContent            String?  @db.Text
+  pilotFintechsAffected Json      @default("[]")
+  rawContent            String?   @db.Text
   agentRunId            String
-  status                String   @default("NEW")
+  status                String    @default("NEW")
   providerTrace         Json?
-  createdAt             DateTime @default(now())
+  createdAt             DateTime  @default(now())
   processedAt           DateTime?
   reviewedAt            DateTime?
 
-  agentRun              AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  salesOutreachDrafts   SalesOutreachDraft[]
+  agentRun            AgentRun             @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  salesOutreachDrafts SalesOutreachDraft[]
 
   @@unique([sourceUrl, contentHash])
   @@index([normalizedUrl])
@@ -3462,26 +3462,26 @@ model RegulatorySignal {
 }
 
 model SalesOutreachDraft {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   sourceSignalId    String
   organizationId    String
-  triggerReason     String   @db.Text
+  triggerReason     String    @db.Text
   engagementContext Json?
   subject           String
-  body              String   @db.Text
+  body              String    @db.Text
   priority          String
-  status            String   @default("DRAFT")
+  status            String    @default("DRAFT")
   agentRunId        String
-  generatedAt       DateTime @default(now())
+  generatedAt       DateTime  @default(now())
   reviewedAt        DateTime?
   reviewedBy        String?
-  editedBody        String?  @db.Text
+  editedBody        String?   @db.Text
   sourceFingerprint String
   metadata          Json?
 
-  sourceSignal      RegulatorySignal @relation(fields: [sourceSignalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  agentRun          AgentRun         @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  sourceSignal RegulatorySignal @relation(fields: [sourceSignalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agentRun     AgentRun         @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([sourceFingerprint])
   @@index([organizationId])
@@ -3507,46 +3507,46 @@ enum BlogDraftGenerationProvider {
 }
 
 model BlogDraftGenerationRun {
-  id                  String                       @id @default(cuid())
+  id String @id @default(cuid())
 
-  blogPostId          String
-  suggestionId        String?
+  blogPostId   String
+  suggestionId String?
 
-  status              BlogDraftGenerationStatus    @default(PENDING)
-  provider            BlogDraftGenerationProvider?
-  model               String?
-  promptVersion       String                       @default("blog-draft-v1")
+  status        BlogDraftGenerationStatus    @default(PENDING)
+  provider      BlogDraftGenerationProvider?
+  model         String?
+  promptVersion String                       @default("blog-draft-v1")
 
-  inputSourceCount    Int                          @default(0)
+  inputSourceCount    Int    @default(0)
   inputTokenEstimate  Int?
   outputTokenEstimate Int?
   costUsdEstimate     Float?
 
-  errorMessage        String?                      @db.Text
+  errorMessage String? @db.Text
 
-  generatedTitle      String?
-  generatedExcerpt    String?                      @db.Text
-  generatedContent    String?                      @db.Text
-  generatedSeoTitle   String?
-  generatedSeoDescription String?                  @db.Text
-  generatedTags       String[]                     @default([])
-  reviewerNotes       String?                      @db.Text
-  uncertaintyFlags    String[]                     @default([])
+  generatedTitle          String?
+  generatedExcerpt        String?  @db.Text
+  generatedContent        String?  @db.Text
+  generatedSeoTitle       String?
+  generatedSeoDescription String?  @db.Text
+  generatedTags           String[] @default([])
+  reviewerNotes           String?  @db.Text
+  uncertaintyFlags        String[] @default([])
 
-  appliedToPost       Boolean                      @default(false)
-  appliedAt           DateTime?
-  appliedById         String?
+  appliedToPost Boolean   @default(false)
+  appliedAt     DateTime?
+  appliedById   String?
 
-  requestedById       String?
-  startedAt           DateTime?
-  completedAt         DateTime?
+  requestedById String?
+  startedAt     DateTime?
+  completedAt   DateTime?
 
-  createdAt           DateTime                     @default(now())
-  updatedAt           DateTime                     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  blogPost            BlogPost                     @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
-  requestedBy         User?                        @relation("BlogDraftGenerationRequestedBy", fields: [requestedById], references: [id])
-  appliedBy           User?                        @relation("BlogDraftGenerationAppliedBy", fields: [appliedById], references: [id])
+  blogPost    BlogPost @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
+  requestedBy User?    @relation("BlogDraftGenerationRequestedBy", fields: [requestedById], references: [id])
+  appliedBy   User?    @relation("BlogDraftGenerationAppliedBy", fields: [appliedById], references: [id])
 
   @@index([blogPostId])
   @@index([suggestionId])
@@ -3555,29 +3555,29 @@ model BlogDraftGenerationRun {
 }
 
 model BlogEditorialDigest {
-  id                       String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  periodStart              DateTime
-  periodEnd                DateTime
+  periodStart DateTime
+  periodEnd   DateTime
 
-  status                   String   @default("GENERATED") // GENERATED, SENT, FAILED
-  generatedAt              DateTime @default(now())
-  sentAt                   DateTime?
+  status      String    @default("GENERATED") // GENERATED, SENT, FAILED
+  generatedAt DateTime  @default(now())
+  sentAt      DateTime?
 
-  sourceMonitorsChecked    Int      @default(0)
-  sourceItemsDiscovered    Int      @default(0)
-  highPrioritySuggestions  Int      @default(0)
-  urgentSuggestions        Int      @default(0)
-  approvedAwaitingDraft    Int      @default(0)
-  draftsAwaitingVerification Int    @default(0)
-  blockedDrafts            Int      @default(0)
-  failingMonitors          Int      @default(0)
+  sourceMonitorsChecked      Int @default(0)
+  sourceItemsDiscovered      Int @default(0)
+  highPrioritySuggestions    Int @default(0)
+  urgentSuggestions          Int @default(0)
+  approvedAwaitingDraft      Int @default(0)
+  draftsAwaitingVerification Int @default(0)
+  blockedDrafts              Int @default(0)
+  failingMonitors            Int @default(0)
 
-  summaryJson              Json?
-  errorMessage             String?  @db.Text
+  summaryJson  Json?
+  errorMessage String? @db.Text
 
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([periodStart])
   @@index([periodEnd])
@@ -3618,3 +3618,98 @@ model AutomationApproval {
   @@index([status, expiresAt])
 }
 
+enum AutomationIncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  IGNORED
+}
+
+enum AutomationIncidentSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AutomationIncidentSource {
+  N8N
+  BACKEND
+  WEBHOOK
+}
+
+enum SideEffectState {
+  NONE
+  PENDING
+  COMPLETED
+  UNKNOWN
+  FAILED
+}
+
+model AutomationIncident {
+  id          String                     @id @default(cuid())
+  fingerprint String
+  environment String
+  workflowKey String
+  category    String
+  severity    AutomationIncidentSeverity
+  status      AutomationIncidentStatus   @default(OPEN)
+
+  firstSeenAt     DateTime
+  lastSeenAt      DateTime
+  occurrenceCount Int      @default(1)
+
+  retryable           Boolean
+  requiresHumanAction Boolean
+  sideEffectState     SideEffectState @default(NONE)
+
+  safeMessage       String
+  latestExecutionId String?
+  latestNodeName    String?
+  correlationId     String?
+  sentryEventId     String?
+
+  owner      String
+  department String
+  runbookUrl String?
+  metadata   Json?
+
+  occurrences AutomationIncidentOccurrence[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([environment, fingerprint])
+  @@index([status, severity])
+  @@index([workflowKey, lastSeenAt])
+}
+
+model AutomationIncidentOccurrence {
+  id         String             @id @default(cuid())
+  incidentId String
+  incident   AutomationIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  idempotencyKey String? @unique
+
+  executionId   String?
+  workflowId    String?
+  nodeName      String?
+  nodeType      String?
+  httpStatus    Int?
+  errorCode     String?
+  attempt       Int      @default(1)
+  maxAttempts   Int?
+  correlationId String?
+  sentryTraceId String?
+  sentryEventId String?
+  safeMessage   String
+  metadata      Json?
+  occurredAt    DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([incidentId, occurredAt])
+  @@index([executionId])
+  @@index([correlationId])
+}
