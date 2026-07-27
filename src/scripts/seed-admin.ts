@@ -21,7 +21,7 @@ import WebSocket from 'ws';
 (globalThis as any).WebSocket = WebSocket;
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
-const prisma = new PrismaClient({ adapter } as never);
+const prisma = new PrismaClient({ adapter });
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL!,
