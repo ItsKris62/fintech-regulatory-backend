@@ -133,7 +133,7 @@ export const registerAutomationIncidentRoutes: FastifyPluginAsync = async (app: 
         let occurrenceId: string;
         let isNewIncident = false;
         let finalOccurrenceCount = 1;
-        let finalStatus = AutomationIncidentStatus.OPEN;
+        let finalStatus: AutomationIncidentStatus = AutomationIncidentStatus.OPEN;
         
         try {
           // 4. Early Idempotency Check (Advisory)
