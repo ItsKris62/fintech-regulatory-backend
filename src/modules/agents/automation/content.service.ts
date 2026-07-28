@@ -4,10 +4,12 @@ import { appConfig } from '@/config/app.config';
 import { logger } from '@/utils/logger';
 import { automationApprovalService as defaultAutomationApprovalService, type AutomationApprovalService } from './approval.service';
 import { parseWindowDays, parseJurisdictionFilter } from './duration';
+import { runPublishReadinessShadowCheck } from '@/server/utils/publish-readiness';
 
 const APPROVED_CONTENT_WINDOW_DAYS = 7;
 const HIGH_IMPACT_SEVERITIES = ['critical', 'high'] as const;
 const HIGH_IMPACT_MAX_ITEMS = 50;
+const CANDIDATE_WEBHOOK_TIMEOUT_MS = 5000;
 
 // Real severity -> score mapping (lowercase values confirmed against
 // signal-classifier.service.ts's SEVERITIES union) - RegulatorySignal has no
@@ -20,7 +22,7 @@ const SEVERITY_SCORE: Record<string, number> = {
   informational: 10,
 };
 
-type ContentPrisma = Pick<typeof defaultPrisma, 'blogPost' | 'blogSourceItem' | 'regulatorySignal'>;
+type ContentPrisma = Pick<typeof defaultPrisma, 'blogPost' | 'blogSourceItem' | 'regulatorySignal' | 'contentOpsAlert'>;
 
 export interface PublishContentInput {
   approvalId: string;
@@ -124,32 +126,54 @@ export class AutomationContentService {
       throw new TRPCError({ code: 'NOT_FOUND', message: `BlogPost ${blogPostId} not found.` });
     }
 
-    if (!post.title || !post.slug || !post.excerpt || !post.category) {
-      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing required fields for publishing (title/slug/excerpt/category).' });
-    }
-    if (post.sources.length === 0) {
-      throw new TRPCError({ code: 'BAD_REQUEST', message: 'At least one source is required for publishing.' });
-    }
-    if (['Regulatory Updates', 'Enforcement & Penalties'].includes(post.category)) {
-      if (!post.sources.some((s) => s.sourceType === 'OFFICIAL')) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: `${post.category} requires an OFFICIAL source.` });
+    // Pack 1 Stage C5: the shared evaluator runs alongside these existing
+    // gate checks in burn-in mode - it never changes the outcome below unless
+    // BLOG_PUBLISH_READINESS_MODE=enforce is explicitly set (not the
+    // default). The inline checks are UNCHANGED and remain fully
+    // authoritative for the default (shadow) mode. See
+    // docs/editorial-intelligence/publish-readiness-burn-in-runbook.md.
+    let legacyError: unknown = null;
+    try {
+      if (!post.title || !post.slug || !post.excerpt || !post.category) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing required fields for publishing (title/slug/excerpt/category).' });
       }
-    } else if (post.category === 'International Standards') {
-      if (!post.sources.some((s) => ['OFFICIAL', 'INTERNATIONAL_STANDARD'].includes(s.sourceType))) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'International Standards requires an OFFICIAL or INTERNATIONAL_STANDARD source.' });
+      if (post.sources.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'At least one source is required for publishing.' });
       }
+      if (['Regulatory Updates', 'Enforcement & Penalties'].includes(post.category)) {
+        if (!post.sources.some((s) => s.sourceType === 'OFFICIAL')) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: `${post.category} requires an OFFICIAL source.` });
+        }
+      } else if (post.category === 'International Standards') {
+        if (!post.sources.some((s) => ['OFFICIAL', 'INTERNATIONAL_STANDARD'].includes(s.sourceType))) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'International Standards requires an OFFICIAL or INTERNATIONAL_STANDARD source.' });
+        }
+      }
+
+      const latestVerification = post.verificationRuns[0];
+      const latestAiDraft = post.draftGenerationRuns[0];
+      if (latestVerification?.status === 'BLOCKED') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: Source and Claim Verification is BLOCKED.' });
+      }
+      if (latestAiDraft) {
+        const verificationTime = latestVerification ? (latestVerification.completedAt ?? latestVerification.createdAt) : null;
+        if (!verificationTime || latestAiDraft.createdAt > verificationTime) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: an AI draft was generated but no verification has been run since then.' });
+        }
+      }
+    } catch (err) {
+      legacyError = err;
     }
 
-    const latestVerification = post.verificationRuns[0];
-    const latestAiDraft = post.draftGenerationRuns[0];
-    if (latestVerification?.status === 'BLOCKED') {
-      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: Source and Claim Verification is BLOCKED.' });
-    }
-    if (latestAiDraft) {
-      const verificationTime = latestVerification ? (latestVerification.completedAt ?? latestVerification.createdAt) : null;
-      if (!verificationTime || latestAiDraft.createdAt > verificationTime) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: an AI draft was generated but no verification has been run since then.' });
-      }
+    const shadowCheck = await runPublishReadinessShadowCheck(this.prisma, blogPostId, legacyError === null, 'publishContent');
+
+    if (legacyError) throw legacyError;
+
+    if (shadowCheck.shouldBlock) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Cannot publish: readiness evaluator blockers: ${shadowCheck.result?.blockers.map((b) => b.code).join(', ')}`,
+      });
     }
 
     const publishedAt = post.publishedAt ?? this.now();
@@ -192,6 +216,8 @@ export class AutomationContentService {
 
     const timestampSeconds = Math.floor(this.now().getTime() / 1000);
     const { header, secret } = appConfig.agents.automation.webhookIngress;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CANDIDATE_WEBHOOK_TIMEOUT_MS);
 
     try {
       const response = await this.fetchImpl('https://agents.sheriabot.com/webhook/sheriabot-content-candidate', {
@@ -202,6 +228,7 @@ export class AutomationContentService {
           [header]: secret,
         },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -212,6 +239,8 @@ export class AutomationContentService {
     } catch (error: unknown) {
       logger.warn({ type: 'automation_content_candidate_forward_failed', sourceItemId: input.sourceItemId, error: error instanceof Error ? error.message : String(error) });
       return { forwarded: false };
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

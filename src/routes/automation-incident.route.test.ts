@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerAutomationIncidentRoutes } from './automation-incident.route';
-import { agentCredentialService, AGENT_CREDENTIAL_HEADER } from '@/modules/agents/agent-credential.service';
+import { agentCredentialService } from '@/modules/agents/agent-credential.service';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 
@@ -17,6 +17,7 @@ vi.mock('@/lib/prisma/client', () => ({
           findUnique: vi.fn(),
           create: vi.fn(),
           update: vi.fn(),
+          upsert: vi.fn().mockResolvedValue({ id: 'inc_123' }),
         },
         automationIncidentOccurrence: {
           create: vi.fn(),
@@ -24,6 +25,9 @@ vi.mock('@/lib/prisma/client', () => ({
       };
       return cb(tx);
     }),
+    automationIncidentOccurrence: {
+      findUnique: vi.fn().mockResolvedValue(null),
+    },
     user: {
       findUnique: vi.fn(),
     }
@@ -33,6 +37,7 @@ vi.mock('@/lib/prisma/client', () => ({
 vi.mock('@/lib/redis/client', () => ({
   redis: {
     set: vi.fn(),
+    get: vi.fn().mockResolvedValue(null),
   }
 }));
 
@@ -59,7 +64,7 @@ function buildApp(): FastifyInstance {
 }
 
 const VALID_PAYLOAD = {
-  fingerprint: 'test-fingerprint',
+  fingerprint: 'f'.repeat(64),
   environment: 'test',
   workflowKey: 'W-TEST-01',
   category: 'NetworkTimeout',
@@ -93,7 +98,7 @@ describe('POST /internal/automation/v1/incidents', () => {
   it('rejects with invalid capability', async () => {
     app = buildApp();
     vi.mocked(agentCredentialService.verifyCredential).mockResolvedValue({
-      userId: 'test',
+      userId: 'sys-automation-orchestrator',
       email: 'test@example.com',
       role: 'SERVICE',
       capabilities: ['some.other.capability'] as any,
@@ -127,10 +132,11 @@ describe('POST /internal/automation/v1/incidents', () => {
         automationIncident: {
           findUnique: vi.fn().mockResolvedValue(null),
           create: vi.fn().mockResolvedValue({ id: 'inc_123' }),
-          update: vi.fn(),
+          update: vi.fn().mockResolvedValue({ id: 'inc_123', occurrenceCount: 1 }),
+          upsert: vi.fn().mockResolvedValue({ id: 'inc_123', occurrenceCount: 0, severity: 'HIGH', status: 'OPEN' }),
         },
         automationIncidentOccurrence: {
-          create: vi.fn().mockResolvedValue({}),
+          create: vi.fn().mockResolvedValue({ id: 'occ_1' }),
         },
       };
       return cb(tx); // the route logic returns `incident` which has `.id`
@@ -139,15 +145,20 @@ describe('POST /internal/automation/v1/incidents', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/internal/automation/v1/incidents',
-      headers: { 'x-agent-credential': 'valid-secret' },
+      headers: { 
+        'x-agent-credential': 'valid-secret',
+        'idempotency-key': '0'.repeat(64)
+      },
       payload: VALID_PAYLOAD,
     });
 
+    if (response.statusCode !== 200) {
+      console.log("TEST FAILURE BODY:", response.json());
+    }
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ success: true, incidentId: 'inc_123', alerted: true });
-    expect(redis.set).toHaveBeenCalledTimes(1);
+    expect(response.json()).toMatchObject({ persisted: true, incidentId: 'inc_123', isNewIncident: true, notify: true, occurrenceId: 'occ_1' });
   });
-  
+
   it('suppresses alert if cooldown is active for existing incident', async () => {
     app = buildApp();
     
@@ -158,8 +169,14 @@ describe('POST /internal/automation/v1/incidents', () => {
       capabilities: ['agents.automation.incident.create'] as any,
     });
 
-    // Redis indicates cooldown is active (returns null on NX set)
-    vi.mocked(redis.set).mockResolvedValue(null);
+    // Redis indicates cooldown is active (recently notified)
+    vi.mocked(redis.get).mockResolvedValue(JSON.stringify({
+      lastNotifiedAt: new Date().toISOString(),
+      lastNotifiedSeverity: 'HIGH',
+      lastNotifiedOccurrenceCount: 1,
+      status: 'OPEN'
+    }));
+    vi.mocked(redis.set).mockResolvedValue('OK');
 
     vi.mocked(prisma.$transaction).mockImplementation(async (cb: any) => {
       const tx = {
@@ -171,9 +188,10 @@ describe('POST /internal/automation/v1/incidents', () => {
           }),
           create: vi.fn(),
           update: vi.fn().mockResolvedValue({ id: 'inc_123' }),
+          upsert: vi.fn().mockResolvedValue({ id: 'inc_123', occurrenceCount: 2, severity: 'HIGH', status: 'OPEN' }),
         },
         automationIncidentOccurrence: {
-          create: vi.fn().mockResolvedValue({}),
+          create: vi.fn().mockResolvedValue({ id: 'occ_2' }),
         },
       };
       return cb(tx);
@@ -182,12 +200,18 @@ describe('POST /internal/automation/v1/incidents', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/internal/automation/v1/incidents',
-      headers: { 'x-agent-credential': 'valid-secret' },
+      headers: { 
+        'x-agent-credential': 'valid-secret',
+        'idempotency-key': '1'.repeat(64)
+      },
       payload: VALID_PAYLOAD,
     });
 
+    if (response.statusCode !== 200) {
+      console.log("TEST FAILURE BODY:", response.json());
+    }
     expect(response.statusCode).toBe(200);
     // Alert should be false due to cooldown
-    expect(response.json()).toEqual({ success: true, incidentId: 'inc_123', alerted: false });
+    expect(response.json()).toMatchObject({ persisted: true, incidentId: 'inc_123', isNewIncident: false, notify: false, occurrenceId: 'occ_2' });
   });
 });

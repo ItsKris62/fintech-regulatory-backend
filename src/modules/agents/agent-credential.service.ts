@@ -53,6 +53,15 @@ export const AGENT_CAPABILITIES = [
   'agents.chiefOfStaff.report.create',
   'agents.chiefOfStaff.report.read',
   'agents.automation.incident.create',
+  'agents.automation.editorial.triage.create',
+  'agents.automation.editorial.triage.read',
+  'agents.automation.editorial.research.create',
+  'agents.automation.editorial.research.read',
+  'agents.automation.editorial.verify.create',
+  'agents.automation.editorial.verify.read',
+  'agents.automation.editorial.freshness.list',
+  'agents.automation.editorial.freshness.run',
+  'agents.automation.editorial.revision.create',
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
@@ -83,6 +92,15 @@ const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
   'agents.automation.dpaVendor.read',
   'agents.automation.notify.shouldNotify',
   'agents.automation.incident.create',
+  'agents.automation.editorial.triage.create',
+  'agents.automation.editorial.triage.read',
+  'agents.automation.editorial.research.create',
+  'agents.automation.editorial.research.read',
+  'agents.automation.editorial.verify.create',
+  'agents.automation.editorial.verify.read',
+  'agents.automation.editorial.freshness.list',
+  'agents.automation.editorial.freshness.run',
+  'agents.automation.editorial.revision.create',
 ];
 
 // Capabilities granted to the n8n scheduler surface only  -  exactly one per

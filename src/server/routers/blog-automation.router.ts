@@ -30,6 +30,25 @@ import {
   adminListEditorialDigestsSchema,
   adminGetEditorialDigestSchema,
   adminGenerateEditorialDigestSchema,
+  adminListEditorialTriageRunsSchema,
+  adminGetEditorialTriageRunSchema,
+  adminListResearchPackVersionsSchema,
+  adminGetResearchPackSchema,
+  adminReviewResearchPackSchema,
+  adminListFreshnessReviewsSchema,
+  adminGetFreshnessReviewSchema,
+  adminListRevisionRequestsSchema,
+  adminGetRevisionRequestSchema,
+  adminAssignRevisionRequestSchema,
+  adminAcceptRevisionRequestSchema,
+  adminStartRevisionRequestSchema,
+  adminResolveRevisionRequestSchema,
+  adminDismissRevisionRequestSchema,
+  adminListContentOpsAlertsSchema,
+  adminGetContentOpsAlertSchema,
+  adminAcknowledgeContentOpsAlertSchema,
+  adminResolveContentOpsAlertSchema,
+  adminIgnoreContentOpsAlertSchema,
 } from '../schemas/blog-automation.schema';
 import { runSourceDiscoveryForMonitor } from '../../modules/blog-automation/source-discovery.service';
 import { createSuggestionFromSourceItem } from '../../modules/blog-automation/suggestion-builder';
@@ -700,6 +719,331 @@ export const blogAutomationRouter = router({
       }
 
       return { run, isStale, isAiStale };
+    }),
+
+  adminListEditorialTriageRuns: adminProcedure
+    .input(adminListEditorialTriageRunsSchema)
+    .query(async ({ input, ctx }) => {
+      const { page, limit } = input;
+      const skip = (page - 1) * limit;
+      const where: any = {};
+      const [runs, total] = await Promise.all([
+        ctx.prisma.blogEditorialTriageRun.findMany({
+          where, skip, take: limit, orderBy: { createdAt: 'desc' },
+          include: { sourceItem: true, suggestion: true }
+        }),
+        ctx.prisma.blogEditorialTriageRun.count({ where })
+      ]);
+      return { runs, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    }),
+
+  adminGetEditorialTriageRun: adminProcedure
+    .input(adminGetEditorialTriageRunSchema)
+    .query(async ({ input, ctx }) => {
+      const run = await ctx.prisma.blogEditorialTriageRun.findUnique({
+        where: { id: input.id },
+        include: { sourceItem: true, suggestion: true }
+      });
+      if (!run) throw new TRPCError({ code: 'NOT_FOUND' });
+      return run;
+    }),
+
+  adminListResearchPackVersions: adminProcedure
+    .input(adminListResearchPackVersionsSchema)
+    .query(async ({ input, ctx }) => {
+      const { blogPostId, page, limit } = input;
+      const skip = (page - 1) * limit;
+      const where: any = {};
+      if (blogPostId) where.blogPostId = blogPostId;
+      const [packs, total] = await Promise.all([
+        ctx.prisma.blogResearchPack.findMany({
+          where, skip, take: limit, orderBy: { version: 'desc' },
+          include: {
+            blogPost: { select: { id: true, title: true } },
+            reviewedBy: { select: { id: true, fullName: true } }
+          }
+        }),
+        ctx.prisma.blogResearchPack.count({ where })
+      ]);
+      return { packs, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    }),
+
+  adminGetResearchPack: adminProcedure
+    .input(adminGetResearchPackSchema)
+    .query(async ({ input, ctx }) => {
+      const pack = await ctx.prisma.blogResearchPack.findUnique({
+        where: { id: input.id },
+        include: {
+          blogPost: { select: { id: true, title: true } },
+          reviewedBy: { select: { id: true, fullName: true } },
+          sources: true
+        }
+      });
+      if (!pack) throw new TRPCError({ code: 'NOT_FOUND' });
+      return pack;
+    }),
+
+  adminReviewResearchPack: adminProcedure
+    .input(adminReviewResearchPackSchema)
+    .mutation(async ({ input, ctx }) => {
+      return ctx.prisma.$transaction(async (tx) => {
+        const { count } = await tx.blogResearchPack.updateMany({
+          where: { id: input.id, status: 'COMPLETE', reviewerStatus: 'PENDING' },
+          data: {
+            reviewerStatus: input.status,
+            reviewedById: ctx.user!.id,
+            reviewedAt: new Date()
+          }
+        });
+
+        if (count === 0) {
+          throw new TRPCError({ 
+            code: 'BAD_REQUEST', 
+            message: 'Pack already reviewed or not ready (must be COMPLETE and PENDING review)' 
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'REVIEW_RESEARCH_PACK',
+            entityId: input.id,
+            entityType: 'BlogResearchPack',
+            metadata: { decision: input.status, note: input.note }
+          }
+        });
+
+        return tx.blogResearchPack.findUnique({ where: { id: input.id } });
+      });
+    }),
+
+  adminGetFreshnessReview: adminProcedure
+    .input(adminGetFreshnessReviewSchema)
+    .query(async ({ input, ctx }) => {
+      const review = await ctx.prisma.blogFreshnessReview.findUnique({
+        where: { id: input.id },
+        include: { blogPost: { select: { id: true, title: true } } }
+      });
+      if (!review) throw new TRPCError({ code: 'NOT_FOUND' });
+      return review;
+    }),
+
+  adminListFreshnessReviews: adminProcedure
+    .input(adminListFreshnessReviewsSchema)
+    .query(async ({ input, ctx }) => {
+      const { blogPostId, page, limit } = input;
+      const skip = (page - 1) * limit;
+      const where: any = {};
+      if (blogPostId) where.blogPostId = blogPostId;
+      const [reviews, total] = await Promise.all([
+        ctx.prisma.blogFreshnessReview.findMany({
+          where, skip, take: limit, orderBy: { createdAt: 'desc' },
+          include: { blogPost: { select: { id: true, title: true } } }
+        }),
+        ctx.prisma.blogFreshnessReview.count({ where })
+      ]);
+      return { reviews, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    }),
+
+  adminListRevisionRequests: adminProcedure
+    .input(adminListRevisionRequestsSchema)
+    .query(async ({ input, ctx }) => {
+      const { blogPostId, status, page, limit } = input;
+      const skip = (page - 1) * limit;
+      const where: any = {};
+      if (blogPostId) where.blogPostId = blogPostId;
+      if (status) where.status = status;
+      const [requests, total] = await Promise.all([
+        ctx.prisma.blogRevisionRequest.findMany({
+          where, skip, take: limit, orderBy: { createdAt: 'desc' },
+          include: {
+            blogPost: { select: { id: true, title: true } },
+            assignedTo: { select: { id: true, fullName: true } },
+            requestedBy: { select: { id: true, fullName: true } }
+          }
+        }),
+        ctx.prisma.blogRevisionRequest.count({ where })
+      ]);
+      return { requests, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    }),
+
+  adminGetRevisionRequest: adminProcedure
+    .input(adminGetRevisionRequestSchema)
+    .query(async ({ input, ctx }) => {
+      const request = await ctx.prisma.blogRevisionRequest.findUnique({
+        where: { id: input.id },
+        include: {
+          blogPost: { select: { id: true, title: true } },
+          assignedTo: { select: { id: true, fullName: true } },
+          requestedBy: { select: { id: true, fullName: true } }
+        }
+      });
+      if (!request) throw new TRPCError({ code: 'NOT_FOUND' });
+      return request;
+    }),
+
+  adminAssignRevisionRequest: adminProcedure
+    .input(adminAssignRevisionRequestSchema)
+    .mutation(async ({ input, ctx }) => {
+      const request = await ctx.prisma.blogRevisionRequest.findUnique({ where: { id: input.id } });
+      if (!request) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (request.status !== 'PENDING_REVIEW') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Cannot assign a request in ${request.status} status` });
+      }
+      return ctx.prisma.blogRevisionRequest.update({
+        where: { id: input.id },
+        data: {
+          assignedToId: input.assignedToId
+        }
+      });
+    }),
+
+  adminAcceptRevisionRequest: adminProcedure
+    .input(adminAcceptRevisionRequestSchema)
+    .mutation(async ({ input, ctx }) => {
+      const request = await ctx.prisma.blogRevisionRequest.findUnique({ where: { id: input.id } });
+      if (!request) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (request.status !== 'PENDING_REVIEW') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Cannot accept a request in ${request.status} status` });
+      }
+      return ctx.prisma.blogRevisionRequest.update({
+        where: { id: input.id },
+        data: {
+          status: 'ACCEPTED',
+          assignedToId: ctx.user!.id
+        }
+      });
+    }),
+
+  adminStartRevisionRequest: adminProcedure
+    .input(adminStartRevisionRequestSchema)
+    .mutation(async ({ input, ctx }) => {
+      const request = await ctx.prisma.blogRevisionRequest.findUnique({ where: { id: input.id } });
+      if (!request) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (request.status !== 'ACCEPTED') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Cannot start a request in ${request.status} status` });
+      }
+      return ctx.prisma.blogRevisionRequest.update({
+        where: { id: input.id },
+        data: {
+          status: 'IN_PROGRESS'
+        }
+      });
+    }),
+
+  adminResolveRevisionRequest: adminProcedure
+    .input(adminResolveRevisionRequestSchema)
+    .mutation(async ({ input, ctx }) => {
+      const request = await ctx.prisma.blogRevisionRequest.findUnique({ where: { id: input.id } });
+      if (!request) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (request.status !== 'ACCEPTED' && request.status !== 'IN_PROGRESS') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Cannot resolve a request in ${request.status} status` });
+      }
+      return ctx.prisma.blogRevisionRequest.update({
+        where: { id: input.id },
+        data: {
+          status: 'RESOLVED',
+          resolvedAt: new Date()
+        }
+      });
+    }),
+
+  adminDismissRevisionRequest: adminProcedure
+    .input(adminDismissRevisionRequestSchema)
+    .mutation(async ({ input, ctx }) => {
+      const request = await ctx.prisma.blogRevisionRequest.findUnique({ where: { id: input.id } });
+      if (!request) throw new TRPCError({ code: 'NOT_FOUND' });
+      return ctx.prisma.blogRevisionRequest.update({
+        where: { id: input.id },
+        data: {
+          status: 'DISMISSED',
+          resolvedAt: new Date()
+        }
+      });
+    }),
+
+  adminListContentOpsAlerts: adminProcedure
+    .input(adminListContentOpsAlertsSchema)
+    .query(async ({ input, ctx }) => {
+      const { status, page, limit } = input;
+      const skip = (page - 1) * limit;
+      const where: any = {};
+      if (status) where.status = status;
+      const [alerts, total] = await Promise.all([
+        ctx.prisma.contentOpsAlert.findMany({
+          where, skip, take: limit, orderBy: { createdAt: 'desc' },
+          include: {
+            resolvedBy: { select: { id: true, fullName: true } }
+          }
+        }),
+        ctx.prisma.contentOpsAlert.count({ where })
+      ]);
+      return { alerts, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    }),
+
+  adminGetContentOpsAlert: adminProcedure
+    .input(adminGetContentOpsAlertSchema)
+    .query(async ({ input, ctx }) => {
+      const alert = await ctx.prisma.contentOpsAlert.findUnique({
+        where: { id: input.id },
+        include: {
+          resolvedBy: { select: { id: true, fullName: true } }
+        }
+      });
+      if (!alert) throw new TRPCError({ code: 'NOT_FOUND' });
+      return alert;
+    }),
+
+  adminAcknowledgeContentOpsAlert: adminProcedure
+    .input(adminAcknowledgeContentOpsAlertSchema)
+    .mutation(async ({ input, ctx }) => {
+      const alert = await ctx.prisma.contentOpsAlert.findUnique({ where: { id: input.id } });
+      if (!alert) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (alert.status !== 'OPEN') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Cannot acknowledge an alert in ${alert.status} status` });
+      }
+      return ctx.prisma.contentOpsAlert.update({
+        where: { id: input.id },
+        data: { status: 'ACKNOWLEDGED' }
+      });
+    }),
+
+  adminResolveContentOpsAlert: adminProcedure
+    .input(adminResolveContentOpsAlertSchema)
+    .mutation(async ({ input, ctx }) => {
+      const alert = await ctx.prisma.contentOpsAlert.findUnique({ where: { id: input.id } });
+      if (!alert) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (alert.status !== 'OPEN' && alert.status !== 'ACKNOWLEDGED') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Cannot resolve an alert in ${alert.status} status` });
+      }
+      return ctx.prisma.contentOpsAlert.update({
+        where: { id: input.id },
+        data: {
+          status: 'RESOLVED',
+          resolvedById: ctx.user!.id,
+          resolvedAt: new Date(),
+          resolutionNote: input.resolutionNotes
+        }
+      });
+    }),
+
+  adminIgnoreContentOpsAlert: adminProcedure
+    .input(adminIgnoreContentOpsAlertSchema)
+    .mutation(async ({ input, ctx }) => {
+      const alert = await ctx.prisma.contentOpsAlert.findUnique({ where: { id: input.id } });
+      if (!alert) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (alert.status !== 'OPEN' && alert.status !== 'ACKNOWLEDGED') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Cannot ignore an alert in ${alert.status} status` });
+      }
+      return ctx.prisma.contentOpsAlert.update({
+        where: { id: input.id },
+        data: {
+          status: 'IGNORED',
+          resolvedById: ctx.user!.id,
+          resolvedAt: new Date(),
+          resolutionNote: input.reason
+        }
+      });
     }),
 
   adminListEditorialDigests: adminProcedure

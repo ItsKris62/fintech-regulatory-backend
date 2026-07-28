@@ -4,7 +4,7 @@ import {
   validateEnvironmentSafety,
   redactDatabaseUrl,
   QueryRunner,
-  COMPLETE_PHASE0_INVENTORY,
+  ALL_EXPECTED_SCHEMA_INVENTORY,
   InformationSchemaTableRaw,
   InformationSchemaColumnRaw,
   PgEnumRaw,
@@ -95,14 +95,14 @@ describe('verifyCompleteSchema', () => {
       };
     }
 
-    const defaultTables: InformationSchemaTableRaw[] = COMPLETE_PHASE0_INVENTORY.tables.map((t) => ({
+    const defaultTables: InformationSchemaTableRaw[] = ALL_EXPECTED_SCHEMA_INVENTORY.tables.map((t) => ({
       table_name: t.tableName,
     }));
     // Add User table as prerequisite
     defaultTables.push({ table_name: 'User' });
 
     const defaultColumns: InformationSchemaColumnRaw[] = [];
-    for (const t of COMPLETE_PHASE0_INVENTORY.tables) {
+    for (const t of ALL_EXPECTED_SCHEMA_INVENTORY.tables) {
       for (const c of t.columns) {
         defaultColumns.push({
           table_name: t.tableName,
@@ -115,13 +115,13 @@ describe('verifyCompleteSchema', () => {
     defaultColumns.push({ table_name: 'User', column_name: 'id', data_type: 'text', is_nullable: 'NO' });
 
     const defaultEnums: PgEnumRaw[] = [];
-    for (const e of COMPLETE_PHASE0_INVENTORY.enums) {
+    for (const e of ALL_EXPECTED_SCHEMA_INVENTORY.enums) {
       for (const val of e.requiredValues) {
         defaultEnums.push({ enum_name: e.enumName, enum_value: val });
       }
     }
 
-    const defaultIndexes: PgIndexRaw[] = COMPLETE_PHASE0_INVENTORY.indexes.map((idx) => {
+    const defaultIndexes: PgIndexRaw[] = ALL_EXPECTED_SCHEMA_INVENTORY.indexes.map((idx) => {
       const colStr = idx.columns.map((c) => `"${c}"`).join(', ');
       const uniqueStr = idx.isUnique ? 'UNIQUE INDEX' : 'INDEX';
       return {
@@ -131,7 +131,7 @@ describe('verifyCompleteSchema', () => {
       };
     });
 
-    const defaultFKs: PgConstraintRaw[] = COMPLETE_PHASE0_INVENTORY.foreignKeys.map((fk) => ({
+    const defaultFKs: PgConstraintRaw[] = ALL_EXPECTED_SCHEMA_INVENTORY.foreignKeys.map((fk) => ({
       constraint_name: fk.name,
       source_table: fk.sourceTable,
       source_column: fk.sourceColumns[0],

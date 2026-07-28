@@ -79,6 +79,29 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  // Pack 1 (Editorial Intelligence) rollout flags - see
+  // docs/editorial-intelligence/human-review-backfill-runbook.md and
+  // phase-b-foundations.md Foundation E for the required rollout order.
+  // Computation and enforcement are deliberately two separate flags: the
+  // policy can compute and persist explicit values without yet blocking
+  // anything, so the backfill can be reviewed before enforcement goes live.
+  EDITORIAL_HUMAN_REVIEW_POLICY_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  EDITORIAL_HUMAN_REVIEW_ENFORCEMENT_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Shared publish-readiness evaluator rollout mode - see
+  // docs/editorial-intelligence/publish-readiness-burn-in-runbook.md.
+  // 'off': evaluator not invoked at all. 'shadow': evaluator runs and logs
+  // divergences but never changes the publish decision (existing inline gates
+  // stay authoritative). 'enforce': evaluator result is authoritative -
+  // NOT enabled by default, cutover is a separate, explicit later action.
+  BLOG_PUBLISH_READINESS_MODE: z
+    .enum(['off', 'shadow', 'enforce'])
+    .default('shadow'),
   AGENT_MAX_COST_PER_RUN_USD: z.coerce.number().positive().default(2),
   AGENT_MAX_COST_PER_DAY_USD: z.coerce.number().positive().default(20),
   AGENT_MAX_ITERATIONS_PER_RUN: z.coerce.number().int().positive().default(25),
@@ -115,6 +138,10 @@ const envSchema = z.object({
   // approvals concurrently.
   AUTOMATION_APPROVAL_READ_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
   AUTOMATION_APPROVAL_READ_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+  // Editorial Intelligence LLM procedures
+  AUTOMATION_EDITORIAL_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  AUTOMATION_EDITORIAL_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // Outbound backend -> n8n webhook fan-out (agents.automation.queueContentCandidate).
   // Distinct trust boundary from X-Agent-Credential (inbound n8n -> backend) and from
@@ -259,6 +286,12 @@ export const appConfig = {
     orchestratorEnabled: env.ORCHESTRATOR_ENABLED,
     agentsEnabled: env.AGENTS_ENABLED,
   },
+
+  editorial: {
+    humanReviewPolicyEnabled: env.EDITORIAL_HUMAN_REVIEW_POLICY_ENABLED,
+    humanReviewEnforcementEnabled: env.EDITORIAL_HUMAN_REVIEW_ENFORCEMENT_ENABLED,
+    publishReadinessMode: env.BLOG_PUBLISH_READINESS_MODE,
+  },
   agents: {
     maxCostPerRunUsd: env.AGENT_MAX_COST_PER_RUN_USD,
     maxCostPerDayUsd: env.AGENT_MAX_COST_PER_DAY_USD,
@@ -276,6 +309,8 @@ export const appConfig = {
       approvalCreateRateLimitWindowSeconds: env.AUTOMATION_APPROVAL_CREATE_RATE_LIMIT_WINDOW_SECONDS,
       approvalReadRateLimitMax: env.AUTOMATION_APPROVAL_READ_RATE_LIMIT_MAX,
       approvalReadRateLimitWindowSeconds: env.AUTOMATION_APPROVAL_READ_RATE_LIMIT_WINDOW_SECONDS,
+      editorialRateLimitMax: env.AUTOMATION_EDITORIAL_RATE_LIMIT_MAX,
+      editorialRateLimitWindowSeconds: env.AUTOMATION_EDITORIAL_RATE_LIMIT_WINDOW_SECONDS,
       webhookIngress: {
         header: env.SHERIABOT_WEBHOOK_INGRESS_HEADER,
         secret: env.SHERIABOT_WEBHOOK_INGRESS_SECRET,

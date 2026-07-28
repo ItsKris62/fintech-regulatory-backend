@@ -1,7 +1,9 @@
 import { BlogSourceItemStatus, BlogSuggestionStatus } from '@prisma/client';
 import type { prisma as appPrisma } from '@/lib/prisma/client';
+import { appConfig } from '@/config/app.config';
 import { scoreSourceItemForBlogSuggestion } from './relevance-scoring.service';
 import { blogNotificationService } from './blog-notification.service';
+import { computeRequiresHumanReviewAtCreation } from './human-review-policy';
 
 type BlogAutomationPrisma = typeof appPrisma;
 
@@ -61,6 +63,25 @@ export async function createSuggestionFromSourceItem(params: {
 
   // Create suggestion
   const suggestion = await prisma.$transaction(async (tx) => {
+    // Pack 1 Foundation E (corrected): compute and persist an EXPLICIT
+    // requiresHumanReview value rather than silently inheriting the Prisma
+    // column default (`true`). Gated behind the policy flag so it can be
+    // deployed without changing behavior until an operator explicitly turns
+    // it on - see docs/editorial-intelligence/human-review-backfill-runbook.md.
+    // When the flag is off, the field is omitted from `data` entirely,
+    // preserving today's default-only behavior exactly.
+    const humanReviewData = appConfig.editorial.humanReviewPolicyEnabled
+      ? {
+          requiresHumanReview: computeRequiresHumanReviewAtCreation({
+            category: scoringResult.category,
+            requiresOfficialSource: scoringResult.requiresOfficialSource,
+            sourceQuality: scoringResult.sourceQuality,
+            priority: scoringResult.priority,
+            jurisdiction: sourceItem.jurisdiction,
+          }).required,
+        }
+      : {};
+
     const sug = await tx.blogArticleSuggestion.create({
       data: {
         title: scoringResult.recommendedTitle,
@@ -80,6 +101,7 @@ export async function createSuggestionFromSourceItem(params: {
         suggestedNextAction: scoringResult.suggestedNextAction,
         requiresOfficialSource: scoringResult.requiresOfficialSource,
         needsMoreSources: scoringResult.needsMoreSources,
+        ...humanReviewData,
       },
     });
 

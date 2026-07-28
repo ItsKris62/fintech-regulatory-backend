@@ -11,6 +11,7 @@ import {
   adminDeleteBlogPostSchema,
 } from '../schemas/blog.schema';
 import { z } from 'zod';
+import { runPublishReadinessShadowCheck } from '../utils/publish-readiness';
 
 function generateSlug(title: string): string {
   return title
@@ -306,38 +307,60 @@ export const blogRouter = router({
       const updates: any = { status };
 
       if (status === 'PUBLISHED') {
-        if (!post.title || !post.slug || !post.excerpt || !post.content || !post.category) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing required fields for publishing' });
-        }
-
-        if (post.sources.length === 0) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'At least one source is required for publishing' });
-        }
-
-        if (['Regulatory Updates', 'Enforcement & Penalties'].includes(post.category)) {
-          if (!post.sources.some(s => s.sourceType === 'OFFICIAL')) {
-            throw new TRPCError({ code: 'BAD_REQUEST', message: `${post.category} requires an OFFICIAL source` });
+        // Pack 1 Stage C5: the shared evaluator runs alongside this existing
+        // gate logic in burn-in mode - it never changes this block's outcome
+        // unless BLOG_PUBLISH_READINESS_MODE=enforce is explicitly set (not
+        // the default). The existing inline checks below are UNCHANGED and
+        // remain fully authoritative for the default (shadow) mode. See
+        // docs/editorial-intelligence/publish-readiness-burn-in-runbook.md.
+        let legacyError: unknown = null;
+        try {
+          if (!post.title || !post.slug || !post.excerpt || !post.content || !post.category) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'Missing required fields for publishing' });
           }
-        } else if (post.category === 'International Standards') {
-          if (!post.sources.some(s => ['OFFICIAL', 'INTERNATIONAL_STANDARD'].includes(s.sourceType))) {
-            throw new TRPCError({ code: 'BAD_REQUEST', message: `International Standards requires an OFFICIAL or INTERNATIONAL_STANDARD source` });
+
+          if (post.sources.length === 0) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'At least one source is required for publishing' });
           }
+
+          if (['Regulatory Updates', 'Enforcement & Penalties'].includes(post.category)) {
+            if (!post.sources.some(s => s.sourceType === 'OFFICIAL')) {
+              throw new TRPCError({ code: 'BAD_REQUEST', message: `${post.category} requires an OFFICIAL source` });
+            }
+          } else if (post.category === 'International Standards') {
+            if (!post.sources.some(s => ['OFFICIAL', 'INTERNATIONAL_STANDARD'].includes(s.sourceType))) {
+              throw new TRPCError({ code: 'BAD_REQUEST', message: `International Standards requires an OFFICIAL or INTERNATIONAL_STANDARD source` });
+            }
+          }
+
+          const latestVerification = post.verificationRuns[0];
+          const latestAiDraft = post.draftGenerationRuns[0];
+
+          if (latestVerification?.status === 'BLOCKED') {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: Source and Claim Verification is BLOCKED.' });
+          }
+
+          if (latestAiDraft) {
+            const draftTime = latestAiDraft.createdAt;
+            const verificationTime = latestVerification ? (latestVerification.completedAt || latestVerification.createdAt) : null;
+
+            if (!verificationTime || draftTime > verificationTime) {
+              throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: An AI draft was generated but no verification has been run since then.' });
+            }
+          }
+        } catch (err) {
+          legacyError = err;
         }
 
-        const latestVerification = post.verificationRuns[0];
-        const latestAiDraft = post.draftGenerationRuns[0];
+        const shadowCheck = await runPublishReadinessShadowCheck(ctx.prisma, id, legacyError === null, 'adminSetStatus');
 
-        if (latestVerification?.status === 'BLOCKED') {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: Source and Claim Verification is BLOCKED.' });
-        }
+        if (legacyError) throw legacyError;
 
-        if (latestAiDraft) {
-          const draftTime = latestAiDraft.createdAt;
-          const verificationTime = latestVerification ? (latestVerification.completedAt || latestVerification.createdAt) : null;
-          
-          if (!verificationTime || draftTime > verificationTime) {
-            throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot publish: An AI draft was generated but no verification has been run since then.' });
-          }
+        if (shadowCheck.shouldBlock) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Cannot publish: readiness evaluator blockers: ${shadowCheck.result?.blockers.map((b) => b.code).join(', ')}`,
+          });
         }
 
         if (!post.publishedAt) updates.publishedAt = new Date();

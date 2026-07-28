@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+
 
 const MAX_DEPTH = 5;
 const MAX_KEYS = 50;
@@ -34,7 +34,7 @@ function redactString(str: string): string {
     redacted = redacted.substring(0, MAX_STRING) + '...[TRUNCATED]';
   }
   for (const pattern of SECRET_PATTERNS) {
-    redacted = redacted.replace(pattern, (match, p1) => {
+    redacted = redacted.replace(pattern, (match) => {
       if (match.includes('@') && !match.startsWith('postgres') && !match.startsWith('redis')) {
         const [local, domain] = match.split('@');
         return `${local.substring(0, 2)}***@${domain}`;

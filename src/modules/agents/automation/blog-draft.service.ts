@@ -7,6 +7,7 @@ import { createSuggestionFromSourceItem } from '@/modules/blog-automation/sugges
 import { createBlogDraftFromSuggestion } from '@/modules/blog-automation/draft-creation.service';
 import { generateAiDraftForBlogPost } from '@/modules/blog-automation/ai-draft-generation.service';
 import { agentRunService as defaultAgentRunService, type AgentRunService } from '@/modules/agents/agent-run.service';
+import { computeRequiresHumanReviewAtCreation } from '@/modules/blog-automation/human-review-policy';
 import { contentOpsAlertService as defaultContentOpsAlertService, type ContentOpsAlertService } from './content-ops-alert.service';
 import { AUTOMATION_AGENT_TYPE, toJsonValue } from './types';
 
@@ -20,7 +21,10 @@ export interface CreateDraftFromCandidateInput {
 
 export type CreateDraftFromCandidateResult =
   | { status: 'created'; suggestionId: string; blogPostId: string; slug: string }
-  | { status: 'below_threshold' | 'duplicate' };
+  | { status: 'below_threshold' | 'duplicate' }
+  // Pack 1 Foundation E (corrected): a clear, typed outcome for the enforcement
+  // gate - never an ambiguous internal error for an expected review state.
+  | { status: 'human_review_required'; suggestionId: string; reasons: string[] };
 
 export interface GenerateDraftContentInput {
   blogPostId: string;
@@ -139,6 +143,33 @@ export class AutomationBlogDraftService {
 
     const suggestion = result.suggestion;
 
+    // Pack 1 Foundation E (corrected): when enforcement is enabled and this
+    // suggestion's persisted requiresHumanReview is true, stop here - remain
+    // at PENDING_REVIEW, do not promote, do not generate a draft. Gated
+    // behind its own flag (separate from the policy-computation flag) so
+    // enforcement only goes live after an operator has reviewed the backfill
+    // - see docs/editorial-intelligence/human-review-backfill-runbook.md.
+    // Research generation (a later stage) is deliberately NOT gated by this
+    // check - only draft promotion is.
+    if (appConfig.editorial.humanReviewEnforcementEnabled && suggestion.requiresHumanReview) {
+      const { reasons } = computeRequiresHumanReviewAtCreation({
+        category: suggestion.category,
+        requiresOfficialSource: suggestion.requiresOfficialSource,
+        sourceQuality: suggestion.sourceQuality,
+        priority: suggestion.priority,
+        jurisdiction: suggestion.jurisdiction,
+      });
+
+      logger.info({
+        type: 'automation_blog_draft_human_review_required',
+        suggestionId: suggestion.id,
+        sourceItemId: input.sourceItemId,
+        reasons,
+      });
+
+      return { status: 'human_review_required', suggestionId: suggestion.id, reasons };
+    }
+
     await this.prisma.blogArticleSuggestion.update({
       where: { id: suggestion.id },
       data: {
@@ -169,11 +200,19 @@ export class AutomationBlogDraftService {
     });
 
     if (HIGH_PRIORITY_SUGGESTION_LEVELS.has(suggestion.priority)) {
-      await this.contentOpsAlert.sendAlert({
-        subject: 'High Priority Blog Suggestion',
+      // Pack 1 Stage C4: migrated from the old fire-and-forget sendAlert to
+      // the persisted path. Severity chosen to preserve prior "always emails"
+      // behavior for this call site (URGENT -> CRITICAL, HIGH -> HIGH, both
+      // notify-eligible) - the new cooldown/dedupe behavior is an intentional
+      // addition (see content-ops-alert.service.ts), not a silent regression.
+      await this.contentOpsAlert.createOrIncrementAlert({
+        type: 'high_priority_suggestion_drafted',
+        severity: suggestion.priority === 'URGENT' ? 'CRITICAL' : 'HIGH',
+        entityType: 'BlogPost',
+        entityId: draft.blogPostId,
+        title: 'High Priority Blog Suggestion',
         summary: `A ${suggestion.priority.toLowerCase()}-priority suggestion "${suggestion.title}" was auto-approved and drafted from an automation candidate.`,
-        details: [`Suggestion: ${suggestion.id}`, `BlogPost: ${draft.blogPostId}`],
-        link: new URL(`/admin/content/blog/${draft.blogPostId}`, appConfig.appUrl).toString(),
+        metadata: { suggestionId: suggestion.id, priority: suggestion.priority },
       });
     }
 
@@ -257,11 +296,21 @@ export class AutomationBlogDraftService {
       generationRunId: result.runId,
     });
 
-    await this.contentOpsAlert.sendAlert({
-      subject: 'Blog Draft Ready for Verification',
+    // Pack 1 Stage C4: migrated to the persisted path. Severity HIGH
+    // (rather than a semantically "lower" severity) is a deliberate choice to
+    // preserve this call site's prior "always emails" behavior - see the
+    // parallel comment on the createDraftFromCandidate call site above.
+    await this.contentOpsAlert.createOrIncrementAlert({
+      type: 'draft_ready_for_verification',
+      severity: 'HIGH',
+      entityType: 'BlogPost',
+      entityId: result.post.id,
+      title: 'Blog Draft Ready for Verification',
       summary: `An AI-generated draft for "${result.post.title}" is ready for compliance verification.`,
-      details: result.uncertaintyFlags.length > 0 ? [`Uncertainty flags: ${result.uncertaintyFlags.join(', ')}`] : undefined,
-      link: new URL(`/admin/content/blog/${result.post.id}`, appConfig.appUrl).toString(),
+      metadata: {
+        generationRunId: result.runId,
+        uncertaintyFlagCount: result.uncertaintyFlags.length,
+      },
     });
 
     return {

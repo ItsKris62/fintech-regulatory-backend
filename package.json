@@ -40,6 +40,8 @@
     "cron:cleanup-snapshots": "tsx src/scripts/cleanup-compliance-snapshots.ts",
     "backfill:compliance-snapshots": "tsx src/scripts/backfill-compliance-snapshots.ts",
     "cron:blog-source-discovery": "tsx src/scripts/blog-source-discovery-cron.ts",
+    "editorial:backfill-human-review": "tsx src/scripts/backfill-editorial-human-review.ts --dry-run",
+    "editorial:backfill-human-review:write": "tsx src/scripts/backfill-editorial-human-review.ts --write",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:ci": "eslint . --max-warnings 0",

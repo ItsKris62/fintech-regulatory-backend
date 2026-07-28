@@ -5,7 +5,7 @@ import { prisma } from '../lib/prisma/client';
 import crypto from 'crypto';
 import assert from 'assert';
 import { agentCredentialService } from '../modules/agents/agent-credential.service';
-import * as Sentry from '@sentry/node';
+
 
 const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 const EMPTY_MD5 = 'd41d8cd98f00b204e9800998ecf8427e';
@@ -115,7 +115,7 @@ async function runTests() {
     const idSimul1 = crypto.createHash('sha256').update('idSimul1' + Date.now()).digest('hex');
     const idSimul2 = crypto.createHash('sha256').update('idSimul2' + Date.now()).digest('hex');
     
-    const [resSimul1, resSimul2] = await Promise.all([
+    await await Promise.all([
       app.inject({ method: 'POST', url: '/internal/automation/v1/incidents', headers: { ...headers, 'idempotency-key': idSimul1 }, payload: { ...basePayload, fingerprint: fpSimul } }),
       app.inject({ method: 'POST', url: '/internal/automation/v1/incidents', headers: { ...headers, 'idempotency-key': idSimul2 }, payload: { ...basePayload, fingerprint: fpSimul } })
     ]);
@@ -129,7 +129,7 @@ async function runTests() {
     const fpSimulIdem = crypto.createHash('sha256').update('fpSimulIdem' + Date.now()).digest('hex');
     const idSimulIdem = crypto.createHash('sha256').update('idSimulIdem' + Date.now()).digest('hex');
     
-    const [resIdem1, resIdem2] = await Promise.all([
+    await await Promise.all([
       app.inject({ method: 'POST', url: '/internal/automation/v1/incidents', headers: { ...headers, 'idempotency-key': idSimulIdem }, payload: { ...basePayload, fingerprint: fpSimulIdem } }),
       app.inject({ method: 'POST', url: '/internal/automation/v1/incidents', headers: { ...headers, 'idempotency-key': idSimulIdem }, payload: { ...basePayload, fingerprint: fpSimulIdem } })
     ]);

@@ -21,6 +21,11 @@ import { appConfig } from '@/config/app.config';
 import { productBiAgent } from '@/modules/agents/product-bi/product-bi.agent';
 import { securityOpsAgent } from '@/modules/agents/security-ops/security-ops.agent';
 import { chiefOfStaffAgent } from '@/modules/agents/chief-of-staff/chief-of-staff.agent';
+import { editorialTriageService } from '@/modules/blog-automation/editorial-triage.service';
+import { researchPackService } from '@/modules/blog-automation/research-pack.service';
+import { semanticVerificationService } from '@/modules/blog-automation/semantic-verification.service';
+import { freshnessReviewService } from '@/modules/blog-automation/freshness-review.service';
+import { revisionRequestService } from '@/modules/blog-automation/revision-request.service';
 
 type JsonInputValue = string | number | boolean | JsonInputValue[] | { [key: string]: JsonInputValue };
 
@@ -460,6 +465,106 @@ export const agentsRouter = router({
         ttlSeconds: z.number().int().positive().max(86400),
       }))
       .mutation(async ({ input }) => automationNotifyService.shouldNotify(input)),
+
+    // Pack 1 Phase E: Editorial Intelligence automation endpoints
+    triageEditorialCandidate: agentProcedure('agents.automation.editorial.triage.create')
+      .use(rateLimited('automation-editorial-triage-create', appConfig.agents.automation.editorialRateLimitMax, {
+        window: appConfig.agents.automation.editorialRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        sourceItemId: z.string().min(1).optional(),
+        suggestionId: z.string().min(1).optional(),
+        regulatorySignalId: z.string().min(1).optional(),
+        idempotencyKey: z.string().min(8).max(200),
+        forceRetriage: z.boolean().optional(),
+      }).refine(v => !!(v.sourceItemId || v.suggestionId || v.regulatorySignalId), 'one of sourceItemId/suggestionId/regulatorySignalId is required'))
+      .mutation(async ({ input }) => editorialTriageService.triageEditorialCandidate(input)),
+
+    getEditorialTriage: agentProcedure('agents.automation.editorial.triage.read')
+      .use(rateLimited('automation-editorial-triage-read', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ triageRunId: z.string().min(1) }))
+      .mutation(async ({ input }) => editorialTriageService.getEditorialTriage(input.triageRunId)),
+
+    createResearchPack: agentProcedure('agents.automation.editorial.research.create')
+      .use(rateLimited('automation-editorial-research-create', appConfig.agents.automation.editorialRateLimitMax, {
+        window: appConfig.agents.automation.editorialRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        blogPostId: z.string().min(1).optional(),
+        suggestionId: z.string().min(1).optional(),
+        idempotencyKey: z.string().min(8).max(200),
+      }).refine(v => !!(v.blogPostId || v.suggestionId), 'one of blogPostId/suggestionId is required'))
+      .mutation(async ({ input }) => researchPackService.createResearchPack(input)),
+
+    getResearchPack: agentProcedure('agents.automation.editorial.research.read')
+      .use(rateLimited('automation-editorial-research-read', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        researchPackId: z.string().min(1).optional(),
+        blogPostId: z.string().min(1).optional(),
+      }).refine(v => !!(v.researchPackId || v.blogPostId), 'one of researchPackId/blogPostId is required'))
+      .mutation(async ({ input }) => researchPackService.getResearchPack(input)),
+
+    verifyBlogPostClaims: agentProcedure('agents.automation.editorial.verify.create')
+      .use(rateLimited('automation-editorial-verify-create', appConfig.agents.automation.editorialRateLimitMax, {
+        window: appConfig.agents.automation.editorialRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        blogPostId: z.string().min(1),
+        idempotencyKey: z.string().min(8).max(200),
+        requestSecondReview: z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => semanticVerificationService.runSemanticVerification(input)),
+
+    getVerificationResult: agentProcedure('agents.automation.editorial.verify.read')
+      .use(rateLimited('automation-editorial-verify-read', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        verificationRunId: z.string().min(1).optional(),
+        blogPostId: z.string().min(1).optional(),
+      }).refine(v => !!(v.verificationRunId || v.blogPostId), 'one of verificationRunId/blogPostId is required'))
+      .mutation(async ({ input, ctx }) => {
+        if (input.verificationRunId) {
+          return ctx.prisma.blogVerificationRun.findUnique({ where: { id: input.verificationRunId }, include: { issues: true } });
+        }
+        return ctx.prisma.blogVerificationRun.findFirst({ where: { blogPostId: input.blogPostId }, orderBy: { createdAt: 'desc' }, include: { issues: true } });
+      }),
+
+    listFreshnessReviewCandidates: agentProcedure('agents.automation.editorial.freshness.list')
+      .use(rateLimited('automation-editorial-freshness-list', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ maxItems: z.number().int().positive().max(200).default(50) }))
+      .mutation(async ({ input }) => freshnessReviewService.selectFreshnessCandidates(input.maxItems)),
+
+    runFreshnessReview: agentProcedure('agents.automation.editorial.freshness.run')
+      .use(rateLimited('automation-editorial-freshness-run', appConfig.agents.automation.editorialRateLimitMax, {
+        window: appConfig.agents.automation.editorialRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        blogPostId: z.string().min(1),
+        idempotencyKey: z.string().min(8).max(200),
+      }))
+      .mutation(async ({ input }) => freshnessReviewService.runFreshnessReview(input)),
+
+    createRevisionRequest: agentProcedure('agents.automation.editorial.revision.create')
+      .use(rateLimited('automation-editorial-revision-create', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        blogPostId: z.string().min(1),
+        freshnessReviewId: z.string().min(1).optional(),
+        reason: z.string().min(1).max(2000),
+        priority: z.enum(['LOW','MEDIUM','HIGH','URGENT']),
+        recommendedChanges: jsonObjectSchema.optional(),
+        evidence: jsonObjectSchema.optional(),
+        idempotencyKey: z.string().min(8).max(200),
+      }))
+      .mutation(async ({ input }) => revisionRequestService.createRevisionRequest(input)),
   }),
   productBi: router({
     // Read-only synthesis across ALL organizations, not one tenant - deliberately

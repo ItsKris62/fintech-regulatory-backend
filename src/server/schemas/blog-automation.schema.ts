@@ -251,3 +251,96 @@ export const adminGenerateEditorialDigestSchema = z.object({
   periodStart: z.date().optional(),
   periodEnd: z.date().optional(),
 });
+
+export const adminListEditorialTriageRunsSchema = z.object({
+  page: z.number().min(1).default(1),
+  limit: z.number().min(1).max(100).default(20),
+});
+
+export const adminGetEditorialTriageRunSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminListResearchPackVersionsSchema = z.object({
+  blogPostId: z.string().optional(),
+  page: z.number().min(1).default(1),
+  limit: z.number().min(1).max(100).default(20),
+});
+
+export const adminGetResearchPackSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminReviewResearchPackSchema = z.object({
+  id: z.string().min(1),
+  status: z.enum(['REVIEWED', 'REJECTED']),
+  note: z.string().optional(),
+});
+
+export const adminListFreshnessReviewsSchema = z.object({
+  blogPostId: z.string().optional(),
+  page: z.number().min(1).default(1),
+  limit: z.number().min(1).max(100).default(20),
+});
+
+export const adminGetFreshnessReviewSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminListRevisionRequestsSchema = z.object({
+  blogPostId: z.string().optional(),
+  status: z.enum(['PENDING_REVIEW', 'ASSIGNED', 'ACCEPTED', 'RESOLVED', 'DISMISSED']).optional(),
+  page: z.number().min(1).default(1),
+  limit: z.number().min(1).max(100).default(20),
+});
+
+export const adminGetRevisionRequestSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminAssignRevisionRequestSchema = z.object({
+  id: z.string().min(1),
+  assignedToId: z.string().min(1),
+});
+
+export const adminAcceptRevisionRequestSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminStartRevisionRequestSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminResolveRevisionRequestSchema = z.object({
+  id: z.string().min(1),
+  resolutionNotes: z.string().min(1),
+});
+
+export const adminDismissRevisionRequestSchema = z.object({
+  id: z.string().min(1),
+  reason: z.string().min(1),
+});
+
+export const adminListContentOpsAlertsSchema = z.object({
+  status: z.enum(['OPEN', 'ACKNOWLEDGED', 'RESOLVED', 'IGNORED']).optional(),
+  page: z.number().min(1).default(1),
+  limit: z.number().min(1).max(100).default(20),
+});
+
+export const adminGetContentOpsAlertSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminAcknowledgeContentOpsAlertSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const adminResolveContentOpsAlertSchema = z.object({
+  id: z.string().min(1),
+  resolutionNotes: z.string().min(1),
+});
+
+export const adminIgnoreContentOpsAlertSchema = z.object({
+  id: z.string().min(1),
+  reason: z.string().min(1),
+});

@@ -333,6 +333,135 @@ export const COMPLETE_PHASE0_INVENTORY: {
 };
 
 /**
+ * SheriaBot Pack 1 — Editorial Intelligence Inventory
+ * Governing spec: docs/editorial-intelligence/phase-b-*.md (Phase B.1 approved).
+ * Additive to COMPLETE_PHASE0_INVENTORY above — see ALL_EXPECTED_SCHEMA_INVENTORY,
+ * which is what verifyCompleteSchema actually checks against.
+ *
+ * NOTE: "ContentOpsAlert_dedupe_key" (a raw SQL COALESCE expression unique index —
+ * see prisma/migrations/20260727020000_content_ops_alert/migration.sql) is
+ * intentionally NOT listed in `indexes` below. This engine's index-column parser
+ * (a naive first-paren-group regex) cannot correctly parse an expression index
+ * containing its own nested parentheses — attempting to check it here would
+ * produce false CONFLICT results, not a genuine gap. That index must be verified
+ * manually (e.g. `\d "ContentOpsAlert"` in psql) until a dedicated
+ * expression-index-aware check is added. See docs/editorial-intelligence/
+ * phase-c-schema-verification.md.
+ */
+export const PACK1_EDITORIAL_INTELLIGENCE_INVENTORY: {
+  tables: ExpectedTable[];
+  enums: ExpectedEnum[];
+  indexes: ExpectedIndex[];
+  foreignKeys: ExpectedForeignKey[];
+} = {
+  enums: [
+    { enumName: 'ContentOpsAlertNotificationStatus', requiredValues: ['NOT_REQUIRED', 'PENDING', 'SENT', 'FAILED', 'SUPPRESSED'] },
+    { enumName: 'BlogEditorialRecommendation', requiredValues: ['PRIORITISE_NOW', 'QUEUE', 'MONITOR', 'REJECT', 'HUMAN_REVIEW_REQUIRED'] },
+    { enumName: 'BlogEditorialTriageStatus', requiredValues: ['PENDING', 'RUNNING', 'COMPLETE', 'FAILED'] },
+    { enumName: 'BlogResearchPackStatus', requiredValues: ['DRAFT', 'COMPLETE', 'SUPERSEDED', 'FAILED'] },
+    { enumName: 'BlogResearchSourceCategory', requiredValues: ['OFFICIAL_REGULATOR', 'LEGISLATION', 'OFFICIAL_GUIDANCE', 'APPROVED_CORPUS', 'REPUTABLE_NEWS', 'INDUSTRY_SOURCE', 'COMPANY_SOURCE', 'USER_GENERATED', 'UNVERIFIED'] },
+    { enumName: 'BlogClaimCategory', requiredValues: ['LEGAL_OBLIGATION', 'DEADLINE', 'PENALTY', 'REGULATOR_AUTHORITY', 'LICENSING_REQUIREMENT', 'REPORTING_REQUIREMENT', 'SECURITY_REQUIREMENT', 'DATA_PROTECTION_REQUIREMENT', 'NUMERICAL_CLAIM', 'FACTUAL_EVENT', 'INTERPRETATION', 'RECOMMENDATION', 'MARKETING_STATEMENT'] },
+    { enumName: 'BlogClaimVerificationStatus', requiredValues: ['VERIFIED', 'PARTIALLY_SUPPORTED', 'UNSUPPORTED', 'CONTRADICTED', 'STALE_SOURCE', 'HUMAN_REVIEW_REQUIRED'] },
+    { enumName: 'BlogFreshnessRiskTier', requiredValues: ['HIGH_RISK', 'NORMAL', 'EVERGREEN'] },
+    { enumName: 'BlogFreshnessAction', requiredValues: ['FRESH', 'REVIEW_SOON', 'REVISION_REQUIRED', 'URGENT_REVISION', 'ARCHIVE_RECOMMENDED', 'HUMAN_REVIEW_REQUIRED'] },
+    { enumName: 'BlogRevisionPriority', requiredValues: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] },
+    { enumName: 'BlogRevisionStatus', requiredValues: ['PENDING_REVIEW', 'ACCEPTED', 'IN_PROGRESS', 'RESOLVED', 'DISMISSED'] },
+    // Additive value on the pre-existing BlogVerificationIssueType enum. Not
+    // marked isPrerequisite: in this engine's pre/post model, isPrerequisite
+    // means "must already exist independent of any migration in this repo"
+    // (e.g. the User table) — the enum itself was created by an earlier Phase 0
+    // migration in this same repo, so it's an ordinary expected object, exactly
+    // like every other ALL_EXPECTED_SCHEMA_INVENTORY entry.
+    { enumName: 'BlogVerificationIssueType', requiredValues: ['SEMANTIC_CLAIM_ISSUE'] },
+  ],
+  tables: [
+    { tableName: 'ContentOpsAlert', columns: [{ name: 'id', dataType: 'text', isNullable: false, isPrimaryKey: true }, { name: 'type', dataType: 'text', isNullable: false }, { name: 'workflowKey', dataType: 'text', isNullable: true }, { name: 'entityId', dataType: 'text', isNullable: false }] },
+    { tableName: 'BlogEditorialTriageRun', columns: [{ name: 'id', dataType: 'text', isNullable: false, isPrimaryKey: true }, { name: 'sourceItemId', dataType: 'text', isNullable: true }, { name: 'suggestionId', dataType: 'text', isNullable: true }, { name: 'inputHash', dataType: 'text', isNullable: false }] },
+    { tableName: 'BlogResearchPack', columns: [{ name: 'id', dataType: 'text', isNullable: false, isPrimaryKey: true }, { name: 'blogPostId', dataType: 'text', isNullable: true }, { name: 'suggestionId', dataType: 'text', isNullable: true }, { name: 'inputHash', dataType: 'text', isNullable: false }, { name: 'sourceSetHash', dataType: 'text', isNullable: false }] },
+    { tableName: 'BlogResearchPackSource', columns: [{ name: 'id', dataType: 'text', isNullable: false, isPrimaryKey: true }, { name: 'researchPackId', dataType: 'text', isNullable: false }, { name: 'category', dataType: 'USER-DEFINED', isNullable: false }] },
+    { tableName: 'BlogFreshnessReview', columns: [{ name: 'id', dataType: 'text', isNullable: false, isPrimaryKey: true }, { name: 'blogPostId', dataType: 'text', isNullable: false }, { name: 'contentHash', dataType: 'text', isNullable: false }, { name: 'sourceSetHash', dataType: 'text', isNullable: false }] },
+    { tableName: 'BlogRevisionRequest', columns: [{ name: 'id', dataType: 'text', isNullable: false, isPrimaryKey: true }, { name: 'blogPostId', dataType: 'text', isNullable: false }, { name: 'idempotencyKey', dataType: 'text', isNullable: false }] },
+    // Additive-column checks on pre-existing tables. Not marked isPrerequisite —
+    // see the BlogVerificationIssueType comment above for why: these tables were
+    // created by an earlier Phase 0 migration in this same repo, so like every
+    // other Phase 0 object they're "expected but not guaranteed present yet" in
+    // pre-mode, not an external must-already-exist prerequisite.
+    { tableName: 'BlogVerificationRun', columns: [{ name: 'contentHash', dataType: 'text', isNullable: true }, { name: 'sourceSetHash', dataType: 'text', isNullable: true }, { name: 'promptVersion', dataType: 'text', isNullable: true }] },
+    { tableName: 'BlogVerificationIssue', columns: [{ name: 'claimCategory', dataType: 'USER-DEFINED', isNullable: true }, { name: 'claimVerificationStatus', dataType: 'USER-DEFINED', isNullable: true }, { name: 'confidence', dataType: 'integer', isNullable: true }, { name: 'claimHash', dataType: 'text', isNullable: true }, { name: 'reviewProvenance', dataType: 'jsonb', isNullable: true }] },
+  ],
+  indexes: [
+    { name: 'RegulatorySignal_sourceItemId_idx', tableName: 'RegulatorySignal', columns: ['sourceItemId'], isUnique: false },
+    { name: 'BlogEditorialTriageRun_sourceItemId_version_key', tableName: 'BlogEditorialTriageRun', columns: ['sourceItemId', 'version'], isUnique: true },
+    { name: 'BlogEditorialTriageRun_suggestionId_version_key', tableName: 'BlogEditorialTriageRun', columns: ['suggestionId', 'version'], isUnique: true },
+    { name: 'BlogEditorialTriageRun_suggestionId_idx', tableName: 'BlogEditorialTriageRun', columns: ['suggestionId'], isUnique: false },
+    { name: 'BlogEditorialTriageRun_recommendation_idx', tableName: 'BlogEditorialTriageRun', columns: ['recommendation'], isUnique: false },
+    { name: 'BlogEditorialTriageRun_status_idx', tableName: 'BlogEditorialTriageRun', columns: ['status'], isUnique: false },
+    { name: 'BlogEditorialTriageRun_createdAt_idx', tableName: 'BlogEditorialTriageRun', columns: ['createdAt'], isUnique: false },
+    { name: 'BlogResearchPack_blogPostId_version_key', tableName: 'BlogResearchPack', columns: ['blogPostId', 'version'], isUnique: true },
+    { name: 'BlogResearchPack_suggestionId_version_key', tableName: 'BlogResearchPack', columns: ['suggestionId', 'version'], isUnique: true },
+    { name: 'BlogResearchPack_suggestionId_idx', tableName: 'BlogResearchPack', columns: ['suggestionId'], isUnique: false },
+    { name: 'BlogResearchPack_status_idx', tableName: 'BlogResearchPack', columns: ['status'], isUnique: false },
+    { name: 'BlogResearchPack_createdAt_idx', tableName: 'BlogResearchPack', columns: ['createdAt'], isUnique: false },
+    { name: 'BlogResearchPackSource_researchPackId_idx', tableName: 'BlogResearchPackSource', columns: ['researchPackId'], isUnique: false },
+    { name: 'BlogResearchPackSource_sourceItemId_idx', tableName: 'BlogResearchPackSource', columns: ['sourceItemId'], isUnique: false },
+    { name: 'BlogResearchPackSource_category_idx', tableName: 'BlogResearchPackSource', columns: ['category'], isUnique: false },
+    { name: 'BlogVerificationIssue_claimHash_idx', tableName: 'BlogVerificationIssue', columns: ['claimHash'], isUnique: false },
+    { name: 'BlogFreshnessReview_blogPostId_createdAt_idx', tableName: 'BlogFreshnessReview', columns: ['blogPostId', 'createdAt'], isUnique: false },
+    { name: 'BlogFreshnessReview_action_idx', tableName: 'BlogFreshnessReview', columns: ['action'], isUnique: false },
+    { name: 'BlogFreshnessReview_nextReviewAt_idx', tableName: 'BlogFreshnessReview', columns: ['nextReviewAt'], isUnique: false },
+    { name: 'BlogFreshnessReview_status_idx', tableName: 'BlogFreshnessReview', columns: ['status'], isUnique: false },
+    { name: 'BlogRevisionRequest_idempotencyKey_key', tableName: 'BlogRevisionRequest', columns: ['idempotencyKey'], isUnique: true },
+    { name: 'BlogRevisionRequest_blogPostId_status_idx', tableName: 'BlogRevisionRequest', columns: ['blogPostId', 'status'], isUnique: false },
+    { name: 'BlogRevisionRequest_freshnessReviewId_idx', tableName: 'BlogRevisionRequest', columns: ['freshnessReviewId'], isUnique: false },
+    { name: 'BlogRevisionRequest_status_priority_idx', tableName: 'BlogRevisionRequest', columns: ['status', 'priority'], isUnique: false },
+    { name: 'BlogRevisionRequest_createdAt_idx', tableName: 'BlogRevisionRequest', columns: ['createdAt'], isUnique: false },
+    { name: 'ContentOpsAlert_status_severity_idx', tableName: 'ContentOpsAlert', columns: ['status', 'severity'], isUnique: false },
+    { name: 'ContentOpsAlert_entityType_entityId_idx', tableName: 'ContentOpsAlert', columns: ['entityType', 'entityId'], isUnique: false },
+    { name: 'ContentOpsAlert_workflowKey_lastSeenAt_idx', tableName: 'ContentOpsAlert', columns: ['workflowKey', 'lastSeenAt'], isUnique: false },
+    { name: 'ContentOpsAlert_createdAt_idx', tableName: 'ContentOpsAlert', columns: ['createdAt'], isUnique: false },
+  ],
+  foreignKeys: [
+    { name: 'RegulatorySignal_sourceItemId_fkey', sourceTable: 'RegulatorySignal', sourceColumns: ['sourceItemId'], targetTable: 'BlogSourceItem', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogEditorialTriageRun_sourceItemId_fkey', sourceTable: 'BlogEditorialTriageRun', sourceColumns: ['sourceItemId'], targetTable: 'BlogSourceItem', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogEditorialTriageRun_suggestionId_fkey', sourceTable: 'BlogEditorialTriageRun', sourceColumns: ['suggestionId'], targetTable: 'BlogArticleSuggestion', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogEditorialTriageRun_agentRunId_fkey', sourceTable: 'BlogEditorialTriageRun', sourceColumns: ['agentRunId'], targetTable: 'AgentRun', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogResearchPack_blogPostId_fkey', sourceTable: 'BlogResearchPack', sourceColumns: ['blogPostId'], targetTable: 'BlogPost', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogResearchPack_suggestionId_fkey', sourceTable: 'BlogResearchPack', sourceColumns: ['suggestionId'], targetTable: 'BlogArticleSuggestion', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogResearchPack_reviewedById_fkey', sourceTable: 'BlogResearchPack', sourceColumns: ['reviewedById'], targetTable: 'User', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogResearchPackSource_researchPackId_fkey', sourceTable: 'BlogResearchPackSource', sourceColumns: ['researchPackId'], targetTable: 'BlogResearchPack', targetColumns: ['id'], onDelete: 'CASCADE', onUpdate: 'CASCADE' },
+    { name: 'BlogResearchPackSource_sourceItemId_fkey', sourceTable: 'BlogResearchPackSource', sourceColumns: ['sourceItemId'], targetTable: 'BlogSourceItem', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogResearchPackSource_postSourceId_fkey', sourceTable: 'BlogResearchPackSource', sourceColumns: ['postSourceId'], targetTable: 'BlogPostSource', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogFreshnessReview_blogPostId_fkey', sourceTable: 'BlogFreshnessReview', sourceColumns: ['blogPostId'], targetTable: 'BlogPost', targetColumns: ['id'], onDelete: 'RESTRICT', onUpdate: 'CASCADE' },
+    { name: 'BlogFreshnessReview_agentRunId_fkey', sourceTable: 'BlogFreshnessReview', sourceColumns: ['agentRunId'], targetTable: 'AgentRun', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogRevisionRequest_blogPostId_fkey', sourceTable: 'BlogRevisionRequest', sourceColumns: ['blogPostId'], targetTable: 'BlogPost', targetColumns: ['id'], onDelete: 'RESTRICT', onUpdate: 'CASCADE' },
+    { name: 'BlogRevisionRequest_freshnessReviewId_fkey', sourceTable: 'BlogRevisionRequest', sourceColumns: ['freshnessReviewId'], targetTable: 'BlogFreshnessReview', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogRevisionRequest_requestedById_fkey', sourceTable: 'BlogRevisionRequest', sourceColumns: ['requestedById'], targetTable: 'User', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogRevisionRequest_assignedToId_fkey', sourceTable: 'BlogRevisionRequest', sourceColumns: ['assignedToId'], targetTable: 'User', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'BlogRevisionRequest_approvedById_fkey', sourceTable: 'BlogRevisionRequest', sourceColumns: ['approvedById'], targetTable: 'User', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'ContentOpsAlert_acknowledgedById_fkey', sourceTable: 'ContentOpsAlert', sourceColumns: ['acknowledgedById'], targetTable: 'User', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+    { name: 'ContentOpsAlert_resolvedById_fkey', sourceTable: 'ContentOpsAlert', sourceColumns: ['resolvedById'], targetTable: 'User', targetColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'CASCADE' },
+  ],
+};
+
+/**
+ * Union of the Phase 0 baseline and Pack 1's additions — this is what
+ * verifyCompleteSchema actually iterates. Kept as a separate merged constant
+ * (rather than mutating COMPLETE_PHASE0_INVENTORY in place) so the Phase 0
+ * baseline stays independently readable/importable.
+ */
+export const ALL_EXPECTED_SCHEMA_INVENTORY: {
+  tables: ExpectedTable[];
+  enums: ExpectedEnum[];
+  indexes: ExpectedIndex[];
+  foreignKeys: ExpectedForeignKey[];
+} = {
+  tables: [...COMPLETE_PHASE0_INVENTORY.tables, ...PACK1_EDITORIAL_INTELLIGENCE_INVENTORY.tables],
+  enums: [...COMPLETE_PHASE0_INVENTORY.enums, ...PACK1_EDITORIAL_INTELLIGENCE_INVENTORY.enums],
+  indexes: [...COMPLETE_PHASE0_INVENTORY.indexes, ...PACK1_EDITORIAL_INTELLIGENCE_INVENTORY.indexes],
+  foreignKeys: [...COMPLETE_PHASE0_INVENTORY.foreignKeys, ...PACK1_EDITORIAL_INTELLIGENCE_INVENTORY.foreignKeys],
+};
+
+/**
  * Main verification engine for Content, Blog, Agent & Marketing Schema.
  */
 export async function verifyCompleteSchema(
@@ -461,7 +590,7 @@ export async function verifyCompleteSchema(
     }
 
     // --- Verify Tables & Columns ---
-    for (const table of COMPLETE_PHASE0_INVENTORY.tables) {
+    for (const table of ALL_EXPECTED_SCHEMA_INVENTORY.tables) {
       result.summaryCounts.totalChecked++;
       const exists = tableSet.has(table.tableName);
 
@@ -534,7 +663,7 @@ export async function verifyCompleteSchema(
     }
 
     // --- Verify Enums & Values ---
-    for (const expectedEnum of COMPLETE_PHASE0_INVENTORY.enums) {
+    for (const expectedEnum of ALL_EXPECTED_SCHEMA_INVENTORY.enums) {
       result.summaryCounts.totalChecked++;
       const actualValues = enumMap.get(expectedEnum.enumName);
 
@@ -585,7 +714,7 @@ export async function verifyCompleteSchema(
     }
 
     // --- Verify Indexes ---
-    for (const expectedIdx of COMPLETE_PHASE0_INVENTORY.indexes) {
+    for (const expectedIdx of ALL_EXPECTED_SCHEMA_INVENTORY.indexes) {
       result.summaryCounts.totalChecked++;
       const actualIdx = indexMap.get(expectedIdx.name);
 
@@ -641,7 +770,7 @@ export async function verifyCompleteSchema(
     }
 
     // --- Verify Foreign Keys ---
-    for (const expectedFk of COMPLETE_PHASE0_INVENTORY.foreignKeys) {
+    for (const expectedFk of ALL_EXPECTED_SCHEMA_INVENTORY.foreignKeys) {
       result.summaryCounts.totalChecked++;
       const actualFk = fkMap.get(expectedFk.name);
 

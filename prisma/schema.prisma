@@ -138,6 +138,14 @@ model User {
 
   blogVerificationRunsRequested BlogVerificationRun[] @relation("BlogVerificationRunRequestedBy")
 
+  // Pack 1 — Editorial Intelligence
+  blogResearchPacksReviewed    BlogResearchPack[]    @relation("BlogResearchPackReviewedBy")
+  contentOpsAlertsAcknowledged ContentOpsAlert[]     @relation("ContentOpsAlertAcknowledgedBy")
+  contentOpsAlertsResolved     ContentOpsAlert[]     @relation("ContentOpsAlertResolvedBy")
+  blogRevisionsRequested       BlogRevisionRequest[] @relation("BlogRevisionRequestedBy")
+  blogRevisionsAssigned        BlogRevisionRequest[] @relation("BlogRevisionAssignedTo")
+  blogRevisionsApproved        BlogRevisionRequest[] @relation("BlogRevisionApprovedBy")
+
   @@index([email])
   @@index([supabaseAuthId])
   @@index([organizationId])
@@ -2899,6 +2907,10 @@ model BlogPost {
   automationSuggestion BlogArticleSuggestion?
   draftGenerationRuns  BlogDraftGenerationRun[]
   verificationRuns     BlogVerificationRun[]
+  // Pack 1 domain contracts (docs/editorial-intelligence/phase-b-data-model.md)
+  researchPacks        BlogResearchPack[]
+  freshnessReviews     BlogFreshnessReview[]
+  revisionRequests     BlogRevisionRequest[]
 
   @@index([slug])
   @@index([status])
@@ -2922,6 +2934,8 @@ model BlogPostSource {
   notes String? @db.Text
 
   post BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  // Pack 1: research packs may cite this source when it backs an already-drafted post.
+  researchPackSources BlogResearchPackSource[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3103,8 +3117,13 @@ model BlogSourceItem {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  monitor     BlogSourceMonitor      @relation(fields: [monitorId], references: [id], onDelete: Cascade)
-  suggestions BlogSuggestionSource[]
+  monitor           BlogSourceMonitor      @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  suggestions       BlogSuggestionSource[]
+  // Pack 1 Foundation A: inverse side of RegulatorySignal.sourceItem.
+  regulatorySignals RegulatorySignal[]     @relation("RegulatorySignalSourceItem")
+  // Pack 1: triage/research provenance links (optional, SetNull on delete).
+  editorialTriageRuns   BlogEditorialTriageRun[]
+  researchPackSources   BlogResearchPackSource[]
 
   @@unique([monitorId, normalizedUrl])
   @@unique([contentHash])
@@ -3181,6 +3200,9 @@ enum BlogVerificationIssueType {
   UNKNOWN_PUBLICATION_DATE
   GENERATION_UNCERTAINTY
   OTHER
+  // Pack 1: marks a row produced by AI semantic claim verification, distinct
+  // from the 17 lexical/structural detectors above. See phase-b-data-model.md §3.
+  SEMANTIC_CLAIM_ISSUE
 }
 
 enum BlogVerificationRunType {
@@ -3217,6 +3239,14 @@ model BlogVerificationRun {
 
   requestedById String?
 
+  // Pack 1 semantic-verification extension (nullable — pre-Pack-1 structural-only
+  // runs remain valid with NULL here). Used for hash-based replay/staleness
+  // decisions instead of relying solely on BlogPost.updatedAt. See
+  // docs/editorial-intelligence/phase-b-data-model.md §3.
+  contentHash   String?
+  sourceSetHash String?
+  promptVersion String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3251,6 +3281,17 @@ model BlogVerificationIssue {
   sourceUrl String?
   claimText String? @db.Text
 
+  // Pack 1 semantic-verification extension (all nullable — structural/lexical
+  // issues leave these NULL). See docs/editorial-intelligence/phase-b-data-model.md §3.
+  claimCategory           BlogClaimCategory?
+  claimVerificationStatus BlogClaimVerificationStatus?
+  confidence              Int?
+  // Correlates multiple issue rows (primary pass + forced secondary-review row)
+  // concerning the SAME underlying claim.
+  claimHash               String?
+  // Structured {pass, provider, model, promptVersion} — never free text in `recommendation`.
+  reviewProvenance        Json?
+
   createdAt DateTime @default(now())
 
   run BlogVerificationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
@@ -3258,6 +3299,7 @@ model BlogVerificationIssue {
   @@index([runId])
   @@index([severity])
   @@index([issueType])
+  @@index([claimHash])
 }
 
 enum BlogSuggestionPriority {
@@ -3338,6 +3380,9 @@ model BlogArticleSuggestion {
   approvedBy  User? @relation("BlogSuggestionApprovedBy", fields: [approvedById], references: [id])
 
   sources BlogSuggestionSource[]
+  // Pack 1 domain contracts
+  editorialTriageRuns BlogEditorialTriageRun[]
+  researchPacks       BlogResearchPack[]
 
   @@index([jurisdiction])
   @@index([category])
@@ -3380,6 +3425,9 @@ model AgentRun {
   regulatorySignals   RegulatorySignal[]
   marketingDrafts     MarketingDraft[]
   salesOutreachDrafts SalesOutreachDraft[]
+  // Pack 1 — Editorial Intelligence
+  editorialTriageRuns BlogEditorialTriageRun[]
+  freshnessReviews    BlogFreshnessReview[]
 }
 
 model AgentReport {
@@ -3448,6 +3496,10 @@ model RegulatorySignal {
   reviewedAt            DateTime?
 
   agentRun            AgentRun             @relation(fields: [agentRunId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  // Pack 1 Foundation A: additive FK to the blog-automation source pipeline.
+  // Nullable and ON DELETE SET NULL — historical signals remain valid if the
+  // source item is later removed. See docs/editorial-intelligence/phase-b-foundations.md.
+  sourceItem          BlogSourceItem?      @relation("RegulatorySignalSourceItem", fields: [sourceItemId], references: [id], onDelete: SetNull)
   salesOutreachDrafts SalesOutreachDraft[]
 
   @@unique([sourceUrl, contentHash])
@@ -3459,6 +3511,7 @@ model RegulatorySignal {
   @@index([corpusGapDetected])
   @@index([agentRunId])
   @@index([createdAt])
+  @@index([sourceItemId])
 }
 
 model SalesOutreachDraft {
@@ -3712,4 +3765,381 @@ model AutomationIncidentOccurrence {
   @@index([incidentId, occurredAt])
   @@index([executionId])
   @@index([correlationId])
+}
+
+// =============================================================================
+// SheriaBot Pack 1 — Editorial Intelligence
+// Governing spec: docs/editorial-intelligence/phase-b-*.md (Phase B.1 approved).
+// Additive only — see prisma/migrations/<TS>_* for the corresponding raw SQL.
+// =============================================================================
+
+enum ContentOpsAlertNotificationStatus {
+  NOT_REQUIRED
+  PENDING
+  SENT
+  FAILED
+  SUPPRESSED
+}
+
+// Persisted content-ops alerting (Foundation C). Reuses AutomationIncidentSeverity
+// and AutomationIncidentStatus verbatim rather than minting near-duplicate enums —
+// see phase-b-foundations.md Foundation C. The dedupe uniqueness constraint on
+// (type, entityType, entityId, COALESCE(workflowKey, '')) is a raw SQL expression
+// index that Prisma's schema DSL cannot express — it is NOT declared here as a
+// @@unique; it exists only in the migration SQL. createOrIncrementAlert must
+// upsert via a raw query targeting that index, not Prisma Client's typed .upsert().
+//
+// status (AutomationIncidentStatus.IGNORED) = human content-review decision.
+// notificationStatus (SUPPRESSED) = delivery-mechanics decision (cooldown). These
+// are independent axes — never conflate them.
+model ContentOpsAlert {
+  id       String                     @id @default(cuid())
+  type     String
+  severity AutomationIncidentSeverity
+  status   AutomationIncidentStatus   @default(OPEN)
+
+  title   String
+  summary String @db.Text // short operator-facing summary only — never article bodies, prompts, credentials, or recipient lists
+
+  workflowKey String?
+  executionId String?
+
+  entityType String
+  entityId   String
+
+  occurrenceCount Int      @default(1)
+  firstSeenAt     DateTime @default(now())
+  lastSeenAt      DateTime @default(now())
+
+  notificationStatus   ContentOpsAlertNotificationStatus @default(NOT_REQUIRED)
+  notificationAttempts Int                                @default(0)
+  lastNotificationAt   DateTime?
+
+  acknowledgedById String?
+  acknowledgedAt   DateTime?
+  resolvedById     String?
+  resolvedAt       DateTime?
+  resolutionNote   String? @db.Text
+
+  metadata Json? // small structured pointers only (ids, counts, scores) — never article bodies, prompts, or credentials
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  acknowledgedBy User? @relation("ContentOpsAlertAcknowledgedBy", fields: [acknowledgedById], references: [id])
+  resolvedBy     User? @relation("ContentOpsAlertResolvedBy", fields: [resolvedById], references: [id])
+
+  @@index([status, severity])
+  @@index([entityType, entityId])
+  @@index([workflowKey, lastSeenAt])
+  @@index([createdAt])
+}
+
+enum BlogEditorialRecommendation {
+  PRIORITISE_NOW
+  QUEUE
+  MONITOR
+  REJECT
+  HUMAN_REVIEW_REQUIRED
+}
+
+enum BlogEditorialTriageStatus {
+  PENDING
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+// Versioned editorial triage assessment (Domain Contract §1). New related model,
+// not fields on BlogArticleSuggestion — see phase-b-data-model.md §1 for the
+// reuse-vs-new-model rationale. Two unique indexes (sourceItemId, suggestionId)
+// exist because Postgres ignores NULL in unique indexes; the SERVICE decides
+// which single one is authoritative for a given run (sourceItemId when present,
+// else suggestionId) — never both independently.
+model BlogEditorialTriageRun {
+  id String @id @default(cuid())
+
+  sourceItemId String?
+  suggestionId String?
+  agentRunId   String?
+
+  version Int @default(1)
+
+  deterministicScore Int
+  aiRelevanceScore   Int?
+  finalScore         Int
+
+  recommendation         BlogEditorialRecommendation
+  urgency                BlogSuggestionPriority
+  targetAudiences        String[] @default([])
+  recommendedArticleType BlogArticleType?
+  recommendedChannels    String[] @default([])
+  rationale              String   @db.Text
+  sourceConfidence       Int
+
+  requiresHumanReview Boolean @default(true)
+
+  modelProvider String?
+  modelName     String?
+  promptVersion String  @default("editorial-triage-v1")
+  inputHash     String
+
+  status       BlogEditorialTriageStatus @default(PENDING)
+  errorMessage String?                    @db.Text
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  sourceItem BlogSourceItem?        @relation(fields: [sourceItemId], references: [id], onDelete: SetNull)
+  suggestion BlogArticleSuggestion? @relation(fields: [suggestionId], references: [id], onDelete: SetNull)
+  agentRun   AgentRun?              @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+
+  @@unique([sourceItemId, version])
+  @@unique([suggestionId, version])
+  @@index([suggestionId])
+  @@index([recommendation])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum BlogResearchPackStatus {
+  DRAFT
+  COMPLETE
+  SUPERSEDED
+  FAILED
+}
+
+enum BlogResearchSourceCategory {
+  OFFICIAL_REGULATOR
+  LEGISLATION
+  OFFICIAL_GUIDANCE
+  APPROVED_CORPUS
+  REPUTABLE_NEWS
+  INDUSTRY_SOURCE
+  COMPANY_SOURCE
+  USER_GENERATED
+  UNVERIFIED
+}
+
+// Versioned research pack (Domain Contract §2). blogPostId is nullable because
+// research commonly precedes draft creation in the Pack 1 pipeline order
+// (triage -> research -> draft creation -> verification) — see phase-b-data-model.md
+// §2 "Pipeline-order consequence." Two unique indexes for the same reason as
+// BlogEditorialTriageRun above.
+model BlogResearchPack {
+  id String @id @default(cuid())
+
+  blogPostId   String?
+  suggestionId String?
+
+  version Int                    @default(1)
+  status  BlogResearchPackStatus @default(DRAFT)
+
+  researchObjective String  @db.Text
+  executiveSummary  String? @db.Text
+
+  importantDates     Json?
+  authorities        Json?
+  obligationsSummary Json?
+  evidenceGaps       String[] @default([])
+  contradictions     Json?    @default("[]")
+
+  confidence Int
+
+  modelProvider String?
+  modelName     String?
+  promptVersion String  @default("research-pack-v1")
+  // Split hash (corrected from a single URL-only contentHash) — see
+  // phase-b-data-model.md §2/§11.
+  inputHash     String
+  sourceSetHash String
+
+  reviewerStatus String?   @default("PENDING")
+  reviewedById   String?
+  reviewedAt     DateTime?
+
+  createdAt DateTime @default(now())
+
+  blogPost   BlogPost?                @relation(fields: [blogPostId], references: [id], onDelete: SetNull)
+  suggestion BlogArticleSuggestion?   @relation(fields: [suggestionId], references: [id], onDelete: SetNull)
+  reviewedBy User?                    @relation("BlogResearchPackReviewedBy", fields: [reviewedById], references: [id])
+  sources    BlogResearchPackSource[]
+
+  @@unique([blogPostId, version])
+  @@unique([suggestionId, version])
+  @@index([suggestionId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model BlogResearchPackSource {
+  id             String @id @default(cuid())
+  researchPackId String
+
+  sourceItemId String?
+  postSourceId String?
+  externalUrl  String?
+
+  title           String
+  publisher       String?
+  authority       String?
+  jurisdiction    String?
+  category        BlogResearchSourceCategory
+  publicationDate DateTime?
+  retrievalDate   DateTime @default(now())
+  trustLevel      Int
+  contentHash     String?
+  isAvailable     Boolean  @default(true)
+  isContradictory Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  researchPack BlogResearchPack @relation(fields: [researchPackId], references: [id], onDelete: Cascade)
+  sourceItem   BlogSourceItem?  @relation(fields: [sourceItemId], references: [id], onDelete: SetNull)
+  postSource   BlogPostSource?  @relation(fields: [postSourceId], references: [id], onDelete: SetNull)
+
+  @@index([researchPackId])
+  @@index([sourceItemId])
+  @@index([category])
+}
+
+enum BlogClaimCategory {
+  LEGAL_OBLIGATION
+  DEADLINE
+  PENALTY
+  REGULATOR_AUTHORITY
+  LICENSING_REQUIREMENT
+  REPORTING_REQUIREMENT
+  SECURITY_REQUIREMENT
+  DATA_PROTECTION_REQUIREMENT
+  NUMERICAL_CLAIM
+  FACTUAL_EVENT
+  INTERPRETATION
+  RECOMMENDATION
+  MARKETING_STATEMENT
+}
+
+enum BlogClaimVerificationStatus {
+  VERIFIED
+  PARTIALLY_SUPPORTED
+  UNSUPPORTED
+  CONTRADICTED
+  STALE_SOURCE
+  HUMAN_REVIEW_REQUIRED
+}
+
+enum BlogFreshnessRiskTier {
+  HIGH_RISK
+  NORMAL
+  EVERGREEN
+}
+
+enum BlogFreshnessAction {
+  FRESH
+  REVIEW_SOON
+  REVISION_REQUIRED
+  URGENT_REVISION
+  ARCHIVE_RECOMMENDED
+  HUMAN_REVIEW_REQUIRED
+}
+
+// Proactive freshness review (Domain Contract §4). blogPostId is required
+// (unlike BlogResearchPack) — a freshness review only ever exists to assess an
+// already-published post. onDelete: Restrict (corrected from Cascade) protects
+// this audit trail; compatible with the existing soft-delete-only adminDelete
+// path (see phase-b-data-model.md §4 "Deletion behavior").
+model BlogFreshnessReview {
+  id String @id @default(cuid())
+
+  blogPostId String
+  agentRunId String?
+
+  triggeredBy String @default("SCHEDULE") // SCHEDULE | SIGNAL | MANUAL
+
+  contentHash   String
+  sourceSetHash String
+
+  riskTier       BlogFreshnessRiskTier
+  freshnessScore Int
+  action         BlogFreshnessAction
+
+  rationale         String   @db.Text
+  changedSourceIds  String[] @default([])
+  newSignalIds      String[] @default([])
+  brokenSourceCount Int      @default(0)
+  staleSourceCount  Int      @default(0)
+
+  nextReviewAt DateTime?
+
+  modelProvider String?
+  modelName     String?
+  promptVersion String  @default("freshness-review-v1")
+
+  status       BlogEditorialTriageStatus @default(PENDING)
+  errorMessage String?                    @db.Text
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  blogPost         BlogPost              @relation(fields: [blogPostId], references: [id], onDelete: Restrict)
+  agentRun         AgentRun?             @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+  revisionRequests BlogRevisionRequest[]
+
+  @@index([blogPostId, createdAt])
+  @@index([action])
+  @@index([nextReviewAt])
+  @@index([status])
+}
+
+enum BlogRevisionPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum BlogRevisionStatus {
+  PENDING_REVIEW
+  ACCEPTED
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+}
+
+// Durable revision request (Domain Contract §5). idempotencyKey is required and
+// always caller-supplied (corrected — never a server-synthesized 'manual'
+// fallback, which would have collapsed every manual revision request for a post
+// into one shared bucket). onDelete: Restrict for the same audit-retention
+// reason as BlogFreshnessReview above.
+model BlogRevisionRequest {
+  id String @id @default(cuid())
+
+  blogPostId        String
+  freshnessReviewId String?
+  idempotencyKey    String  @unique
+
+  reason             String   @db.Text
+  priority           BlogRevisionPriority
+  recommendedChanges Json?
+  evidence           Json?
+
+  status BlogRevisionStatus @default(PENDING_REVIEW)
+
+  requestedById String?
+  assignedToId  String?
+  approvedById  String?
+
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  blogPost        BlogPost             @relation(fields: [blogPostId], references: [id], onDelete: Restrict)
+  freshnessReview BlogFreshnessReview? @relation(fields: [freshnessReviewId], references: [id], onDelete: SetNull)
+  requestedBy     User?                @relation("BlogRevisionRequestedBy", fields: [requestedById], references: [id])
+  assignedTo      User?                @relation("BlogRevisionAssignedTo", fields: [assignedToId], references: [id])
+  approvedBy      User?                @relation("BlogRevisionApprovedBy", fields: [approvedById], references: [id])
+
+  @@index([blogPostId, status])
+  @@index([freshnessReviewId])
+  @@index([status, priority])
+  @@index([createdAt])
 }

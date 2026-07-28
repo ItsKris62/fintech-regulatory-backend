@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import type { AgentRun } from '@prisma/client';
+import { appConfig } from '@/config/app.config';
 import type { prisma as appPrisma } from '@/lib/prisma/client';
 import type { AgentRunService } from '@/modules/agents/agent-run.service';
 import { createSuggestionFromSourceItem } from '@/modules/blog-automation/suggestion-builder';
@@ -19,7 +20,7 @@ function buildService(overrides: {
   updateSuggestion?: ReturnType<typeof vi.fn>;
   generateDraft?: ReturnType<typeof vi.fn>;
   agentRuns?: { beginRun: ReturnType<typeof vi.fn>; completeRun: ReturnType<typeof vi.fn>; failRun: ReturnType<typeof vi.fn> };
-  sendAlert?: ReturnType<typeof vi.fn>;
+  createOrIncrementAlert?: ReturnType<typeof vi.fn>;
 } = {}) {
   const updateSuggestion = overrides.updateSuggestion ?? vi.fn().mockResolvedValue({});
   const prisma = {
@@ -32,8 +33,8 @@ function buildService(overrides: {
     failRun: vi.fn(),
   }) as unknown as AgentRunService;
 
-  const sendAlert = overrides.sendAlert ?? vi.fn().mockResolvedValue(undefined);
-  const contentOpsAlert = { sendAlert } as unknown as ContentOpsAlertService;
+  const createOrIncrementAlert = overrides.createOrIncrementAlert ?? vi.fn().mockResolvedValue(undefined);
+  const contentOpsAlert = { createOrIncrementAlert } as unknown as ContentOpsAlertService;
 
   const service = new AutomationBlogDraftService({
     prisma,
@@ -45,7 +46,7 @@ function buildService(overrides: {
     now: () => NOW,
   });
 
-  return { service, updateSuggestion, prisma, agentRuns, sendAlert };
+  return { service, updateSuggestion, prisma, agentRuns, createOrIncrementAlert };
 }
 
 function fakeAgentRun(overrides: Partial<AgentRun> = {}): AgentRun {
@@ -72,14 +73,14 @@ describe('AutomationBlogDraftService.createDraftFromCandidate', () => {
   it('returns below_threshold and never touches suggestion/draft creation when scoring rejects the item', async () => {
     const createSuggestion = vi.fn().mockResolvedValue({ createdSuggestion: false, suggestion: null });
     const createDraft = vi.fn();
-    const { service, updateSuggestion, sendAlert } = buildService({ createSuggestion, createDraft });
+    const { service, updateSuggestion, createOrIncrementAlert } = buildService({ createSuggestion, createDraft });
 
     const result = await service.createDraftFromCandidate({ sourceItemId: 'src_1' }, AGENT_USER_ID);
 
     expect(result).toEqual({ status: 'below_threshold' });
     expect(updateSuggestion).not.toHaveBeenCalled();
     expect(createDraft).not.toHaveBeenCalled();
-    expect(sendAlert).not.toHaveBeenCalled();
+    expect(createOrIncrementAlert).not.toHaveBeenCalled();
   });
 
   it('returns duplicate when the source item was already converted to a suggestion', async () => {
@@ -143,34 +144,113 @@ describe('AutomationBlogDraftService.createDraftFromCandidate', () => {
     expect(callOrder).toEqual(['approve', 'createDraft']);
   });
 
-  it.each(['HIGH', 'URGENT'])(
-    'sends a fixed-address content ops alert for %s-priority suggestions, not derived per-monitor',
-    async (priority) => {
+  it.each([
+    ['HIGH', 'HIGH'],
+    ['URGENT', 'CRITICAL'],
+  ])(
+    'persists a content ops alert (severity %s -> %s) for high-priority suggestions, not derived per-monitor',
+    async (priority, expectedSeverity) => {
       const suggestion = { id: 'sug_1', priority, title: 'New CBK Circular' };
       const createSuggestion = vi.fn().mockResolvedValue({ createdSuggestion: true, suggestion });
       const createDraft = vi.fn().mockResolvedValue({ blogPostId: 'post_1', slug: 'post-1' });
-      const { service, sendAlert } = buildService({ createSuggestion, createDraft });
+      const { service, createOrIncrementAlert } = buildService({ createSuggestion, createDraft });
 
       await service.createDraftFromCandidate({ sourceItemId: 'src_1' }, AGENT_USER_ID);
 
-      expect(sendAlert).toHaveBeenCalledWith(
+      expect(createOrIncrementAlert).toHaveBeenCalledWith(
         expect.objectContaining({
-          subject: 'High Priority Blog Suggestion',
-          link: expect.stringContaining('/admin/content/blog/post_1'),
+          type: 'high_priority_suggestion_drafted',
+          severity: expectedSeverity,
+          entityType: 'BlogPost',
+          entityId: 'post_1',
+          title: 'High Priority Blog Suggestion',
         }),
       );
     },
   );
 
-  it.each(['LOW', 'MEDIUM'])('does not send a content ops alert for %s-priority suggestions', async (priority) => {
+  it.each(['LOW', 'MEDIUM'])('does not persist a content ops alert for %s-priority suggestions', async (priority) => {
     const suggestion = { id: 'sug_1', priority, title: 'New CBK Circular' };
     const createSuggestion = vi.fn().mockResolvedValue({ createdSuggestion: true, suggestion });
     const createDraft = vi.fn().mockResolvedValue({ blogPostId: 'post_1', slug: 'post-1' });
-    const { service, sendAlert } = buildService({ createSuggestion, createDraft });
+    const { service, createOrIncrementAlert } = buildService({ createSuggestion, createDraft });
 
     await service.createDraftFromCandidate({ sourceItemId: 'src_1' }, AGENT_USER_ID);
 
-    expect(sendAlert).not.toHaveBeenCalled();
+    expect(createOrIncrementAlert).not.toHaveBeenCalled();
+  });
+
+  describe('requiresHumanReview enforcement (Pack 1 Stage C3)', () => {
+    const reviewRequiredSuggestion = {
+      id: 'sug_1',
+      priority: 'URGENT',
+      title: 'New CBK Circular',
+      requiresHumanReview: true,
+      category: 'Regulatory Updates',
+      requiresOfficialSource: true,
+      sourceQuality: 'MEDIUM',
+      jurisdiction: 'KE',
+    };
+
+    afterEach(() => {
+      (appConfig.editorial as any).humanReviewEnforcementEnabled = false;
+    });
+
+    it('preserves current auto-promotion behavior when enforcement is disabled, even for a requiresHumanReview=true suggestion', async () => {
+      (appConfig.editorial as any).humanReviewEnforcementEnabled = false;
+      const createSuggestion = vi.fn().mockResolvedValue({ createdSuggestion: true, suggestion: reviewRequiredSuggestion });
+      const createDraft = vi.fn().mockResolvedValue({ blogPostId: 'post_1', slug: 'post-1' });
+      const { service, updateSuggestion } = buildService({ createSuggestion, createDraft });
+
+      const result = await service.createDraftFromCandidate({ sourceItemId: 'src_1' }, AGENT_USER_ID);
+
+      expect(updateSuggestion).toHaveBeenCalledWith({
+        where: { id: 'sug_1' },
+        data: { status: 'APPROVED_FOR_DRAFT', approvedAt: NOW, approvedById: AGENT_USER_ID },
+      });
+      expect(createDraft).toHaveBeenCalled();
+      expect(result).toEqual({ status: 'created', suggestionId: 'sug_1', blogPostId: 'post_1', slug: 'post-1' });
+    });
+
+    it('returns human_review_required, never promotes, and never creates a draft when enforcement is enabled for a requiresHumanReview=true suggestion', async () => {
+      (appConfig.editorial as any).humanReviewEnforcementEnabled = true;
+      const createSuggestion = vi.fn().mockResolvedValue({ createdSuggestion: true, suggestion: reviewRequiredSuggestion });
+      const createDraft = vi.fn();
+      const { service, updateSuggestion } = buildService({ createSuggestion, createDraft });
+
+      const result = await service.createDraftFromCandidate({ sourceItemId: 'src_1' }, AGENT_USER_ID);
+
+      expect(result.status).toBe('human_review_required');
+      expect(result).toMatchObject({ status: 'human_review_required', suggestionId: 'sug_1' });
+      if (result.status === 'human_review_required') {
+        expect(result.reasons).toContain('MISSING_REQUIRED_OFFICIAL_SOURCE');
+      }
+      expect(updateSuggestion).not.toHaveBeenCalled();
+      expect(createDraft).not.toHaveBeenCalled();
+    });
+
+    it('still promotes and creates a draft when enforcement is enabled but the suggestion does not require human review', async () => {
+      (appConfig.editorial as any).humanReviewEnforcementEnabled = true;
+      const safeSuggestion = {
+        id: 'sug_2',
+        priority: 'LOW',
+        title: 'Routine update',
+        requiresHumanReview: false,
+        category: 'Compliance Guides',
+        requiresOfficialSource: false,
+        sourceQuality: 'OFFICIAL',
+        jurisdiction: 'KE',
+      };
+      const createSuggestion = vi.fn().mockResolvedValue({ createdSuggestion: true, suggestion: safeSuggestion });
+      const createDraft = vi.fn().mockResolvedValue({ blogPostId: 'post_2', slug: 'post-2' });
+      const { service, updateSuggestion } = buildService({ createSuggestion, createDraft });
+
+      const result = await service.createDraftFromCandidate({ sourceItemId: 'src_2' }, AGENT_USER_ID);
+
+      expect(updateSuggestion).toHaveBeenCalled();
+      expect(createDraft).toHaveBeenCalled();
+      expect(result).toEqual({ status: 'created', suggestionId: 'sug_2', blogPostId: 'post_2', slug: 'post-2' });
+    });
   });
 });
 
@@ -211,7 +291,7 @@ describe('AutomationBlogDraftService.generateDraftContent', () => {
     expect(generateDraft).toHaveBeenCalledWith('post_1', AGENT_USER_ID);
   });
 
-  it('sends a fixed-address content ops alert after a successful generation, including uncertainty flags', async () => {
+  it('persists a content ops alert after a successful generation, including uncertainty flag count', async () => {
     const beginRun = vi.fn().mockResolvedValue({ started: true, duplicate: false, run: fakeAgentRun() });
     const completeRun = vi.fn().mockResolvedValue({});
     const generateDraft = vi.fn().mockResolvedValue({
@@ -220,39 +300,42 @@ describe('AutomationBlogDraftService.generateDraftContent', () => {
       reviewerNotes: 'looks fine',
       uncertaintyFlags: ['unverified date'],
     });
-    const { service, sendAlert } = buildService({ agentRuns: { beginRun, completeRun, failRun: vi.fn() }, generateDraft });
+    const { service, createOrIncrementAlert } = buildService({ agentRuns: { beginRun, completeRun, failRun: vi.fn() }, generateDraft });
 
     await service.generateDraftContent(INPUT, AGENT_USER_ID);
 
-    expect(sendAlert).toHaveBeenCalledWith(
+    expect(createOrIncrementAlert).toHaveBeenCalledWith(
       expect.objectContaining({
-        subject: 'Blog Draft Ready for Verification',
-        details: ['Uncertainty flags: unverified date'],
-        link: expect.stringContaining('/admin/content/blog/post_1'),
+        type: 'draft_ready_for_verification',
+        severity: 'HIGH',
+        entityType: 'BlogPost',
+        entityId: 'post_1',
+        title: 'Blog Draft Ready for Verification',
+        metadata: expect.objectContaining({ generationRunId: 'gen_run_1', uncertaintyFlagCount: 1 }),
       }),
     );
   });
 
-  it('does not send a content ops alert when generateDraft fails', async () => {
+  it('does not persist a content ops alert when generateDraft fails', async () => {
     const beginRun = vi.fn().mockResolvedValue({ started: true, duplicate: false, run: fakeAgentRun({ id: 'run_42' }) });
     const generateDraft = vi.fn().mockRejectedValue(new Error('boom'));
-    const { service, sendAlert } = buildService({ agentRuns: { beginRun, completeRun: vi.fn(), failRun: vi.fn() }, generateDraft });
+    const { service, createOrIncrementAlert } = buildService({ agentRuns: { beginRun, completeRun: vi.fn(), failRun: vi.fn() }, generateDraft });
 
     await expect(service.generateDraftContent(INPUT, AGENT_USER_ID)).rejects.toBeDefined();
-    expect(sendAlert).not.toHaveBeenCalled();
+    expect(createOrIncrementAlert).not.toHaveBeenCalled();
   });
 
-  it('does not send a content ops alert on a duplicate replay (avoids re-alerting on retries)', async () => {
+  it('does not persist a content ops alert on a duplicate replay (avoids re-alerting on retries)', async () => {
     const duplicateRun = fakeAgentRun({
       status: 'COMPLETED',
       metadata: { blogPostId: 'post_1', generationRunId: 'gen_run_1', reviewerNotes: 'looks fine', uncertaintyFlags: [] },
     });
     const beginRun = vi.fn().mockResolvedValue({ started: true, duplicate: true, run: duplicateRun });
-    const { service, sendAlert } = buildService({ agentRuns: { beginRun, completeRun: vi.fn(), failRun: vi.fn() } });
+    const { service, createOrIncrementAlert } = buildService({ agentRuns: { beginRun, completeRun: vi.fn(), failRun: vi.fn() } });
 
     await service.generateDraftContent(INPUT, AGENT_USER_ID);
 
-    expect(sendAlert).not.toHaveBeenCalled();
+    expect(createOrIncrementAlert).not.toHaveBeenCalled();
   });
 
   it('completes the run with the generated result stashed in metadata and returns it', async () => {

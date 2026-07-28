@@ -116,7 +116,7 @@ describe('AgentCredentialService', () => {
           'agents.automation.sources.dedupe',
           'agents.automation.pilotCohort.read',
           'agents.automation.dpaVendor.read',
-          'agents.automation.notify.shouldNotify',
+          'agents.automation.notify.shouldNotify', 'agents.automation.incident.create', 'agents.automation.editorial.triage.create', 'agents.automation.editorial.triage.read', 'agents.automation.editorial.research.create', 'agents.automation.editorial.research.read', 'agents.automation.editorial.verify.create', 'agents.automation.editorial.verify.read', 'agents.automation.editorial.freshness.list', 'agents.automation.editorial.freshness.run', 'agents.automation.editorial.revision.create',
         ].sort(),
       );
     });

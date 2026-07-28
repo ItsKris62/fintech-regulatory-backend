@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { appConfig } from '@/config/app.config';
 import { AutomationContentService } from './content.service';
 import type { AutomationApprovalService } from './approval.service';
 
@@ -46,7 +47,7 @@ describe('AutomationContentService.publishContent', () => {
 
   it('publishes a valid post by flipping status/publishedAt only - never overwrites the live content column', async () => {
     const update = vi.fn();
-    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost({ content: 'human-edited final content' })), update }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() } };
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost({ content: 'human-edited final content' })), update }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
     const service = new AutomationContentService({
       prisma: prisma as never,
       approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
@@ -66,7 +67,7 @@ describe('AutomationContentService.publishContent', () => {
 
   it('refuses to publish when verification is BLOCKED, same gate as adminSetStatus', async () => {
     const post = basePost({ verificationRuns: [{ status: 'BLOCKED', createdAt: NOW, completedAt: NOW }] });
-    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(post), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() } };
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(post), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
     const service = new AutomationContentService({
       prisma: prisma as never,
       approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
@@ -78,7 +79,7 @@ describe('AutomationContentService.publishContent', () => {
 
   it('refuses to publish a Regulatory Updates post without an OFFICIAL source', async () => {
     const post = basePost({ category: 'Regulatory Updates', sources: [{ sourceType: 'NEWS' }] });
-    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(post), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() } };
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(post), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
     const service = new AutomationContentService({
       prisma: prisma as never,
       approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
@@ -86,6 +87,57 @@ describe('AutomationContentService.publishContent', () => {
     });
 
     await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  describe('publish-readiness shadow integration (Pack 1 Stage C5)', () => {
+    afterEach(() => {
+      (appConfig.editorial as any).publishReadinessMode = 'shadow';
+    });
+
+    it('shadow mode (default): a legacy-accepted publish still succeeds even if the new evaluator would have found a blocker', async () => {
+      (appConfig.editorial as any).publishReadinessMode = 'shadow';
+      const update = vi.fn();
+      // Legacy gates pass (title/slug/excerpt/category/sources all present), but
+      // the new evaluator's own "no open ContentOpsAlert" pass will still find
+      // this one, since it's marked blocksPublication.
+      const post = basePost();
+      const prisma = {
+        blogPost: { findUnique: vi.fn().mockResolvedValue(post), update },
+        blogSourceItem: { findUnique: vi.fn() },
+        regulatorySignal: { findMany: vi.fn() },
+        contentOpsAlert: { findMany: vi.fn().mockResolvedValue([{ id: 'alert_1', metadata: { blocksPublication: true } }]) },
+      };
+      const service = new AutomationContentService({
+        prisma: prisma as never,
+        approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
+        now: () => NOW,
+      });
+
+      const result = await service.publishContent({ approvalId: 'appr_1' });
+
+      expect(result).toEqual({ blogPostId: 'post_1', publishedAt: NOW.toISOString() });
+      expect(update).toHaveBeenCalled();
+    });
+
+    it('enforce mode: the same divergence now blocks publication (not enabled by default)', async () => {
+      (appConfig.editorial as any).publishReadinessMode = 'enforce';
+      const update = vi.fn();
+      const post = basePost();
+      const prisma = {
+        blogPost: { findUnique: vi.fn().mockResolvedValue(post), update },
+        blogSourceItem: { findUnique: vi.fn() },
+        regulatorySignal: { findMany: vi.fn() },
+        contentOpsAlert: { findMany: vi.fn().mockResolvedValue([{ id: 'alert_1', metadata: { blocksPublication: true } }]) },
+      };
+      const service = new AutomationContentService({
+        prisma: prisma as never,
+        approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
+        now: () => NOW,
+      });
+
+      await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(update).not.toHaveBeenCalled();
+    });
   });
 });
 

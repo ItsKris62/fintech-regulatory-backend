@@ -197,4 +197,30 @@ describe('agents.automation wire format (real Fastify + real tRPC adapter)', () 
       error: { message: 'Invalid agent credential.', data: { code: 'UNAUTHORIZED', httpStatus: 401 } },
     });
   });
+
+  describe('Phase E Editorial Intelligence Automation Smoke Tests', () => {
+    const endpoints = [
+      'triageEditorialCandidate',
+      'getEditorialTriage',
+      'createResearchPack',
+      'getResearchPack',
+      'verifyBlogPostClaims',
+      'getVerificationResult',
+      'listFreshnessReviewCandidates',
+      'runFreshnessReview',
+      'createRevisionRequest'
+    ];
+
+    for (const endpoint of endpoints) {
+      it(`rejects ${endpoint} with 401 when missing credential`, async () => {
+        const response = await app.inject({
+          method: 'POST',
+          url: `/trpc/agents.automation.${endpoint}`,
+          headers: { 'content-type': 'application/json' },
+          payload: {},
+        });
+        expect(response.statusCode).toBe(401);
+      });
+    }
+  });
 });
