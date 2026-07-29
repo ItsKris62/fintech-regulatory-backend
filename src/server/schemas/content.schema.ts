@@ -82,6 +82,34 @@ export const listContentSchema = z.object({
 export type ListContentInput = z.infer<typeof listContentSchema>;
 
 /**
+ * Public Knowledge Base listing
+ */
+export const listPublishedKnowledgeBaseSchema = z.object({
+  page: z.number().int().min(1).default(1),
+  limit: z.number().int().min(1).max(50).default(12),
+  search: z
+    .string()
+    .trim()
+    .max(200)
+    .optional()
+    .transform((value) => value || undefined),
+  category: z
+    .string()
+    .trim()
+    .max(100)
+    .optional()
+    .transform((value) => value || undefined),
+  tag: z
+    .string()
+    .trim()
+    .max(50)
+    .optional()
+    .transform((value) => value || undefined),
+});
+
+export type ListPublishedKnowledgeBaseInput = z.infer<typeof listPublishedKnowledgeBaseSchema>;
+
+/**
  * Get content by ID
  */
 export const getContentSchema = z.object({

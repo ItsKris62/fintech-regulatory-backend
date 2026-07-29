@@ -4,6 +4,7 @@ import {
   createContentSchema,
   updateContentSchema,
   listContentSchema,
+  listPublishedKnowledgeBaseSchema,
   getContentBySlugSchema,
   rateContentSchema,
 } from '../server/schemas/content.schema';
@@ -364,6 +365,43 @@ describe('Content Schemas', () => {
       };
 
       const result = listContentSchema.safeParse(input);
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('listPublishedKnowledgeBaseSchema', () => {
+    it('should apply public listing defaults', () => {
+      const result = listPublishedKnowledgeBaseSchema.parse({});
+      expect(result.page).toBe(1);
+      expect(result.limit).toBe(12);
+    });
+
+    it('should trim empty filters to undefined', () => {
+      const result = listPublishedKnowledgeBaseSchema.parse({
+        search: '  ',
+        category: '  ',
+        tag: '  ',
+      });
+
+      expect(result.search).toBeUndefined();
+      expect(result.category).toBeUndefined();
+      expect(result.tag).toBeUndefined();
+    });
+
+    it('should enforce bounded pagination limits', () => {
+      const result = listPublishedKnowledgeBaseSchema.safeParse({ limit: 51 });
+      expect(result.success).toBe(false);
+    });
+
+    it('should accept bounded search and filters', () => {
+      const result = listPublishedKnowledgeBaseSchema.safeParse({
+        page: 2,
+        limit: 24,
+        search: 'data protection',
+        category: 'AML',
+        tag: 'CBK',
+      });
+
       expect(result.success).toBe(true);
     });
   });

@@ -46,11 +46,12 @@ describe('blog.router.ts adminSetStatus', () => {
     vi.mocked(publishReadiness.runPublishReadinessShadowCheck).mockResolvedValue({
       evaluated: true,
       shouldBlock: false,
+      mode: 'shadow',
       result: {
         ready: false,
         blockers: [{ code: 'NO_CONTENT', message: 'Failed' }],
         warnings: [],
-        evaluatedAt: new Date().toISOString(),
+        evaluatedAt: new Date(),
         isStale: false,
         isAiStale: false
       }

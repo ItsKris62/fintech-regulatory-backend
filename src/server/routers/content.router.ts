@@ -4,6 +4,7 @@ import {
   createContentSchema,
   updateContentSchema,
   listContentSchema,
+  listPublishedKnowledgeBaseSchema,
   getContentSchema,
   getContentBySlugSchema,
   publishContentSchema,
@@ -14,6 +15,13 @@ import { ContentService } from '@/lib/content/content.service';
 import { rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { hashIp } from '@/utils/request-identifiers';
+
+function calculateReadingTime(content: string | null): number {
+  if (!content) return 1;
+
+  const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(wordCount / 220));
+}
 
 /**
  * Content Router
@@ -237,6 +245,119 @@ export const contentRouter = router({
     }),
 
   /**
+   * List published Knowledge Base articles for the public site.
+   *
+   * @public
+   */
+  listPublishedKnowledgeBase: publicProcedure
+    .input(listPublishedKnowledgeBaseSchema)
+    .query(async ({ input, ctx }) => {
+      try {
+        const { page, limit, search, category, tag } = input;
+        const skip = (page - 1) * limit;
+        const now = new Date();
+
+        const andConditions: any[] = [
+          {
+            OR: [{ publishedAt: null }, { publishedAt: { lte: now } }],
+          },
+        ];
+
+        if (search) {
+          andConditions.push({
+            OR: [
+              { title: { contains: search, mode: 'insensitive' } },
+              { excerpt: { contains: search, mode: 'insensitive' } },
+              { content: { contains: search, mode: 'insensitive' } },
+            ],
+          });
+        }
+
+        const where: any = {
+          deletedAt: null,
+          isLatestVersion: true,
+          contentType: 'KNOWLEDGE_BASE_ARTICLE',
+          contentStatus: 'PUBLISHED',
+          slug: { not: null },
+          AND: andConditions,
+        };
+
+        if (category) where.category = category;
+        if (tag) where.tags = { has: tag };
+
+        const [documents, total] = await Promise.all([
+          ctx.prisma.legalDocument.findMany({
+            where,
+            skip,
+            take: limit,
+            orderBy: [{ publishedAt: 'desc' }, { updatedAt: 'desc' }],
+            select: {
+              id: true,
+              title: true,
+              slug: true,
+              excerpt: true,
+              category: true,
+              subcategory: true,
+              tags: true,
+              publishedAt: true,
+              updatedAt: true,
+              viewCount: true,
+              content: true,
+              author: {
+                select: {
+                  id: true,
+                  fullName: true,
+                  avatar: true,
+                },
+              },
+            },
+          }),
+          ctx.prisma.legalDocument.count({ where }),
+        ]);
+
+        return {
+          items: documents.map((document) => ({
+            id: document.id,
+            title: document.title,
+            slug: document.slug!,
+            excerpt: document.excerpt,
+            category: document.category,
+            subcategory: document.subcategory,
+            tags: document.tags,
+            publishedAt: document.publishedAt,
+            updatedAt: document.updatedAt,
+            viewCount: document.viewCount,
+            readingTime: calculateReadingTime(document.content),
+            author: document.author
+              ? {
+                  id: document.author.id,
+                  name: document.author.fullName,
+                  avatar: document.author.avatar,
+                }
+              : null,
+          })),
+          pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit),
+          },
+        };
+      } catch (error: any) {
+        logger.error({
+          type: 'content_kb_public_list_error',
+          error: error.message,
+        });
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to list knowledge base articles',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
    * List content with filtering and pagination
    *
    * @protected
@@ -412,7 +533,12 @@ export const contentRouter = router({
           },
         });
 
-        if (!document || document.deletedAt || document.contentStatus !== 'PUBLISHED') {
+        if (
+          !document ||
+          document.deletedAt ||
+          document.contentStatus !== 'PUBLISHED' ||
+          (document.publishedAt && document.publishedAt > new Date())
+        ) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Content not found' });
         }
 
@@ -435,6 +561,7 @@ export const contentRouter = router({
           seoDescription: document.seoDescription,
           seoKeywords: document.seoKeywords,
           publishedAt: document.publishedAt,
+          updatedAt: document.updatedAt,
           viewCount: document.viewCount,
           helpfulCount: document.helpfulCount,
           notHelpfulCount: document.notHelpfulCount,
