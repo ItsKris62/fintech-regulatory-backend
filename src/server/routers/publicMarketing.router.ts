@@ -17,12 +17,12 @@ import { rateLimiter } from "@/lib/redis/rate-limiter";
 import { logger } from "@/utils/logger";
 import { hashIp } from "@/utils/request-identifiers";
 import { rateLimited } from "../trpc/middleware";
-import { suppress } from "@/modules/marketing/suppression.service";
+import { isSuppressed, suppress } from "@/modules/marketing/suppression.service";
 import { recordConsent } from "@/modules/marketing/consent.service";
 import { createContact, updateContact } from "@/modules/marketing/contact.service";
 import { findOrCreateByEmailDomain } from "@/modules/marketing/company.service";
 import { BadRequestError } from "@/utils/error";
-import { SuppressionReason, ConsentAction } from "@prisma/client";
+import { ContactConsentStatus, SuppressionReason, ConsentAction } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -37,6 +37,7 @@ const SYSTEM_USER_ID = "system";
  * re-running the contact-creation flow.
  */
 const PILOT_APPLY_DEDUP_TTL = 600; // seconds
+const BLOG_NEWSLETTER_DEDUP_TTL = 3600; // seconds
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -273,6 +274,125 @@ export const publicMarketingRouter = router({
           emailPrefix: emailHash.slice(0, 8),
         });
 
+        return { success: true };
+      } catch (err) {
+        mapError(err);
+      }
+    }),
+
+  /**
+   * Subscribe to the Blog newsletter using the existing marketing Contact and
+   * ConsentRecord infrastructure. The response is intentionally generic for
+   * duplicate, existing, and newly-created contacts.
+   */
+  subscribeBlogNewsletter: publicProcedure
+    .use(rateLimited('blogNewsletterSubscribe', 5, {
+      window: 900,
+      identifier: (ctx) => hashIp(ctx.req.ip),
+    }))
+    .input(z.object({
+      email: z.string().trim().email().max(254),
+      sourcePage: z.string().trim().max(200).optional(),
+      readerSessionId: z.string().trim().max(120).optional(),
+      privacyPolicyVersion: z.string().trim().max(80).optional(),
+      spamTrap: z.string().max(200).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const normalizedEmail = input.email.trim().toLowerCase();
+        const emailHash = crypto.createHash('sha256').update(normalizedEmail).digest('hex');
+        const dedupKey = `sheriabot:blog_newsletter:dedup:${emailHash}`;
+
+        const acquired = await redis.set(dedupKey, '1', { nx: true, ex: BLOG_NEWSLETTER_DEDUP_TTL });
+        if (acquired === null) {
+          logger.info({ type: 'blog_newsletter_subscription_dedup_hit', emailPrefix: emailHash.slice(0, 8) });
+          return { success: true };
+        }
+
+        if (input.spamTrap?.trim()) {
+          logger.info({ type: 'blog_newsletter_subscription_spam_trap', emailPrefix: emailHash.slice(0, 8) });
+          return { success: true };
+        }
+
+        if (await isSuppressed(normalizedEmail)) {
+          logger.info({ type: 'blog_newsletter_subscription_suppressed', emailPrefix: emailHash.slice(0, 8) });
+          return { success: true };
+        }
+
+        const now = new Date();
+        const metadata = {
+          source: 'blog_newsletter',
+          sourcePage: input.sourcePage ?? null,
+          privacyPolicyVersion: input.privacyPolicyVersion ?? null,
+          readerSessionHash: input.readerSessionId
+            ? crypto.createHash('sha256').update(input.readerSessionId).digest('hex').slice(0, 32)
+            : null,
+          requestIpHash: hashIp(ctx.req.ip),
+        };
+
+        const listId = process.env.SHERIABOT_BLOG_NEWSLETTER_LIST_ID || process.env.SHERIABOT_NEWSLETTER_LIST_ID;
+
+        const contact = await prisma.$transaction(async (tx) => {
+          const existing = await tx.contact.findUnique({
+            where: { email: normalizedEmail },
+            select: { id: true, tags: true, deletedAt: true },
+          });
+
+          const tags = ['blog-newsletter'];
+          const contactRecord = existing && !existing.deletedAt
+            ? await tx.contact.update({
+                where: { id: existing.id },
+                data: {
+                  consentStatus: ContactConsentStatus.GRANTED,
+                  consentSource: 'blog_newsletter_form',
+                  consentTimestamp: now,
+                  tags: [...new Set([...existing.tags, ...tags])].slice(0, 10),
+                },
+                select: { id: true },
+              })
+            : await tx.contact.create({
+                data: {
+                  email: normalizedEmail,
+                  consentStatus: ContactConsentStatus.GRANTED,
+                  consentSource: 'blog_newsletter_form',
+                  consentTimestamp: now,
+                  tags,
+                  createdById: SYSTEM_USER_ID,
+                },
+                select: { id: true },
+              });
+
+          await tx.consentRecord.create({
+            data: {
+              contactId: contactRecord.id,
+              action: ConsentAction.GRANTED,
+              source: 'blog_newsletter_form',
+              metadata,
+              occurredAt: now,
+            },
+          });
+
+          if (listId) {
+            const list = await tx.contactList.findFirst({
+              where: { id: listId, deletedAt: null },
+              select: { id: true },
+            });
+
+            if (list) {
+              await tx.contactListMembership.upsert({
+                where: { listId_contactId: { listId: list.id, contactId: contactRecord.id } },
+                create: { listId: list.id, contactId: contactRecord.id, addedById: SYSTEM_USER_ID },
+                update: {},
+              });
+            } else {
+              logger.warn({ type: 'blog_newsletter_list_missing', listConfigured: true });
+            }
+          }
+
+          return contactRecord;
+        });
+
+        logger.info({ type: 'blog_newsletter_subscription_completed', contactId: contact.id, emailPrefix: emailHash.slice(0, 8) });
         return { success: true };
       } catch (err) {
         mapError(err);

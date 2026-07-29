@@ -23,6 +23,24 @@ function calculateReadingTime(content: string | null): number {
   return Math.max(1, Math.ceil(wordCount / 220));
 }
 
+function rejectLegacyBlogPostPublishing(contentType: string): void {
+  if (contentType === 'BLOG_POST') {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Legacy LegalDocument BLOG_POST publishing is disabled. Use the canonical blog.* BlogPost workflow.',
+    });
+  }
+}
+
+function requireAdminForLegacyBlogPost(contentType: string, role: string): void {
+  if (contentType === 'BLOG_POST' && role !== 'ADMIN') {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Legacy LegalDocument BLOG_POST records are admin-only cleanup records. Use the canonical blog.* BlogPost workflow.',
+    });
+  }
+}
+
 /**
  * Content Router
  *
@@ -149,11 +167,16 @@ export const contentRouter = router({
       try {
         const existing = await ctx.prisma.legalDocument.findUnique({
           where: { id: input.id },
-          select: { id: true, authorId: true, userId: true, organizationId: true, deletedAt: true },
+          select: { id: true, contentType: true, authorId: true, userId: true, organizationId: true, deletedAt: true },
         });
 
         if (!existing || existing.deletedAt) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Content not found' });
+        }
+
+        requireAdminForLegacyBlogPost(existing.contentType, ctx.user.role);
+        if (input.status === 'PUBLISHED') {
+          rejectLegacyBlogPostPublishing(existing.contentType);
         }
 
         // Access check: author, owner, or admin
@@ -369,11 +392,18 @@ export const contentRouter = router({
         const { page, limit, contentType, status, category, tag, search, authorId } = input;
         const skip = (page - 1) * limit;
 
+        if (contentType === 'BLOG_POST' && ctx.user.role !== 'ADMIN') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Legacy LegalDocument BLOG_POST records are admin-only cleanup records.',
+          });
+        }
+
         const where: any = {
           deletedAt: null,
           isLatestVersion: true,
           // Exclude regulatory documents from content listing
-          contentType: contentType || { not: 'REGULATORY_DOCUMENT' },
+          contentType: contentType || (ctx.user.role === 'ADMIN' ? { not: 'REGULATORY_DOCUMENT' } : { notIn: ['REGULATORY_DOCUMENT', 'BLOG_POST'] }),
         };
 
         if (status) where.contentStatus = status;
@@ -453,6 +483,8 @@ export const contentRouter = router({
           error: error.message,
         });
 
+        if (error instanceof TRPCError) throw error;
+
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to list content',
@@ -485,6 +517,8 @@ export const contentRouter = router({
         if (!document || document.deletedAt) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Content not found' });
         }
+
+        requireAdminForLegacyBlogPost(document.contentType, ctx.user.role);
 
         // Non-admin can only see published or own content
         if (
@@ -524,8 +558,12 @@ export const contentRouter = router({
           });
         }
 
-        const document = await ctx.prisma.legalDocument.findUnique({
-          where: { slug: input.slug },
+        const document = await ctx.prisma.legalDocument.findFirst({
+          where: {
+            slug: input.slug,
+            contentType: input.contentType,
+            isLatestVersion: true,
+          },
           include: {
             author: {
               select: { id: true, fullName: true, avatar: true },
@@ -591,6 +629,7 @@ export const contentRouter = router({
           where: { id: input.id },
           select: {
             id: true,
+            contentType: true,
             contentStatus: true,
             slug: true,
             authorId: true,
@@ -602,6 +641,8 @@ export const contentRouter = router({
         if (!document || document.deletedAt) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Content not found' });
         }
+
+        rejectLegacyBlogPostPublishing(document.contentType);
 
         if (
           ctx.user.role !== 'ADMIN' &&
@@ -662,12 +703,14 @@ export const contentRouter = router({
       try {
         const document = await ctx.prisma.legalDocument.findUnique({
           where: { id: input.id },
-          select: { id: true, authorId: true, userId: true, deletedAt: true },
+          select: { id: true, contentType: true, authorId: true, userId: true, deletedAt: true },
         });
 
         if (!document || document.deletedAt) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Content not found' });
         }
+
+        requireAdminForLegacyBlogPost(document.contentType, ctx.user.role);
 
         if (
           ctx.user.role !== 'ADMIN' &&
@@ -711,10 +754,14 @@ export const contentRouter = router({
       try {
         const document = await ctx.prisma.legalDocument.findUnique({
           where: { id: input.id },
-          select: { id: true, contentStatus: true, deletedAt: true },
+          select: { id: true, contentType: true, contentStatus: true, deletedAt: true },
         });
 
         if (!document || document.deletedAt) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Content not found' });
+        }
+
+        if (document.contentType !== 'KNOWLEDGE_BASE_ARTICLE' || document.contentStatus !== 'PUBLISHED') {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Content not found' });
         }
 

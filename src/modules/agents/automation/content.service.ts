@@ -5,6 +5,8 @@ import { logger } from '@/utils/logger';
 import { automationApprovalService as defaultAutomationApprovalService, type AutomationApprovalService } from './approval.service';
 import { parseWindowDays, parseJurisdictionFilter } from './duration';
 import { runPublishReadinessShadowCheck } from '@/server/utils/publish-readiness';
+import { publicBlogOrderBy, publicBlogWhere } from '@/modules/blog/public-blog-visibility';
+import { computeBlogPublicationSnapshot } from '@/modules/blog-automation/publication-snapshot';
 
 const APPROVED_CONTENT_WINDOW_DAYS = 7;
 const HIGH_IMPACT_SEVERITIES = ['critical', 'high'] as const;
@@ -113,6 +115,13 @@ export class AutomationContentService {
     }
 
     const blogPostId = await this.approvalService.requireMetadataField(input.approvalId, 'blogPostId');
+    const approvalSnapshot = await this.approvalService.requireBlogPublicationSnapshot(input.approvalId);
+    if (approvalSnapshot.expiresAt && approvalSnapshot.expiresAt < this.now()) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: `APPROVAL_EXPIRED: approval ${input.approvalId} expired at ${approvalSnapshot.expiresAt.toISOString()}.` });
+    }
+    if (approvalSnapshot.snapshot.blogPostId !== blogPostId) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'APPROVAL_POST_MISMATCH: approval snapshot does not match approval metadata blogPostId.' });
+    }
 
     const post = await this.prisma.blogPost.findUnique({
       where: { id: blogPostId },
@@ -124,6 +133,26 @@ export class AutomationContentService {
     });
     if (!post || post.deletedAt) {
       throw new TRPCError({ code: 'NOT_FOUND', message: `BlogPost ${blogPostId} not found.` });
+    }
+    if (post.status === 'ARCHIVED' || post.archivedAt) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: `POST_ARCHIVED: BlogPost ${blogPostId} is archived and cannot be published.` });
+    }
+
+    const currentSnapshot = computeBlogPublicationSnapshot(post, this.now());
+    if (currentSnapshot.contentHash !== approvalSnapshot.snapshot.contentHash) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'APPROVED_CONTENT_CHANGED: BlogPost markdown content changed after approval.' });
+    }
+    if (currentSnapshot.sourceSetHash !== approvalSnapshot.snapshot.sourceSetHash) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'APPROVED_SOURCES_CHANGED: BlogPost source set changed after approval.' });
+    }
+    if (currentSnapshot.draftGenerationRunId !== approvalSnapshot.snapshot.draftGenerationRunId) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'APPROVED_DRAFT_CHANGED: BlogPost draft generation run changed after approval.' });
+    }
+    if (currentSnapshot.verificationRunId !== approvalSnapshot.snapshot.verificationRunId) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'VERIFICATION_REQUIRED: BlogPost verification run changed after approval.' });
+    }
+    if (currentSnapshot.publicationPayloadHash !== approvalSnapshot.snapshot.publicationPayloadHash) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'APPROVED_PUBLICATION_PAYLOAD_CHANGED: BlogPost title, slug, excerpt, category, jurisdiction, tags or related regulations changed after approval.' });
     }
 
     // Pack 1 Stage C5: the shared evaluator runs alongside these existing
@@ -285,12 +314,13 @@ export class AutomationContentService {
 
     const posts = await this.prisma.blogPost.findMany({
       where: {
-        status: 'PUBLISHED',
-        publishedAt: { gte: periodStart },
-        deletedAt: null,
+        AND: [
+          publicBlogWhere(this.now()),
+          { publishedAt: { gte: periodStart } },
+        ],
         ...(jurisdictionFilter ? { jurisdiction: { in: jurisdictionFilter } } : {}),
       },
-      orderBy: { publishedAt: 'desc' },
+      orderBy: publicBlogOrderBy(),
       select: { id: true, title: true, jurisdiction: true, publishedAt: true, excerpt: true },
     });
 

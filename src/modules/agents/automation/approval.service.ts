@@ -8,6 +8,7 @@ import { sendEmail as defaultSendEmail } from '@/lib/email/client';
 import type { EmailOptions, EmailResult } from '@/lib/email/client';
 import { signApprovalCallback } from './approval-callback-signature';
 import { signApprovalDecisionLink } from './approval-decision-link-signature';
+import { computeBlogPublicationSnapshot, parseBlogPublicationSnapshot, type BlogPublicationSnapshot } from '@/modules/blog-automation/publication-snapshot';
 
 type FetchLike = typeof fetch;
 type SendEmail = (options: EmailOptions) => Promise<EmailResult>;
@@ -79,6 +80,11 @@ export interface ListApprovalsResult {
   limit: number;
 }
 
+export interface BlogPublicationApprovalMetadata {
+  snapshot: BlogPublicationSnapshot;
+  expiresAt: Date | null;
+}
+
 type ApprovalPrisma = Pick<typeof defaultPrisma, 'automationApproval' | 'blogPost'>;
 
 export interface AutomationApprovalServiceDependencies {
@@ -104,6 +110,15 @@ function extractOptionalBlogPostId(metadata: Prisma.JsonValue | null | undefined
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
   const value = (metadata as Record<string, unknown>).blogPostId;
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function isBlogPublicationApproval(input: Pick<CreateApprovalInput, 'department' | 'kind' | 'metadata'>): boolean {
+  return (
+    input.department === 'CONTENT' &&
+    input.kind === 'BLOG_POST_PUBLICATION' &&
+    typeof input.metadata.blogPostId === 'string' &&
+    input.metadata.blogPostId.length > 0
+  );
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
@@ -138,9 +153,11 @@ export class AutomationApprovalService {
     // reviewerEmail rides in the metadata JSON blob (no schema/DB column
     // change) so the emailed link's decision route (agents/automation/
     // approval-decision.route.ts) can recover it later via getApprovalPublicView.
-    const metadata = input.reviewerEmail
+    let metadata = input.reviewerEmail
       ? { ...input.metadata, reviewerEmail: input.reviewerEmail }
       : input.metadata;
+
+    metadata = await this.attachBlogPublicationSnapshotIfNeeded(input, metadata);
 
     try {
       const expiresAt = new Date(this.now().getTime() + APPROVAL_TTL_MS);
@@ -187,6 +204,45 @@ export class AutomationApprovalService {
       }
       throw error;
     }
+  }
+
+  private async attachBlogPublicationSnapshotIfNeeded(
+    input: CreateApprovalInput,
+    metadata: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (!isBlogPublicationApproval(input)) return metadata;
+
+    const blogPostId = input.metadata.blogPostId as string;
+    const post = await this.prisma.blogPost.findUnique({
+      where: { id: blogPostId },
+      include: {
+        sources: true,
+        draftGenerationRuns: { orderBy: { createdAt: 'desc' }, take: 1 },
+        verificationRuns: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+    });
+
+    if (!post || post.deletedAt) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: `Cannot create Blog publication approval: BlogPost ${blogPostId} was not found.` });
+    }
+
+    const snapshot = computeBlogPublicationSnapshot(post, this.now());
+    const suppliedGenerationRunId = input.metadata.generationRunId;
+    if (
+      typeof suppliedGenerationRunId === 'string' &&
+      suppliedGenerationRunId.length > 0 &&
+      suppliedGenerationRunId !== snapshot.draftGenerationRunId
+    ) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'APPROVAL_DRAFT_MISMATCH: supplied generationRunId does not match the current BlogPost draft generation run.',
+      });
+    }
+
+    return {
+      ...metadata,
+      publicationSnapshot: snapshot,
+    };
   }
 
   /**
@@ -404,6 +460,28 @@ export class AutomationApprovalService {
       });
     }
     return value as Record<string, unknown>;
+  }
+
+  async requireBlogPublicationSnapshot(approvalId: string): Promise<BlogPublicationApprovalMetadata> {
+    const row = await this.prisma.automationApproval.findUnique({
+      where: { id: approvalId },
+      select: { metadata: true, expiresAt: true },
+    });
+
+    const metadata = row?.metadata;
+    const value = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>).publicationSnapshot
+      : undefined;
+    const snapshot = parseBlogPublicationSnapshot(value);
+
+    if (!snapshot) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `APPROVAL_SNAPSHOT_REQUIRED: approval ${approvalId} is missing Blog publication snapshot metadata.`,
+      });
+    }
+
+    return { snapshot, expiresAt: row?.expiresAt ?? null };
   }
 
   /**

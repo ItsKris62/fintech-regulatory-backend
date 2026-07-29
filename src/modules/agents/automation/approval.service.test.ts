@@ -42,6 +42,16 @@ interface FakeBlogPostRow {
   excerpt: string | null;
   content: string | null;
   status: string;
+  slug?: string;
+  category?: string;
+  jurisdiction?: string;
+  tags?: string[];
+  relatedRegulations?: string[];
+  updatedAt?: Date;
+  deletedAt?: Date | null;
+  sources?: Array<{ url: string | null; updatedAt: Date }>;
+  draftGenerationRuns?: Array<{ id: string; createdAt?: Date }>;
+  verificationRuns?: Array<{ id: string; createdAt?: Date }>;
 }
 
 /** In-memory fake standing in for prisma.automationApproval (+ blogPost for the Batch 3 join), keyed by id. */
@@ -269,6 +279,122 @@ describe('AutomationApprovalService.createApproval / getApproval', () => {
     expect(second.approvalId).toBe(first.approvalId);
     expect(prisma.rows.size).toBe(1);
     expect(prisma.automationApproval.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('adds a server-computed Blog publication snapshot for CONTENT BLOG_POST_PUBLICATION approvals', async () => {
+    const prisma = createFakePrisma([
+      {
+        id: 'post_1',
+        title: 'New CBK Circular',
+        slug: 'new-cbk-circular',
+        excerpt: 'Summary',
+        content: 'Approved markdown content',
+        category: 'Regulatory Updates',
+        jurisdiction: 'Kenya',
+        tags: ['CBK'],
+        relatedRegulations: [],
+        status: 'DRAFT',
+        updatedAt: NOW,
+        deletedAt: null,
+        sources: [{ url: 'https://regulator.example/source', updatedAt: NOW }],
+        draftGenerationRuns: [{ id: 'gen_1' }],
+        verificationRuns: [{ id: 'verify_1' }],
+      },
+    ]);
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    const { approvalId } = await service.createApproval(baseCreateInput({
+      department: 'CONTENT',
+      workflow: 'W-CONTENT-02',
+      kind: 'BLOG_POST_PUBLICATION',
+      metadata: { blogPostId: 'post_1', generationRunId: 'gen_1' },
+    }));
+
+    const metadata = prisma.rows.get(approvalId)?.metadata as Record<string, unknown>;
+    expect(metadata.publicationSnapshot).toMatchObject({
+      version: 'blog-publication-snapshot-v1',
+      blogPostId: 'post_1',
+      draftGenerationRunId: 'gen_1',
+      verificationRunId: 'verify_1',
+      postUpdatedAt: NOW.toISOString(),
+      computedAt: NOW.toISOString(),
+    });
+    expect((metadata.publicationSnapshot as Record<string, unknown>).contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect((metadata.publicationSnapshot as Record<string, unknown>).sourceSetHash).toMatch(/^[a-f0-9]{64}$/);
+    expect((metadata.publicationSnapshot as Record<string, unknown>).publicationPayloadHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('rejects a Blog publication approval when the supplied generationRunId is stale', async () => {
+    const prisma = createFakePrisma([
+      {
+        id: 'post_1',
+        title: 'New CBK Circular',
+        slug: 'new-cbk-circular',
+        excerpt: 'Summary',
+        content: 'Approved markdown content',
+        category: 'Regulatory Updates',
+        jurisdiction: 'Kenya',
+        tags: [],
+        relatedRegulations: [],
+        status: 'DRAFT',
+        updatedAt: NOW,
+        deletedAt: null,
+        sources: [{ url: 'https://regulator.example/source', updatedAt: NOW }],
+        draftGenerationRuns: [{ id: 'gen_current' }],
+        verificationRuns: [],
+      },
+    ]);
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+
+    await expect(service.createApproval(baseCreateInput({
+      department: 'CONTENT',
+      workflow: 'W-CONTENT-02',
+      kind: 'BLOG_POST_PUBLICATION',
+      metadata: { blogPostId: 'post_1', generationRunId: 'gen_stale' },
+    }))).rejects.toThrow(/APPROVAL_DRAFT_MISMATCH/);
+    expect(prisma.automationApproval.create).not.toHaveBeenCalled();
+  });
+
+  it('returns Blog publication snapshot metadata for publish-time gates', async () => {
+    const prisma = createFakePrisma([
+      {
+        id: 'post_1',
+        title: 'New CBK Circular',
+        slug: 'new-cbk-circular',
+        excerpt: 'Summary',
+        content: 'Approved markdown content',
+        category: 'Regulatory Updates',
+        jurisdiction: 'Kenya',
+        tags: [],
+        relatedRegulations: [],
+        status: 'DRAFT',
+        updatedAt: NOW,
+        deletedAt: null,
+        sources: [{ url: 'https://regulator.example/source', updatedAt: NOW }],
+        draftGenerationRuns: [],
+        verificationRuns: [],
+      },
+    ]);
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+    const { approvalId } = await service.createApproval(baseCreateInput({
+      department: 'CONTENT',
+      workflow: 'W-CONTENT-02',
+      kind: 'BLOG_POST_PUBLICATION',
+      metadata: { blogPostId: 'post_1' },
+    }));
+
+    const result = await service.requireBlogPublicationSnapshot(approvalId);
+
+    expect(result.expiresAt).toEqual(new Date('2026-07-23T12:00:00.000Z'));
+    expect(result.snapshot.blogPostId).toBe('post_1');
+  });
+
+  it('rejects Blog publication snapshot reads for legacy approvals without snapshot metadata', async () => {
+    const prisma = createFakePrisma();
+    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+    const { approvalId } = await service.createApproval(baseCreateInput());
+
+    await expect(service.requireBlogPublicationSnapshot(approvalId)).rejects.toThrow(/APPROVAL_SNAPSHOT_REQUIRED/);
   });
 
   it('sets expiresAt to 24h after creation', async () => {

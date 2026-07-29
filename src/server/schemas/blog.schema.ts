@@ -1,8 +1,14 @@
 import { z } from 'zod';
-import { BlogPostStatus, BlogSourceType } from '@prisma/client';
+import { BlogPostFeedbackValue, BlogPostStatus, BlogSourceType } from '@prisma/client';
 
 export const blogPostStatusSchema = z.nativeEnum(BlogPostStatus);
 export const blogSourceTypeSchema = z.nativeEnum(BlogSourceType);
+
+const optionalTrimmedString = (max: number) =>
+  z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim() : value),
+    z.string().min(1).max(max).optional(),
+  );
 
 export const blogSourceSchema = z.object({
   id: z.string().optional(),
@@ -15,16 +21,44 @@ export const blogSourceSchema = z.object({
 });
 
 export const publicListBlogPostsSchema = z.object({
-  category: z.string().optional(),
-  search: z.string().optional(),
-  tag: z.string().optional(),
-  page: z.number().min(1).default(1),
-  limit: z.number().min(1).max(100).default(10),
+  category: optionalTrimmedString(100),
+  search: optionalTrimmedString(200),
+  tag: optionalTrimmedString(100),
+  page: z.number().int().min(1).default(1),
+  limit: z.number().int().min(1).max(50).default(10),
   featured: z.boolean().optional(),
 });
 
 export const publicGetBlogPostBySlugSchema = z.object({
-  slug: z.string().min(1),
+  slug: z.string().min(1).max(200),
+});
+
+export const publicFeaturedBlogPostsSchema = z.object({
+  limit: z.number().int().min(1).max(10).default(3),
+});
+
+export const submitBlogFeedbackSchema = z.object({
+  postId: z.string().min(1).max(200),
+  value: z.nativeEnum(BlogPostFeedbackValue),
+  reasonCode: optionalTrimmedString(80),
+  readerSessionId: optionalTrimmedString(120),
+});
+
+export const publicFeedbackSummarySchema = z.object({
+  postId: z.string().min(1).max(200),
+});
+
+export const submitBlogTopicRequestSchema = z.object({
+  topic: z.string().trim().min(5).max(300),
+  category: optionalTrimmedString(100),
+  jurisdiction: optionalTrimmedString(80),
+  sourcePage: optionalTrimmedString(200),
+  contactEmail: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().trim().email().max(254).optional(),
+  ),
+  readerSessionId: optionalTrimmedString(120),
+  spamTrap: z.string().max(200).optional(),
 });
 
 export const adminListBlogPostsSchema = z.object({

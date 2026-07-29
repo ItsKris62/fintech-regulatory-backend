@@ -127,6 +127,7 @@ model User {
   blogPostsAuthored                BlogPost[]               @relation("BlogPostAuthor")
   blogPostsReviewed                BlogPost[]               @relation("BlogPostReviewer")
   blogPostsUpdated                 BlogPost[]               @relation("BlogPostUpdatedBy")
+  blogPostFeedbacks                BlogPostFeedback[]        @relation("BlogPostFeedbackUser")
   blogSourceMonitorsVerified       BlogSourceMonitor[]      @relation("BlogSourceMonitorVerifiedBy")
   blogSourceMonitorsCreated        BlogSourceMonitor[]      @relation("BlogSourceMonitorCreatedBy")
   blogSourceMonitorsUpdated        BlogSourceMonitor[]      @relation("BlogSourceMonitorUpdatedBy")
@@ -2904,6 +2905,8 @@ model BlogPost {
   updatedBy User? @relation("BlogPostUpdatedBy", fields: [updatedById], references: [id])
 
   sources              BlogPostSource[]
+  feedbacks            BlogPostFeedback[]
+  topicRequests        BlogTopicRequest[]
   automationSuggestion BlogArticleSuggestion?
   draftGenerationRuns  BlogDraftGenerationRun[]
   verificationRuns     BlogVerificationRun[]
@@ -2942,6 +2945,66 @@ model BlogPostSource {
 
   @@index([postId])
   @@index([sourceType])
+}
+
+enum BlogPostFeedbackValue {
+  HELPFUL
+  NOT_HELPFUL
+}
+
+model BlogPostFeedback {
+  id String @id @default(cuid())
+
+  blogPostId       String
+  value            BlogPostFeedbackValue
+  reasonCode       String?
+  anonymousKeyHash String?
+  userId           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  blogPost BlogPost @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
+  user     User?    @relation("BlogPostFeedbackUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([blogPostId, userId])
+  @@unique([blogPostId, anonymousKeyHash])
+  @@index([blogPostId, value])
+  @@index([createdAt])
+}
+
+enum BlogTopicRequestStatus {
+  PENDING
+  UNDER_REVIEW
+  ACCEPTED
+  DISMISSED
+  SPAM
+}
+
+model BlogTopicRequest {
+  id String @id @default(cuid())
+
+  topic           String @db.Text
+  category        String?
+  jurisdiction    String?
+  sourcePage      String?
+  contactEmail    String?
+  anonymousKeyHash String?
+  status          BlogTopicRequestStatus @default(PENDING)
+  spamTrap        String?
+  adminNotes      String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  relatedPostId String?
+  relatedPost   BlogPost? @relation(fields: [relatedPostId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([category])
+  @@index([jurisdiction])
+  @@index([createdAt])
+  @@index([anonymousKeyHash, createdAt])
 }
 
 enum BlogPostStatus {

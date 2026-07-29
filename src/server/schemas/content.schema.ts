@@ -14,6 +14,9 @@ export const contentTypeEnum = z.enum([
   'POLICY_TEMPLATE',
 ]);
 
+export const legacyCreateContentTypeEnum = contentTypeEnum.exclude(['REGULATORY_DOCUMENT', 'BLOG_POST']);
+export const publicContentSlugTypeEnum = z.enum(['KNOWLEDGE_BASE_ARTICLE']);
+
 export const contentStatusEnum = z.enum([
   'DRAFT',
   'PUBLISHED',
@@ -25,7 +28,7 @@ export const contentStatusEnum = z.enum([
  * Create blog post or KB article
  */
 export const createContentSchema = z.object({
-  contentType: contentTypeEnum.exclude(['REGULATORY_DOCUMENT']),
+  contentType: legacyCreateContentTypeEnum,
   title: z.string().min(3).max(200),
   slug: z.string().min(3).max(200).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
     message: 'Slug must be lowercase alphanumeric with hyphens only',
@@ -122,7 +125,8 @@ export type GetContentInput = z.infer<typeof getContentSchema>;
  * Get content by slug (public)
  */
 export const getContentBySlugSchema = z.object({
-  slug: z.string(),
+  slug: z.string().min(1).max(200),
+  contentType: publicContentSlugTypeEnum.default('KNOWLEDGE_BASE_ARTICLE'),
 });
 
 export type GetContentBySlugInput = z.infer<typeof getContentBySlugSchema>;

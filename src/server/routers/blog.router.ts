@@ -3,6 +3,10 @@ import { router, publicProcedure, adminProcedure } from '../trpc/trpc';
 import {
   publicListBlogPostsSchema,
   publicGetBlogPostBySlugSchema,
+  publicFeaturedBlogPostsSchema,
+  submitBlogFeedbackSchema,
+  publicFeedbackSummarySchema,
+  submitBlogTopicRequestSchema,
   adminListBlogPostsSchema,
   adminGetBlogPostByIdSchema,
   adminCreateBlogPostSchema,
@@ -10,8 +14,26 @@ import {
   adminSetBlogPostStatusSchema,
   adminDeleteBlogPostSchema,
 } from '../schemas/blog.schema';
-import { z } from 'zod';
 import { runPublishReadinessShadowCheck } from '../utils/publish-readiness';
+import { publicBlogOrderBy, publicBlogWhere } from '@/modules/blog/public-blog-visibility';
+import { BLOG_EDITORIAL_METRIC_SOURCES } from '@/modules/blog/editorial-metrics';
+import { hashIp } from '@/utils/request-identifiers';
+import { rateLimited } from '../trpc/middleware';
+import { Prisma } from '@prisma/client';
+import crypto from 'crypto';
+
+const BLOG_ANALYTICS_HASH_PEPPER = process.env.BLOG_ANALYTICS_HASH_PEPPER ?? process.env.SUPABASE_JWT_SECRET ?? 'development-blog-analytics-pepper';
+
+function hashAnonymousKey(value: string): string {
+  return crypto.createHash('sha256').update(`${BLOG_ANALYTICS_HASH_PEPPER}:${value}`).digest('hex');
+}
+
+function sanitizeBoundedText(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 function generateSlug(title: string): string {
   return title
@@ -36,11 +58,7 @@ export const blogRouter = router({
       const { category, search, tag, page, limit, featured } = input;
       const skip = (page - 1) * limit;
 
-      const where: any = {
-        status: 'PUBLISHED',
-        deletedAt: null,
-        publishedAt: { not: null },
-      };
+      const where: Prisma.BlogPostWhereInput = publicBlogWhere();
 
       if (category) where.category = category;
       if (tag) where.tags = { has: tag };
@@ -59,7 +77,7 @@ export const blogRouter = router({
           where,
           skip,
           take: limit,
-          orderBy: { publishedAt: 'desc' },
+          orderBy: publicBlogOrderBy(),
           select: {
             id: true,
             title: true,
@@ -100,9 +118,8 @@ export const blogRouter = router({
     .query(async ({ input, ctx }) => {
       const post = await ctx.prisma.blogPost.findFirst({
         where: {
+          ...publicBlogWhere(),
           slug: input.slug,
-          status: 'PUBLISHED',
-          deletedAt: null,
         },
         include: {
           author: { select: { id: true, fullName: true } },
@@ -121,12 +138,12 @@ export const blogRouter = router({
     }),
 
   getFeatured: publicProcedure
-    .input(z.object({ limit: z.number().optional().default(3) }))
+    .input(publicFeaturedBlogPostsSchema)
     .query(async ({ input, ctx }) => {
       const posts = await ctx.prisma.blogPost.findMany({
-        where: { status: 'PUBLISHED', deletedAt: null, featured: true },
+        where: { ...publicBlogWhere(), featured: true },
         take: input.limit,
-        orderBy: { publishedAt: 'desc' },
+        orderBy: publicBlogOrderBy(),
         select: {
           id: true,
           title: true,
@@ -157,10 +174,157 @@ export const blogRouter = router({
 
   publicSlugs: publicProcedure.query(async ({ ctx }) => {
     return ctx.prisma.blogPost.findMany({
-      where: { status: 'PUBLISHED', deletedAt: null },
+      where: publicBlogWhere(),
+      orderBy: publicBlogOrderBy(),
       select: { slug: true, updatedAt: true, publishedAt: true },
     });
   }),
+
+  publicTaxonomy: publicProcedure.query(async ({ ctx }) => {
+    const posts = await ctx.prisma.blogPost.findMany({
+      where: publicBlogWhere(),
+      orderBy: publicBlogOrderBy(),
+      select: {
+        category: true,
+        tags: true,
+      },
+    });
+
+    const categoryCounts = new Map<string, number>();
+    const tagCounts = new Map<string, number>();
+
+    for (const post of posts) {
+      if (post.category?.trim()) {
+        const category = post.category.trim();
+        categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
+      }
+
+      for (const rawTag of post.tags ?? []) {
+        const tag = rawTag.trim();
+        if (!tag) continue;
+        tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+      }
+    }
+
+    const sortByCountThenName = ([nameA, countA]: [string, number], [nameB, countB]: [string, number]) =>
+      countB - countA || nameA.localeCompare(nameB);
+
+    return {
+      categories: Array.from(categoryCounts.entries())
+        .sort(sortByCountThenName)
+        .map(([name, count]) => ({ name, count })),
+      tags: Array.from(tagCounts.entries())
+        .sort(sortByCountThenName)
+        .slice(0, 24)
+        .map(([name, count]) => ({ name, count })),
+    };
+  }),
+
+  submitFeedback: publicProcedure
+    .use(rateLimited('blog-submit-feedback', 20, {
+      window: 900,
+      identifier: (ctx) => hashIp(ctx.req.ip),
+    }))
+    .input(submitBlogFeedbackSchema)
+    .mutation(async ({ input, ctx }) => {
+      const post = await ctx.prisma.blogPost.findFirst({
+        where: { ...publicBlogWhere(), id: input.postId },
+        select: { id: true },
+      });
+
+      if (!post) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Blog post not found' });
+      }
+
+      const userId = ctx.user?.id;
+      const anonymousKeyHash = userId ? null : input.readerSessionId ? hashAnonymousKey(input.readerSessionId) : null;
+
+      if (!userId && !anonymousKeyHash) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'A reader session is required for anonymous feedback.' });
+      }
+
+      const data = {
+        value: input.value,
+        reasonCode: input.reasonCode ?? null,
+        userId: userId ?? null,
+        anonymousKeyHash,
+      };
+
+      if (userId) {
+        await ctx.prisma.blogPostFeedback.upsert({
+          where: { blogPostId_userId: { blogPostId: post.id, userId } },
+          create: { blogPostId: post.id, ...data },
+          update: data,
+        });
+      } else {
+        await ctx.prisma.blogPostFeedback.upsert({
+          where: { blogPostId_anonymousKeyHash: { blogPostId: post.id, anonymousKeyHash: anonymousKeyHash! } },
+          create: { blogPostId: post.id, ...data },
+          update: data,
+        });
+      }
+
+      return { success: true as const };
+    }),
+
+  getPublicFeedbackSummary: publicProcedure
+    .input(publicFeedbackSummarySchema)
+    .query(async ({ input, ctx }) => {
+      const post = await ctx.prisma.blogPost.findFirst({
+        where: { ...publicBlogWhere(), id: input.postId },
+        select: { id: true },
+      });
+
+      if (!post) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Blog post not found' });
+      }
+
+      const [helpfulCount, notHelpfulCount] = await Promise.all([
+        ctx.prisma.blogPostFeedback.count({ where: { blogPostId: post.id, value: 'HELPFUL' } }),
+        ctx.prisma.blogPostFeedback.count({ where: { blogPostId: post.id, value: 'NOT_HELPFUL' } }),
+      ]);
+
+      return {
+        helpfulCount,
+        notHelpfulCount,
+        totalResponses: helpfulCount + notHelpfulCount,
+      };
+    }),
+
+  submitTopicRequest: publicProcedure
+    .use(rateLimited('blog-submit-topic-request', 5, {
+      window: 900,
+      identifier: (ctx) => hashIp(ctx.req.ip),
+    }))
+    .input(submitBlogTopicRequestSchema)
+    .mutation(async ({ input, ctx }) => {
+      const isSpam = Boolean(input.spamTrap?.trim());
+      const topic = sanitizeBoundedText(input.topic);
+      if (topic.length < 5) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Topic is too short.' });
+      }
+
+      await ctx.prisma.blogTopicRequest.create({
+        data: {
+          topic,
+          category: input.category ? sanitizeBoundedText(input.category) : null,
+          jurisdiction: input.jurisdiction ? sanitizeBoundedText(input.jurisdiction) : null,
+          sourcePage: input.sourcePage ?? null,
+          contactEmail: input.contactEmail?.trim().toLowerCase() ?? null,
+          anonymousKeyHash: input.readerSessionId ? hashAnonymousKey(input.readerSessionId) : null,
+          spamTrap: input.spamTrap ?? null,
+          status: isSpam ? 'SPAM' : 'PENDING',
+        },
+      });
+
+      return { success: true as const };
+    }),
+
+  adminGetEditorialMetricsContract: adminProcedure.query(() => ({
+    publicTrendingEnabled: false,
+    aggregationArchitecture: 'PostHog engagement events plus durable feedback and marketing records feed scheduled Blog performance snapshots before any public trending API.',
+    sources: BLOG_EDITORIAL_METRIC_SOURCES,
+  })),
 
   adminList: adminProcedure
     .input(adminListBlogPostsSchema)

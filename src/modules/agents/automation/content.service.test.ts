@@ -2,19 +2,9 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { appConfig } from '@/config/app.config';
 import { AutomationContentService } from './content.service';
 import type { AutomationApprovalService } from './approval.service';
+import { computeBlogPublicationSnapshot, type BlogPublicationSnapshot } from '@/modules/blog-automation/publication-snapshot';
 
 const NOW = new Date('2026-07-22T12:00:00.000Z');
-
-function approvalServiceStub(overrides: { status?: 'pending' | 'approved' | 'rejected'; metadata?: Record<string, unknown> } = {}) {
-  return {
-    getApproval: vi.fn().mockResolvedValue({ status: overrides.status ?? 'approved' }),
-    requireMetadataField: vi.fn().mockImplementation(async (_id: string, field: string) => {
-      const value = overrides.metadata?.[field];
-      if (typeof value !== 'string') throw Object.assign(new Error('missing'), { code: 'BAD_REQUEST' });
-      return value;
-    }),
-  } as unknown as AutomationApprovalService;
-}
 
 function basePost(overrides: Record<string, unknown> = {}) {
   return {
@@ -24,14 +14,37 @@ function basePost(overrides: Record<string, unknown> = {}) {
     excerpt: 'Excerpt',
     category: 'General',
     content: 'old content',
+    updatedAt: NOW,
     publishedAt: null,
     lastReviewedAt: null,
     deletedAt: null,
-    sources: [{ sourceType: 'OFFICIAL' }],
+    archivedAt: null,
+    tags: [],
+    relatedRegulations: [],
+    jurisdiction: 'Kenya',
+    sources: [{ sourceType: 'OFFICIAL', url: 'https://regulator.example/source', updatedAt: NOW }],
     verificationRuns: [],
     draftGenerationRuns: [],
     ...overrides,
   };
+}
+
+function approvalServiceStub(overrides: {
+  status?: 'pending' | 'approved' | 'rejected';
+  metadata?: Record<string, unknown>;
+  snapshot?: BlogPublicationSnapshot;
+  expiresAt?: Date | null;
+} = {}) {
+  const snapshot = overrides.snapshot ?? computeBlogPublicationSnapshot(basePost() as never, NOW);
+  return {
+    getApproval: vi.fn().mockResolvedValue({ status: overrides.status ?? 'approved' }),
+    requireMetadataField: vi.fn().mockImplementation(async (_id: string, field: string) => {
+      const value = overrides.metadata?.[field];
+      if (typeof value !== 'string') throw Object.assign(new Error('missing'), { code: 'BAD_REQUEST' });
+      return value;
+    }),
+    requireBlogPublicationSnapshot: vi.fn().mockResolvedValue({ snapshot, expiresAt: overrides.expiresAt ?? new Date('2026-07-23T12:00:00.000Z') }),
+  } as unknown as AutomationApprovalService;
 }
 
 describe('AutomationContentService.publishContent', () => {
@@ -45,9 +58,9 @@ describe('AutomationContentService.publishContent', () => {
     await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
-  it('publishes a valid post by flipping status/publishedAt only - never overwrites the live content column', async () => {
+  it('publishes an approved unchanged draft by flipping status/publishedAt only - never overwrites the live content column', async () => {
     const update = vi.fn();
-    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost({ content: 'human-edited final content' })), update }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost()), update }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
     const service = new AutomationContentService({
       prisma: prisma as never,
       approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
@@ -65,6 +78,107 @@ describe('AutomationContentService.publishContent', () => {
     expect(updateCall.data).not.toHaveProperty('content');
   });
 
+  it('rejects when markdown content changed after approval', async () => {
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost({ content: 'human-edited final content' })), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
+    const service = new AutomationContentService({
+      prisma: prisma as never,
+      approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
+      now: () => NOW,
+    });
+
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toThrow(/APPROVED_CONTENT_CHANGED/);
+    expect(prisma.blogPost.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects when a source is added after approval', async () => {
+    const prisma = {
+      blogPost: {
+        findUnique: vi.fn().mockResolvedValue(basePost({
+          sources: [
+            { sourceType: 'OFFICIAL', url: 'https://regulator.example/source', updatedAt: NOW },
+            { sourceType: 'OFFICIAL', url: 'https://regulator.example/extra', updatedAt: NOW },
+          ],
+        })),
+        update: vi.fn(),
+      },
+      blogSourceItem: { findUnique: vi.fn() },
+      regulatorySignal: { findMany: vi.fn() },
+      contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const service = new AutomationContentService({ prisma: prisma as never, approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }), now: () => NOW });
+
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toThrow(/APPROVED_SOURCES_CHANGED/);
+    expect(prisma.blogPost.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects when a source is removed after approval', async () => {
+    const approvedPost = basePost({
+      sources: [
+        { sourceType: 'OFFICIAL', url: 'https://regulator.example/source', updatedAt: NOW },
+        { sourceType: 'OFFICIAL', url: 'https://regulator.example/extra', updatedAt: NOW },
+      ],
+    });
+    const snapshot = computeBlogPublicationSnapshot(approvedPost as never, NOW);
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost()), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
+    const service = new AutomationContentService({ prisma: prisma as never, approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' }, snapshot }), now: () => NOW });
+
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toThrow(/APPROVED_SOURCES_CHANGED/);
+    expect(prisma.blogPost.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects when a source URL changed after approval', async () => {
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost({ sources: [{ sourceType: 'OFFICIAL', url: 'https://regulator.example/changed', updatedAt: NOW }] })), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
+    const service = new AutomationContentService({ prisma: prisma as never, approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }), now: () => NOW });
+
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toThrow(/APPROVED_SOURCES_CHANGED/);
+    expect(prisma.blogPost.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects when approval metadata and snapshot point at different posts', async () => {
+    const snapshot = computeBlogPublicationSnapshot(basePost({ id: 'post_2' }) as never, NOW);
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost()), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
+    const service = new AutomationContentService({ prisma: prisma as never, approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' }, snapshot }), now: () => NOW });
+
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toThrow(/APPROVAL_POST_MISMATCH/);
+    expect(prisma.blogPost.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects expired publication approvals', async () => {
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost()), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
+    const service = new AutomationContentService({
+      prisma: prisma as never,
+      approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' }, expiresAt: new Date('2026-07-22T11:59:59.000Z') }),
+      now: () => NOW,
+    });
+
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toThrow(/APPROVAL_EXPIRED/);
+    expect(prisma.blogPost.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the approved verification run is no longer the current verification', async () => {
+    const snapshot = computeBlogPublicationSnapshot(basePost({ verificationRuns: [{ id: 'verify_old' }] }) as never, NOW);
+    const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(basePost({ verificationRuns: [{ id: 'verify_new', status: 'PASSED', createdAt: NOW, completedAt: NOW }] })), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
+    const service = new AutomationContentService({ prisma: prisma as never, approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' }, snapshot }), now: () => NOW });
+
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toThrow(/VERIFICATION_REQUIRED/);
+    expect(prisma.blogPost.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects replaying an approval after a later material edit', async () => {
+    const update = vi.fn();
+    const findUnique = vi
+      .fn()
+      .mockResolvedValueOnce(basePost())
+      .mockResolvedValueOnce(basePost())
+      .mockResolvedValueOnce(basePost({ title: 'A later title edit' }));
+    const prisma = { blogPost: { findUnique, update }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
+    const service = new AutomationContentService({ prisma: prisma as never, approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }), now: () => NOW });
+
+    await expect(service.publishContent({ approvalId: 'appr_1' })).resolves.toEqual({ blogPostId: 'post_1', publishedAt: NOW.toISOString() });
+    await expect(service.publishContent({ approvalId: 'appr_1' })).rejects.toThrow(/APPROVED_PUBLICATION_PAYLOAD_CHANGED/);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses to publish when verification is BLOCKED, same gate as adminSetStatus', async () => {
     const post = basePost({ verificationRuns: [{ status: 'BLOCKED', createdAt: NOW, completedAt: NOW }] });
     const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(post), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
@@ -78,7 +192,7 @@ describe('AutomationContentService.publishContent', () => {
   });
 
   it('refuses to publish a Regulatory Updates post without an OFFICIAL source', async () => {
-    const post = basePost({ category: 'Regulatory Updates', sources: [{ sourceType: 'NEWS' }] });
+    const post = basePost({ category: 'Regulatory Updates', sources: [{ sourceType: 'NEWS', url: 'https://news.example/story', updatedAt: NOW }] });
     const prisma = { blogPost: { findUnique: vi.fn().mockResolvedValue(post), update: vi.fn() }, blogSourceItem: { findUnique: vi.fn() }, regulatorySignal: { findMany: vi.fn() }, contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) } };
     const service = new AutomationContentService({
       prisma: prisma as never,
@@ -224,7 +338,21 @@ describe('AutomationContentService.getApprovedContentThisWeek', () => {
         { id: 'post_1', title: 'CBK Circular Summary', jurisdiction: 'Kenya', publishedAt: NOW.toISOString(), excerpt: 'A real excerpt of the published post.' },
       ],
     });
-    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ select: expect.objectContaining({ excerpt: true }) }));
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: [
+          expect.objectContaining({
+            status: 'PUBLISHED',
+            deletedAt: null,
+            archivedAt: null,
+            publishedAt: { not: null, lte: NOW },
+          }),
+          { publishedAt: { gte: new Date('2026-07-15T12:00:00.000Z') } },
+        ],
+      }),
+      orderBy: [{ publishedAt: 'desc' }, { id: 'desc' }],
+      select: expect.objectContaining({ excerpt: true }),
+    }));
   });
 
   it('returns excerpt: undefined (not null, not a fabricated fallback) for the anomalous case of a PUBLISHED post with no excerpt', async () => {
