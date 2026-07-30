@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { MarketingCampaignStatus, MarketingTemplateKey } from '@prisma/client';
+import { appConfig } from '@/config/app.config';
 import { logger } from '@/utils/logger';
 import { redis as defaultRedis } from '@/lib/redis/client';
 import { campaignService as defaultCampaignService } from '@/modules/marketing/campaign.service';
@@ -78,6 +79,19 @@ export class AutomationNewsletterService {
   }
 
   async sendNewsletter(input: SendNewsletterInput): Promise<SendNewsletterResult> {
+    if (appConfig.runtime.disableOutboundEmail || appConfig.runtime.disableN8nAutomation) {
+      logger.warn({
+        type: 'automation_newsletter_send_suppressed',
+        runtimeMode: appConfig.runtime.mode,
+        outboundEmail: appConfig.runtime.disableOutboundEmail ? 'disabled' : 'enabled',
+        n8nAutomation: appConfig.runtime.disableN8nAutomation ? 'disabled' : 'enabled',
+      });
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Automation newsletter sending is disabled in this runtime.',
+      });
+    }
+
     const { approvalId } = input;
 
     const approval = await this.approvalService.getApproval({ approvalId });

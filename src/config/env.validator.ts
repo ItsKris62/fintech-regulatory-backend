@@ -9,12 +9,14 @@ import { z } from 'zod';
 const envSchema = z.object({
   // -- Application ----------------------------------------------------------
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  APP_RUNTIME_MODE: z.enum(['standard', 'preview']).default('standard'),
   PORT: z.string().default('4000').transform(Number).pipe(z.number().min(1).max(65535)),
   APP_URL: z.string().url('APP_URL must be a valid URL'),
   FRONTEND_URL: z.string().url('FRONTEND_URL must be a valid URL'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
   // -- Database -------------------------------------------------------------
+  DATABASE_ENVIRONMENT: z.enum(['unknown', 'preview', 'development-uat', 'production']).default('unknown'),
   DATABASE_URL: z
     .string()
     .min(1, 'DATABASE_URL is required')
@@ -85,6 +87,10 @@ const envSchema = z.object({
 
   // -- Agent workforce -------------------------------------------------------
   AGENTS_ENABLED: z.coerce.boolean().default(false),
+  DISABLE_BACKGROUND_WORKERS: z.coerce.boolean().default(false),
+  DISABLE_SCHEDULED_JOBS: z.coerce.boolean().default(false),
+  DISABLE_OUTBOUND_EMAIL: z.coerce.boolean().default(false),
+  DISABLE_N8N_AUTOMATION: z.coerce.boolean().default(false),
   AGENT_MAX_COST_PER_RUN_USD: z.coerce.number().positive().default(2),
   AGENT_MAX_COST_PER_DAY_USD: z.coerce.number().positive().default(20),
   AGENT_MAX_ITERATIONS_PER_RUN: z.coerce.number().int().positive().default(25),
@@ -161,14 +167,20 @@ export function printEnvSummary(env: EnvConfig): void {
       '',
       '-- Environment Summary ------------------------------',
       `  NODE_ENV:         ${env.NODE_ENV}`,
+      `  APP_RUNTIME_MODE: ${env.APP_RUNTIME_MODE}`,
       `  PORT:             ${env.PORT}`,
       `  APP_URL:          ${env.APP_URL}`,
+      `  DATABASE_ENV:     ${env.DATABASE_ENVIRONMENT}`,
       `  DATABASE_URL:     ${mask(env.DATABASE_URL)}`,
       `  SUPABASE_URL:     ${env.SUPABASE_URL}`,
       `  UPSTASH_URL:      ${mask(env.UPSTASH_REDIS_REST_URL)}`,
       `  ANTHROPIC:        ${mask(env.ANTHROPIC_API_KEY)}`,
       `  PINECONE:         ${mask(env.PINECONE_API_KEY)}`,
       `  RESEND:           ${mask(env.RESEND_API_KEY)}`,
+      `  WORKERS:          ${env.DISABLE_BACKGROUND_WORKERS ? 'disabled' : 'enabled'}`,
+      `  SCHEDULED JOBS:   ${env.DISABLE_SCHEDULED_JOBS ? 'disabled' : 'external/API-unregistered'}`,
+      `  OUTBOUND EMAIL:   ${env.DISABLE_OUTBOUND_EMAIL ? 'disabled' : 'enabled'}`,
+      `  N8N AUTOMATION:   ${env.DISABLE_N8N_AUTOMATION ? 'disabled' : 'enabled'}`,
       `  R2 BUCKET:        ${env.R2_BUCKET_NAME}`,
       '----------------------------------------------------',
       '',

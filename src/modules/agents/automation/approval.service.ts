@@ -550,6 +550,16 @@ export class AutomationApprovalService {
    * decision itself must persist regardless of the callback's outcome.
    */
   private async deliverCallback(approvalId: string, decision: ApprovalDecision, callbackUrl: string): Promise<void> {
+    if (appConfig.runtime.disableN8nAutomation) {
+      logger.warn({
+        type: 'automation_approval_callback_suppressed',
+        runtimeMode: appConfig.runtime.mode,
+        approvalId,
+      });
+      await this.recordCallbackFailure(approvalId, 'disabled_by_runtime');
+      return;
+    }
+
     const timestampSeconds = Math.floor(this.now().getTime() / 1000);
     const signature = signApprovalCallback(this.hmacSecret, { approvalId, decision, timestampSeconds });
 

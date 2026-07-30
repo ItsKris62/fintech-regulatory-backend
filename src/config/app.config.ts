@@ -11,6 +11,7 @@ dotenv.config();
 const envSchema = z.object({
   // App Configuration
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  APP_RUNTIME_MODE: z.enum(['standard', 'preview']).default('standard'),
   PORT: z.string().transform(Number).pipe(z.number().min(1).max(65535)).default(4000),
   APP_URL: z.string().url(),
   // Comma-separated origins are supported for CORS (e.g. apex + www + Vercel previews).
@@ -18,6 +19,7 @@ const envSchema = z.object({
   FRONTEND_URL: z.string().min(1),
 
   // Database
+  DATABASE_ENVIRONMENT: z.enum(['unknown', 'preview', 'development-uat', 'production']).default('unknown'),
   DATABASE_URL: z.string().min(1, 'Database URL is required'),
   DIRECT_URL: z.string().optional(),
 
@@ -76,6 +78,22 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
   AGENTS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  DISABLE_BACKGROUND_WORKERS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  DISABLE_SCHEDULED_JOBS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  DISABLE_OUTBOUND_EMAIL: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  DISABLE_N8N_AUTOMATION: z
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
@@ -271,6 +289,14 @@ if (
 export const appConfig = {
   // Environment
   env: env.NODE_ENV,
+  runtime: {
+    mode: env.APP_RUNTIME_MODE,
+    isPreview: env.APP_RUNTIME_MODE === 'preview',
+    disableBackgroundWorkers: env.DISABLE_BACKGROUND_WORKERS || env.APP_RUNTIME_MODE === 'preview',
+    disableScheduledJobs: env.DISABLE_SCHEDULED_JOBS || env.APP_RUNTIME_MODE === 'preview',
+    disableOutboundEmail: env.DISABLE_OUTBOUND_EMAIL || env.APP_RUNTIME_MODE === 'preview',
+    disableN8nAutomation: env.DISABLE_N8N_AUTOMATION || env.APP_RUNTIME_MODE === 'preview',
+  },
   isDevelopment: env.NODE_ENV === 'development',
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
@@ -343,6 +369,7 @@ export const appConfig = {
 
   // Database
   database: {
+    environment: env.DATABASE_ENVIRONMENT,
     url: env.DATABASE_URL,
     directUrl: env.DIRECT_URL,
   },

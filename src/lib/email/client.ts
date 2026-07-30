@@ -1,4 +1,5 @@
 import { Resend } from 'resend';
+import { appConfig } from '@/config/app.config';
 import { emailConfig, getSenderAddress } from '@/config/email.config';
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
@@ -241,6 +242,20 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
   const startTime = Date.now();
 
   try {
+    if (appConfig.runtime.disableOutboundEmail) {
+      const recipientCount = Array.isArray(options.to) ? options.to.length : 1;
+      logger.warn({
+        type: 'outbound_email_disabled_send_suppressed',
+        runtimeMode: appConfig.runtime.mode,
+        recipientCount,
+        tagCount: options.tags?.length ?? 0,
+      });
+      return {
+        success: true,
+        messageId: `suppressed-${appConfig.runtime.mode}`,
+      };
+    }
+
     // Validate recipient
     const recipients = Array.isArray(options.to) ? options.to : [options.to];
 
@@ -374,6 +389,17 @@ export async function queueEmail(
   priority: number = 0
 ): Promise<void> {
   try {
+    if (appConfig.runtime.disableOutboundEmail) {
+      const recipientCount = Array.isArray(options.to) ? options.to.length : 1;
+      logger.warn({
+        type: 'outbound_email_disabled_queue_suppressed',
+        runtimeMode: appConfig.runtime.mode,
+        recipientCount,
+        priority,
+      });
+      return;
+    }
+
     const queueEntry = JSON.stringify({
       options,
       priority,
@@ -412,6 +438,15 @@ export async function queueEmail(
  */
 export async function processEmailQueue(batchSize: number = 10): Promise<number> {
   try {
+    if (appConfig.runtime.disableOutboundEmail) {
+      logger.warn({
+        type: 'outbound_email_disabled_queue_processing_suppressed',
+        runtimeMode: appConfig.runtime.mode,
+        batchSize,
+      });
+      return 0;
+    }
+
     // Get emails from queue (highest priority first)
     const entries = await redis.zrange<string[]>(
       emailConfig.queue.queueName,

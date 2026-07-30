@@ -228,6 +228,15 @@ export class AutomationContentService {
    * new requirement, not an oversight in this pass.
    */
   async queueContentCandidate(input: QueueContentCandidateInput): Promise<{ forwarded: boolean }> {
+    if (appConfig.runtime.disableN8nAutomation) {
+      logger.warn({
+        type: 'automation_content_candidate_forward_suppressed',
+        runtimeMode: appConfig.runtime.mode,
+        sourceItemId: input.sourceItemId,
+      });
+      return { forwarded: false };
+    }
+
     const sourceItem = await this.prisma.blogSourceItem.findUnique({
       where: { id: input.sourceItemId },
       select: { summary: true },

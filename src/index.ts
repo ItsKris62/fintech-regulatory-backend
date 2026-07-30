@@ -11,6 +11,7 @@ import { warmCaches } from './lib/cache-warming';
 import { storageConfig } from './config/storage.config';
 import { appConfig } from './config/app.config';
 import { aiJobRunner } from './modules/ai-jobs/ai-job-runner';
+import { assertPreviewDatabaseIsolation, classifyDatabaseEnvironment, isPreviewDatabaseClassificationAllowed } from './utils/database-identity';
 import type { FastifyInstance } from 'fastify';
 
 // -- Process-level error traps ------------------------------------------------
@@ -78,6 +79,29 @@ for (const key of REQUIRED_ENV_VARS) {
 
 const start = async () => {
   try {
+    const backgroundWorkersDisabled = appConfig.runtime.disableBackgroundWorkers;
+    assertPreviewDatabaseIsolation({
+      runtimeMode: appConfig.runtime.mode,
+      databaseEnvironment: appConfig.database.environment,
+    });
+
+    logger.info({
+      type: 'runtime_side_effect_controls',
+      runtimeMode: appConfig.runtime.mode,
+      backgroundWorkers: backgroundWorkersDisabled ? 'disabled' : 'enabled',
+      scheduledJobs: appConfig.runtime.disableScheduledJobs ? 'disabled' : 'api_start_does_not_register_cron',
+      outboundEmail: appConfig.runtime.disableOutboundEmail ? 'disabled' : 'enabled',
+      n8nAutomation: appConfig.runtime.disableN8nAutomation ? 'disabled' : 'enabled',
+    });
+
+    logger.info({
+      type: 'database_identity_startup',
+      applicationEnvironment: appConfig.env,
+      runtimeMode: appConfig.runtime.mode,
+      databaseClassification: classifyDatabaseEnvironment(appConfig.database.environment),
+      previewIsolationMetadataPresent: isPreviewDatabaseClassificationAllowed(appConfig.database.environment),
+    });
+
     // 1. Connect all external services (database is critical, Redis is degradable)
     const connectionStatus = await connectionManager.connectAll();
     logger.info({ type: 'connections_ready', status: connectionStatus });
@@ -86,8 +110,12 @@ const start = async () => {
     await warmCaches();
 
     // 3. Start error tracker background cleanup
-    errorTracker.start();
-    aiJobRunner.start();
+    if (backgroundWorkersDisabled) {
+      logger.info({ type: 'background_workers_disabled', aiJobRunner: 'disabled', errorTrackerCleanup: 'disabled' });
+    } else {
+      errorTracker.start();
+      aiJobRunner.start();
+    }
 
     // 4. Build the Fastify app (registers all plugins inside an async function)
     const app = await buildApp();
@@ -118,6 +146,7 @@ const start = async () => {
       trpcUrl: `http://localhost:${port}/trpc`,
       healthUrl: `http://localhost:${port}/health`,
       environment: process.env.NODE_ENV || 'development',
+      runtimeMode: appConfig.runtime.mode,
     });
 
     logger.info({
@@ -134,6 +163,7 @@ const start = async () => {
   tRPC:        http://localhost:${port}/trpc
   Health:      http://localhost:${port}/health
   Environment: ${(process.env.NODE_ENV || 'development').toUpperCase()}
+  Runtime:     ${appConfig.runtime.mode.toUpperCase()}
 
 =============================================================
     `);
