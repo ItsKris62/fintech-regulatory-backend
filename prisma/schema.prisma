@@ -127,7 +127,7 @@ model User {
   blogPostsAuthored                BlogPost[]               @relation("BlogPostAuthor")
   blogPostsReviewed                BlogPost[]               @relation("BlogPostReviewer")
   blogPostsUpdated                 BlogPost[]               @relation("BlogPostUpdatedBy")
-  blogPostFeedbacks                BlogPostFeedback[]        @relation("BlogPostFeedbackUser")
+  blogPostFeedbacks                BlogPostFeedback[]       @relation("BlogPostFeedbackUser")
   blogSourceMonitorsVerified       BlogSourceMonitor[]      @relation("BlogSourceMonitorVerifiedBy")
   blogSourceMonitorsCreated        BlogSourceMonitor[]      @relation("BlogSourceMonitorCreatedBy")
   blogSourceMonitorsUpdated        BlogSourceMonitor[]      @relation("BlogSourceMonitorUpdatedBy")
@@ -2936,7 +2936,7 @@ model BlogPostSource {
 
   notes String? @db.Text
 
-  post BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post                BlogPost                 @relation(fields: [postId], references: [id], onDelete: Cascade)
   // Pack 1: research packs may cite this source when it backs an already-drafted post.
   researchPackSources BlogResearchPackSource[]
 
@@ -2984,15 +2984,15 @@ enum BlogTopicRequestStatus {
 model BlogTopicRequest {
   id String @id @default(cuid())
 
-  topic           String @db.Text
-  category        String?
-  jurisdiction    String?
-  sourcePage      String?
-  contactEmail    String?
+  topic            String                 @db.Text
+  category         String?
+  jurisdiction     String?
+  sourcePage       String?
+  contactEmail     String?
   anonymousKeyHash String?
-  status          BlogTopicRequestStatus @default(PENDING)
-  spamTrap        String?
-  adminNotes      String? @db.Text
+  status           BlogTopicRequestStatus @default(PENDING)
+  spamTrap         String?
+  adminNotes       String?                @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3180,13 +3180,13 @@ model BlogSourceItem {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  monitor           BlogSourceMonitor      @relation(fields: [monitorId], references: [id], onDelete: Cascade)
-  suggestions       BlogSuggestionSource[]
+  monitor             BlogSourceMonitor        @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  suggestions         BlogSuggestionSource[]
   // Pack 1 Foundation A: inverse side of RegulatorySignal.sourceItem.
-  regulatorySignals RegulatorySignal[]     @relation("RegulatorySignalSourceItem")
+  regulatorySignals   RegulatorySignal[]       @relation("RegulatorySignalSourceItem")
   // Pack 1: triage/research provenance links (optional, SetNull on delete).
-  editorialTriageRuns   BlogEditorialTriageRun[]
-  researchPackSources   BlogResearchPackSource[]
+  editorialTriageRuns BlogEditorialTriageRun[]
+  researchPackSources BlogResearchPackSource[]
 
   @@unique([monitorId, normalizedUrl])
   @@unique([contentHash])
@@ -3442,7 +3442,7 @@ model BlogArticleSuggestion {
   dismissedBy User? @relation("BlogSuggestionDismissedBy", fields: [dismissedById], references: [id])
   approvedBy  User? @relation("BlogSuggestionApprovedBy", fields: [approvedById], references: [id])
 
-  sources BlogSuggestionSource[]
+  sources             BlogSuggestionSource[]
   // Pack 1 domain contracts
   editorialTriageRuns BlogEditorialTriageRun[]
   researchPacks       BlogResearchPack[]
@@ -3471,16 +3471,16 @@ model BlogSuggestionSource {
 }
 
 model AgentRun {
-  id                  String               @id
+  id                  String                   @id
   agentType           String
-  status              String               @default("RUNNING")
-  idempotencyKey      String               @unique
+  status              String                   @default("RUNNING")
+  idempotencyKey      String                   @unique
   organizationId      String?
-  inputTokens         Int                  @default(0)
-  outputTokens        Int                  @default(0)
-  costUsd             Decimal              @default(0) @db.Decimal(12, 6)
-  iterations          Int                  @default(0)
-  startedAt           DateTime             @default(now())
+  inputTokens         Int                      @default(0)
+  outputTokens        Int                      @default(0)
+  costUsd             Decimal                  @default(0) @db.Decimal(12, 6)
+  iterations          Int                      @default(0)
+  startedAt           DateTime                 @default(now())
   completedAt         DateTime?
   error               String?
   metadata            Json?
@@ -3875,14 +3875,14 @@ model ContentOpsAlert {
   lastSeenAt      DateTime @default(now())
 
   notificationStatus   ContentOpsAlertNotificationStatus @default(NOT_REQUIRED)
-  notificationAttempts Int                                @default(0)
+  notificationAttempts Int                               @default(0)
   lastNotificationAt   DateTime?
 
   acknowledgedById String?
   acknowledgedAt   DateTime?
   resolvedById     String?
   resolvedAt       DateTime?
-  resolutionNote   String? @db.Text
+  resolutionNote   String?   @db.Text
 
   metadata Json? // small structured pointers only (ids, counts, scores) — never article bodies, prompts, or credentials
 
@@ -3934,10 +3934,10 @@ model BlogEditorialTriageRun {
 
   recommendation         BlogEditorialRecommendation
   urgency                BlogSuggestionPriority
-  targetAudiences        String[] @default([])
+  targetAudiences        String[]                    @default([])
   recommendedArticleType BlogArticleType?
-  recommendedChannels    String[] @default([])
-  rationale              String   @db.Text
+  recommendedChannels    String[]                    @default([])
+  rationale              String                      @db.Text
   sourceConfidence       Int
 
   requiresHumanReview Boolean @default(true)
@@ -3948,7 +3948,7 @@ model BlogEditorialTriageRun {
   inputHash     String
 
   status       BlogEditorialTriageStatus @default(PENDING)
-  errorMessage String?                    @db.Text
+  errorMessage String?                   @db.Text
 
   createdAt   DateTime  @default(now())
   completedAt DateTime?
@@ -4049,11 +4049,11 @@ model BlogResearchPackSource {
   jurisdiction    String?
   category        BlogResearchSourceCategory
   publicationDate DateTime?
-  retrievalDate   DateTime @default(now())
+  retrievalDate   DateTime                   @default(now())
   trustLevel      Int
   contentHash     String?
-  isAvailable     Boolean  @default(true)
-  isContradictory Boolean  @default(false)
+  isAvailable     Boolean                    @default(true)
+  isContradictory Boolean                    @default(false)
 
   createdAt DateTime @default(now())
 
@@ -4139,7 +4139,7 @@ model BlogFreshnessReview {
   promptVersion String  @default("freshness-review-v1")
 
   status       BlogEditorialTriageStatus @default(PENDING)
-  errorMessage String?                    @db.Text
+  errorMessage String?                   @db.Text
 
   createdAt   DateTime  @default(now())
   completedAt DateTime?
@@ -4181,7 +4181,7 @@ model BlogRevisionRequest {
   freshnessReviewId String?
   idempotencyKey    String  @unique
 
-  reason             String   @db.Text
+  reason             String               @db.Text
   priority           BlogRevisionPriority
   recommendedChanges Json?
   evidence           Json?
