@@ -5,7 +5,10 @@
 
 // Logo is served from the R2 public bucket so it loads even when the
 // frontend is down and is immune to Vercel cold-start delays.
-const R2_PUBLIC_URL = process.env.R2_PUBLIC_BUCKET_URL ?? '';
+const R2_PUBLIC_URL =
+  process.env.R2_PUBLIC_BUCKET_URL ??
+  process.env.NEXT_PUBLIC_R2_ASSETS_URL ??
+  'https://pub-724936356a15494f9ce61480c5225e6f.r2.dev';
 // FRONTEND_URL may be comma-separated for multi-origin CORS  -  use only the first (canonical) URL.
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'https://sheriabot.com').split(',')[0].trim();
 
@@ -16,12 +19,13 @@ export const EMAIL_THEME = {
     primary: '#15803D',       // Green-700  -  SheriaBot brand green (matches app primary)
     primaryLight: '#22C55E',  // Green-500  -  lighter green for links and accents
     accent: '#15803D',        // Brand green accent
-    background: '#F8F9FA',    // Light gray background
+    headerBackground: '#0F172A', // Dark Slate for high-contrast, premium email headers
+    background: '#F8FAFC',    // Slate-50 background
     cardBackground: '#FFFFFF',// White card/content area
-    text: '#111827',          // Near-black for body text
-    textSecondary: '#6B7280', // Gray for secondary text
-    textMuted: '#9CA3AF',     // Lighter gray for footer text
-    border: '#E5E7EB',        // Light border color
+    text: '#1E293B',          // Slate-800 for main body text
+    textSecondary: '#64748B', // Slate-500 for secondary text
+    textMuted: '#94A3B8',     // Slate-400 for footer text
+    border: '#E2E8F0',        // Light border color
     success: '#15803D',       // Green for success states
     warning: '#D97706',       // Amber for warnings
     danger: '#DC2626',        // Red for errors/urgent
@@ -39,7 +43,7 @@ export const EMAIL_THEME = {
   },
 } as const;
 
-export const LOGO_URL = `${R2_PUBLIC_URL}/branding/email-signature-logo.png`;
+export const LOGO_URL = `${R2_PUBLIC_URL}/branding/Sheriabot%20logo%20-%20email.png`;
 
 export const APP_NAME = 'SheriaBot';
 export const SUPPORT_EMAIL = process.env.EMAIL_SUPPORT_ADDRESS || 'support@sheriabot.com';

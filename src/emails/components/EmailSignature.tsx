@@ -30,17 +30,19 @@ export interface EmailSignatureProps {
  */
 export function EmailSignature({ showUnsubscribe = false, recipientEmail }: EmailSignatureProps) {
   return (
-    <Section>
-      <Hr style={styles.divider} />
-
+    <Section style={styles.footerSection}>
       <Text style={styles.brand}>
-        {APP_NAME} — AI-Powered Regulatory Compliance for Kenya&apos;s Fintech Sector
+        {APP_NAME} — AI-Powered Regulatory Compliance for Kenya&apos;s Fintech & Financial Sector
       </Text>
 
       <Text style={styles.contact}>
-        Nairobi, Kenya &nbsp;|&nbsp;{' '}
+        Nairobi, Kenya &nbsp;&bull;&nbsp;{' '}
         <Link href={`mailto:${SUPPORT_EMAIL}`} style={styles.link}>
           {SUPPORT_EMAIL}
+        </Link>
+        &nbsp;&bull;&nbsp;{' '}
+        <Link href={SHERIABOT_URL} style={styles.link}>
+          sheriabot.com
         </Link>
       </Text>
 
@@ -57,22 +59,23 @@ export function EmailSignature({ showUnsubscribe = false, recipientEmail }: Emai
       )}
 
       <Text style={styles.copyright}>
-        &copy; {CURRENT_YEAR} {APP_NAME}. Powered by SheriaBot.
+        &copy; {CURRENT_YEAR} {APP_NAME}. All rights reserved.
       </Text>
     </Section>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  divider: {
-    borderColor: EMAIL_THEME.colors.border,
-    margin: '0',
+  footerSection: {
+    padding: '16px 0 24px',
+    textAlign: 'center',
   },
   brand: {
     color: EMAIL_THEME.colors.textSecondary,
     fontSize: '12px',
+    fontWeight: '500',
     textAlign: 'center',
-    margin: '16px 0 4px',
+    margin: '8px 0 4px',
   },
   contact: {
     color: EMAIL_THEME.colors.textMuted,
@@ -82,6 +85,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   link: {
     color: EMAIL_THEME.colors.primary,
+    fontWeight: '500',
     textDecoration: 'none',
   },
   copyright: {

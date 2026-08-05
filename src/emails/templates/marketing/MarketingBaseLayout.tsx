@@ -86,13 +86,15 @@ export function MarketingBaseLayout({
         {/* ── Hero band ─────────────────────────────────────────────────── */}
         <Container style={styles.outerContainer}>
           <Section style={styles.heroBand}>
-            <Img
-              src={LOGO_URL}
-              alt={APP_NAME}
-              width="140"
-              height="auto"
-              style={styles.logo}
-            />
+            <div style={styles.logoBadge}>
+              <Img
+                src={LOGO_URL}
+                alt={APP_NAME}
+                width="220"
+                height="auto"
+                style={styles.logo}
+              />
+            </div>
           </Section>
 
           {/* ── Card body ───────────────────────────────────────────────── */}
@@ -154,21 +156,28 @@ const styles: Record<string, React.CSSProperties> = {
   outerContainer: {
     maxWidth: EMAIL_THEME.spacing.containerWidth,
     margin:   '0 auto',
-    padding:  '0 20px',
+    padding:  '0 16px',
   },
   heroBand: {
-    backgroundColor: MARKETING_COLORS.heroBand,
-    borderRadius:    '8px 8px 0 0',
-    height:          MARKETING_COLORS.heroBandHeight,
+    backgroundColor: '#0F172A',
+    borderTop:       `4px solid ${EMAIL_THEME.colors.primary}`,
+    borderRadius:    '12px 12px 0 0',
     textAlign:       'center',
-    padding:         '0 40px',
-    display:         'flex',
-    alignItems:      'center',
-    justifyContent:  'center',
+    padding:         '24px 32px',
+  },
+  logoBadge: {
+    backgroundColor: '#FFFFFF',
+    borderRadius:    '8px',
+    padding:         '12px 24px',
+    display:         'inline-block',
+    margin:          '0 auto',
+    boxShadow:       '0 4px 12px rgba(0, 0, 0, 0.15)',
   },
   logo: {
-    maxWidth: '160px',
+    maxWidth: '220px',
+    width:    '100%',
     height:   'auto',
+    display:  'block',
     margin:   '0 auto',
   },
   card: {
