@@ -1,5 +1,5 @@
 import { emailConfig } from '@/config/email.config';
-import { LOGO_URL } from '@/emails/theme';
+import { LOGO_URL, EMAIL_SIGNATURE_LOGO_URL } from '@/emails/theme';
 
 /**
  * Password reset email template parameters
@@ -203,6 +203,9 @@ function generatePasswordResetHTML(params: PasswordResetEmailParams): string {
       </div>
 
       <div class="footer">
+        <div style="margin-bottom: 16px; text-align: center;">
+          <img src="${EMAIL_SIGNATURE_LOGO_URL}" alt="SheriaBot — Your Legal Tech Assistant" style="max-width: 100%; width: 440px; height: auto; border-radius: 8px;" />
+        </div>
         <p>${emailConfig.content.footer}</p>
         <p>
           <a href="${emailConfig.content.privacyPolicyUrl}">Privacy Policy</a> &bull; 

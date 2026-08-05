@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { Section, Hr, Text, Link } from '@react-email/components';
-import { EMAIL_THEME, APP_NAME, SUPPORT_EMAIL, CURRENT_YEAR, SHERIABOT_URL } from '../theme';
+import { Section, Text, Link, Img } from '@react-email/components';
+import { EMAIL_THEME, APP_NAME, SUPPORT_EMAIL, CURRENT_YEAR, SHERIABOT_URL, EMAIL_SIGNATURE_LOGO_URL } from '../theme';
 
 export interface EmailSignatureProps {
   /**
@@ -19,24 +19,28 @@ export interface EmailSignatureProps {
  * Reusable email footer / signature block.
  *
  * Renders:
- *   - Horizontal divider
- *   - Brand tagline
- *   - Contact info (support email)
+ *   - New official SheriaBot Email Signature Banner (R2 served)
+ *   - Contact info & support email
  *   - Optional unsubscribe link
  *   - Copyright notice
  *
  * Used by BaseLayout so all 16 templates inherit it automatically.
- * Can also be imported directly into one-off transactional emails.
  */
 export function EmailSignature({ showUnsubscribe = false, recipientEmail }: EmailSignatureProps) {
   return (
     <Section style={styles.footerSection}>
-      <Text style={styles.brand}>
-        {APP_NAME} — AI-Powered Regulatory Compliance for Kenya&apos;s Fintech & Financial Sector
-      </Text>
+      <div style={styles.signatureBadge}>
+        <Img
+          src={EMAIL_SIGNATURE_LOGO_URL}
+          alt={`${APP_NAME} — Your Legal Tech Assistant`}
+          width="480"
+          height="auto"
+          style={styles.signatureImg}
+        />
+      </div>
 
       <Text style={styles.contact}>
-        Nairobi, Kenya &nbsp;&bull;&nbsp;{' '}
+        Support:{' '}
         <Link href={`mailto:${SUPPORT_EMAIL}`} style={styles.link}>
           {SUPPORT_EMAIL}
         </Link>
@@ -67,21 +71,26 @@ export function EmailSignature({ showUnsubscribe = false, recipientEmail }: Emai
 
 const styles: Record<string, React.CSSProperties> = {
   footerSection: {
-    padding: '16px 0 24px',
+    padding: '24px 0 32px',
     textAlign: 'center',
   },
-  brand: {
-    color: EMAIL_THEME.colors.textSecondary,
-    fontSize: '12px',
-    fontWeight: '500',
+  signatureBadge: {
+    margin: '0 auto 16px',
     textAlign: 'center',
-    margin: '8px 0 4px',
+  },
+  signatureImg: {
+    maxWidth: '100%',
+    width: '480px',
+    height: 'auto',
+    display: 'block',
+    margin: '0 auto',
+    borderRadius: '8px',
   },
   contact: {
     color: EMAIL_THEME.colors.textMuted,
-    fontSize: '11px',
+    fontSize: '12px',
     textAlign: 'center',
-    margin: '4px 0',
+    margin: '8px 0 4px',
   },
   link: {
     color: EMAIL_THEME.colors.primary,

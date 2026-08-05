@@ -44,6 +44,7 @@ export const EMAIL_THEME = {
 } as const;
 
 export const LOGO_URL = `${R2_PUBLIC_URL}/branding/Sheriabot%20logo%20-%20email.png`;
+export const EMAIL_SIGNATURE_LOGO_URL = `${R2_PUBLIC_URL}/branding/Sheriabot%20logo-Email%20signature.png`;
 
 export const APP_NAME = 'SheriaBot';
 export const SUPPORT_EMAIL = process.env.EMAIL_SUPPORT_ADDRESS || 'support@sheriabot.com';
