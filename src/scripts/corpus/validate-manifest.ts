@@ -8,6 +8,7 @@
  *   pnpm corpus:validate --country=international
  *   pnpm corpus:validate --country=malawi
  *   pnpm corpus:validate --country=nigeria
+ *   pnpm corpus:validate --country=rwanda
  *   pnpm corpus:validate --all
  */
 
@@ -39,7 +40,7 @@ function parseArgs(): { countries: Country[]; verifyChecksums: boolean } {
       const mapped = mapCountryArg(raw);
       if (!mapped) {
         console.error(`❌ Unknown country: "${raw}"`);
-        console.error(`   Valid: kenya, international, malawi, nigeria`);
+        console.error(`   Valid: kenya, international, malawi, nigeria, rwanda`);
         process.exit(1);
       }
       countries.push(mapped);
@@ -62,6 +63,7 @@ function mapCountryArg(raw: string): Country | null {
     international: 'International',
     malawi: 'Malawi',
     nigeria: 'Nigeria',
+    rwanda: 'Rwanda',
   };
   return map[raw.toLowerCase()] ?? null;
 }

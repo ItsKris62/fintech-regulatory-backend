@@ -14,10 +14,10 @@ import { z } from 'zod';
 // Enum Unions
 // ============================================================================
 
-export const CountryEnum = z.enum(['Kenya', 'Malawi', 'Nigeria', 'International']);
+export const CountryEnum = z.enum(['Kenya', 'Malawi', 'Nigeria', 'Rwanda', 'International']);
 export type Country = z.infer<typeof CountryEnum>;
 
-export const JurisdictionCodeEnum = z.enum(['KE', 'MW', 'NG', 'INTL', 'EU', 'GLOBAL']);
+export const JurisdictionCodeEnum = z.enum(['KE', 'MW', 'NG', 'RW', 'INTL', 'EU', 'GLOBAL']);
 export type JurisdictionCode = z.infer<typeof JurisdictionCodeEnum>;
 
 export const ScopeEnum = z.enum(['COUNTRY', 'INTERNATIONAL', 'REGIONAL']);
@@ -93,6 +93,7 @@ export const COUNTRY_JURISDICTION_MAP: Record<Country, JurisdictionCode[]> = {
   Kenya: ['KE'],
   Malawi: ['MW'],
   Nigeria: ['NG'],
+  Rwanda: ['RW'],
   International: ['INTL', 'EU', 'GLOBAL'],
 };
 

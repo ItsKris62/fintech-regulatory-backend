@@ -1,110 +1,75 @@
-# SheriaBot — Regulatory Document Corpus
+# SheriaBot - Regulatory Document Corpus
 
-This folder contains source documents for the RAG knowledge base.
+This folder contains source documents and manifest metadata for the RAG knowledge
+base.
 
 ## Folder Structure
 
-```
+```text
 documents/
-├── kenya/           — Kenyan legislation, CBK guidelines, ODPC guidance, etc.
-├── international/   — International standards (NIST, ISO, PCI DSS, GDPR)
-└── README.md        — This file
+├── international/   - International standards and regional frameworks
+├── kenya/           - Kenyan legislation, CBK guidelines, ODPC guidance, etc.
+├── malawi/          - Malawi country corpus, grouped by category
+├── nigeria/         - Nigeria country corpus, grouped by category
+├── rwanda/          - Rwanda country corpus, grouped by category
+├── _incoming/       - Candidate and manual intake review files
+└── README.md
 ```
 
-> **Note:** PDF, DOCX, and TXT files in this folder are gitignored (large
-> binaries). Only this README and `.gitkeep` placeholders are tracked.
+Country corpora may be flat, as with the original Kenya corpus, or nested by
+category, as with Malawi, Nigeria, and Rwanda.
 
----
+## Git Tracking
+
+PDF, DOC, DOCX, and TXT files in this folder are gitignored because the source
+binaries are large and are stored outside Git after ingestion. The tracked files
+are:
+
+- `README.md`
+- `manifest.json`
+- `.gitkeep` placeholders for empty country/category folders
+- review and intake files under `_incoming/`
+
+For Rwanda, the tracked skeleton is:
+
+```text
+documents/rwanda/
+├── aml-cft/.gitkeep
+├── banking/.gitkeep
+├── consumer-protection/.gitkeep
+├── cybersecurity/.gitkeep
+├── data-protection/.gitkeep
+├── guidance/.gitkeep
+├── microfinance/.gitkeep
+├── payments/.gitkeep
+└── manifest.json
+```
 
 ## How to Add Documents
 
-1. Obtain the official document in PDF, DOCX, or TXT format.
-2. Place it in the correct subfolder (`kenya/` or `international/`).
-3. Confirm the `fileName` in the registry in
-   [`src/scripts/ingest-documents.ts`](../src/scripts/ingest-documents.ts)
-   matches the file you placed.
-4. Run the ingestion pipeline:
+1. Obtain the official document in PDF, DOCX, DOC, or TXT format.
+2. Place it in the correct folder, for example
+   `documents/rwanda/aml-cft/example-law.pdf`.
+3. Add or update the corresponding entry in that country's `manifest.json`.
+4. Run validation:
+
+```bash
+pnpm corpus:validate --country=rwanda --verify-checksums
+```
+
+5. Run ingestion when the manifest is ready:
 
 ```bash
 pnpm ingest
 ```
 
-The pipeline will:
-- Compute a SHA-256 checksum and skip already-indexed copies
-- Upload the original file to Cloudflare R2
-- Extract and chunk the text (legal-aware chunking)
-- Generate embeddings and upsert vectors to Pinecone
-- Save chunk records to PostgreSQL
-
----
-
-## Document Registry Checklist
-
-Place each file in the indicated folder, then run `pnpm ingest`.
-
-### Kenyan Legislation & Regulations
-
-- [ ] `kenya/data-protection-act-2019.pdf`
-      — Kenya Data Protection Act, 2019 — Parliament of Kenya
-- [ ] `kenya/computer-misuse-cybercrimes-act-2018.pdf`
-      — Computer Misuse and Cybercrimes Act, 2018 — Parliament of Kenya
-- [ ] `kenya/cbk-prudential-guidelines-digital-lending.pdf`
-      — CBK Prudential Guidelines for Digital Lending — Central Bank of Kenya
-- [ ] `kenya/national-payment-systems-act.pdf`
-      — National Payment Systems Act & Regulations — Parliament of Kenya
-- [ ] `kenya/cbk-regulatory-sandbox-guidelines.pdf`
-      — CBK Regulatory Sandbox Guidelines — Central Bank of Kenya
-- [ ] `kenya/odpc-guidance-notes.pdf`
-      — ODPC Guidance Notes and Compliance Guidelines — ODPC
-- [ ] `kenya/aml-cft-guidelines.pdf`
-      — AML/CFT Guidelines — Financial Reporting Centre
-- [ ] `kenya/kenya-information-communications-act.pdf`
-      — Kenya Information and Communications Act — Parliament of Kenya
-- [ ] `kenya/central-bank-of-kenya-act.pdf`
-      — Central Bank of Kenya Act (Fintech Sections) — Parliament of Kenya
-- [ ] `kenya/cma-regulatory-sandbox-guidelines.pdf`
-      — CMA Regulatory Sandbox Guidelines — Capital Markets Authority
-- [ ] `kenya/ira-insurtech-guidelines.pdf`
-      — IRA Insurtech Guidelines — Insurance Regulatory Authority
-
-### International Standards
-
-- [ ] `international/nist-csf-2.0.pdf`
-      — NIST Cybersecurity Framework 2.0 — NIST
-- [ ] `international/iso-27001-overview.pdf`
-      — ISO 27001 Information Security Overview — ISO
-- [ ] `international/pci-dss-requirements.pdf`
-      — PCI DSS Requirements — PCI Security Standards Council
-- [ ] `international/gdpr-full-text.pdf`
-      — GDPR Full Text — European Union
-
----
+The ingestion pipeline computes a SHA-256 checksum, skips already-indexed
+copies, uploads the original file to Cloudflare R2, extracts and chunks text,
+generates embeddings, and stores records for retrieval.
 
 ## Filename Conventions
 
-- Use lowercase letters, numbers, and hyphens only
-- Include the year for legislation: `data-protection-act-2019.pdf`
-- For versioned standards: `nist-csf-2.0.pdf`, `pci-dss-v4.0.pdf`
-- Keep names short but unambiguous
-
----
-
-## Re-ingesting a Document
-
-If you need to update a document (e.g. an amended version):
-
-```bash
-# 1. Find the document ID in the DB
-# 2. Run the re-ingest utility
-npx tsx -e "
-import { documentIngestionService } from './src/lib/ingestion/document-processor';
-documentIngestionService
-  .reingestDocument('DOCUMENT_ID', './documents/kenya/updated-file.pdf')
-  .then(r => console.log(r))
-  .finally(() => process.exit(0));
-"
-```
-
-Or mark it as superseded and ingest the new file fresh by running `pnpm ingest`
-(the old entry will be skipped by checksum; rename the new file slightly or
-delete the old DB record first).
+- Use descriptive names that make the source recognizable.
+- Prefer lowercase letters, numbers, and hyphens for new files.
+- Keep category placement consistent with the manifest `category`.
+- Use forward slashes in `localPath` values inside manifest files.

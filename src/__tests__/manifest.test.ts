@@ -97,6 +97,16 @@ describe('CorpusManifestEntrySchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('should accept a valid Rwanda entry', () => {
+    const entry = makeValidEntry({
+      country: 'Rwanda',
+      jurisdictionCode: 'RW',
+      localPath: 'documents/rwanda/aml-cft/some-doc.pdf',
+    });
+    const result = CorpusManifestEntrySchema.safeParse(entry);
+    expect(result.success).toBe(true);
+  });
+
   it('should accept optional fields', () => {
     const entry = makeValidEntry({
       effectiveDate: '2024-01-01',
@@ -196,6 +206,16 @@ describe('CorpusManifestEntrySchema', () => {
       country: 'Nigeria',
       jurisdictionCode: 'INTL',
       localPath: 'documents/nigeria/test.pdf',
+    });
+    const result = CorpusManifestEntrySchema.safeParse(entry);
+    expect(result.success).toBe(false);
+  });
+
+  it('should require RW for Rwanda', () => {
+    const entry = makeValidEntry({
+      country: 'Rwanda',
+      jurisdictionCode: 'KE',
+      localPath: 'documents/rwanda/test.pdf',
     });
     const result = CorpusManifestEntrySchema.safeParse(entry);
     expect(result.success).toBe(false);
@@ -358,6 +378,17 @@ describe('CorpusManifestSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('should accept an empty Rwanda manifest', () => {
+    const manifest = {
+      version: 1,
+      country: 'Rwanda',
+      jurisdictionCode: 'RW',
+      entries: [],
+    };
+    const result = CorpusManifestSchema.safeParse(manifest);
+    expect(result.success).toBe(true);
+  });
+
   it('should accept a Kenya manifest with entries', () => {
     const manifest = {
       version: 1,
@@ -504,6 +535,16 @@ describe('Flat vs nested path validation', () => {
       country: 'Malawi',
       jurisdictionCode: 'MW',
       localPath: 'documents/malawi/aml-cft/fiu-guidelines.pdf',
+    });
+    const result = CorpusManifestEntrySchema.safeParse(entry);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate nested Rwanda path under documents/rwanda/', () => {
+    const entry = makeValidEntry({
+      country: 'Rwanda',
+      jurisdictionCode: 'RW',
+      localPath: 'documents/rwanda/cybersecurity/dpo-guide.pdf',
     });
     const result = CorpusManifestEntrySchema.safeParse(entry);
     expect(result.success).toBe(true);

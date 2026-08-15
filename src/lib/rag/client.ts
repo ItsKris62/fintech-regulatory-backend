@@ -78,6 +78,32 @@ const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY || '',
 });
 
+const PINECONE_REQUEST_TIMEOUT_MS = Number(
+  process.env.PINECONE_REQUEST_TIMEOUT_MS ?? 120_000,
+);
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  operation: string,
+  timeoutMs = PINECONE_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 /**
  * Get Pinecone index name
  */
@@ -104,7 +130,7 @@ export async function getIndex() {
   const indexName = getIndexName();
 
   try {
-    const indexList = await pinecone.listIndexes();
+    const indexList = await withTimeout(pinecone.listIndexes(), 'pinecone_list_indexes');
     const exists = indexList.indexes?.some(i => i.name === indexName);
 
     if (!exists) {
@@ -138,10 +164,13 @@ export async function upsertVectors(
       namespace,
     });
 
-    await index.upsertRecords({
-      records: records as any[],
-      namespace: namespace || '__default__',
-    });
+    await withTimeout(
+      index.upsertRecords({
+        records: records as any[],
+        namespace: namespace || '__default__',
+      }),
+      'pinecone_upsert_records',
+    );
 
     logger.info({
       type: 'pinecone_upsert_complete',

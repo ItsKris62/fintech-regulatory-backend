@@ -429,6 +429,15 @@ export class DocumentIngestionService {
     })
 
     if (existing) {
+      if (existing.status === 'PROCESSING' || existing.status === 'PENDING') {
+        await (prisma as any).regulatoryDocument.update({
+          where: { id: existing.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: 'Marked failed so ingestion can resume after an interrupted run.',
+          },
+        })
+      } else {
       const nextAuthorityStatus = input.authorityStatus ?? 'IN_FORCE'
       const nextIsBinding = input.isBinding ?? defaultBindingForAuthority(nextAuthorityStatus)
 
@@ -452,6 +461,7 @@ export class DocumentIngestionService {
         storageKey: existing.storageKey,
         skipped: true,
         reason: `Duplicate  -  already indexed as "${existing.title}"`,
+      }
       }
     }
 

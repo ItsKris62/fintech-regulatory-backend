@@ -47,8 +47,8 @@ scripts/verify-sprint-3-batch-4.ts
 scripts/verify-sprint-3-batch-5.ts
 
 # Regulatory document source files (large binaries -- gitignored, store in R2)
-# Place documents in documents/kenya/ and documents/international/
-# The folder structure (README.md, .gitkeep) is tracked; only binaries are ignored.
+# Place documents in the relevant documents/<country-or-scope>/ category folder.
+# The folder structure (README.md, manifest.json, .gitkeep) is tracked; binaries are ignored.
 documents/**/*.pdf
 documents/**/*.docx
 documents/**/*.doc

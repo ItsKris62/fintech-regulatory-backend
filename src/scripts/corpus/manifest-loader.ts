@@ -47,12 +47,13 @@ export interface ManifestError {
 // Constants
 // ============================================================================
 
-const KNOWN_COUNTRIES: Country[] = ['Kenya', 'Malawi', 'Nigeria', 'International'];
+const KNOWN_COUNTRIES: Country[] = ['Kenya', 'Malawi', 'Nigeria', 'Rwanda', 'International'];
 
 const COUNTRY_FOLDER_MAP: Record<Country, string> = {
   Kenya: 'kenya',
   Malawi: 'malawi',
   Nigeria: 'nigeria',
+  Rwanda: 'rwanda',
   International: 'international',
 };
 

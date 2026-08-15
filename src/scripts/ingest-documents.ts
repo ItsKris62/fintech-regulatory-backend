@@ -8,9 +8,9 @@
  *   pnpm ingest
  *
  * Workflow:
- *   1. Place documents in documents/kenya/ or documents/international/
- *   2. Set the correct `fileName` in DOCUMENT_REGISTRY below
- *   3. Run `pnpm ingest`
+ *   1. Place documents in documents/<country-or-scope>/
+ *   2. Set hardcoded registry entries below or add entries to a corpus manifest
+ *   3. Run `pnpm ingest`, optionally filtered with `--country=rwanda`
  *
  * Documents are processed sequentially (not in parallel) to avoid rate-limiting
  * on embedding APIs. Already-indexed documents (same SHA-256 checksum) are
@@ -26,6 +26,13 @@ import {
   type DocumentIngestionInput,
 } from '@/lib/ingestion/document-processor';
 import { logger } from '@/utils/logger';
+import { loadManifest } from './corpus/manifest-loader';
+import type {
+  AuthorityStatus as ManifestAuthorityStatus,
+  Category as ManifestCategory,
+  Country as ManifestCountry,
+  CorpusManifestEntry,
+} from './corpus/manifest.schema';
 
 /**
  * Local string-union matching the `RegulatoryDocumentCategory` Prisma enum.
@@ -56,6 +63,156 @@ interface RegistryEntry extends Omit<DocumentIngestionInput, 'filePath' | 'categ
    * Prisma enum. After `prisma generate` the types align automatically.
    */
   category: DocumentCategory;
+}
+
+type IngestionAuthorityStatus = NonNullable<DocumentIngestionInput['authorityStatus']>;
+
+const COUNTRY_ARG_MAP: Record<string, ManifestCountry> = {
+  kenya: 'Kenya',
+  international: 'International',
+  malawi: 'Malawi',
+  nigeria: 'Nigeria',
+  rwanda: 'Rwanda',
+};
+
+const MANIFEST_BACKED_COUNTRIES = new Set<ManifestCountry>(['Rwanda']);
+
+function parseCountryFilter(): ManifestCountry | null {
+  const countryArg = process.argv
+    .slice(2)
+    .find((arg) => arg.startsWith('--country='));
+
+  if (!countryArg) return null;
+
+  const raw = countryArg.replace('--country=', '').trim().toLowerCase();
+  const mapped = COUNTRY_ARG_MAP[raw];
+
+  if (!mapped) {
+    console.error(`❌ Unknown country: "${raw}"`);
+    console.error(`   Valid: ${Object.keys(COUNTRY_ARG_MAP).join(', ')}`);
+    process.exit(1);
+  }
+
+  return mapped;
+}
+
+function categoryFromManifest(category: ManifestCategory): DocumentCategory {
+  switch (category) {
+    case 'data-protection':
+      return 'DATA_PROTECTION';
+    case 'cybersecurity':
+    case 'cloud':
+    case 'ict':
+    case 'ai-governance':
+      return 'CYBERSECURITY';
+    case 'aml-cft':
+      return 'AML_CFT';
+    case 'payments':
+      return 'PAYMENT_SYSTEMS';
+    case 'core':
+    case 'banking':
+    case 'microfinance':
+    case 'consumer-protection':
+    case 'capital-markets':
+    case 'digital-lending':
+    case 'open-banking':
+    case 'insurance':
+    case 'tax':
+    case 'guidance':
+    case 'accessibility':
+    case 'other':
+      return 'FINTECH_REGULATION';
+    default:
+      return 'FINTECH_REGULATION';
+  }
+}
+
+function authorityStatusFromManifest(
+  authorityStatus: ManifestAuthorityStatus,
+): IngestionAuthorityStatus {
+  switch (authorityStatus) {
+    case 'DRAFT':
+    case 'SUPERSEDED':
+    case 'CONSULTATION':
+      return authorityStatus;
+    case 'IN_FORCE':
+    case 'GUIDANCE':
+    case 'REPORT':
+    case 'UNKNOWN':
+      return 'IN_FORCE';
+    default:
+      return 'IN_FORCE';
+  }
+}
+
+function optionalDate(value: string | null | undefined): Date | undefined {
+  if (!value) return undefined;
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function documentTypeFromManifest(entry: CorpusManifestEntry): string {
+  return entry.documentType.toLowerCase().replace(/_/g, '-');
+}
+
+function fileNameFromLocalPath(localPath: string): string {
+  return localPath.replace(/^documents\//, '');
+}
+
+function registryEntryFromManifest(entry: CorpusManifestEntry): RegistryEntry {
+  const authorityStatus = authorityStatusFromManifest(entry.authorityStatus);
+
+  return {
+    fileName: fileNameFromLocalPath(entry.localPath),
+    title: entry.title,
+    source: entry.regulator,
+    category: categoryFromManifest(entry.category),
+    jurisdiction: entry.country,
+    documentType: documentTypeFromManifest(entry),
+    effectiveDate: optionalDate(entry.effectiveDate),
+    publicationDate: optionalDate(entry.publicationDate),
+    retrievedAt: optionalDate(entry.retrievedAt),
+    officialUrl: entry.sourceUrl ?? undefined,
+    version: entry.version ?? undefined,
+    authorityStatus,
+    isBinding: entry.isBinding,
+  };
+}
+
+function loadManifestRegistryEntries(country: ManifestCountry): RegistryEntry[] {
+  const result = loadManifest(country);
+
+  if (result.errors.length > 0 || !result.manifest) {
+    const messages = result.errors.map((err) => {
+      const prefix = err.entryId ? `[${err.entryId}] ` : '';
+      const field = err.field ? `${err.field}: ` : '';
+      return `${prefix}${field}${err.message}`;
+    });
+
+    throw new Error(
+      `Cannot ingest ${country} manifest until validation errors are fixed:\n${messages.join('\n')}`,
+    );
+  }
+
+  return result.validEntries
+    .filter((entry) => entry.reviewStatus !== 'REJECTED' && entry.reviewStatus !== 'PLACEHOLDER')
+    .map(registryEntryFromManifest);
+}
+
+function buildRegistry(countryFilter: ManifestCountry | null): RegistryEntry[] {
+  const manifestEntries: RegistryEntry[] = [];
+
+  for (const country of MANIFEST_BACKED_COUNTRIES) {
+    if (countryFilter && countryFilter !== country) continue;
+    manifestEntries.push(...loadManifestRegistryEntries(country));
+  }
+
+  const staticEntries = countryFilter && MANIFEST_BACKED_COUNTRIES.has(countryFilter)
+    ? []
+    : DOCUMENT_REGISTRY.filter((entry) => !countryFilter || entry.jurisdiction === countryFilter);
+
+  return [...staticEntries, ...manifestEntries];
 }
 
 const DOCUMENT_REGISTRY: RegistryEntry[] = [
@@ -717,9 +874,15 @@ process.on('SIGTERM', () => {
 // ============================================================================
 
 async function main(): Promise<void> {
+  const countryFilter = parseCountryFilter();
+  const registry = buildRegistry(countryFilter);
+
   console.log('\n🚀 SheriaBot  -  Regulatory Document Ingestion Pipeline\n');
   console.log(`📁 Documents folder: ${DOCS_ROOT}`);
-  console.log(`📋 Registry entries: ${DOCUMENT_REGISTRY.length}\n`);
+  if (countryFilter) {
+    console.log(`🌍 Country filter: ${countryFilter}`);
+  }
+  console.log(`📋 Registry entries: ${registry.length}\n`);
 
   let totalProcessed = 0;
   let totalSkipped = 0;
@@ -727,7 +890,7 @@ async function main(): Promise<void> {
   let totalChunks = 0;
   let totalVectors = 0;
 
-  for (const entry of DOCUMENT_REGISTRY) {
+  for (const entry of registry) {
     if (shuttingDown) {
       console.log('\n⚠️  Shutdown requested  -  stopping ingestion.');
       break;
@@ -750,16 +913,20 @@ async function main(): Promise<void> {
       `   Source:       ${entry.source} | Category: ${entry.category} | Jurisdiction: ${entry.jurisdiction}`
     );
 
-    const input: DocumentIngestionInput = {
-      filePath,
-      title: entry.title,
-      source: entry.source,
+      const input: DocumentIngestionInput = {
+        filePath,
+        fileName: path.basename(entry.fileName),
+        title: entry.title,
+        source: entry.source,
       // Cast is safe  -  DocumentCategory values match RegulatoryDocumentCategory exactly
       category: entry.category as DocumentIngestionInput['category'],
       jurisdiction: entry.jurisdiction,
-      documentType: entry.documentType,
-      effectiveDate: entry.effectiveDate,
-      version: entry.version,
+        documentType: entry.documentType,
+        effectiveDate: entry.effectiveDate,
+        publicationDate: entry.publicationDate,
+        retrievedAt: entry.retrievedAt,
+        officialUrl: entry.officialUrl,
+        version: entry.version,
       authorityStatus: entry.authorityStatus ?? 'IN_FORCE',
       isBinding: entry.isBinding ?? (entry.authorityStatus ?? 'IN_FORCE') === 'IN_FORCE',
       supersedesDocumentId: entry.supersedesDocumentId,

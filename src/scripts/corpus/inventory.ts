@@ -62,6 +62,7 @@ function mapCountryArg(raw: string): Country | null {
     international: 'International',
     malawi: 'Malawi',
     nigeria: 'Nigeria',
+    rwanda: 'Rwanda',
   };
   return map[raw.toLowerCase()] ?? null;
 }
