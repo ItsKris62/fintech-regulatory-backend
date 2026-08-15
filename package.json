@@ -31,6 +31,8 @@
     "pilot:cron": "tsx src/scripts/pilot-lifecycle-cron.ts",
     "pilot:backfill-access": "tsx src/scripts/backfill-pilot-access.ts",
     "pilot:backfill-access:execute": "tsx src/scripts/backfill-pilot-access.ts --execute",
+    "qa:provision-dashboard-user": "tsx src/scripts/provision-dashboard-qa-user.ts",
+    "qa:cleanup-dashboard-user": "tsx src/scripts/provision-dashboard-qa-user.ts --cleanup",
     "softbounce:cron": "tsx src/scripts/soft-bounce-cron.ts",
     "bulksend:cron": "tsx src/scripts/bulk-send-cron.ts",
     "vault:cron": "tsx src/scripts/vault-reconciliation-cron.ts",
