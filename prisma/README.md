@@ -18,7 +18,7 @@ prisma/
 Ensure your `.env` file has the correct `DATABASE_URL`:
 
 ```bash
-# Railway PostgreSQL (production)
+# Supabase PostgreSQL (production on Render)
 DATABASE_URL="postgresql://postgres:password@host:port/database?connection_limit=5&pool_timeout=20"
 
 # Local PostgreSQL (development)
@@ -45,7 +45,7 @@ npm run db:migrate
 npx prisma migrate dev --name your_migration_name
 ```
 
-For production (Railway):
+For production (Render):
 
 ```bash
 npx prisma migrate deploy
@@ -189,7 +189,7 @@ npx prisma format
 
 ### Connection Pooling
 
-The Prisma client is configured with connection pooling optimized for Railway:
+The Prisma client is configured with conservative pooling for the Render web service and Supabase PostgreSQL:
 
 ```typescript
 // In src/lib/prisma/client.ts
@@ -221,7 +221,7 @@ If you get connection errors:
 1. Check DATABASE_URL is correct
 2. Ensure PostgreSQL is running
 3. Verify firewall allows connection
-4. Check connection limits (Railway free tier: 5 connections)
+4. Check Supabase connection limits and whether the app is using the pooled URL
 
 ### Migration Conflicts
 
@@ -246,26 +246,18 @@ npx prisma generate
 ## 📚 Documentation
 
 - [Prisma Documentation](https://www.prisma.io/docs)
-- [Prisma Railway Guide](https://www.prisma.io/docs/guides/deployment/deployment-guides/deploying-to-railway)
 - [Prisma Best Practices](https://www.prisma.io/docs/guides/performance-and-optimization/connection-management)
 
-## 🚀 Railway Deployment
+## 🚀 Production Deployment
 
-Add these commands to your `railway.json`:
+Render runs the production lifecycle from `render.yaml`:
 
-```json
-{
-  "build": {
-    "builder": "NIXPACKS",
-    "buildCommand": "npm install && npx prisma generate && npm run build"
-  },
-  "deploy": {
-    "startCommand": "npx prisma migrate deploy && npm run start"
-  }
-}
+```bash
+npm ci && npm run build:prod
+npm run start:prod
 ```
 
-The `prisma migrate deploy` command will automatically run pending migrations on each deployment.
+The `prestart:prod` lifecycle script runs `prisma migrate deploy` before `dist/index.js` starts.
 
 ## 📞 Support
 
@@ -273,4 +265,4 @@ For Prisma-related issues:
 
 1. Check the [Prisma GitHub Issues](https://github.com/prisma/prisma/issues)
 2. Join the [Prisma Slack Community](https://slack.prisma.io/)
-3. Review Railway PostgreSQL documentation
+3. Review Supabase PostgreSQL and Render service logs

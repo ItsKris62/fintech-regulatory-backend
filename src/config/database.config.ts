@@ -2,7 +2,7 @@ import { appConfig } from './app.config';
 
 /**
  * Database configuration for Prisma
- * Optimized for Railway PostgreSQL deployment
+ * Optimized for Render-hosted API processes using Supabase PostgreSQL.
  */
 export const databaseConfig = {
   /**
@@ -11,12 +11,12 @@ export const databaseConfig = {
   url: appConfig.database.url,
 
   /**
-   * Connection pool settings for Railway
-   * Railway free tier has connection limits, so we optimize pool size
+   * Connection pool settings for the Render web service.
+   * Supabase pooled connections still benefit from a conservative app pool.
    */
   pool: {
     // Maximum number of connections in the pool
-    // Railway free tier: keep this low (5-10)
+    // Keep this low to avoid exhausting the pooled Supabase connection limit.
     connectionLimit: 5,
 
     // Timeout for acquiring connection from pool (seconds)

@@ -1,244 +1,178 @@
-# SheriaBot API — Railway Deployment Guide
+# SheriaBot API - Render Deployment Guide
+
+The production backend runs on Render. The frontend runs separately on Vercel and calls this API through the configured backend URL.
 
 ## Prerequisites
 
-- [Railway account](https://railway.app/) (free tier works)
-- [Railway CLI](https://docs.railway.app/guides/cli) installed: `npm i -g @railway/cli`
-- GitHub repository connected to Railway
-- All environment variables ready (see `.env.example`)
+- Render account with access to the SheriaBot backend service
+- GitHub repository connected to Render
+- Supabase PostgreSQL database URL and direct migration URL
+- Upstash Redis REST URL and token
+- Pinecone, Cloudflare R2, Resend, Anthropic, Stripe, and Supabase secrets ready
+- Vercel frontend URL ready for CORS
 
----
+## Render Service
 
-## 1. Railway Project Setup
+Use the checked-in `render.yaml` blueprint for the backend web service:
 
-### Create project
+```yaml
+services:
+  - type: web
+    name: fintech-regulatory-backend
+    env: node
+    buildCommand: npm ci && npm run build:prod
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+```
+
+Recommended dashboard settings:
+
+- Runtime: Node
+- Auto-deploy: enabled for the production branch
+- Health check path: `/health`
+- Build command: `npm ci && npm run build:prod`
+- Start command: `npm run start:prod`
+
+The start command runs `prestart:prod`, which applies Prisma migrations with `prisma migrate deploy` before starting `dist/index.js`.
+
+## Environment Variables
+
+Set variables in Render dashboard under **Service -> Environment**. Use `.env.example` as the full reference list.
+
+Required production values include:
 
 ```bash
-railway login
-railway init    # creates a new project
-railway link    # or link to existing project
-```
-
-### Provision services
-
-```bash
-# PostgreSQL
-railway add --plugin postgresql
-
-# Redis
-railway add --plugin redis
-```
-
-Railway auto-injects `DATABASE_URL` and `REDIS_URL` for provisioned databases.
-
----
-
-## 2. Environment Variables
-
-Set all variables from `.env.example` in the Railway dashboard:
-
-**Settings → Variables → Raw Editor**
-
-Required variables (DATABASE_URL and REDIS_URL are auto-set by Railway plugins):
-
-```
 NODE_ENV=production
-APP_URL=https://your-app.up.railway.app
-FRONTEND_URL=https://your-frontend.vercel.app
-JWT_SECRET=<generate: openssl rand -base64 48>
-REFRESH_TOKEN_SECRET=<generate: openssl rand -base64 48>
-RESEND_API_KEY=re_...
-FROM_EMAIL=noreply@yourdomain.com
+PORT=4000
+LOG_LEVEL=info
+
+APP_URL=https://your-render-backend.onrender.com
+FRONTEND_URL=https://your-vercel-frontend.vercel.app
+
+DATABASE_ENVIRONMENT=production
+DATABASE_URL=postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?pgbouncer=true
+DIRECT_URL=postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
+
+UPSTASH_REDIS_REST_URL=https://your-database.upstash.io
+UPSTASH_REDIS_REST_TOKEN=your-upstash-token
+
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_JWT_SECRET=your-jwt-secret
+
 ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-3-haiku-20240307
 PINECONE_API_KEY=...
-PINECONE_ENVIRONMENT=us-east-1-aws
-PINECONE_INDEX_NAME=sheriabot-legal-corpus
 R2_ACCOUNT_ID=...
 R2_ACCESS_KEY_ID=...
 R2_SECRET_ACCESS_KEY=...
-R2_BUCKET_NAME=sheriabot-documents
-R2_PUBLIC_URL=https://your-bucket.r2.dev
-RATE_LIMIT_MAX=100
-RATE_LIMIT_WINDOW=15m
+RESEND_API_KEY=re_...
+STRIPE_SECRET_KEY=...
 ```
 
----
+## Frontend on Vercel
 
-## 3. Database Migration
+The frontend is deployed from the separate `fintech-regulatory-platform` project on Vercel.
 
-Migrations run automatically on deploy via `prestart:prod` script.
-
-To run manually:
+Set the frontend API variables to the Render backend URL:
 
 ```bash
-railway run pnpm run db:migrate:prod
+NEXT_PUBLIC_API_URL=https://your-render-backend.onrender.com
+NEXT_PUBLIC_TRPC_URL=https://your-render-backend.onrender.com/trpc
 ```
 
-To seed production data:
+Set backend `FRONTEND_URL` to the production Vercel URL. Add preview origins as comma-separated values when Vercel previews need backend access:
 
 ```bash
-railway run pnpm run db:seed:prod
+FRONTEND_URL=https://app.sheriabot.com,https://your-preview.vercel.app
 ```
 
----
+## Deploy
 
-## 4. Deploy
+### Auto-deploy
 
-### Option A: Auto-deploy (recommended)
+Connect the backend repository in Render and enable auto-deploy for the production branch. A push to that branch triggers:
 
-Connect your GitHub repo in Railway dashboard. Pushes to `main` auto-deploy.
+1. `npm ci`
+2. `npm run build:prod`
+3. `npm run start:prod`
+4. `npm run db:migrate:prod` through the `prestart:prod` lifecycle script
 
-### Option B: CLI deploy
+### Manual deploy
+
+Use Render dashboard:
+
+1. Open the backend web service
+2. Go to **Manual Deploy**
+3. Choose **Deploy latest commit**
+
+If you use a Render deploy hook, call it from your terminal or CI:
 
 ```bash
-railway up
+curl -X POST "$RENDER_DEPLOY_HOOK_URL"
 ```
 
-### Option C: GitHub Actions
-
-Add `RAILWAY_TOKEN` as a GitHub secret:
-
-1. Railway dashboard → Account Settings → Tokens → Create Token
-2. GitHub repo → Settings → Secrets → New Repository Secret → `RAILWAY_TOKEN`
-
-Pushes to `main` trigger production deploy, pushes to `staging` trigger staging deploy.
-
----
-
-## 5. Verify Deployment
+## Verify Deployment
 
 ```bash
-# Quick health check
-curl https://your-app.up.railway.app/health
-
-# Detailed health check (database, redis, services)
-curl https://your-app.up.railway.app/health/detailed
-
-# Root info
-curl https://your-app.up.railway.app/
+curl https://your-render-backend.onrender.com/health
+curl https://your-render-backend.onrender.com/health/detailed
+curl https://your-render-backend.onrender.com/
 ```
 
----
+Expected:
 
-## 6. Monitoring & Alerts
+- `/health` returns a healthy HTTP status
+- `/health/detailed` can reach PostgreSQL and reports Redis status
+- Vercel frontend can call `/trpc` and `/api/compliance/stream`
 
-### View logs
+## Logs and Monitoring
 
-- **Railway dashboard**: Select your service → Deployments → View Logs
-- **CLI**: `railway logs` or `railway logs --follow`
+- Render logs: **Service -> Logs**
+- Render deploy history: **Service -> Deploys**
+- Render metrics: **Service -> Metrics**
+- Application structured logs include request IDs, health events, RAG errors, and service failures
 
-### Built-in metrics
+For incidents:
 
-Railway provides CPU, memory, and network metrics in the dashboard under **Metrics** tab.
+1. Check the latest Render deploy logs
+2. Check `/health/detailed`
+3. Verify Supabase and Upstash service status
+4. Confirm `APP_URL` and `FRONTEND_URL` are correct
+5. Roll back to the last healthy Render deploy if the new deploy is bad
 
-### Interpreting `/health/detailed`
+## Rollback
 
-| Status | Meaning | Action |
-|--------|---------|--------|
-| `ok` | All services healthy | None |
-| `degraded` | Redis or a non-critical service is down | Check Redis connection, may self-recover |
-| `down` | Database AND Redis both unreachable | Immediate investigation required |
+Use Render dashboard:
 
-### What to do when degraded
+1. Open the backend service
+2. Go to **Deploys**
+3. Select the last known good deploy
+4. Click **Rollback**
 
-1. Check Railway dashboard for service health
-2. Verify Redis is running: `railway logs --service redis`
-3. The API continues to function without Redis (no caching/rate limiting)
-4. Redis typically auto-recovers; if not, restart the Redis plugin
+The Vercel frontend rolls back separately from the Vercel project dashboard.
 
-### What to do when down
+## Troubleshooting
 
-1. Check PostgreSQL: `railway logs --service postgresql`
-2. Check API logs: `railway logs`
-3. Verify DATABASE_URL is correct in variables
-4. Try redeploying: `railway up`
+| Error | Likely Cause | Fix |
+| ----- | ------------ | --- |
+| `npm ci` fails | `package-lock.json` out of sync | Run `npm install`, commit the updated lockfile, redeploy |
+| `prisma migrate deploy` fails | Migration or database drift | Inspect Render logs and run migrations only after confirming the target DB |
+| `DATABASE_URL` connection errors | Wrong Supabase pooled URL or credentials | Verify `DATABASE_URL`, `DIRECT_URL`, and Supabase status |
+| Redis degraded | Upstash REST URL/token missing or wrong | Verify `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` |
+| CORS errors from Vercel | Frontend URL not allowed | Add production and preview Vercel origins to `FRONTEND_URL` |
+| Health check fails | Wrong `PORT`, startup failure, or env validation failure | Check Render logs and required env vars |
+| Path alias runtime errors | Build output not alias-rewritten | Ensure `npm run build:prod` runs `tsc-alias` |
 
----
+## Cost Notes
 
-## 7. Rollback
+The backend bill is primarily Render compute plus usage-based providers:
 
-### Via dashboard
-
-1. Go to your service → Deployments
-2. Find the last working deployment
-3. Click the three dots → Rollback
-
-### Via CLI
-
-```bash
-# List recent deployments
-railway deployments
-
-# Rollback to previous
-railway rollback
-```
-
----
-
-## 8. Scaling
-
-### When to scale
-
-| Symptom | Solution |
-|---------|----------|
-| Response times > 2s consistently | Increase RAM/CPU |
-| Memory usage > 80% of allocated | Increase RAM |
-| Database connections exhausted | Increase connection pool or upgrade DB plan |
-| Rate limit errors from Anthropic | Reduce AI request rate or upgrade API plan |
-
-### How to scale
-
-**Railway dashboard → Service → Settings → Resources**
-
-- **Starter plan** (free): 512 MB RAM, shared CPU — good for development
-- **Pro plan** ($5/mo): Up to 8 GB RAM, dedicated CPU — good for production
-- **Scale replicas**: Set `numReplicas` in `railway.toml` (requires Pro plan)
-
-### Database scaling
-
-- Free tier: 1 GB storage, 5 connections
-- Pro tier: Scale storage as needed, increase connection pool in config
-
----
-
-## 9. Troubleshooting
-
-### Common errors
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `ECONNREFUSED` on DATABASE_URL | DB not provisioned or URL wrong | Check Railway plugins, verify DATABASE_URL |
-| `prisma migrate deploy` fails | Schema drift or missing migrations | Run `pnpm exec prisma migrate reset` (destroys data!) or fix migration |
-| `ENOMEM` / OOM killed | Not enough RAM | Scale up in Railway settings |
-| `SIGTERM` + immediate restart | Health check failing | Check `/health` endpoint, verify PORT matches |
-| `Cannot find module '@/...'` | Path aliases not resolved | Ensure `tsc-alias` runs in `build:prod` |
-| `Connection timeout` to Redis | Redis plugin not linked | Re-add Redis plugin, check REDIS_URL |
-
-### Debug commands
-
-```bash
-# SSH into running container
-railway shell
-
-# Run one-off command
-railway run node -e "console.log(process.env.DATABASE_URL ? 'DB OK' : 'DB MISSING')"
-
-# Check Prisma migrations status
-railway run pnpm exec prisma migrate status
-```
-
----
-
-## 10. Cost Estimate
-
-| Service | Free Tier | When to Upgrade |
-|---------|-----------|-----------------|
-| **Railway** | $5 credit/mo, 512 MB RAM | > 100 daily users or need custom domains |
-| **Pinecone** | 1 index, 100K vectors | > 100K document chunks |
-| **Resend** | 100 emails/day | > 100 daily notifications |
-| **Cloudflare R2** | 10 GB, 10M reads/mo | > 10 GB documents |
-| **Anthropic** | $5 signup credit | After credits; ~$0.25/1M input tokens (Haiku) |
-
-**Estimated monthly cost at launch**: $0–$10 (within free tiers)
-**Estimated at 500 users**: ~$25–$50/mo (Railway Pro + Anthropic usage)
+- Render web service
+- Supabase PostgreSQL/Auth
+- Upstash Redis
+- Pinecone vector index
+- Cloudflare R2 storage
+- Anthropic API usage
+- Resend email
+- Stripe processing fees

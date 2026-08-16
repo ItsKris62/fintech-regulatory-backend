@@ -44,7 +44,7 @@ export function registerSecurityMiddleware(app: FastifyInstance): void {
     (request as any).requestId = existingId || randomUUID();
   });
 
-  // -- Client IP extraction (behind Railway proxy) -----------------------
+  // -- Client IP extraction (behind Render proxy) ------------------------
   app.addHook('onRequest', async (request: FastifyRequest) => {
     const forwarded = request.headers['x-forwarded-for'];
     const clientIp = typeof forwarded === 'string'

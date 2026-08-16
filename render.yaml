@@ -4,13 +4,16 @@ services:
     env: node
     region: oregon
     plan: starter
-    buildCommand: pnpm install --frozen-lockfile && pnpm run build:prod
-    startCommand: pnpm run start:prod
+    autoDeploy: true
+    buildCommand: npm ci && npm run build:prod
+    startCommand: npm run start:prod
     healthCheckPath: /health
     envVars:
       # Application
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: "20.20.0"
       - key: PORT
         value: "4000"
       - key: LOG_LEVEL

@@ -17,14 +17,14 @@ redis/
 
 ### 1. Environment Setup
 
-Ensure your `.env` file has the correct `REDIS_URL`:
+Ensure your `.env` file has the correct Upstash Redis REST credentials:
 
 ```bash
-# Railway Redis (production)
-REDIS_URL="redis://default:password@host:port"
+# Upstash Redis (production on Render)
+UPSTASH_REDIS_REST_URL="https://your-database.upstash.io"
+UPSTASH_REDIS_REST_TOKEN="your-upstash-redis-rest-token"
 
-# Local Redis (development)
-REDIS_URL="redis://localhost:6379"
+# Local development can leave Upstash unset if Redis-dependent features are not being tested.
 ```
 
 ### 2. Test Connection
@@ -358,10 +358,10 @@ await sessionCache.delete('session-abc123');
 
 If Redis connection fails:
 
-1. Check `REDIS_URL` is correct
-2. Ensure Redis is running: `redis-cli ping` should return `PONG`
-3. Check firewall allows connection
-4. Verify Railway Redis is provisioned
+1. Check `UPSTASH_REDIS_REST_URL` is correct
+2. Check `UPSTASH_REDIS_REST_TOKEN` is current
+3. Verify the Upstash database is reachable from Render
+4. Check Render service logs for Redis client errors
 
 ### Memory Issues
 
@@ -375,7 +375,7 @@ console.log(`Memory used: ${stats.usedMemory}`);
 ```
 
 If memory is full:
-- Increase Railway Redis plan
+- Increase the Upstash Redis plan
 - Set shorter TTLs
 - Use `cache.invalidatePattern()` to clear old data
 
@@ -442,11 +442,11 @@ console.log(`Cache hit rate: ${hitRate.toFixed(2)}%`);
 3. **Invalidate on updates** - Keep cache fresh
 4. **Rate limit expensive operations** - Protect your API
 5. **Use pub/sub for real-time** - Better than polling
-6. **Monitor memory usage** - Railway free tier has limits
+6. **Monitor memory usage** - Upstash plans have request and storage limits
 7. **Handle errors gracefully** - Fail open on cache errors
 
 ## 📚 Documentation
 
 - [Redis Documentation](https://redis.io/documentation)
 - [ioredis Documentation](https://github.com/redis/ioredis)
-- [Railway Redis Guide](https://docs.railway.app/databases/redis)
+- [Upstash Redis Documentation](https://upstash.com/docs/redis)
