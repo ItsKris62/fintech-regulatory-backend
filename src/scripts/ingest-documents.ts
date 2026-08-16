@@ -75,7 +75,7 @@ const COUNTRY_ARG_MAP: Record<string, ManifestCountry> = {
   rwanda: 'Rwanda',
 };
 
-const MANIFEST_BACKED_COUNTRIES = new Set<ManifestCountry>(['Rwanda']);
+const MANIFEST_BACKED_COUNTRIES = new Set<ManifestCountry>(['Malawi', 'Rwanda']);
 
 function parseCountryFilter(): ManifestCountry | null {
   const countryArg = process.argv
