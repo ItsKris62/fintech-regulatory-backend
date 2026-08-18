@@ -46,7 +46,7 @@ describe('Business and Startup organization limit enforcement map', () => {
   });
 
   it('guards Business checkout before attaching a subscription to the org billing context', () => {
-    const start = billingRouter.indexOf('createCheckoutSession: orgMemberProcedure');
+    const start = billingRouter.indexOf('createCheckoutSession: billingAdminProcedure');
     const body = billingRouter.slice(start, start + 5200);
     const guardIndex = body.indexOf('assertCanCreateOrJoinOrganization');
     const stripeIndex = body.indexOf('stripe.checkout.sessions.create');

@@ -36,6 +36,8 @@
     "softbounce:cron": "tsx src/scripts/soft-bounce-cron.ts",
     "bulksend:cron": "tsx src/scripts/bulk-send-cron.ts",
     "vault:cron": "tsx src/scripts/vault-reconciliation-cron.ts",
+    "billing:intasend:reconcile": "tsx src/scripts/intasend-reconciliation-cron.ts",
+    "billing:mpesa:renewals": "tsx src/scripts/mpesa-renewal-cron.ts",
     "automation-approval-expiry:cron": "tsx src/scripts/automation-approval-expiry-cron.ts",
     "vault:cleanup-deleted": "tsx src/scripts/cleanup-deleted-vault-documents.ts",
     "seed:marketing:flags": "tsx src/scripts/seed-marketing-feature-flags.ts",

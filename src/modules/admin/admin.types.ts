@@ -124,6 +124,14 @@ export interface AdminOrgDetail {
   subscriptionEndsAt: Date | null;
   planStartDate: Date | null;
   planEndDate: Date | null;
+  preferredPaymentMethod: string | null;
+  mpesaPhoneNumber: string | null;
+  mpesaNextPaymentDueDate: Date | null;
+  subscriptionCycleEnd: Date | null;
+  mpesaFailedRenewalAttempts: number;
+  mpesaLastRenewalAttemptAt: Date | null;
+  mpesaNextRenewalRetryAt: Date | null;
+  mpesaCancelledByUserAt: Date | null;
   maxSeats: number;
   memberCount: number;
   documentCount: number;

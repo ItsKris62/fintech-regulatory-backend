@@ -97,6 +97,11 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  ACTIVE_PAYMENT_PROVIDER: z.enum(['INTASEND', 'STRIPE']).default('INTASEND'),
+  STRIPE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   // Pack 1 (Editorial Intelligence) rollout flags - see
   // docs/editorial-intelligence/human-review-backfill-runbook.md and
   // phase-b-foundations.md Foundation E for the required rollout order.
@@ -217,10 +222,10 @@ const envSchema = z.object({
   RATE_LIMIT_MAX: z.string().transform(Number).pipe(z.number().positive()).default(100),
   RATE_LIMIT_WINDOW: z.string().default('15m'),
 
-  // Stripe
-  STRIPE_SECRET_KEY: z.string().min(1, 'Stripe secret key is required'),
-  STRIPE_PUBLISHABLE_KEY: z.string().min(1, 'Stripe publishable key is required'),
-  STRIPE_WEBHOOK_SECRET: z.string().min(1, 'Stripe webhook secret is required'),
+  // Stripe. Required only when STRIPE_ENABLED=true.
+  STRIPE_SECRET_KEY: z.string().optional().default(''),
+  STRIPE_PUBLISHABLE_KEY: z.string().optional().default(''),
+  STRIPE_WEBHOOK_SECRET: z.string().optional().default(''),
 
   // IntaSend (M-Pesa)  -  optional; required only when M-Pesa payment method is used
   INTASEND_PUBLISHABLE_KEY: z.string().optional().default(''),
@@ -232,6 +237,9 @@ const envSchema = z.object({
   INTASEND_PLAN_STARTUP_YEARLY: z.string().optional().default(''),
   INTASEND_PLAN_BUSINESS_MONTHLY: z.string().optional().default(''),
   INTASEND_PLAN_BUSINESS_YEARLY: z.string().optional().default(''),
+  INTASEND_RECONCILIATION_STALE_MINUTES: z.coerce.number().int().positive().default(15),
+  INTASEND_PENDING_EXPIRE_HOURS: z.coerce.number().int().positive().default(24),
+  MPESA_RENEWAL_GRACE_DAYS: z.coerce.number().int().min(1).default(7),
 
   // Marketing & Outreach Module
   RESEND_MARKETING_FROM_EMAIL: z.string().email().default('marketing@sheriabot.com'),
@@ -249,7 +257,31 @@ const envSchema = z.object({
  */
 function validateEnv() {
   try {
-    return envSchema.parse(process.env);
+    const parsed = envSchema.parse(process.env);
+    const invalidVariables: string[] = [];
+
+    if (parsed.STRIPE_ENABLED) {
+      if (!parsed.STRIPE_SECRET_KEY) invalidVariables.push('STRIPE_SECRET_KEY');
+      if (!parsed.STRIPE_PUBLISHABLE_KEY) invalidVariables.push('STRIPE_PUBLISHABLE_KEY');
+      if (!parsed.STRIPE_WEBHOOK_SECRET) invalidVariables.push('STRIPE_WEBHOOK_SECRET');
+    }
+
+    if (parsed.ACTIVE_PAYMENT_PROVIDER === 'STRIPE' && !parsed.STRIPE_ENABLED) {
+      invalidVariables.push('ACTIVE_PAYMENT_PROVIDER/STRIPE_ENABLED');
+    }
+
+    if (invalidVariables.length > 0) {
+      console.error(
+        [
+          'Environment validation failed.',
+          'Invalid variable names only; values are intentionally not logged.',
+          ...invalidVariables.map((name) => `  - ${name}`),
+        ].join('\n')
+      );
+      process.exit(1);
+    }
+
+    return parsed;
   } catch (error) {
     if (error instanceof z.ZodError) {
       const invalidVariables = error.issues.map((err) => `  - ${err.path.join('.') || '<root>'}`);
@@ -311,6 +343,11 @@ export const appConfig = {
   features: {
     orchestratorEnabled: env.ORCHESTRATOR_ENABLED,
     agentsEnabled: env.AGENTS_ENABLED,
+  },
+  payments: {
+    activeProvider: env.ACTIVE_PAYMENT_PROVIDER,
+    stripeEnabled: env.STRIPE_ENABLED,
+    intasendEnabled: env.ACTIVE_PAYMENT_PROVIDER === 'INTASEND',
   },
 
   editorial: {
@@ -465,6 +502,13 @@ export const appConfig = {
         monthly: env.INTASEND_PLAN_BUSINESS_MONTHLY,
         yearly: env.INTASEND_PLAN_BUSINESS_YEARLY,
       },
+    },
+    reconciliation: {
+      staleMinutes: env.INTASEND_RECONCILIATION_STALE_MINUTES,
+      pendingExpireHours: env.INTASEND_PENDING_EXPIRE_HOURS,
+    },
+    renewal: {
+      graceDays: env.MPESA_RENEWAL_GRACE_DAYS,
     },
   },
 

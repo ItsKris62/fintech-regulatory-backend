@@ -185,10 +185,23 @@ class IntaSendService {
     const invoice = (raw['invoice'] ?? raw) as Record<string, unknown>;
     const state = normaliseIntaSendState((invoice['state'] as string) ?? 'PENDING');
     const providerRef = (invoice['mpesa_reference'] ?? invoice['provider_ref'] ?? null) as string | null;
+    const rawAmount = invoice['amount'] ?? invoice['value'] ?? invoice['net_amount'] ?? invoice['amount_paid'] ?? invoice['paid_amount'];
+    const amount = rawAmount === undefined || rawAmount === null
+      ? null
+      : Number(String(rawAmount).replace(/,/g, '').trim());
+    const rawCurrency = invoice['currency'] ?? invoice['currency_code'] ?? null;
+    const currency = rawCurrency === null ? null : String(rawCurrency).trim().toUpperCase();
 
     logger.info({ type: 'intasend_status_checked', invoiceId, state, providerRef });
 
-    return { invoiceId, state, providerRef, raw: invoice };
+    return {
+      invoiceId,
+      state,
+      amount: Number.isFinite(amount) ? amount : null,
+      currency: currency && currency.length > 0 ? currency : null,
+      providerRef,
+      raw: invoice,
+    };
   }
 }
 

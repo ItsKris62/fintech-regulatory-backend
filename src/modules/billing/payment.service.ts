@@ -11,6 +11,7 @@
  */
 
 import { PaymentProvider, PaymentStatus } from '@prisma/client';
+import type { PaymentPurpose } from '@prisma/client';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
@@ -26,6 +27,7 @@ export interface CreatePaymentInput {
   amount:                number;        // smallest currency unit
   currency?:             string;        // defaults to KES
   status:                PaymentStatus;
+  paymentPurpose?:       PaymentPurpose;
   description?:          string;
   paidAt?:               Date;
   metadata?:             Record<string, unknown>;
@@ -80,6 +82,7 @@ class PaymentService {
         amount:                input.amount,
         currency:              input.currency ?? 'KES',
         status:                input.status,
+        paymentPurpose:        input.paymentPurpose,
         description:           input.description,
         paidAt:                input.paidAt,
         metadata:              input.metadata ?? {},

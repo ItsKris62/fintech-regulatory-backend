@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { BillingMetric, PaymentProvider, PaymentStatus, SubscriptionPlan } from '@prisma/client';
-import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
+import { BillingMetric, MemberRole, PaymentProvider, PaymentStatus, SubscriptionPlan } from '@prisma/client';
+import { router, protectedProcedure, orgMemberProcedure, orgMemberProcedureWithRole } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
-import { stripe } from '@/lib/stripe/client';
+import { getStripeClient } from '@/lib/stripe/client';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import { stripeConfig } from '@/config/stripe.config';
 import { appConfig } from '@/config/app.config';
@@ -14,6 +14,10 @@ import { logger } from '@/utils/logger';
 import { getTrialStatus } from '@/modules/trial';
 import { intaSendService, normalisePhoneNumber } from '@/modules/intasend';
 import { paymentService } from '@/modules/billing/payment.service';
+import {
+  intaSendFinalizationService,
+  invalidateOrganizationPlanCaches,
+} from '@/modules/billing/intasend-finalization.service';
 import {
   getBillingPlanCatalog,
   getRuntimePlan,
@@ -26,6 +30,25 @@ const enterpriseInquiryKey = (orgId: string) => {
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   return `sheriabot:enterprise_inquiry:${orgId}:${date}`;
 };
+
+const billingAdminProcedure = orgMemberProcedureWithRole([MemberRole.ADMIN, MemberRole.OWNER]);
+const PAYMENT_PURPOSE_INITIAL = 'INITIAL_PURCHASE';
+const PAYMENT_PURPOSE_RENEWAL = 'RENEWAL';
+
+function latestDate(...dates: Array<Date | null | undefined>): Date | null {
+  const valid = dates.filter((date): date is Date => date instanceof Date);
+  if (valid.length === 0) return null;
+  return valid.reduce((latest, date) => date > latest ? date : latest, valid[0]);
+}
+
+function assertStripeEnabled(): void {
+  if (!appConfig.payments.stripeEnabled || appConfig.payments.activeProvider !== 'STRIPE') {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Stripe billing is currently disabled. Use M-Pesa via IntaSend.',
+    });
+  }
+}
 
 // ============================================================================
 // Helpers
@@ -113,6 +136,7 @@ export const billingRouter = router({
                   preferredPaymentMethod: true,
                   mpesaNextPaymentDueDate: true,
                   subscriptionCycleEnd: true,
+                  mpesaPhoneNumber: true,
                 },
               })
             : Promise.resolve(null),
@@ -179,7 +203,10 @@ export const billingRouter = router({
             preferredPaymentMethod: org?.preferredPaymentMethod ?? null,
             mpesaNextPaymentDueDate: org?.mpesaNextPaymentDueDate?.toISOString() ?? null,
             subscriptionCycleEnd:    org?.subscriptionCycleEnd?.toISOString()    ?? null,
+            mpesaPhoneNumber:        org?.mpesaPhoneNumber ?? null,
             catalogPrice,
+            activePaymentProvider: appConfig.payments.activeProvider,
+            stripeEnabled: appConfig.payments.stripeEnabled,
           },
           trial: trialStatus,
           effectivePlanSource: ctx.effectivePlanSource ?? 'FALLBACK',
@@ -236,7 +263,7 @@ export const billingRouter = router({
    *
    * @protected  -  requires authentication + an organization
    */
-  createCheckoutSession: orgMemberProcedure
+  createCheckoutSession: billingAdminProcedure
     .use(withPlanContext)
     .input(
       z.object({
@@ -245,6 +272,8 @@ export const billingRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      assertStripeEnabled();
+      const stripe = getStripeClient();
       const user = ctx.user!;
 
       const orgId = ctx.orgMembership!.organizationId;
@@ -384,9 +413,11 @@ export const billingRouter = router({
    *
    * @protected  -  requires authentication + an organization with an active Stripe customer
    */
-  createPortalSession: orgMemberProcedure
+  createPortalSession: billingAdminProcedure
     .use(withPlanContext)
     .mutation(async ({ ctx }) => {
+      assertStripeEnabled();
+      const stripe = getStripeClient();
       const user = ctx.user!;
 
       const orgId = ctx.orgMembership!.organizationId;
@@ -507,7 +538,7 @@ export const billingRouter = router({
    * Switching methods does NOT cancel an existing Stripe subscription  -  it only
    * affects the next payment initiated by the user.
    */
-  updatePaymentMethod: orgMemberProcedure
+  updatePaymentMethod: billingAdminProcedure
     .input(
       z.object({
         provider:          z.nativeEnum(PaymentProvider),
@@ -547,6 +578,13 @@ export const billingRouter = router({
         normalisedPhone = normalised;
       }
 
+      if (input.provider === PaymentProvider.STRIPE && !appConfig.payments.stripeEnabled) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Stripe billing is currently disabled. Use M-Pesa via IntaSend.',
+        });
+      }
+
       const updated = await prisma.organization.update({
         where: { id: orgId },
         data: {
@@ -559,8 +597,7 @@ export const billingRouter = router({
         },
       });
 
-      // Invalidate plan context cache so next request picks up the updated payment method
-      await redis.del(`sheriabot:planctx:${user.id}`);
+      await invalidateOrganizationPlanCaches(orgId);
 
       logger.info({
         type:     'payment_method_updated',
@@ -581,17 +618,25 @@ export const billingRouter = router({
    * Creates a PENDING Payment record first (idempotent via providerTransactionId),
    * then triggers the STK push via IntaSend. Returns the paymentId for polling.
    */
-  initiateMpesaPayment: orgMemberProcedure
+  initiateMpesaPayment: billingAdminProcedure
     .input(
       z.object({
         plan:             z.nativeEnum(SubscriptionPlan),
         phoneNumber:      z.string().optional(),
+        paymentPurpose:   z.enum([PAYMENT_PURPOSE_INITIAL, PAYMENT_PURPOSE_RENEWAL]).optional().default(PAYMENT_PURPOSE_INITIAL),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const user = ctx.user!;
 
       const orgId = ctx.orgMembership!.organizationId;
+
+      if (appConfig.payments.activeProvider !== 'INTASEND') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'M-Pesa via IntaSend is not the active payment provider.',
+        });
+      }
 
       if (input.plan === SubscriptionPlan.REGULATOR || input.plan === SubscriptionPlan.ENTERPRISE) {
         throw new TRPCError({
@@ -603,8 +648,34 @@ export const billingRouter = router({
       // Resolve phone number: use provided value or fall back to stored org number
       const org = await prisma.organization.findUnique({
         where:  { id: orgId },
-        select: { mpesaPhoneNumber: true, name: true },
+        select: {
+          mpesaPhoneNumber: true,
+          name: true,
+          plan: true,
+          planEndDate: true,
+          subscriptionCycleEnd: true,
+          mpesaNextPaymentDueDate: true,
+        },
       });
+
+      const paymentPurpose = input.paymentPurpose;
+      const planToCharge = paymentPurpose === PAYMENT_PURPOSE_RENEWAL
+        ? org?.plan
+        : input.plan;
+
+      if (!planToCharge || planToCharge === SubscriptionPlan.REGULATOR || planToCharge === SubscriptionPlan.ENTERPRISE) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Renewals are available only for current Startup or Business subscriptions.',
+        });
+      }
+
+      if (paymentPurpose === PAYMENT_PURPOSE_RENEWAL && input.plan !== planToCharge) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Renewal payments must target the organization current paid plan.',
+        });
+      }
 
       const rawPhone = input.phoneNumber ?? org?.mpesaPhoneNumber ?? null;
       if (!rawPhone) {
@@ -622,25 +693,30 @@ export const billingRouter = router({
         });
       }
 
-      // Persist normalised phone if a new number was provided
-      if (input.phoneNumber) {
-        await prisma.organization.update({
-          where: { id: orgId },
-          data:  { mpesaPhoneNumber: phoneNumber, preferredPaymentMethod: PaymentProvider.MPESA },
-        });
-      }
+      await prisma.organization.update({
+        where: { id: orgId },
+        data:  { mpesaPhoneNumber: phoneNumber, preferredPaymentMethod: PaymentProvider.MPESA },
+      });
 
-      const runtimePlan = await getRuntimePlan(input.plan);
+      const runtimePlan = await getRuntimePlan(planToCharge);
       const amountKes = resolvePlanPriceForInterval(runtimePlan, 'monthly') ?? 0;
 
       if (amountKes <= 0) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: `The ${input.plan} monthly M-Pesa price is not configured.`,
+          message: `The ${planToCharge} monthly M-Pesa price is not configured.`,
         });
       }
 
-      const amountCents = amountKes * 100; // DB stores smallest unit
+      const amountCents = Math.round(amountKes * 100); // DB stores smallest unit
+      const now = new Date();
+      const paidThrough = latestDate(org?.subscriptionCycleEnd, org?.mpesaNextPaymentDueDate, org?.planEndDate);
+      const billingPeriodStart = paymentPurpose === PAYMENT_PURPOSE_RENEWAL
+        ? (paidThrough && paidThrough > now ? paidThrough : now)
+        : null;
+      const billingPeriodEnd = billingPeriodStart
+        ? new Date(billingPeriodStart.getTime() + 30 * 24 * 60 * 60 * 1000)
+        : null;
 
       // Idempotency guard: return existing PENDING payment if created within last 15 minutes
       // for the same org + plan. Prevents duplicate STK prompts on network-drop retries.
@@ -650,7 +726,8 @@ export const billingRouter = router({
           orgId,
           status:           PaymentStatus.PENDING,
           provider:         PaymentProvider.MPESA,
-          subscriptionPlan: input.plan as string,
+          subscriptionPlan: planToCharge as string,
+          paymentPurpose,
           createdAt:        { gte: fifteenMinsAgo },
         },
         orderBy: { createdAt: 'desc' },
@@ -662,7 +739,8 @@ export const billingRouter = router({
           userId:    user.id,
           orgId,
           paymentId: existingPending.id,
-          plan:      input.plan,
+          plan:      planToCharge,
+          paymentPurpose,
         });
         return { paymentId: existingPending.id };
       }
@@ -677,10 +755,48 @@ export const billingRouter = router({
         amount:           amountCents,
         currency:         'KES',
         status:           PaymentStatus.PENDING,
-        description:      `${input.plan} plan  -  M-Pesa payment`,
+        paymentPurpose,
+        description:      `${planToCharge} plan ${paymentPurpose === PAYMENT_PURPOSE_RENEWAL ? 'renewal' : 'subscription'} - M-Pesa payment`,
         invoiceNumber,
-        subscriptionPlan: input.plan,
-        metadata:         { phone_number: phoneNumber, plan: input.plan },
+        subscriptionPlan: planToCharge,
+        billingPeriodStart: billingPeriodStart ?? undefined,
+        billingPeriodEnd: billingPeriodEnd ?? undefined,
+        metadata: {
+          phone_number: phoneNumber,
+          plan: planToCharge,
+          amountMinor: amountCents,
+          amountKes,
+          currency: 'KES',
+          billingPeriod: 'monthly',
+          paymentKind: paymentPurpose === PAYMENT_PURPOSE_RENEWAL ? 'renewal' : 'initial_purchase',
+          paymentPurpose,
+          renewalPaidThrough: paidThrough?.toISOString() ?? null,
+          renewalPeriodStart: billingPeriodStart?.toISOString() ?? null,
+          renewalPeriodEnd: billingPeriodEnd?.toISOString() ?? null,
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'payment_initiated',
+          entityType: 'Payment',
+          entityId: payment.id,
+          metadata: {
+            orgId,
+            provider: PaymentProvider.MPESA,
+            plan: planToCharge,
+            amountMinor: amountCents,
+            currency: 'KES',
+            paymentPurpose,
+          },
+        },
+      }).catch((err: unknown) => {
+        logger.error({
+          type: 'payment_initiated_audit_failed',
+          paymentId: payment.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
 
       // Trigger STK push
@@ -690,12 +806,34 @@ export const billingRouter = router({
           phoneNumber,
           amount:           amountKes,
           accountReference: payment.id,
-          narrative:        `SheriaBot ${input.plan} subscription`,
+          narrative:        `SheriaBot ${planToCharge} ${paymentPurpose === PAYMENT_PURPOSE_RENEWAL ? 'renewal' : 'subscription'}`,
         });
       } catch (err: unknown) {
-        // Mark the pre-created payment as failed so history is clean
-        void paymentService.updatePaymentStatus(payment.id, PaymentStatus.FAILED, {
-          error: err instanceof Error ? err.message : String(err),
+        const failedAt = new Date();
+        await prisma.$transaction(async (tx) => {
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: {
+              status: PaymentStatus.FAILED,
+              metadata: {
+                ...(payment.metadata as Record<string, unknown> ?? {}),
+                error: err instanceof Error ? err.message : String(err),
+                failedAt: failedAt.toISOString(),
+                failedBy: 'initiation',
+              },
+            },
+          });
+
+          if (paymentPurpose === PAYMENT_PURPOSE_RENEWAL) {
+            await tx.organization.update({
+              where: { id: orgId },
+              data: {
+                mpesaFailedRenewalAttempts: { increment: 1 },
+                mpesaLastRenewalAttemptAt: failedAt,
+                mpesaNextRenewalRetryAt: new Date(failedAt.getTime() + 24 * 60 * 60 * 1000),
+              },
+            });
+          }
         });
         throw new TRPCError({
           code:    'BAD_REQUEST',
@@ -711,6 +849,7 @@ export const billingRouter = router({
           metadata: {
             ...(payment.metadata as Record<string, unknown> ?? {}),
             intasendInvoiceId: stkResponse.invoiceId,
+            intasendInitialState: stkResponse.state,
           },
         },
       });
@@ -721,8 +860,9 @@ export const billingRouter = router({
         orgId,
         paymentId:         payment.id,
         intasendInvoiceId: stkResponse.invoiceId,
-        plan:              input.plan,
+        plan:              planToCharge,
         amountKes,
+        paymentPurpose,
       });
 
       return {
@@ -758,23 +898,35 @@ export const billingRouter = router({
           const liveStatus = await intaSendService.getPaymentStatus(payment.providerTransactionId);
 
           if (liveStatus.state === 'COMPLETE') {
-            // Webhook may not have fired yet  -  optimistically reflect completed status
-            // (webhook will do the full activation; we just return the current DB state)
-            logger.info({
-              type:      'mpesa_poll_status_complete_not_yet_webhoooked',
+            await intaSendFinalizationService.finalizePayment({
               paymentId: payment.id,
               invoiceId: payment.providerTransactionId,
+              verifiedStatus: liveStatus,
+              source: 'polling',
+              actorUserId: ctx.user!.id,
+            });
+          } else if (liveStatus.state === 'FAILED') {
+            await intaSendFinalizationService.markFailed({
+              invoiceId: payment.providerTransactionId,
+              source: 'polling',
             });
           }
-        } catch {
-          // Non-fatal  -  just return current DB status
+        } catch (err: unknown) {
+          logger.error({
+            type: 'mpesa_poll_status_repair_failed',
+            paymentId: payment.id,
+            invoiceId: payment.providerTransactionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
 
+      const latestPayment = await paymentService.getPaymentById(input.paymentId, orgId);
+
       return {
-        paymentId:  payment.id,
-        status:     payment.status,
-        updatedAt:  payment.updatedAt.toISOString(),
+        paymentId: latestPayment?.id ?? payment.id,
+        status:    latestPayment?.status ?? payment.status,
+        updatedAt: (latestPayment?.updatedAt ?? payment.updatedAt).toISOString(),
       };
     }),
 });

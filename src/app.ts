@@ -29,6 +29,8 @@ import {
   isAllowedIntaSendIp,
   parseAllowedIps,
   isStrongIntaSendWebhookChallenge,
+  parseTrustedProxyHops,
+  getIntaSendWebhookClientIp,
 } from './lib/intasend/webhook-verifier';
 import { hashIp } from './utils/request-identifiers';
 import * as Sentry from '@sentry/node';
@@ -67,9 +69,10 @@ const intaSendWebhookSchema = z.object({
 
 type TrustProxyValue = NonNullable<FastifyServerOptions['trustProxy']>;
 
-export function parseTrustProxy(rawValue: string | undefined): TrustProxyValue {
+export function parseTrustProxy(rawValue: string | undefined, rawHopValue = process.env.TRUST_PROXY_HOPS): TrustProxyValue {
   if (rawValue === undefined || rawValue.trim() === '') {
-    return true;
+    const hops = parseTrustedProxyHops(rawHopValue);
+    return hops > 0 ? hops : false;
   }
 
   const normalized = rawValue.trim().toLowerCase();
@@ -183,6 +186,11 @@ export async function buildApp(): Promise<FastifyInstance> {
     webhookApp.post<{ Body: Buffer }>(
       '/webhooks/stripe',
       async (request, reply) => {
+        if (!appConfig.payments.stripeEnabled) {
+          logger.info({ type: 'stripe_webhook_rejected_disabled', ip: request.ip });
+          return reply.status(410).send({ error: 'Stripe billing is disabled' });
+        }
+
         const signature = request.headers['stripe-signature'];
 
         if (!signature || typeof signature !== 'string') {
@@ -226,7 +234,11 @@ export async function buildApp(): Promise<FastifyInstance> {
           req.rawBody = body as Buffer;
           done(null, json);
         } catch (err) {
-          done(err instanceof Error ? err : new Error('json_parse_failed'), undefined);
+          req.rawBody = body as Buffer;
+          done(null, {
+            __invalidJson: true,
+            __parseError: err instanceof Error ? err.message : 'json_parse_failed',
+          });
         }
       },
     );
@@ -245,20 +257,36 @@ export async function buildApp(): Promise<FastifyInstance> {
           return reply.code(500).send({ error: 'misconfigured' });
         }
 
+        const webhookClientIp = getIntaSendWebhookClientIp(request);
+        await intaSendWebhookService.recordOperationalEvent({
+          event: 'WEBHOOK_RECEIVED',
+          providerTransactionId: typeof request.body?.invoice_id === 'string' ? request.body.invoice_id : null,
+          reasonCode: 'route_entered',
+          requestId: String(request.id),
+          ipHash: hashIp(webhookClientIp),
+        });
+
         if (!isAllowedIntaSendIp(request, allowedIps)) {
           logger.warn({
             type: 'intasend_webhook_rejected_ip',
-            ip: request.ip,
+            ip: webhookClientIp,
             allowed_count: allowedIps.length,
+          });
+          await intaSendWebhookService.recordOperationalEvent({
+            event: 'WEBHOOK_REJECTED_IP',
+            providerTransactionId: typeof request.body?.invoice_id === 'string' ? request.body.invoice_id : null,
+            reasonCode: 'ip_not_allowed',
+            requestId: String(request.id),
+            ipHash: hashIp(webhookClientIp),
           });
           return reply.code(403).send({ error: 'forbidden' });
         }
 
-        const rlResult = await checkIntaSendIngressRateLimit(request.ip);
+        const rlResult = await checkIntaSendIngressRateLimit(webhookClientIp);
         if (!rlResult.allowed) {
           logger.warn({
             type: 'intasend_webhook_rate_limited',
-            ipHash: hashIp(request.ip),
+            ipHash: hashIp(webhookClientIp),
             retryAfter: rlResult.retryAfter,
           });
           return reply.code(429).send({ error: 'rate_limited' });
@@ -286,8 +314,15 @@ export async function buildApp(): Promise<FastifyInstance> {
         if (!parseResult.success) {
           logger.warn({
             type:   'intasend_webhook_invalid_body',
-            ip:     request.ip,
+            ip:     webhookClientIp,
             errors: parseResult.error.flatten(),
+          });
+          await intaSendWebhookService.recordOperationalEvent({
+            event: 'WEBHOOK_INVALID_PAYLOAD',
+            providerTransactionId: typeof request.body?.invoice_id === 'string' ? request.body.invoice_id : null,
+            reasonCode: 'schema_validation_failed',
+            requestId: String(request.id),
+            ipHash: hashIp(webhookClientIp),
           });
           return reply.status(400).send({ error: 'Invalid webhook payload' });
         }
@@ -303,7 +338,14 @@ export async function buildApp(): Promise<FastifyInstance> {
           logger.warn({
             type: 'intasend_webhook_rejected_challenge',
             reason: verification.reason,
-            ip: request.ip,
+            ip: webhookClientIp,
+          });
+          await intaSendWebhookService.recordOperationalEvent({
+            event: 'WEBHOOK_REJECTED_CHALLENGE',
+            providerTransactionId: payload.invoice_id,
+            reasonCode: verification.reason,
+            requestId: String(request.id),
+            ipHash: hashIp(webhookClientIp),
           });
           return reply.code(400).send({ error: 'webhook_verification_failed' });
         }
@@ -311,7 +353,14 @@ export async function buildApp(): Promise<FastifyInstance> {
         logger.info({
           type: 'intasend_webhook_verified',
           mode: verification.mode,
-          ip: request.ip,
+          ip: webhookClientIp,
+        });
+        await intaSendWebhookService.recordOperationalEvent({
+          event: 'WEBHOOK_ACCEPTED',
+          providerTransactionId: payload.invoice_id,
+          reasonCode: verification.mode,
+          requestId: String(request.id),
+          ipHash: hashIp(webhookClientIp),
         });
 
         try {

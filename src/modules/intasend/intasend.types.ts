@@ -32,6 +32,9 @@ export interface STKPushResponse {
 export interface PaymentStatusResponse {
   invoiceId: string;
   state: IntaSendPaymentState;
+  /** Confirmed amount in provider major units, for example KES shillings. */
+  amount: number | null;
+  currency: string | null;
   /** Provider-assigned transaction ID (e.g. Safaricom mpesa_reference) */
   providerRef: string | null;
   raw: Record<string, unknown>;

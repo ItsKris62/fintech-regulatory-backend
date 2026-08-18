@@ -1,12 +1,14 @@
 import { TRPCError } from '@trpc/server';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import { MemberRole } from '@prisma/client';
+import { MemberRole, PaymentProvider, PaymentStatus, Prisma } from '@prisma/client';
 import { router, adminProcedure } from '../trpc/trpc';
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
 import { adminModule } from '@/modules/admin';
 import { appConfig } from '@/config/app.config';
+import { intaSendService, normaliseIntaSendState } from '@/modules/intasend';
+import { intaSendFinalizationService } from '@/modules/billing/intasend-finalization.service';
 import { getStats as getChecklistStats } from '@/lib/metrics/checklist-metrics';
 import { BadRequestError, OrganizationNotFoundError } from '@/utils/error';
 import { isPrismaForeignKeyError, sanitizeErrorMessage } from '@/utils/error-sanitizer';
@@ -40,6 +42,10 @@ const billingPlanCatalogUpdateItemSchema = z.object({
       path: ['yearlyPriceId'],
     }),
 });
+
+function maskPhone(value: string | null | undefined): string | null {
+  return value ? `****${value.slice(-4)}` : null;
+}
 
 const billingPlanCatalogUpdateSchema = z.object({
   plans: z.array(billingPlanCatalogUpdateItemSchema).min(1).max(2),
@@ -2547,9 +2553,12 @@ export const adminRouter = router({
   getBillingOperationsSummary: adminProcedure.query(async ({ ctx }) => {
     try {
       const now = new Date();
+      const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const toKes = (amount: number | null | undefined) => Math.round((Number(amount ?? 0) / 100) * 100) / 100;
+      const stalePendingBefore = new Date(now.getTime() - appConfig.intasend.reconciliation.staleMinutes * 60 * 1000);
 
       // Revenue (only COMPLETED payments)
       const revenue30dAgg = await ctx.prisma.payment.aggregate({
@@ -2605,7 +2614,7 @@ export const adminRouter = router({
         organizationName: string | null;
         userId?: string | null;
         userEmail?: string | null;
-        issueType: "failed_payment" | "past_due" | "trial_expiring" | "suspended" | "unknown";
+        issueType: "failed_payment" | "stale_pending_payment" | "past_due" | "trial_expiring" | "suspended" | "unknown";
         amount?: number | null;
         currency?: string | null;
         lastEventAt?: string | null;
@@ -2626,7 +2635,33 @@ export const adminRouter = router({
           userId: p.org.users[0]?.id || null,
           userEmail: p.org.users[0]?.email || null,
           issueType: 'failed_payment',
-          amount: p.amount,
+          amount: toKes(p.amount),
+          currency: p.currency,
+          lastEventAt: p.createdAt.toISOString(),
+          actionHref: `/admin/organizations/${p.orgId}`,
+        });
+      }
+
+      // 1b. Stale pending IntaSend payments
+      const stalePendingPayments = await ctx.prisma.payment.findMany({
+        where: {
+          provider: PaymentProvider.MPESA,
+          status: PaymentStatus.PENDING,
+          providerTransactionId: { not: null },
+          createdAt: { lte: stalePendingBefore },
+        },
+        include: { org: { select: { id: true, name: true, mpesaPhoneNumber: true, users: { select: { id: true, email: true }, take: 1 } } } },
+        orderBy: { createdAt: 'asc' },
+        take: 20,
+      });
+      for (const p of stalePendingPayments) {
+        problemAccounts.push({
+          organizationId: p.orgId,
+          organizationName: p.org.name,
+          userId: p.org.users[0]?.id || null,
+          userEmail: p.org.users[0]?.email || null,
+          issueType: 'stale_pending_payment',
+          amount: toKes(p.amount),
           currency: p.currency,
           lastEventAt: p.createdAt.toISOString(),
           actionHref: `/admin/organizations/${p.orgId}`,
@@ -2713,28 +2748,67 @@ export const adminRouter = router({
         id: p.id,
         type: 'payment_' + p.status.toLowerCase(),
         title: `Payment ${p.status} - ${p.org.name}`,
-        description: `${p.currency} ${p.amount} via ${p.provider}`,
+        description: `${p.currency} ${toKes(p.amount).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} via ${p.provider}`,
         severity: p.status === 'FAILED' ? 'critical' as const : p.status === 'PENDING' ? 'warning' as const : 'info' as const,
         createdAt: p.createdAt.toISOString(),
         actionHref: `/admin/organizations/${p.orgId}`,
       }));
 
-      const isDegraded = failedLast30DaysCount > successfulLast30DaysCount * 0.5 || pastDueSubs > 0;
+      const [lastReceivedWebhook, lastSuccessfulWebhook, lastRejectedWebhook, lastFinalizationFailure, verificationFailures, providerLookupFailures, unknownTransactions, stalePendingCount] = await Promise.all([
+        ctx.prisma.auditLog.findFirst({
+          where: { action: 'intasend_webhook_received' },
+          orderBy: { createdAt: 'desc' },
+          select: { createdAt: true },
+        }),
+        ctx.prisma.auditLog.findFirst({
+          where: { action: { in: ['intasend_webhook_finalization_succeeded', 'intasend_webhook_verified'] } },
+          orderBy: { createdAt: 'desc' },
+          select: { createdAt: true },
+        }),
+        ctx.prisma.auditLog.findFirst({
+          where: { action: { in: ['intasend_webhook_rejected_ip', 'intasend_webhook_rejected_challenge', 'intasend_webhook_invalid_payload'] } },
+          orderBy: { createdAt: 'desc' },
+          select: { createdAt: true },
+        }),
+        ctx.prisma.auditLog.findFirst({
+          where: { action: 'intasend_webhook_finalization_failed' },
+          orderBy: { createdAt: 'desc' },
+          select: { createdAt: true },
+        }),
+        ctx.prisma.auditLog.count({
+          where: { action: { in: ['intasend_webhook_rejected_ip', 'intasend_webhook_rejected_challenge', 'intasend_webhook_invalid_payload'] }, createdAt: { gte: last24Hours } },
+        }),
+        ctx.prisma.auditLog.count({
+          where: { action: { in: ['intasend_webhook_provider_lookup_failed', 'intasend_webhook_verification_failed'] }, createdAt: { gte: last24Hours } },
+        }),
+        ctx.prisma.auditLog.count({
+          where: { action: { in: ['intasend_webhook_unknown_transaction', 'intasend_webhook_unknown_invoice'] }, createdAt: { gte: last24Hours } },
+        }),
+        ctx.prisma.payment.count({
+          where: {
+            provider: PaymentProvider.MPESA,
+            status: PaymentStatus.PENDING,
+            createdAt: { lte: stalePendingBefore },
+          },
+        }),
+      ]);
+      const providerDegraded = verificationFailures > 0 || providerLookupFailures > 0 || unknownTransactions > 0 || stalePendingCount > 0;
+      const isDegraded = failedLast30DaysCount > successfulLast30DaysCount * 0.5 || pastDueSubs > 0 || providerDegraded;
 
       return {
         generatedAt: now.toISOString(),
         overallStatus: isDegraded ? 'degraded' as const : 'healthy' as const,
         revenue: {
-          totalRevenueLast30Days: revenue30dAgg._sum.amount || 0,
-          totalRevenueAllTime: revenueAllTimeAgg._sum.amount || 0,
+          totalRevenueLast30Days: toKes(revenue30dAgg._sum.amount),
+          totalRevenueAllTime: toKes(revenueAllTimeAgg._sum.amount),
           currency: 'KES',
         },
         payments: {
           successfulLast30Days: successfulLast30DaysCount,
           failedLast30Days: failedLast30DaysCount,
           pendingLast30Days: pendingLast30DaysCount,
-          failedAmountLast30Days: failedAmount30dAgg._sum.amount || 0,
-          pendingAmountLast30Days: pendingAmount30dAgg._sum.amount || 0,
+          failedAmountLast30Days: toKes(failedAmount30dAgg._sum.amount),
+          pendingAmountLast30Days: toKes(pendingAmount30dAgg._sum.amount),
         },
         subscriptions: {
           active: activeSubs,
@@ -2749,11 +2823,38 @@ export const adminRouter = router({
           expiredLast7Days,
         },
         provider: {
-          name: 'Stripe & M-Pesa',
-          status: 'unknown' as const,
-          message: 'Payment webhook health is not currently tracked.',
-          lastWebhookAt: null,
+          name: appConfig.payments.activeProvider === 'INTASEND' ? 'M-Pesa via IntaSend' : 'Stripe',
+          status: !lastReceivedWebhook ? 'unknown' as const : providerDegraded ? 'degraded' as const : 'healthy' as const,
+          message: appConfig.payments.activeProvider === 'INTASEND'
+            ? `IntaSend active. Verification failures/rejections (24h): ${verificationFailures}; provider lookup failures (24h): ${providerLookupFailures}; unknown invoices (24h): ${unknownTransactions}; stale pending: ${stalePendingCount}.`
+            : 'Stripe is active.',
+          lastWebhookAt: lastReceivedWebhook?.createdAt.toISOString() ?? null,
+          lastReceivedWebhookAt: lastReceivedWebhook?.createdAt.toISOString() ?? null,
+          lastSuccessfulWebhookAt: lastSuccessfulWebhook?.createdAt.toISOString() ?? null,
+          lastRejectedWebhookAt: lastRejectedWebhook?.createdAt.toISOString() ?? null,
+          lastFinalizationFailureAt: lastFinalizationFailure?.createdAt.toISOString() ?? null,
+          verificationFailuresLast24Hours: verificationFailures,
+          providerLookupFailuresLast24Hours: providerLookupFailures,
+          unknownTransactionsLast24Hours: unknownTransactions,
+          stalePendingPaymentCount: stalePendingCount,
         },
+        pendingIntaSendPayments: stalePendingPayments.map((p) => ({
+          id: p.id,
+          orgId: p.orgId,
+          orgName: p.org.name,
+          invoiceNumber: p.invoiceNumber,
+          providerTransactionId: p.providerTransactionId,
+          maskedPhone: maskPhone(p.org.mpesaPhoneNumber),
+          status: p.status,
+          provider: p.provider,
+          amount: toKes(p.amount),
+          currency: p.currency,
+          ageMinutes: Math.floor((now.getTime() - p.createdAt.getTime()) / 60_000),
+          createdAt: p.createdAt.toISOString(),
+          lastReconciliationAt: typeof (p.metadata as Record<string, unknown> | null)?.['lastReconciliationAt'] === 'string'
+            ? (p.metadata as Record<string, unknown>)['lastReconciliationAt'] as string
+            : null,
+        })),
         problemAccounts,
         recentEvents,
       };
@@ -2761,6 +2862,230 @@ export const adminRouter = router({
       throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get billing operations summary', cause: error });
     }
   }),
+
+  reconcileIntaSendPayment: adminProcedure
+    .input(z.object({
+      paymentId: z.string(),
+      reason: z.string().trim().min(8).max(500),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const payment = await ctx.prisma.payment.findUnique({
+        where: { id: input.paymentId },
+        select: {
+          id: true,
+          orgId: true,
+          provider: true,
+          status: true,
+          providerTransactionId: true,
+        },
+      });
+
+      if (!payment || payment.provider !== PaymentProvider.MPESA || !payment.providerTransactionId) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'A pending IntaSend payment with an invoice id is required.' });
+      }
+
+      if (payment.status !== PaymentStatus.PENDING) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only pending IntaSend payments can be reconciled.' });
+      }
+
+      const status = await intaSendService.getPaymentStatus(payment.providerTransactionId);
+
+      if (status.state === 'COMPLETE') {
+        const result = await intaSendFinalizationService.finalizePayment({
+          paymentId: payment.id,
+          invoiceId: payment.providerTransactionId,
+          verifiedStatus: status,
+          source: 'admin',
+          actorUserId: ctx.user!.id,
+          operationalReason: input.reason,
+        });
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'admin_billing_action',
+            entityType: 'Payment',
+            entityId: payment.id,
+            metadata: {
+              action: 'reconcile_intasend_payment',
+              orgId: payment.orgId,
+              providerState: status.state,
+              reason: input.reason,
+              finalizationStatus: result.status,
+              newlyFinalized: result.newlyFinalized,
+            } as Prisma.InputJsonObject,
+          },
+        });
+        return { providerState: status.state, result };
+      }
+
+      if (status.state === 'FAILED') {
+        await intaSendFinalizationService.markFailed({
+          invoiceId: payment.providerTransactionId,
+          source: 'admin',
+          failedReason: input.reason,
+        });
+      }
+
+      await ctx.prisma.auditLog.create({
+        data: {
+          userId: ctx.user!.id,
+          action: 'admin_billing_action',
+          entityType: 'Payment',
+          entityId: payment.id,
+          metadata: {
+            action: 'reconcile_intasend_payment',
+            orgId: payment.orgId,
+            providerState: status.state,
+            reason: input.reason,
+          } as Prisma.InputJsonObject,
+        },
+      });
+
+      return { providerState: status.state, result: null };
+    }),
+
+  expireIntaSendPayment: adminProcedure
+    .input(z.object({
+      paymentId: z.string(),
+      reason: z.string().trim().min(8).max(500),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const payment = await ctx.prisma.payment.findUnique({
+        where: { id: input.paymentId },
+        select: {
+          id: true,
+          orgId: true,
+          provider: true,
+          status: true,
+          createdAt: true,
+          metadata: true,
+          providerTransactionId: true,
+        },
+      });
+
+      if (!payment || payment.provider !== PaymentProvider.MPESA || !payment.providerTransactionId) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'An IntaSend payment is required.' });
+      }
+
+      if (payment.status !== PaymentStatus.PENDING) {
+        return { success: true, expired: false, paymentStatus: payment.status, result: 'already_terminal' as const };
+      }
+
+      let providerStatus: Awaited<ReturnType<typeof intaSendService.getPaymentStatus>>;
+      try {
+        providerStatus = await intaSendService.getPaymentStatus(payment.providerTransactionId);
+      } catch (err: unknown) {
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'admin_billing_action',
+            entityType: 'Payment',
+            entityId: payment.id,
+            metadata: {
+              action: 'expire_intasend_payment_refused',
+              orgId: payment.orgId,
+              invoiceId: payment.providerTransactionId,
+              reason: input.reason,
+              refusalReason: 'provider_lookup_failed',
+              error: err instanceof Error ? err.message : String(err),
+            } as Prisma.InputJsonObject,
+          },
+        });
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Unable to verify IntaSend provider status. Payment was not expired.',
+        });
+      }
+
+      const providerState = normaliseIntaSendState(providerStatus.state);
+
+      if (providerState === 'COMPLETE') {
+        const result = await intaSendFinalizationService.finalizePayment({
+          paymentId: payment.id,
+          invoiceId: payment.providerTransactionId,
+          verifiedStatus: providerStatus,
+          source: 'admin',
+          actorUserId: ctx.user!.id,
+          operationalReason: input.reason,
+        });
+        return { success: true, expired: false, providerState, result };
+      }
+
+      if (providerState === 'FAILED') {
+        await intaSendFinalizationService.markFailed({
+          invoiceId: payment.providerTransactionId,
+          source: 'admin',
+          failedReason: input.reason,
+        });
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'admin_billing_action',
+            entityType: 'Payment',
+            entityId: payment.id,
+            metadata: {
+              action: 'expire_intasend_payment_resolved_failed',
+              orgId: payment.orgId,
+              invoiceId: payment.providerTransactionId,
+              providerState,
+              reason: input.reason,
+            } as Prisma.InputJsonObject,
+          },
+        });
+        return { success: true, expired: false, providerState, result: 'marked_failed' as const };
+      }
+
+      const expireBefore = new Date(Date.now() - appConfig.intasend.reconciliation.pendingExpireHours * 60 * 60 * 1000);
+      if (payment.createdAt > expireBefore) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `IntaSend still reports this payment as pending. It can only be expired after ${appConfig.intasend.reconciliation.pendingExpireHours} hours.`,
+        });
+      }
+
+      const metadata = payment.metadata !== null && typeof payment.metadata === 'object' && !Array.isArray(payment.metadata)
+        ? payment.metadata as Record<string, unknown>
+        : {};
+
+      await ctx.prisma.$transaction(async (tx) => {
+        const expired = await tx.payment.updateMany({
+          where: { id: payment.id, status: PaymentStatus.PENDING },
+          data: {
+            status: PaymentStatus.EXPIRED,
+            metadata: {
+              ...metadata,
+              expiredAt: new Date().toISOString(),
+              expiredBy: 'admin',
+              expiredReason: input.reason,
+              providerState,
+              providerCheckedAt: new Date().toISOString(),
+            } as Prisma.InputJsonObject,
+          },
+        });
+
+        if (expired.count === 0) {
+          return;
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'admin_billing_action',
+            entityType: 'Payment',
+            entityId: payment.id,
+            metadata: {
+              action: 'expire_intasend_payment',
+              orgId: payment.orgId,
+              invoiceId: payment.providerTransactionId,
+              providerState,
+              reason: input.reason,
+            } as Prisma.InputJsonObject,
+          },
+        });
+      });
+
+      return { success: true, expired: true, providerState, result: 'expired' as const };
+    }),
 
   // --- RECENT PAYMENTS (ALL ORGS, ADMIN-ONLY) ------------------------------
 

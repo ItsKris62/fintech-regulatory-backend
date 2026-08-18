@@ -21,7 +21,7 @@
 
 import type Stripe from 'stripe';
 import { PaymentProvider, PaymentStatus, SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
-import { stripe } from './client';
+import { getStripeClient } from './client';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
@@ -110,6 +110,7 @@ class StripeWebhookService {
    * @throws          If signature verification fails (Fastify route returns 400).
    */
   async handleEvent(payload: Buffer, signature: string): Promise<void> {
+    const stripe = getStripeClient();
     const event = stripe.webhooks.constructEvent(
       payload,
       signature,
@@ -168,6 +169,7 @@ class StripeWebhookService {
    * We store the subscription ID, activate the new plan, and record trial dates.
    */
   private async handleCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
+    const stripe = getStripeClient();
     const orgId = session.metadata?.organizationId;
     const planName = session.metadata?.plan as keyof typeof SubscriptionPlan | undefined;
 

@@ -1,5 +1,6 @@
 import type { FastifyRequest } from 'fastify';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import type { IntaSendWebhookPayload } from '../../modules/intasend/intasend.types';
 
 export type WebhookVerifyResult =
@@ -55,8 +56,8 @@ export function verifyIntaSendWebhook(input: WebhookVerifyInput): WebhookVerifyR
     : { ok: false, reason: 'invalid_challenge' };
 }
 
-export function isAllowedIntaSendIp(req: FastifyRequest, allowedIps: readonly string[]): boolean {
-  return allowedIps.includes(req.ip);
+export function isAllowedIntaSendIp(req: FastifyRequest, allowedIps: readonly string[], trustedProxyHops?: number): boolean {
+  return allowedIps.includes(getIntaSendWebhookClientIp(req, trustedProxyHops));
 }
 
 export function parseAllowedIps(csv: string): string[] {
@@ -64,4 +65,24 @@ export function parseAllowedIps(csv: string): string[] {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+export function parseTrustedProxyHops(rawValue: string | undefined): number {
+  if (rawValue === undefined || rawValue.trim() === '') return 0;
+  const parsed = Number(rawValue.trim());
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+export function getIntaSendWebhookClientIp(req: FastifyRequest, trustedProxyHops = parseTrustedProxyHops(process.env.TRUST_PROXY_HOPS)): string {
+  if (trustedProxyHops <= 0) return req.ip;
+
+  const forwarded = req.headers['x-forwarded-for'];
+  const forwardedValues = Array.isArray(forwarded) ? forwarded.join(',') : forwarded;
+  const chain = String(forwardedValues ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => isIP(value) !== 0);
+
+  const selected = chain.at(-trustedProxyHops);
+  return selected ?? req.ip;
 }

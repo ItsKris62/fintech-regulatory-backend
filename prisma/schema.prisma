@@ -1773,7 +1773,13 @@ enum PaymentStatus {
   PENDING
   COMPLETED
   FAILED
+  EXPIRED
   REFUNDED
+}
+
+enum PaymentPurpose {
+  INITIAL_PURCHASE
+  RENEWAL
 }
 
 model Payment {
@@ -1786,6 +1792,7 @@ model Payment {
   amount                Int // smallest currency unit (e.g. KES cents)
   currency              String          @default("KES")
   status                PaymentStatus   @default(PENDING)
+  paymentPurpose        PaymentPurpose?
   description           String?
   paidAt                DateTime?
   metadata              Json? // provider-specific data (invoice URL, etc.)
@@ -1801,6 +1808,8 @@ model Payment {
   @@index([orgId, createdAt])
   @@index([providerTransactionId])
   @@index([invoiceNumber])
+  @@index([paymentPurpose])
+  @@unique([provider, providerTransactionId])
 }
 
 // ============================================================================

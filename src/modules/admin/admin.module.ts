@@ -1515,7 +1515,7 @@ class AdminModule {
 
   async getSubscriptionOverview(): Promise<SubscriptionOverview> {
     const orgs = await prisma.organization.findMany({
-      select: { subscriptionTier: true, subscriptionStatus: true },
+      select: { plan: true, subscriptionStatus: true },
     });
 
     const byPlan = Object.fromEntries(
@@ -1523,7 +1523,7 @@ class AdminModule {
     ) as Record<SubscriptionPlan, number>;
 
     for (const org of orgs) {
-      const plan = org.subscriptionTier as SubscriptionPlan;
+      const plan = org.plan as SubscriptionPlan;
       if (plan in byPlan) byPlan[plan]++;
     }
 
@@ -1531,7 +1531,7 @@ class AdminModule {
     const active = orgs.filter((o) => o.subscriptionStatus === 'ACTIVE').length;
     const trials = orgs.filter((o) => o.subscriptionStatus === 'TRIALING').length;
     const converted = orgs.filter(
-      (o) => o.subscriptionStatus === 'ACTIVE' && o.subscriptionTier !== 'REGULATOR'
+      (o) => o.subscriptionStatus === 'ACTIVE' && o.plan !== PrismaSubscriptionPlan.REGULATOR
     ).length;
     const churned = orgs.filter(
       (o) => o.subscriptionStatus === 'CANCELLED' || o.subscriptionStatus === 'EXPIRED'
@@ -2031,7 +2031,7 @@ class AdminModule {
 
     const orgs = await prisma.organization.findMany({
       where: where as never,
-      select: { subscriptionTier: true, plan: true, subscriptionStatus: true },
+      select: { plan: true, subscriptionStatus: true },
     });
 
     const byPlan: Record<string, number> = Object.fromEntries(
@@ -2040,7 +2040,7 @@ class AdminModule {
     const byStatus: Record<string, number> = {};
 
     for (const org of orgs) {
-      const plan = String(org.subscriptionTier ?? org.plan);
+      const plan = String(org.plan);
       const status = String(org.subscriptionStatus);
       byPlan[plan] = (byPlan[plan] ?? 0) + 1;
       byStatus[status] = (byStatus[status] ?? 0) + 1;

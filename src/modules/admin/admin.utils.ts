@@ -161,6 +161,16 @@ export function toAdminOrgDetail(
     subscriptionEndsAt: org.subscriptionEndsAt as Date | null,
     planStartDate: org.planStartDate as Date | null,
     planEndDate: org.planEndDate as Date | null,
+    preferredPaymentMethod: org.preferredPaymentMethod as string | null,
+    mpesaPhoneNumber: org.mpesaPhoneNumber as string | null,
+    mpesaNextPaymentDueDate: org.mpesaNextPaymentDueDate as Date | null,
+    subscriptionCycleEnd: org.subscriptionCycleEnd as Date | null,
+    mpesaFailedRenewalAttempts: typeof org.mpesaFailedRenewalAttempts === 'number'
+      ? org.mpesaFailedRenewalAttempts
+      : 0,
+    mpesaLastRenewalAttemptAt: org.mpesaLastRenewalAttemptAt as Date | null,
+    mpesaNextRenewalRetryAt: org.mpesaNextRenewalRetryAt as Date | null,
+    mpesaCancelledByUserAt: org.mpesaCancelledByUserAt as Date | null,
     maxSeats: typeof org.maxSeats === 'number' ? org.maxSeats : 0,
     memberCount: counts.members,
     documentCount: counts.documents,
