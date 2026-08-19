@@ -101,8 +101,8 @@ Complete implementation of the authentication router for SheriaBot Phase 2. This
 
 // Response
 {
-  accessToken: "eyJhbGciOiJIUzI1NiIs...",
-  refreshToken: "eyJhbGciOiJIUzI1NiIs...",
+  accessToken: "<JWT_TOKEN>",
+  refreshToken: "<REFRESH_TOKEN>",
   user: {
     id: "user_123",
     email: "user@example.com",
@@ -183,12 +183,12 @@ Complete implementation of the authentication router for SheriaBot Phase 2. This
 ```typescript
 // Input
 {
-  refreshToken: "eyJhbGciOiJIUzI1NiIs..."
+  refreshToken: "<REFRESH_TOKEN>"
 }
 
 // Response
 {
-  accessToken: "eyJhbGciOiJIUzI1NiIs..." // new access token
+  accessToken: "<JWT_TOKEN>" // new access token
 }
 
 // Errors

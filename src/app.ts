@@ -116,7 +116,7 @@ async function checkIntaSendIngressRateLimit(
  * Call this once from src/index.ts inside the start() bootstrap function.
  */
 export async function buildApp(): Promise<FastifyInstance> {
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging') {
     const allowedIps = parseAllowedIps(process.env.INTASEND_WEBHOOK_ALLOWED_IPS || '68.183.180.25,157.245.201.212');
     if (allowedIps.length === 0) {
       throw new Error(
@@ -302,7 +302,7 @@ export async function buildApp(): Promise<FastifyInstance> {
           return reply.code(500).send({ error: 'misconfigured' });
         }
 
-        if (process.env.NODE_ENV === 'production' && !isStrongIntaSendWebhookChallenge(expectedChallenge)) {
+        if ((process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging') && !isStrongIntaSendWebhookChallenge(expectedChallenge)) {
           logger.error({
             type: 'intasend_webhook_misconfigured_weak_challenge',
             ip: request.ip,

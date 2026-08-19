@@ -8,7 +8,7 @@ import { z } from 'zod';
 
 const envSchema = z.object({
   // -- Application ----------------------------------------------------------
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  NODE_ENV: z.enum(['development', 'staging', 'production', 'test']).default('development'),
   APP_RUNTIME_MODE: z.enum(['standard', 'preview']).default('standard'),
   PORT: z.string().default('4000').transform(Number).pipe(z.number().min(1).max(65535)),
   APP_URL: z.string().url('APP_URL must be a valid URL'),

@@ -17,6 +17,8 @@ import * as Sentry from '@sentry/node';
 import { sanitizePayload } from '@/utils/sanitizer';
 
 const INCIDENT_COOLDOWN_SECONDS = 3600;
+const EMPTY_SHA256_HEX = crypto.createHash('sha256').update('').digest('hex');
+const EMPTY_MD5_HEX = crypto.createHash('md5').update('').digest('hex');
 
 const createIncidentSchema = z.object({
   fingerprint: z.string().length(64).regex(/^[a-f0-9]+$/i),
@@ -83,7 +85,7 @@ export const registerAutomationIncidentRoutes: FastifyPluginAsync = async (app: 
       if (!idempotencyKey || !/^[a-f0-9]{64}$/i.test(idempotencyKey)) {
         return reply.status(400).send({ error: 'Missing or invalid Idempotency-Key header. Must be 64-char hex string.' });
       }
-      if (idempotencyKey === 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' || idempotencyKey === 'd41d8cd98f00b204e9800998ecf8427e') {
+      if (idempotencyKey === EMPTY_SHA256_HEX || idempotencyKey === EMPTY_MD5_HEX) {
         return reply.status(400).send({ error: 'Idempotency-Key is an empty-input hash.' });
       }
 

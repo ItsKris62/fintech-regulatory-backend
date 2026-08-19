@@ -14,7 +14,11 @@ async function seed(): Promise<void> {
 
   // -- 1. Default admin user ----------------------------------------------
   const adminEmail = process.env.ADMIN_EMAIL || 'admin@sheriabot.com';
-  const adminPassword = process.env.ADMIN_PASSWORD || 'SheriaBot-Admin-2024!';
+  const adminPassword = process.env.ADMIN_PASSWORD;
+
+  if (!adminPassword) {
+    throw new Error('ADMIN_PASSWORD is required; no default admin password is allowed.');
+  }
 
   const hashedPassword = await bcrypt.hash(adminPassword, 12);
 

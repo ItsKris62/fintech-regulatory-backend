@@ -22,7 +22,14 @@ import { rateLimited } from '../trpc/middleware';
 import { Prisma } from '@prisma/client';
 import crypto from 'crypto';
 
-const BLOG_ANALYTICS_HASH_PEPPER = process.env.BLOG_ANALYTICS_HASH_PEPPER ?? process.env.SUPABASE_JWT_SECRET ?? 'development-blog-analytics-pepper';
+const BLOG_ANALYTICS_HASH_PEPPER = (() => {
+  const configuredPepper = process.env.BLOG_ANALYTICS_HASH_PEPPER ?? process.env.SUPABASE_JWT_SECRET;
+  if (configuredPepper) return configuredPepper;
+  if (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging') {
+    throw new Error('BLOG_ANALYTICS_HASH_PEPPER or SUPABASE_JWT_SECRET is required in deployed environments.');
+  }
+  return 'development-blog-analytics-pepper';
+})();
 
 function hashAnonymousKey(value: string): string {
   return crypto.createHash('sha256').update(`${BLOG_ANALYTICS_HASH_PEPPER}:${value}`).digest('hex');

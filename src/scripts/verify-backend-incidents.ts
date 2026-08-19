@@ -143,9 +143,9 @@ async function runTests() {
     const sanitizePayloadData = {
       ...basePayload,
       fingerprint: crypto.createHash('sha256').update('sanitize' + Date.now()).digest('hex'),
-      safeMessage: `Failed with postgres://user:password@localhost:5432/db and sk_test_fakekeyfortesting1234567890 and https://storage.com/file?X-Amz-Signature=secret`,
+      safeMessage: `Failed with postgres://user:password@localhost:5432/db and stripe-secret-placeholder and https://storage.com/file?X-Amz-Signature=secret`,
       metadata: {
-        authorization: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
+        authorization: 'Bearer test-jwt-placeholder',
         cookie: 'session_id=123; foo=bar',
         nested: { 'api-key': '12345' }
       }
@@ -161,7 +161,7 @@ async function runTests() {
     const dbSanitize = await prisma.automationIncidentOccurrence.findUnique({ where: { id: dSanitize.occurrenceId }});
     
     assert(!dbSanitize?.safeMessage.includes('postgres://'));
-    assert(!dbSanitize?.safeMessage.includes('sk_test_'));
+    assert(!dbSanitize?.safeMessage.includes('stripe-secret-placeholder'));
     assert(!dbSanitize?.safeMessage.includes('X-Amz-Signature=secret'));
     assert.strictEqual((dbSanitize?.metadata as any)?.authorization, '[REDACTED]');
     assert.strictEqual((dbSanitize?.metadata as any)?.cookie, '[REDACTED]');

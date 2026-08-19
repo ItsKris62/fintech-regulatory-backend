@@ -7,7 +7,7 @@
  * Usage:
  *   ADMIN_EMAIL=admin@yourcompany.com ADMIN_PASSWORD=YourPass123! pnpm seed:admin
  *
- * Or use defaults from .env:
+ * Or use required values from .env:
  *   pnpm seed:admin
  */
 
@@ -47,8 +47,12 @@ async function findSupabaseUserByEmail(email: string) {
 
 async function seedAdmin(): Promise<void> {
   const email = process.env.ADMIN_EMAIL || 'admin@sheriabot.com';
-  const password = process.env.ADMIN_PASSWORD || 'SheriaBot-Admin-2024!';
+  const password = process.env.ADMIN_PASSWORD;
   const fullName = process.env.ADMIN_NAME || 'System Admin';
+
+  if (!password) {
+    throw new Error('ADMIN_PASSWORD is required; no default admin password is allowed.');
+  }
 
   console.log(`\nCreating or repairing admin account: ${email}\n`);
 

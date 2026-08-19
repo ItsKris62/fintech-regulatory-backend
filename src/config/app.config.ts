@@ -10,7 +10,7 @@ dotenv.config();
  */
 const envSchema = z.object({
   // App Configuration
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  NODE_ENV: z.enum(['development', 'staging', 'production', 'test']).default('development'),
   APP_RUNTIME_MODE: z.enum(['standard', 'preview']).default('standard'),
   PORT: z.string().transform(Number).pipe(z.number().min(1).max(65535)).default(4000),
   APP_URL: z.string().url(),
@@ -330,6 +330,7 @@ export const appConfig = {
     disableN8nAutomation: env.DISABLE_N8N_AUTOMATION || env.APP_RUNTIME_MODE === 'preview',
   },
   isDevelopment: env.NODE_ENV === 'development',
+  isStaging: env.NODE_ENV === 'staging',
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
   malwareScanEnabled: env.MALWARE_SCAN_ENABLED,

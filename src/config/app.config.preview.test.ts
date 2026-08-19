@@ -32,7 +32,7 @@ function applyBaseEnv(overrides: NodeJS.ProcessEnv = {}): void {
     R2_PUBLIC_SECRET_ACCESS_KEY: 'r2-public-secret-key',
     R2_PUBLIC_BUCKET_NAME: 'public-assets',
     R2_PUBLIC_BUCKET_URL: 'https://assets.example.test',
-    STRIPE_SECRET_KEY: 'sk_test_placeholder',
+    STRIPE_SECRET_KEY: 'stripe-secret-placeholder',
     STRIPE_PUBLISHABLE_KEY: 'pk_test_placeholder',
     STRIPE_WEBHOOK_SECRET: 'whsec_placeholder',
     RESEND_WEBHOOK_SECRET: 'd'.repeat(32),
