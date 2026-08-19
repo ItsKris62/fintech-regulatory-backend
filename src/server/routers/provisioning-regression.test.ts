@@ -51,6 +51,6 @@ describe('Organization Router - getMembers platformRole regression fix', () => {
   it('returns both orgRole (mapped to org role) and platformRole (mapped from user)', () => {
     expect(routerSrc).toContain('platformRole: m.user.role');
     expect(routerSrc).toContain('orgRole: m.role');
-    expect(routerSrc).toContain('joinedAt: m.createdAt');
+    expect(routerSrc).toContain('joinedAt: m.joinedAt');
   });
 });

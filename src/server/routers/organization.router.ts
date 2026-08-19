@@ -77,6 +77,41 @@ async function assertOrganizationManager(
   return member;
 }
 
+async function assertNotLastActiveOwner(
+  tx: Pick<Context['prisma'], 'organizationMember'>,
+  organizationId: string,
+  targetUserId: string,
+  action: 'remove' | 'suspend' | 'demote',
+) {
+  const target = await tx.organizationMember.findUnique({
+    where: { userId_organizationId: { userId: targetUserId, organizationId } },
+    select: { role: true, status: true },
+  });
+
+  if (!target || target.role !== MemberRole.OWNER || target.status !== MemberStatus.ACTIVE) {
+    return;
+  }
+
+  const ownerCount = await tx.organizationMember.count({
+    where: {
+      organizationId,
+      role: MemberRole.OWNER,
+      status: MemberStatus.ACTIVE,
+    },
+  });
+
+  if (ownerCount <= 1) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: `Cannot ${action} the last active organization owner. Transfer ownership before changing this member.`,
+    });
+  }
+}
+
+function canManageOrganization(memberRole: MemberRole | null | undefined, platformRole?: string | null): boolean {
+  return platformRole === 'ADMIN' || memberRole === MemberRole.OWNER || memberRole === MemberRole.ADMIN;
+}
+
 async function assertOrganizationCanUseTeamSeats(ctx: Context, organizationId: string) {
   const organization = await ctx.prisma.organization.findUnique({
     where: { id: organizationId },
@@ -606,6 +641,8 @@ export const organizationRouter = router({
             throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
           }
 
+          await assertNotLastActiveOwner(tx as any, organizationId, userId, 'remove');
+
           // Clear user's organization foreign key
           await tx.user.update({
             where: { id: userId },
@@ -677,12 +714,16 @@ export const organizationRouter = router({
           ctx.prisma.organizationMember.findMany({
             where: {
               organizationId,
+              status: { not: MemberStatus.REMOVED },
             },
             skip,
             take: limit,
             select: {
+              id: true,
+              status: true,
               role: true,
-              createdAt: true,
+              joinedAt: true,
+              invitedAt: true,
               user: {
                 select: {
                   id: true,
@@ -691,6 +732,7 @@ export const organizationRouter = router({
                   role: true,
                   phone: true,
                   emailVerified: true,
+                  totpEnabled: true,
                   createdAt: true,
                   lastLoginAt: true,
                 }
@@ -701,6 +743,7 @@ export const organizationRouter = router({
           ctx.prisma.organizationMember.count({
             where: {
               organizationId,
+              status: { not: MemberStatus.REMOVED },
             },
           }),
         ]);
@@ -710,7 +753,11 @@ export const organizationRouter = router({
           role: m.role, // KEEP LEGACY: Prevents breaking current frontend RBAC.
           platformRole: m.user.role, // NEW: Explicit Platform Role.
           orgRole: m.role, // NEW: Explicit Organization Role.
-          joinedAt: m.createdAt,
+          membershipId: m.id,
+          status: m.status,
+          joinedAt: m.joinedAt,
+          invitedAt: m.invitedAt,
+          totpEnabled: m.user.totpEnabled,
         }));
 
         return {
@@ -798,6 +845,7 @@ export const organizationRouter = router({
         }
 
         if (targetMember.role === MemberRole.OWNER) {
+          await assertNotLastActiveOwner(ctx.prisma as any, callerOrgId, input.userId, 'demote');
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Owner role changes require ownership transfer',
@@ -865,6 +913,120 @@ export const organizationRouter = router({
           cause: error,
         });
       }
+    }),
+
+  suspendMember: protectedProcedure
+    .input(z.object({ userId: z.string().min(1), organizationId: z.string().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      const organizationId = input.organizationId ?? ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      if (ctx.user.role !== 'ADMIN' && input.userId === ctx.user.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Organization admins cannot suspend themselves' });
+      }
+
+      const suspendedUser = await ctx.prisma.$transaction(async (tx) => {
+        const target = await tx.organizationMember.findUnique({
+          where: { userId_organizationId: { userId: input.userId, organizationId } },
+          select: {
+            status: true,
+            role: true,
+            user: { select: { id: true, supabaseAuthId: true, email: true } },
+          },
+        });
+
+        if (!target || target.status === MemberStatus.REMOVED) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization member not found' });
+        }
+        if (target.status === MemberStatus.SUSPENDED) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Organization member is already suspended' });
+        }
+
+        await assertNotLastActiveOwner(tx as any, organizationId, input.userId, 'suspend');
+
+        await tx.organizationMember.update({
+          where: { userId_organizationId: { userId: input.userId, organizationId } },
+          data: { status: MemberStatus.SUSPENDED },
+        });
+
+        await writeSafeAuditLog(tx as any, {
+          userId: ctx.user.id,
+          action: 'organization_member_suspended',
+          entityType: 'OrganizationMember',
+          entityId: input.userId,
+          metadata: { organizationId, role: target.role },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: ctx.req.headers['user-agent'] ?? null,
+        });
+
+        return target.user;
+      });
+
+      await revokeMemberAccess(ctx, input.userId, organizationId, suspendedUser.supabaseAuthId);
+      return { success: true, message: `${suspendedUser.email} has been suspended from this organization.` };
+    }),
+
+  reactivateMember: protectedProcedure
+    .input(z.object({ userId: z.string().min(1), organizationId: z.string().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      const organizationId = input.organizationId ?? ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      const member = await ctx.prisma.$transaction(async (tx) => {
+        const target = await tx.organizationMember.findUnique({
+          where: { userId_organizationId: { userId: input.userId, organizationId } },
+          select: {
+            status: true,
+            role: true,
+            user: { select: { id: true, email: true, fullName: true } },
+          },
+        });
+
+        if (!target || target.status === MemberStatus.REMOVED) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization member not found' });
+        }
+        if (target.status === MemberStatus.ACTIVE) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Organization member is already active' });
+        }
+
+        const updated = await tx.organizationMember.update({
+          where: { userId_organizationId: { userId: input.userId, organizationId } },
+          data: { status: MemberStatus.ACTIVE },
+          select: {
+            id: true,
+            userId: true,
+            organizationId: true,
+            role: true,
+            status: true,
+            joinedAt: true,
+            user: { select: { email: true, fullName: true } },
+          },
+        });
+
+        await writeSafeAuditLog(tx as any, {
+          userId: ctx.user.id,
+          action: 'organization_member_reactivated',
+          entityType: 'OrganizationMember',
+          entityId: input.userId,
+          metadata: { organizationId, role: target.role },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: ctx.req.headers['user-agent'] ?? null,
+        });
+
+        return updated;
+      });
+
+      await redis.del(`sheriabot:orgmem:${input.userId}:${organizationId}`).catch(() => {});
+      await userCache.delete(input.userId).catch(() => {});
+      return { success: true, member, message: `${member.user.fullName || member.user.email} has been reactivated.` };
     }),
 
   // --- SETTINGS PAGE PROCEDURES ---------------------------------------------
@@ -961,6 +1123,315 @@ export const organizationRouter = router({
           ctx.user.role === 'ADMIN' ||
           member.role === MemberRole.OWNER ||
           member.role === MemberRole.ADMIN,
+      };
+    }),
+
+  getTeamOverview: protectedProcedure
+    .input(z.void())
+    .query(async ({ ctx }) => {
+      const organizationId = ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      const member = await ctx.prisma.organizationMember.findUnique({
+        where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
+        select: { status: true, role: true },
+      });
+      if (!member || member.status !== MemberStatus.ACTIVE) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this organization' });
+      }
+
+      const [organization, seatUsage, members, pendingInvitations, statusCounts, owner] = await Promise.all([
+        ctx.prisma.organization.findUnique({
+          where: { id: organizationId },
+          select: {
+            id: true,
+            name: true,
+            plan: true,
+            subscriptionStatus: true,
+            registrationNumber: true,
+            industry: true,
+            website: true,
+            address: true,
+            contactPerson: true,
+            contactEmail: true,
+            contactPhone: true,
+            maxSeats: true,
+          },
+        }),
+        getSeatUsageForOrganization(ctx.prisma as any, organizationId),
+        ctx.prisma.organizationMember.findMany({
+          where: { organizationId, status: { not: MemberStatus.REMOVED } },
+          orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
+          take: 100,
+          select: {
+            id: true,
+            role: true,
+            status: true,
+            invitedAt: true,
+            joinedAt: true,
+            user: {
+              select: {
+                id: true,
+                email: true,
+                fullName: true,
+                role: true,
+                createdAt: true,
+                lastLoginAt: true,
+                totpEnabled: true,
+              },
+            },
+          },
+        }),
+        ctx.prisma.invitation.findMany({
+          where: {
+            organizationId,
+            used: false,
+            revokedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            email: true,
+            organizationRole: true,
+            expiresAt: true,
+            createdAt: true,
+            invitedBy: true,
+          },
+        }),
+        ctx.prisma.organizationMember.groupBy({
+          by: ['status'],
+          where: { organizationId, status: { not: MemberStatus.REMOVED } },
+          _count: { _all: true },
+        }),
+        ctx.prisma.organizationMember.findFirst({
+          where: { organizationId, role: MemberRole.OWNER, status: MemberStatus.ACTIVE },
+          orderBy: { joinedAt: 'asc' },
+          select: {
+            user: { select: { id: true, email: true, fullName: true } },
+          },
+        }),
+      ]);
+
+      if (!organization) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this organization' });
+      }
+
+      const counts = statusCounts.reduce(
+        (acc, row) => {
+          acc[row.status] = row._count._all;
+          return acc;
+        },
+        { ACTIVE: 0, SUSPENDED: 0, INVITED: 0, REMOVED: 0 } as Record<MemberStatus, number>,
+      );
+
+      const callerOrgRole = member.role as MemberRole;
+      return {
+        organization,
+        callerOrgRole,
+        canManageMembers: canManageOrganization(callerOrgRole, ctx.user.role),
+        seatUsage,
+        memberCounts: {
+          active: counts.ACTIVE,
+          suspended: counts.SUSPENDED,
+          pendingInvitations: pendingInvitations.length,
+          capacity: seatUsage.seatLimit,
+        },
+        owner: owner?.user ?? null,
+        members: members.map((m) => ({
+          id: m.user.id,
+          membershipId: m.id,
+          name: m.user.fullName,
+          email: m.user.email,
+          role: m.role,
+          orgRole: m.role,
+          platformRole: m.user.role,
+          status: m.status,
+          joinedAt: m.joinedAt,
+          invitedAt: m.invitedAt,
+          createdAt: m.user.createdAt,
+          lastActive: m.user.lastLoginAt,
+          lastLoginAt: m.user.lastLoginAt,
+          totpEnabled: m.user.totpEnabled,
+        })),
+        pendingInvitations,
+      };
+    }),
+
+  getSecurityCenter: protectedProcedure
+    .input(z.void())
+    .query(async ({ ctx }) => {
+      const organizationId = ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      const member = await ctx.prisma.organizationMember.findUnique({
+        where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
+        select: { status: true, role: true },
+      });
+      if (!member || member.status !== MemberStatus.ACTIVE) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this organization' });
+      }
+
+      const [organization, members] = await Promise.all([
+        ctx.prisma.organization.findUnique({
+          where: { id: organizationId },
+          select: {
+            id: true,
+            name: true,
+            plan: true,
+            requireMfa: true,
+            mfaPolicyEnabledAt: true,
+            mfaPolicyUpdatedBy: true,
+          } as any,
+        }),
+        ctx.prisma.organizationMember.findMany({
+          where: {
+            organizationId,
+            status: { in: [MemberStatus.ACTIVE, MemberStatus.SUSPENDED] },
+          },
+          select: {
+            role: true,
+            status: true,
+            user: {
+              select: {
+                id: true,
+                email: true,
+                fullName: true,
+                totpEnabled: true,
+                lastLoginAt: true,
+              },
+            },
+          },
+          orderBy: { joinedAt: 'asc' },
+        }),
+      ]);
+
+      if (!organization) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this organization' });
+      }
+
+      const enabled = members.filter((m) => m.user.totpEnabled).length;
+      const total = members.length;
+      const percentage = total === 0 ? 0 : Math.round((enabled / total) * 100);
+      const callerOrgRole = member.role as MemberRole;
+
+      return {
+        policy: {
+          requireMfa: Boolean((organization as any).requireMfa),
+          mfaPolicyEnabledAt: (organization as any).mfaPolicyEnabledAt,
+          mfaPolicyUpdatedBy: (organization as any).mfaPolicyUpdatedBy,
+        },
+        posture: {
+          totalMembers: total,
+          mfaEnabled: enabled,
+          mfaMissing: total - enabled,
+          percentage,
+        },
+        canManageSecurity: canManageOrganization(callerOrgRole, ctx.user.role),
+        currentUserMfaEnabled: Boolean(ctx.user.totpEnabled),
+        members: members.map((m) => ({
+          id: m.user.id,
+          name: m.user.fullName,
+          email: m.user.email,
+          role: m.role,
+          status: m.status,
+          totpEnabled: m.user.totpEnabled,
+          lastActive: m.user.lastLoginAt,
+        })),
+      };
+    }),
+
+  updateSecurityPolicy: protectedProcedure
+    .input(z.object({ requireMfa: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      const organizationId = ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      if (input.requireMfa && !ctx.user.totpEnabled) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Enable two-factor authentication on your own account before requiring it for the organization.',
+        });
+      }
+
+      const updated = await ctx.prisma.organization.update({
+        where: { id: organizationId },
+        data: {
+          requireMfa: input.requireMfa,
+          mfaPolicyEnabledAt: input.requireMfa ? new Date() : null,
+          mfaPolicyUpdatedBy: ctx.user.id,
+          updatedAt: new Date(),
+        } as any,
+        select: {
+          id: true,
+          requireMfa: true,
+          mfaPolicyEnabledAt: true,
+          mfaPolicyUpdatedBy: true,
+        } as any,
+      });
+
+      await writeSafeAuditLog(ctx.prisma as any, {
+        userId: ctx.user.id,
+        action: 'organization_security_policy_updated',
+        entityType: 'Organization',
+        entityId: organizationId,
+        metadata: { organizationId, requireMfa: input.requireMfa },
+        ipAddress: ctx.req.ip ?? null,
+        userAgent: ctx.req.headers['user-agent'] ?? null,
+      });
+
+      return { success: true, policy: updated };
+    }),
+
+  getActivityLog: protectedProcedure
+    .input(z.object({ limit: z.number().min(1).max(100).default(50) }).optional())
+    .query(async ({ input, ctx }) => {
+      const organizationId = ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      const logs = await ctx.prisma.auditLog.findMany({
+        where: {
+          OR: [
+            { entityType: 'Organization', entityId: organizationId },
+            { metadata: { path: ['organizationId'], equals: organizationId } },
+          ],
+        } as any,
+        orderBy: { createdAt: 'desc' },
+        take: input?.limit ?? 50,
+        select: {
+          id: true,
+          action: true,
+          entityType: true,
+          entityId: true,
+          metadata: true,
+          createdAt: true,
+          user: { select: { id: true, email: true, fullName: true } },
+        },
+      });
+
+      return {
+        logs: logs.map((log) => ({
+          id: log.id,
+          timestamp: log.createdAt,
+          actor: log.user ? { id: log.user.id, email: log.user.email, name: log.user.fullName } : null,
+          action: log.action,
+          target: log.entityType,
+          targetId: log.entityId,
+          result: 'SUCCESS',
+          metadata: log.metadata,
+        })),
       };
     }),
 

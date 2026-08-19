@@ -41,6 +41,7 @@ export interface User {
   sessionId?: string;
   supabaseAuthId: string; // Supabase auth.users UUID (= JWT sub)
   mustChangePassword?: boolean;
+  totpEnabled?: boolean;
   /** Unix ms timestamp of Session.expiresAt  -  enforced on every request (B6). */
   sessionExpiresAt?: number;
 }
@@ -212,6 +213,7 @@ export async function createContext({
             organizationId: true,
             supabaseAuthId: true,
             mustChangePassword: true,
+            totpEnabled: true,
             accountStatus: true,
             deletedAt: true,
           },
@@ -242,6 +244,7 @@ export async function createContext({
               organizationId: dbUser.organizationId ?? undefined,
               supabaseAuthId: dbUser.supabaseAuthId,
               mustChangePassword: dbUser.mustChangePassword,
+              totpEnabled: dbUser.totpEnabled,
               sessionId: activeSession.id,
               sessionExpiresAt: activeSession.expiresAt.getTime(),
             };

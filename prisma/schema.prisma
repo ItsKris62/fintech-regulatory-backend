@@ -221,6 +221,9 @@ model Organization {
   contactPosition        String?
   contactEmail           String?
   contactPhone           String?
+  requireMfa             Boolean                   @default(false)
+  mfaPolicyEnabledAt     DateTime?
+  mfaPolicyUpdatedBy     String?
   createdAt              DateTime                  @default(now())
   updatedAt              DateTime                  @updatedAt
   users                  User[]

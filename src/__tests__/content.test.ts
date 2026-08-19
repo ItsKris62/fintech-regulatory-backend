@@ -230,7 +230,7 @@ describe('ContentService', () => {
 
 describe('Content Schemas', () => {
   describe('createContentSchema', () => {
-    it('should validate a valid blog post', () => {
+    it('should reject BLOG_POST content type', () => {
       const input = {
         contentType: 'BLOG_POST',
         title: 'Understanding KYC Requirements',
@@ -239,7 +239,7 @@ describe('Content Schemas', () => {
       };
 
       const result = createContentSchema.safeParse(input);
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
     });
 
     it('should validate a KB article', () => {
@@ -291,7 +291,7 @@ describe('Content Schemas', () => {
 
     it('should accept valid slug format', () => {
       const input = {
-        contentType: 'BLOG_POST',
+        contentType: 'KNOWLEDGE_BASE_ARTICLE',
         title: 'Test',
         content: 'Content',
         slug: 'valid-slug-123',
@@ -303,7 +303,7 @@ describe('Content Schemas', () => {
 
     it('should default status to DRAFT', () => {
       const input = {
-        contentType: 'BLOG_POST',
+        contentType: 'KNOWLEDGE_BASE_ARTICLE',
         title: 'Test Article',
         content: 'Some content here',
       };
@@ -314,7 +314,7 @@ describe('Content Schemas', () => {
 
     it('should default tags to empty array', () => {
       const input = {
-        contentType: 'BLOG_POST',
+        contentType: 'KNOWLEDGE_BASE_ARTICLE',
         title: 'Test Article',
         content: 'Some content here',
       };

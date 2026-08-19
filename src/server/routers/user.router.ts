@@ -55,6 +55,7 @@ export const userRouter = router({
               type: true,
               registrationNumber: true,
               industry: true,
+              requireMfa: true,
             },
           },
         },

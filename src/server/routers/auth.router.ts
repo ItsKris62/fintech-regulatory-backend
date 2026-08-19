@@ -842,7 +842,17 @@ export const authRouter = router({
       try {
         const user = await ctx.prisma.user.findUnique({
           where: { id: ctx.user!.id },
-          include: { organization: { select: { id: true, name: true, type: true, registrationNumber: true } } },
+          include: {
+            organization: {
+              select: {
+                id: true,
+                name: true,
+                type: true,
+                registrationNumber: true,
+                requireMfa: true,
+              } as any,
+            },
+          },
         });
 
       if (!user || (user as any).deletedAt) {
@@ -856,6 +866,7 @@ export const authRouter = router({
         role: user.role,
         phone: user.phone,
         emailVerified: user.emailVerified,
+        totpEnabled: (user as any).totpEnabled ?? false,
         organization: user.organization,
         preferences: (user as any).preferences,
         createdAt: user.createdAt,
