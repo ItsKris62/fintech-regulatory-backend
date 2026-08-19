@@ -89,6 +89,7 @@ export async function getSeatUsageForOrganization(
       where: {
         organizationId,
         used: false,
+        revokedAt: null,
         expiresAt: { gt: now },
       },
     }),
@@ -121,6 +122,7 @@ export async function findPendingOrganizationInvite(
       organizationId,
       email: email.toLowerCase(),
       used: false,
+      revokedAt: null,
       expiresAt: { gt: now },
     },
     select: { id: true },

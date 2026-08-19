@@ -38,7 +38,7 @@ describe('Business and Startup organization limit enforcement map', () => {
     const start = organizationRouter.indexOf('addMember: protectedProcedure');
     const body = organizationRouter.slice(start, start + 3600);
     const guardIndex = body.indexOf('assertCanCreateOrJoinOrganization');
-    const upsertIndex = body.indexOf('ctx.prisma.organizationMember.upsert');
+    const upsertIndex = body.indexOf('tx.organizationMember.upsert');
 
     expect(guardIndex).toBeGreaterThan(-1);
     expect(upsertIndex).toBeGreaterThan(guardIndex);

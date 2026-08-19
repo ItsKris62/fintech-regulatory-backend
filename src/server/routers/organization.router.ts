@@ -17,12 +17,20 @@ import { userCache } from '@/lib/redis/cache.service';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
-import {
-  buildSeatLimitMessage,
-  getSeatUsageForOrganization,
-  hasSeatCapacity,
-} from '../services/organization-seat.service';
+import { lastSeenKey, sessionStartKey } from '@/config/session';
+import { supabaseAdmin } from '@/lib/supabase';
+import { revokeAllUserTokens } from '@/utils/token-revocation';
+import { getSeatUsageForOrganization } from '../services/organization-seat.service';
 import { assertCanCreateOrJoinOrganization } from '../services/organization-plan-limit.service';
+import {
+  assertSeatCapacityLocked,
+  createOrganizationInvitationLocked,
+  generateInvitationToken,
+  hashInvitationToken,
+  lockOrganizationSeatAllocation,
+  sendOrganizationInvitationEmail,
+  writeSafeAuditLog,
+} from '../services/organization-invitation.service';
 import type { Context } from '../trpc/context';
 
 async function assertActiveOrganizationMember(
@@ -88,15 +96,24 @@ async function assertOrganizationCanUseTeamSeats(ctx: Context, organizationId: s
   }
 }
 
-async function assertCanConsumeSeat(ctx: Context, organizationId: string) {
-  const usage = await getSeatUsageForOrganization(ctx.prisma as any, organizationId);
-  if (!hasSeatCapacity(usage)) {
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: buildSeatLimitMessage(usage),
+async function revokeMemberAccess(ctx: Context, userId: string, organizationId: string, supabaseAuthId?: string | null) {
+  await Promise.all([
+    redis.del(`sheriabot:orgmem:${userId}:${organizationId}`),
+    userCache.delete(userId),
+    ctx.prisma.session.deleteMany({ where: { userId } }),
+    redis.del(lastSeenKey(userId)),
+    redis.del(sessionStartKey(userId)),
+    supabaseAuthId ? redis.del(`user:session:${supabaseAuthId}`) : Promise.resolve(0),
+  ]).catch((error: any) => {
+    logger.warn({ type: 'organization_member_access_revoke_cache_warn', userId, organizationId, error: error.message });
+  });
+
+  await revokeAllUserTokens(userId, 'admin_revoke').catch(() => {});
+  if (supabaseAuthId) {
+    await supabaseAdmin.auth.admin.signOut(supabaseAuthId).catch((error: any) => {
+      logger.warn({ type: 'organization_member_supabase_signout_warn', userId, organizationId, error: error.message });
     });
   }
-  return usage;
 }
 
 /**
@@ -474,42 +491,56 @@ export const organizationRouter = router({
           },
         });
 
-        const existingActiveMember = await ctx.prisma.organizationMember.findUnique({
-          where: { userId_organizationId: { userId, organizationId } },
-          select: { status: true },
-        });
+        await ctx.prisma.$transaction(async (tx) => {
+          await lockOrganizationSeatAllocation(tx as any, organizationId);
 
-        if (
-          existingActiveMember?.status === MemberStatus.ACTIVE ||
-          existingActiveMember?.status === MemberStatus.SUSPENDED
-        ) {
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'This user is already a member of the organization',
+          const existingActiveMember = await tx.organizationMember.findUnique({
+            where: { userId_organizationId: { userId, organizationId } },
+            select: { status: true },
           });
-        }
 
-        await assertCanConsumeSeat(ctx, organizationId);
+          if (
+            existingActiveMember?.status === MemberStatus.ACTIVE ||
+            existingActiveMember?.status === MemberStatus.SUSPENDED
+          ) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'This user is already a member of the organization',
+            });
+          }
 
-        // Update user's organization foreign key
-        await ctx.prisma.user.update({
-          where: { id: userId },
-          data: { organizationId, updatedAt: new Date() },
-        });
+          await assertSeatCapacityLocked(tx as any, organizationId);
 
-        // Upsert OrganizationMember row (source of truth for membership checks)
-        await ctx.prisma.organizationMember.upsert({
-          where: { userId_organizationId: { userId, organizationId } },
-          create: {
-            userId,
-            organizationId,
-            role: role as MemberRole,
-            status: MemberStatus.ACTIVE,
-          },
-          update: {
-            role:   role as MemberRole,
-            status: MemberStatus.ACTIVE,
-          },
+          // Update user's organization foreign key
+          await tx.user.update({
+            where: { id: userId },
+            data: { organizationId, updatedAt: new Date() },
+          });
+
+          // Upsert OrganizationMember row (source of truth for membership checks)
+          await tx.organizationMember.upsert({
+            where: { userId_organizationId: { userId, organizationId } },
+            create: {
+              userId,
+              organizationId,
+              role: role as MemberRole,
+              status: MemberStatus.ACTIVE,
+            },
+            update: {
+              role:   role as MemberRole,
+              status: MemberStatus.ACTIVE,
+            },
+          });
+
+          await writeSafeAuditLog(tx as any, {
+            userId: ctx.user.id,
+            action: 'organization_member_added',
+            entityType: 'OrganizationMember',
+            entityId: userId,
+            metadata: { organizationId, role },
+            ipAddress: ctx.req.ip ?? null,
+            userAgent: ctx.req.headers['user-agent'] ?? null,
+          });
         });
 
         // Invalidate cached membership so requireOrgMembership sees the new row
@@ -565,20 +596,43 @@ export const organizationRouter = router({
           });
         }
 
-        // Clear user's organization foreign key
-        await ctx.prisma.user.update({
-          where: { id: userId },
-          data: { organizationId: null, updatedAt: new Date() },
-        });
+        const removedUser = await ctx.prisma.$transaction(async (tx) => {
+          const target = await tx.user.findUnique({
+            where: { id: userId },
+            select: { id: true, supabaseAuthId: true },
+          });
 
-        // Update OrganizationMember status to REMOVED (source of truth)
-        await ctx.prisma.organizationMember.updateMany({
-          where:  { userId, organizationId },
-          data:   { status: MemberStatus.REMOVED },
+          if (!target) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
+          }
+
+          // Clear user's organization foreign key
+          await tx.user.update({
+            where: { id: userId },
+            data: { organizationId: null, updatedAt: new Date() },
+          });
+
+          // Update OrganizationMember status to REMOVED (source of truth)
+          await tx.organizationMember.updateMany({
+            where:  { userId, organizationId },
+            data:   { status: MemberStatus.REMOVED },
+          });
+
+          await writeSafeAuditLog(tx as any, {
+            userId: ctx.user.id,
+            action: 'organization_member_removed',
+            entityType: 'OrganizationMember',
+            entityId: userId,
+            metadata: { organizationId },
+            ipAddress: ctx.req.ip ?? null,
+            userAgent: ctx.req.headers['user-agent'] ?? null,
+          });
+
+          return target;
         });
 
         // Invalidate cached membership so requireOrgMembership blocks access immediately
-        await redis.del(`sheriabot:orgmem:${userId}:${organizationId}`).catch(() => {});
+        await revokeMemberAccess(ctx, userId, organizationId, removedUser.supabaseAuthId);
 
         logger.info({
           type:            'organization_member_removed',
@@ -764,6 +818,21 @@ export const organizationRouter = router({
         });
 
         await redis.del(`sheriabot:orgmem:${input.userId}:${callerOrgId}`).catch(() => {});
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user!.id,
+            action: 'organization_member_role_updated',
+            entityType: 'OrganizationMember',
+            entityId: input.userId,
+            metadata: {
+              organizationId: callerOrgId,
+              previousRole: targetMember.role,
+              newRole: input.role,
+            },
+            ipAddress: ctx.req.ip || undefined,
+            userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
+          },
+        }).catch(() => {});
 
         logger.info({
           type: 'org_member_role_updated',
@@ -895,10 +964,229 @@ export const organizationRouter = router({
       };
     }),
 
+  createInvitation: protectedProcedure
+    .input(z.object({
+      email: z.string().email(),
+      role: z.enum(['ADMIN', 'MEMBER', 'VIEWER']).default('MEMBER'),
+      expiresInDays: z.number().min(1).max(30).default(7),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const organizationId = ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+      await assertOrganizationCanUseTeamSeats(ctx, organizationId);
+
+      const inviter = await ctx.prisma.user.findUnique({
+        where: { id: ctx.user.id },
+        select: { fullName: true },
+      });
+
+      const { invitation, rawToken } = await ctx.prisma.$transaction(async (tx) => {
+        const result = await createOrganizationInvitationLocked({
+          tx: tx as any,
+          actorUserId: ctx.user.id,
+          organizationId,
+          email: input.email,
+          organizationRole: input.role as MemberRole,
+          expiresInDays: input.expiresInDays,
+          inviterName: inviter?.fullName,
+        });
+
+        await writeSafeAuditLog(tx as any, {
+          userId: ctx.user.id,
+          action: 'organization_invitation_created',
+          entityType: 'Invitation',
+          entityId: result.invitation.id,
+          metadata: {
+            organizationId,
+            email: input.email.toLowerCase(),
+            organizationRole: input.role,
+            expiresAt: result.invitation.expiresAt,
+          },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: ctx.req.headers['user-agent'] ?? null,
+        });
+
+        return result;
+      });
+
+      await sendOrganizationInvitationEmail({
+        email: invitation.email,
+        rawToken,
+        role: invitation.organizationRole ?? input.role,
+        inviterName: inviter?.fullName,
+        expiresInDays: input.expiresInDays,
+      }).catch((emailErr: any) => {
+        logger.warn({ type: 'organization_invitation_email_failed', invitationId: invitation.id, error: emailErr.message });
+      });
+
+      return {
+        success: true,
+        invitation: {
+          id: invitation.id,
+          email: invitation.email,
+          organizationRole: invitation.organizationRole,
+          expiresAt: invitation.expiresAt,
+          createdAt: invitation.createdAt,
+        },
+      };
+    }),
+
+  listPendingInvitations: protectedProcedure
+    .input(z.void())
+    .query(async ({ ctx }) => {
+      const organizationId = ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      const invitations = await ctx.prisma.invitation.findMany({
+        where: {
+          organizationId,
+          used: false,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        select: {
+          id: true,
+          email: true,
+          organizationRole: true,
+          expiresAt: true,
+          createdAt: true,
+          invitedBy: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return { invitations };
+    }),
+
+  revokeInvitation: protectedProcedure
+    .input(z.object({ invitationId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const organizationId = ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      const invitation = await ctx.prisma.$transaction(async (tx) => {
+        await lockOrganizationSeatAllocation(tx as any, organizationId);
+        const existing = await tx.invitation.findFirst({
+          where: {
+            id: input.invitationId,
+            organizationId,
+            used: false,
+            revokedAt: null,
+          },
+          select: { id: true, email: true },
+        });
+
+        if (!existing) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Pending invitation not found' });
+        }
+
+        const updated = await tx.invitation.update({
+          where: { id: existing.id },
+          data: { revokedAt: new Date(), revokedBy: ctx.user.id },
+          select: { id: true, email: true, revokedAt: true },
+        });
+
+        await writeSafeAuditLog(tx as any, {
+          userId: ctx.user.id,
+          action: 'organization_invitation_revoked',
+          entityType: 'Invitation',
+          entityId: updated.id,
+          metadata: { organizationId, email: updated.email },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: ctx.req.headers['user-agent'] ?? null,
+        });
+
+        return updated;
+      });
+
+      return { success: true, invitation };
+    }),
+
+  resendInvitation: protectedProcedure
+    .input(z.object({ invitationId: z.string().min(1), expiresInDays: z.number().min(1).max(30).default(7) }))
+    .mutation(async ({ input, ctx }) => {
+      const organizationId = ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      const inviter = await ctx.prisma.user.findUnique({
+        where: { id: ctx.user.id },
+        select: { fullName: true },
+      });
+
+      const rawToken = generateInvitationToken();
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + input.expiresInDays);
+
+      const invitation = await ctx.prisma.$transaction(async (tx) => {
+        const existing = await tx.invitation.findFirst({
+          where: {
+            id: input.invitationId,
+            organizationId,
+            used: false,
+            revokedAt: null,
+          },
+          select: { id: true },
+        });
+
+        if (!existing) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Pending invitation not found' });
+        }
+
+        const updated = await tx.invitation.update({
+          where: { id: existing.id },
+          data: {
+            token: hashInvitationToken(rawToken),
+            expiresAt,
+          },
+          select: { id: true, email: true, organizationRole: true, expiresAt: true },
+        });
+
+        await writeSafeAuditLog(tx as any, {
+          userId: ctx.user.id,
+          action: 'organization_invitation_resent',
+          entityType: 'Invitation',
+          entityId: updated.id,
+          metadata: { organizationId, email: updated.email, expiresAt },
+          ipAddress: ctx.req.ip ?? null,
+          userAgent: ctx.req.headers['user-agent'] ?? null,
+        });
+
+        return updated;
+      });
+
+      await sendOrganizationInvitationEmail({
+        email: invitation.email,
+        rawToken,
+        role: invitation.organizationRole ?? 'MEMBER',
+        inviterName: inviter?.fullName,
+        expiresInDays: input.expiresInDays,
+      }).catch((emailErr: any) => {
+        logger.warn({ type: 'organization_invitation_resend_email_failed', invitationId: invitation.id, error: emailErr.message });
+      });
+
+      return { success: true, invitation };
+    }),
+
   /**
    * Update the current user's organization settings
    *
-   * @protected  -  REGULATOR role is blocked (read-only)
+   * @protected  -  organization OWNER/ADMIN only
    */
   updateSettings: protectedProcedure
     .input(updateOrganizationSettingsSchema)
@@ -912,7 +1200,7 @@ export const organizationRouter = router({
             message: 'You are not a member of any organization',
           });
         }
-        await assertActiveOrganizationMember(ctx, organizationId);
+        await assertOrganizationManager(ctx, organizationId);
 
         if (ctx.user.role === 'REGULATOR') {
           throw new TRPCError({
@@ -943,6 +1231,18 @@ export const organizationRouter = router({
 
         // Invalidate the current user's profile cache so org name changes surface immediately
         await userCache.delete(ctx.user.id);
+
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user.id,
+            action: 'organization_settings_updated',
+            entityType: 'Organization',
+            entityId: organizationId,
+            metadata: { updatedFields: Object.keys(input) },
+            ipAddress: ctx.req.ip || undefined,
+            userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
+          },
+        }).catch(() => {});
 
         logger.info({
           type: 'organization_settings_updated',

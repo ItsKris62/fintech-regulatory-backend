@@ -62,6 +62,7 @@ describe('organization seat usage', () => {
       where: {
         organizationId: 'org_1',
         used: false,
+        revokedAt: null,
         expiresAt: { gt: expect.any(Date) },
       },
     });
@@ -113,6 +114,7 @@ describe('organization seat usage', () => {
       where: {
         organizationId: 'org_1',
         used: false,
+        revokedAt: null,
         expiresAt: { gt: expect.any(Date) },
       },
     });
@@ -178,6 +180,7 @@ describe('organization seat usage', () => {
         organizationId: 'org_1',
         email: 'user@example.com',
         used: false,
+        revokedAt: null,
         expiresAt: { gt: expect.any(Date) },
       },
       select: { id: true },

@@ -17,7 +17,7 @@ import { emailSchema, passwordSchema, phoneSchema } from '@/utils/validation';
  *   password: "SecurePass123!",
  *   name: "John Doe",
  *   role: "STARTUP",
- *   organizationId: "org_123" // optional
+ *   invitationToken: "raw_invitation_token" // optional, required to accept an invitation
  * }
  */
 export const registerSchema = z.object({
@@ -28,9 +28,9 @@ export const registerSchema = z.object({
     error: 'Role must be REGULATOR, STARTUP, or ENTERPRISE',
   }),
   companyName: z.string().min(2, 'Organization name must be at least 2 characters').max(200).optional(),
-  organizationId: z.string().optional(),
+  invitationToken: z.string().min(16, 'Invitation token is invalid').max(256).optional(),
   phone: phoneSchema.optional(),
-});
+}).strict();
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 

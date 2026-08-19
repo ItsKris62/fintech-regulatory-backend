@@ -11,6 +11,10 @@
 
 import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
+import {
+  findValidInvitationByEmailAndToken,
+  hasPendingInvitationForEmail,
+} from '@/server/services/organization-invitation.service';
 
 // --- Free Email Blocklist -----------------------------------------------------
 
@@ -85,6 +89,7 @@ export interface ValidatedInvitation {
   id: string;
   email: string;
   role: string;
+  organizationRole?: string | null;
   organizationId?: string | null;
   invitedBy: string;
 }
@@ -94,17 +99,11 @@ export interface ValidatedInvitation {
  * Returns null if the token is missing, expired, or already used.
  */
 export async function findValidInvitation(
-  email: string
+  email: string,
+  token?: string,
 ): Promise<ValidatedInvitation | null> {
   try {
-    const invitation = await prisma.invitation.findFirst({
-      where: {
-        email: email.toLowerCase(),
-        used: false,
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const invitation = await findValidInvitationByEmailAndToken(prisma as any, email, token);
 
     if (!invitation) return null;
 
@@ -112,6 +111,7 @@ export async function findValidInvitation(
       id: invitation.id,
       email: invitation.email,
       role: invitation.role,
+      organizationRole: invitation.organizationRole,
       organizationId: invitation.organizationId,
       invitedBy: invitation.invitedBy,
     };
@@ -122,6 +122,19 @@ export async function findValidInvitation(
       error: error.message,
     });
     return null;
+  }
+}
+
+export async function hasPendingInvitation(email: string): Promise<boolean> {
+  try {
+    return await hasPendingInvitationForEmail(prisma as any, email);
+  } catch (error: any) {
+    logger.error({
+      type: 'invitation_pending_lookup_error',
+      email,
+      error: error.message,
+    });
+    return false;
   }
 }
 

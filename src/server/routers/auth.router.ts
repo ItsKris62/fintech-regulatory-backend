@@ -32,7 +32,7 @@ import {
   FREE_EMAIL_ERROR_MESSAGE,
   isRegulatorDomain,
   findValidInvitation,
-  consumeInvitation,
+  hasPendingInvitation,
   initializeNotificationPreferences,
 } from '@/lib/verification/verification.service';
 import { reactMailer } from '@/lib/email/react-mailer.service';
@@ -41,6 +41,11 @@ import {
   AUTH_ERROR_CODES,
   getAuthErrorMessage,
 } from '@/shared/errors/auth-error-messages';
+import {
+  findValidInvitationByEmailAndToken,
+  lockOrganizationSeatAllocation,
+  writeSafeAuditLog,
+} from '../services/organization-invitation.service';
 import {
   buildSeatLimitMessage,
   getSeatUsageForOrganization,
@@ -170,7 +175,23 @@ export const authRouter = router({
           });
         }
 
-        const invitation = await findValidInvitation(input.email);
+        const invitation = input.invitationToken
+          ? await findValidInvitation(input.email, input.invitationToken)
+          : null;
+
+        if (input.invitationToken && !invitation) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invalid, expired, revoked, or already-used invitation token.',
+          });
+        }
+
+        if (!input.invitationToken && await hasPendingInvitation(input.email)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'An invitation token is required to join this organization.',
+          });
+        }
 
         if (!systemConfig.allowNewRegistrations && !invitation) {
           throw new TRPCError({
@@ -189,24 +210,6 @@ export const authRouter = router({
             throw new TRPCError({
               code: 'BAD_REQUEST',
               message: 'Regulator accounts require a verified government email address.',
-            });
-          }
-        }
-
-        if (input.organizationId) {
-          const org = await ctx.prisma.organization.findUnique({ where: { id: input.organizationId } });
-          if (!org) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid organization ID' });
-        }
-
-        if (invitation?.organizationId) {
-          const seatUsage = await getSeatUsageForOrganization(ctx.prisma as any, invitation.organizationId);
-          const usedSeatsAfterConsumingThisInvite = Math.max(0, seatUsage.usedSeats - 1);
-          const canAcceptInvite = seatUsage.seatLimit === -1
-            || usedSeatsAfterConsumingThisInvite < seatUsage.seatLimit;
-          if (!canAcceptInvite) {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: buildSeatLimitMessage(seatUsage),
             });
           }
         }
@@ -278,20 +281,104 @@ export const authRouter = router({
             ? 'pending_approval'
             : 'active';
         try {
-          user = await ctx.prisma.user.create({
-            data: {
-              supabaseAuthId: supabaseUserId,
-              email: input.email,
-              fullName: input.name || input.email,
-              role: resolvedRole,
-              phone: input.phone,
-              organizationId: invitation?.organizationId || input.organizationId,
-              emailVerified: !requireEmailVerification,
-              emailVerifiedAt: requireEmailVerification ? null : new Date(),
-              status: requireEmailVerification ? 'PENDING_VERIFICATION' : 'ACTIVE',
-              accountStatus: initialAccountStatus,
-            } as any,
-            select: { id: true, email: true, fullName: true, role: true, organizationId: true, createdAt: true },
+          user = await ctx.prisma.$transaction(async (tx) => {
+            let acceptedInvitation: any = null;
+
+            if (input.invitationToken) {
+              acceptedInvitation = await findValidInvitationByEmailAndToken(tx as any, input.email, input.invitationToken);
+              if (!acceptedInvitation) {
+                throw new TRPCError({
+                  code: 'BAD_REQUEST',
+                  message: 'Invalid, expired, revoked, or already-used invitation token.',
+                });
+              }
+
+              if (acceptedInvitation.organizationId) {
+                await lockOrganizationSeatAllocation(tx as any, acceptedInvitation.organizationId);
+                acceptedInvitation = await findValidInvitationByEmailAndToken(tx as any, input.email, input.invitationToken);
+                if (!acceptedInvitation) {
+                  throw new TRPCError({
+                    code: 'BAD_REQUEST',
+                    message: 'Invalid, expired, revoked, or already-used invitation token.',
+                  });
+                }
+
+                const seatUsage = await getSeatUsageForOrganization(tx as any, acceptedInvitation.organizationId);
+                const usedSeatsAfterConsumingThisInvite = Math.max(0, seatUsage.usedSeats - 1);
+                const canAcceptInvite = seatUsage.seatLimit === -1
+                  || usedSeatsAfterConsumingThisInvite < seatUsage.seatLimit;
+                if (!canAcceptInvite) {
+                  throw new TRPCError({
+                    code: 'FORBIDDEN',
+                    message: buildSeatLimitMessage(seatUsage),
+                  });
+                }
+              }
+            }
+
+            const createdUser = await tx.user.create({
+              data: {
+                supabaseAuthId: supabaseUserId,
+                email: input.email,
+                fullName: input.name || input.email,
+                role: acceptedInvitation
+                  ? (acceptedInvitation.role as 'REGULATOR' | 'STARTUP' | 'ENTERPRISE')
+                  : resolvedRole,
+                phone: input.phone,
+                organizationId: acceptedInvitation?.organizationId ?? undefined,
+                emailVerified: !requireEmailVerification,
+                emailVerifiedAt: requireEmailVerification ? null : new Date(),
+                status: requireEmailVerification ? 'PENDING_VERIFICATION' : 'ACTIVE',
+                accountStatus: initialAccountStatus,
+              } as any,
+              select: { id: true, email: true, fullName: true, role: true, organizationId: true, createdAt: true },
+            });
+
+            if (acceptedInvitation) {
+              if (acceptedInvitation.organizationId) {
+                await tx.organizationMember.upsert({
+                  where: {
+                    userId_organizationId: {
+                      userId: createdUser.id,
+                      organizationId: acceptedInvitation.organizationId,
+                    },
+                  },
+                  create: {
+                    userId: createdUser.id,
+                    organizationId: acceptedInvitation.organizationId,
+                    role: (acceptedInvitation.organizationRole ?? MemberRole.MEMBER) as MemberRole,
+                    status: MemberStatus.ACTIVE,
+                    invitedBy: acceptedInvitation.invitedBy,
+                    invitedAt: new Date(),
+                  },
+                  update: {
+                    role: (acceptedInvitation.organizationRole ?? MemberRole.MEMBER) as MemberRole,
+                    status: MemberStatus.ACTIVE,
+                  },
+                });
+              }
+
+              await tx.invitation.update({
+                where: { id: acceptedInvitation.id },
+                data: { used: true, usedAt: new Date() },
+              });
+
+              await writeSafeAuditLog(tx as any, {
+                userId: createdUser.id,
+                action: 'organization_invitation_accepted',
+                entityType: 'Invitation',
+                entityId: acceptedInvitation.id,
+                metadata: {
+                  organizationId: acceptedInvitation.organizationId,
+                  invitedBy: acceptedInvitation.invitedBy,
+                  organizationRole: acceptedInvitation.organizationRole ?? MemberRole.MEMBER,
+                },
+                ipAddress: ctx.req.ip ?? null,
+                userAgent: ctx.req.headers['user-agent'] ?? null,
+              });
+            }
+
+            return createdUser;
           });
         } catch (prismaErr: any) {
           logger.error({
@@ -307,40 +394,17 @@ export const authRouter = router({
               error: delErr.message,
             });
           });
+          if (prismaErr instanceof TRPCError) {
+            throw prismaErr;
+          }
           throw new TRPCError({
             code: 'INTERNAL_SERVER_ERROR',
             message: 'Registration failed. Please try again.',
           });
         }
 
-        if (invitation) {
-          if (invitation.organizationId) {
-            await ctx.prisma.organizationMember.upsert({
-              where: {
-                userId_organizationId: {
-                  userId: user.id,
-                  organizationId: invitation.organizationId,
-                },
-              },
-              create: {
-                userId: user.id,
-                organizationId: invitation.organizationId,
-                role: MemberRole.MEMBER,
-                status: MemberStatus.ACTIVE,
-                invitedBy: invitation.invitedBy,
-                invitedAt: new Date(),
-              },
-              update: {
-                role: MemberRole.MEMBER,
-                status: MemberStatus.ACTIVE,
-              },
-            });
-            await redis.del(`sheriabot:orgmem:${user.id}:${invitation.organizationId}`).catch(() => {});
-          }
-
-          await consumeInvitation(invitation.id).catch((err: any) =>
-            logger.warn({ type: 'invitation_consume_failed', invitationId: invitation.id, error: err.message })
-          );
+        if (invitation?.organizationId) {
+          await redis.del(`sheriabot:orgmem:${user.id}:${invitation.organizationId}`).catch(() => {});
         }
 
         // F3.1  -  Create and link Organization if companyName was provided and user has no org yet.
@@ -582,7 +646,12 @@ export const authRouter = router({
           });
           dbSessionId = session.id;
         } catch (err: any) {
-          logger.warn({ type: 'auth_login_session_create_failed', userId: user.id, error: err.message });
+          logger.error({ type: 'auth_login_session_create_failed', userId: user.id, error: err.message });
+          await supabaseAdmin.auth.admin.signOut(authData.user.id).catch(() => {});
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Unable to create a secure session. Please try again.',
+          });
         }
 
         // B6: Include session expiry in the Redis user profile so context.ts

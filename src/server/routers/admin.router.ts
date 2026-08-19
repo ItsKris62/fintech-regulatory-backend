@@ -14,11 +14,14 @@ import { BadRequestError, OrganizationNotFoundError } from '@/utils/error';
 import { isPrismaForeignKeyError, sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { optionalOrganizationIdSchema } from '@/server/services/userProvisioning.service';
 import {
-  buildSeatLimitMessage,
   findPendingOrganizationInvite,
-  getSeatUsageForOrganization,
-  hasSeatCapacity,
 } from '../services/organization-seat.service';
+import {
+  assertSeatCapacityLocked,
+  generateInvitationToken,
+  hashInvitationToken,
+  lockOrganizationSeatAllocation,
+} from '../services/organization-invitation.service';
 
 const billingPlanCatalogUpdateItemSchema = z.object({
   id: z.enum(['STARTUP', 'BUSINESS']),
@@ -1674,56 +1677,53 @@ export const adminRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       try {
-        const { randomBytes } = await import('crypto');
-        const token = randomBytes(32).toString('hex');
+        const token = generateInvitationToken();
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + input.expiresInDays);
 
-        if (input.organizationId) {
-          const [existingMember, existingInvite, seatUsage] = await Promise.all([
-            ctx.prisma.organizationMember.findFirst({
-              where: {
-                organizationId: input.organizationId,
-                user: { email: input.email.toLowerCase() },
-                status: { in: ['ACTIVE', 'SUSPENDED'] },
-              },
-              select: { id: true },
-            }),
-            findPendingOrganizationInvite(ctx.prisma as any, input.organizationId, input.email),
-            getSeatUsageForOrganization(ctx.prisma as any, input.organizationId),
-          ]);
+        const invitation = await ctx.prisma.$transaction(async (tx) => {
+          if (input.organizationId) {
+            await lockOrganizationSeatAllocation(tx as any, input.organizationId);
+            const [existingMember, existingInvite] = await Promise.all([
+              tx.organizationMember.findFirst({
+                where: {
+                  organizationId: input.organizationId,
+                  user: { email: input.email.toLowerCase() },
+                  status: { in: ['ACTIVE', 'SUSPENDED'] },
+                },
+                select: { id: true },
+              }),
+              findPendingOrganizationInvite(tx as any, input.organizationId, input.email),
+            ]);
 
-          if (existingMember) {
-            throw new TRPCError({
-              code: 'CONFLICT',
-              message: 'This email is already an active member of the organization',
-            });
+            if (existingMember) {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'This email is already an active member of the organization',
+              });
+            }
+
+            if (existingInvite) {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'A pending invite already exists for this email',
+              });
+            }
+
+            await assertSeatCapacityLocked(tx as any, input.organizationId);
           }
 
-          if (existingInvite) {
-            throw new TRPCError({
-              code: 'CONFLICT',
-              message: 'A pending invite already exists for this email',
-            });
-          }
-
-          if (!hasSeatCapacity(seatUsage)) {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: buildSeatLimitMessage(seatUsage),
-            });
-          }
-        }
-
-        const invitation = await ctx.prisma.invitation.create({
-          data: {
-            email: input.email.toLowerCase(),
-            role: input.role,
-            token,
-            expiresAt,
-            invitedBy: ctx.user!.id,
-            organizationId: input.organizationId,
-          },
+          return tx.invitation.create({
+            data: {
+              email: input.email.toLowerCase(),
+              role: input.role,
+              organizationRole: input.organizationId ? MemberRole.MEMBER : null,
+              token: hashInvitationToken(token),
+              expiresAt,
+              invitedBy: ctx.user!.id,
+              organizationId: input.organizationId,
+            },
+          });
         });
 
         // Send invitation email
@@ -1804,8 +1804,11 @@ export const adminRouter = router({
               id: true,
               email: true,
               role: true,
+              organizationRole: true,
               used: true,
               usedAt: true,
+              revokedAt: true,
+              revokedBy: true,
               expiresAt: true,
               invitedBy: true,
               organizationId: true,

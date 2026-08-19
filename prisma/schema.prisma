@@ -931,20 +931,24 @@ model LoginHistory {
 }
 
 model Invitation {
-  id             String    @id @default(cuid())
-  email          String
-  role           String // Target role: REGULATOR, STARTUP, ENTERPRISE
-  token          String    @unique
-  expiresAt      DateTime
-  used           Boolean   @default(false)
-  usedAt         DateTime?
-  invitedBy      String // Admin user ID
-  organizationId String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id               String      @id @default(cuid())
+  email            String
+  role             String // Target platform role: REGULATOR, STARTUP, ENTERPRISE
+  token            String      @unique // SHA-256 digest for new invitations; legacy rows may contain raw tokens.
+  organizationRole MemberRole?
+  expiresAt        DateTime
+  used             Boolean     @default(false)
+  usedAt           DateTime?
+  revokedAt        DateTime?
+  revokedBy        String?
+  invitedBy        String // Admin or organization manager user ID
+  organizationId   String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
   @@index([email])
   @@index([token])
+  @@index([organizationId, used, revokedAt, expiresAt])
 }
 
 model EmailDomainWhitelist {

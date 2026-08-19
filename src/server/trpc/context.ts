@@ -212,29 +212,43 @@ export async function createContext({
             organizationId: true,
             supabaseAuthId: true,
             mustChangePassword: true,
+            accountStatus: true,
+            deletedAt: true,
           },
         });
 
-        if (dbUser && dbUser.supabaseAuthId) {
+        if (
+          dbUser &&
+          dbUser.supabaseAuthId &&
+          !dbUser.deletedAt &&
+          dbUser.accountStatus === 'active'
+        ) {
           const activeSession = await prisma.session.findFirst({
             where: { userId: dbUser.id, expiresAt: { gte: new Date() } },
             orderBy: { createdAt: 'desc' },
             select: { id: true, expiresAt: true },
           });
 
-          user = {
-            id: dbUser.id,
-            email: dbUser.email,
-            role: dbUser.role,
-            organizationId: dbUser.organizationId ?? undefined,
-            supabaseAuthId: dbUser.supabaseAuthId,
-            mustChangePassword: dbUser.mustChangePassword,
-            sessionId: activeSession?.id,
-            sessionExpiresAt: activeSession?.expiresAt.getTime(),
-          };
+          if (!activeSession) {
+            logger.warn({ type: 'context_no_active_local_session', userId: dbUser.id });
+            await redis.del(cacheKey).catch(() => {});
+          }
 
-          // Re-populate cache with well-formed JSON
-          await redis.set(cacheKey, JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS });
+          if (activeSession) {
+            user = {
+              id: dbUser.id,
+              email: dbUser.email,
+              role: dbUser.role,
+              organizationId: dbUser.organizationId ?? undefined,
+              supabaseAuthId: dbUser.supabaseAuthId,
+              mustChangePassword: dbUser.mustChangePassword,
+              sessionId: activeSession.id,
+              sessionExpiresAt: activeSession.expiresAt.getTime(),
+            };
+
+            // Re-populate cache with well-formed JSON
+            await redis.set(cacheKey, JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS });
+          }
         }
       }
 
@@ -245,8 +259,33 @@ export async function createContext({
           role: user.role,
         });
 
+        if (!user.sessionId) {
+          logger.warn({ type: 'context_missing_local_session', userId: user.id });
+          await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+          user = null;
+        }
+
+        if (user?.sessionId) {
+          const activeSession = await prisma.session.findFirst({
+            where: { id: user.sessionId, userId: user.id, expiresAt: { gte: new Date() } },
+            select: {
+              id: true,
+              expiresAt: true,
+              user: { select: { accountStatus: true, deletedAt: true } },
+            },
+          });
+
+          if (!activeSession || activeSession.user.deletedAt || activeSession.user.accountStatus !== 'active') {
+            logger.warn({ type: 'context_local_session_revoked', userId: user.id, sessionId: user.sessionId });
+            await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+            user = null;
+          } else {
+            user.sessionExpiresAt = activeSession.expiresAt.getTime();
+          }
+        }
+
         // -- B6: Enforce Session.expiresAt stored in Redis cache ----------
-        if (user.sessionExpiresAt && Date.now() > user.sessionExpiresAt) {
+        if (user?.sessionExpiresAt && Date.now() > user.sessionExpiresAt) {
           logger.warn({
             type:   'context_session_expired',
             userId: user.id,

@@ -536,7 +536,8 @@ export async function resolveEffectivePlan(input: {
   const hasPaidPlan =
     orgPlan !== SubscriptionPlan.REGULATOR &&
     (subscriptionStatus === SubscriptionStatus.ACTIVE ||
-     subscriptionStatus === SubscriptionStatus.TRIALING);
+     subscriptionStatus === SubscriptionStatus.TRIALING ||
+     subscriptionStatus === SubscriptionStatus.PAST_DUE);
 
   const graceStillActive =
     subscriptionStatus === SubscriptionStatus.GRACE_PERIOD &&
