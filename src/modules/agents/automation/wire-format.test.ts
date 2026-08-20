@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import Fastify from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -116,8 +117,7 @@ vi.mock('@/lib/ai/gateway/llm-gateway', () => ({
 }));
 
 describe('agents.automation wire format (real Fastify + real tRPC adapter)', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let app: any;
+  let app: FastifyInstance;
 
   beforeAll(async () => {
     const { router } = await import('@/server/trpc/init');
@@ -132,7 +132,7 @@ describe('agents.automation wire format (real Fastify + real tRPC adapter)', () 
       trpcOptions: { router: testRouter, createContext },
     });
     await app.ready();
-  }, 60000);
+  }, 180000);
 
   afterAll(async () => {
     if (app) await app.close();

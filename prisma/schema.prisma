@@ -570,6 +570,7 @@ model RegulatoryApplication {
   organizationId    String
   userId            String
   title             String
+  jurisdictionCode  String                         @default("KE")
   regulator         String
   licenseType       String
   status            String                         @default("DRAFT")
@@ -590,6 +591,7 @@ model RegulatoryApplication {
   regulatorFeedback ApplicationRegulatorFeedback[]
 
   @@index([organizationId])
+  @@index([jurisdictionCode])
   @@index([userId])
   @@index([status])
   @@index([createdAt])
@@ -636,6 +638,7 @@ model ApplicationFee {
   userId        String
   description   String
   amount        Int
+  currency      String                @default("KES")
   status        String                @default("PENDING")
   paidAt        DateTime?
   createdAt     DateTime              @default(now())
@@ -2127,6 +2130,7 @@ model RegulatoryAlert {
   summary        String
   body           String
   sourceUrl      String?
+  jurisdictionCode String  @default("KE")
   regulatoryBody String
   category       String
   severity       String    @default("MEDIUM")
@@ -2142,6 +2146,7 @@ model RegulatoryAlert {
   notifications AlertNotification[]
 
   @@index([regulatoryBody])
+  @@index([jurisdictionCode])
   @@index([severity])
   @@index([isActive, publishedAt(sort: Desc)])
 }
@@ -2149,6 +2154,7 @@ model RegulatoryAlert {
 model AlertSubscription {
   id                String   @id @default(cuid())
   organizationId    String   @unique
+  jurisdictions     String[] @default(["KE"])
   regulatoryBodies  String[]
   categories        String[]
   severityThreshold String   @default("LOW")

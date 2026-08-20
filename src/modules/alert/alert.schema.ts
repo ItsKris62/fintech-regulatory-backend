@@ -1,6 +1,21 @@
 import { z } from 'zod';
+import { AUDITED_JURISDICTIONS } from '@/config/jurisdictions.config';
 
-export const REGULATORY_BODIES = ['CBK', 'CMA', 'ODPC', 'CA', 'GAZETTE'] as const;
+export const ALERT_JURISDICTIONS = AUDITED_JURISDICTIONS;
+export const REGULATORY_BODIES = [
+  'CBK',
+  'CMA',
+  'ODPC',
+  'CA',
+  'GAZETTE',
+  'BNR',
+  'RURA',
+  'RISA',
+  'RWANDA_GAZETTE',
+  'RBM',
+  'MACRA',
+  'MALAWI_GAZETTE',
+] as const;
 export const ALERT_CATEGORIES = [
   'PRUDENTIAL',
   'DATA_PROTECTION',
@@ -17,6 +32,7 @@ export const createAlertSchema = z.object({
   summary: z.string().min(10).max(500),
   body: z.string().min(20),
   sourceUrl: z.string().url().optional(),
+  jurisdictionCode: z.enum(ALERT_JURISDICTIONS).default('KE'),
   regulatoryBody: z.enum(REGULATORY_BODIES),
   category: z.enum(ALERT_CATEGORIES),
   severity: z.enum(ALERT_SEVERITIES).default('MEDIUM'),
@@ -27,12 +43,14 @@ export const createAlertSchema = z.object({
 export const getAlertsSchema = z.object({
   page: z.number().int().min(1).default(1),
   limit: z.number().int().min(1).max(50).default(20),
+  jurisdictionCode: z.enum(ALERT_JURISDICTIONS).optional(),
   regulatoryBody: z.enum(REGULATORY_BODIES).optional(),
   severity: z.enum(ALERT_SEVERITIES).optional(),
   unreadOnly: z.boolean().optional(),
 });
 
 export const upsertSubscriptionSchema = z.object({
+  jurisdictions: z.array(z.enum(ALERT_JURISDICTIONS)).min(1).default(['KE']),
   regulatoryBodies: z.array(z.enum(REGULATORY_BODIES)).min(0),
   categories: z.array(z.enum(ALERT_CATEGORIES)).min(0),
   severityThreshold: z.enum(ALERT_SEVERITIES),

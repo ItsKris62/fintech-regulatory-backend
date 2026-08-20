@@ -1,4 +1,12 @@
 import { z } from 'zod';
+import { AUDITED_JURISDICTIONS, JURISDICTION_CURRENCIES } from '@/config/jurisdictions.config';
+
+export const jurisdictionCodeSchema = z.enum(AUDITED_JURISDICTIONS);
+export const applicationCurrencySchema = z.enum([
+  JURISDICTION_CURRENCIES.KE,
+  JURISDICTION_CURRENCIES.RW,
+  JURISDICTION_CURRENCIES.MW,
+] as [string, string, string]);
 
 export const applicationStatusSchema = z.enum([
   'DRAFT',
@@ -16,6 +24,7 @@ export const feeStatusSchema = z.enum(['PENDING', 'PAID', 'WAIVED']);
 export const listApplicationsSchema = z.object({
   page: z.number().min(1).default(1),
   limit: z.number().min(1).max(50).default(20),
+  jurisdictionCode: jurisdictionCodeSchema.optional(),
   status: applicationStatusSchema.optional(),
   search: z.string().max(100).optional(),
 });
@@ -26,6 +35,7 @@ export const getApplicationSchema = z.object({
 
 export const createApplicationSchema = z.object({
   title: z.string().min(3).max(200),
+  jurisdictionCode: jurisdictionCodeSchema.default('KE'),
   regulator: z.string().min(2).max(120),
   licenseType: z.string().min(2).max(120),
   status: applicationStatusSchema.default('DRAFT'),
@@ -62,6 +72,7 @@ export const addApplicationFeeSchema = z.object({
   applicationId: z.string().min(1),
   description: z.string().min(2).max(200),
   amount: z.number().int().min(0),
+  currency: applicationCurrencySchema.default('KES'),
   status: feeStatusSchema.default('PENDING'),
   paidAt: z.date().nullable().optional(),
 });

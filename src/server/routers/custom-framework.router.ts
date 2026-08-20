@@ -4,14 +4,16 @@ import { MemberRole } from '@prisma/client';
 import { router, orgMemberProcedureWithRole, orgMemberProcedure } from '../trpc/trpc';
 import { requirePlanFeature, withPlanContext } from '../trpc/middleware';
 import { logger } from '@/utils/logger';
+import { AUDITED_JURISDICTIONS } from '@/config/jurisdictions.config';
 
 const managerRoles = [MemberRole.ADMIN, MemberRole.OWNER];
 
 const idSchema = z.object({ id: z.string().min(1) });
+const jurisdictionSchema = z.enum(AUDITED_JURISDICTIONS);
 const metadataSchema = z.object({
   name: z.string().trim().min(2).max(160),
   description: z.string().trim().max(5000).optional().nullable(),
-  jurisdiction: z.string().trim().max(120).optional().nullable(),
+  jurisdiction: jurisdictionSchema.optional().nullable(),
   regulator: z.string().trim().max(120).optional().nullable(),
   category: z.string().trim().max(120).optional().nullable(),
 });
@@ -38,7 +40,20 @@ const controlSchema = z.object({
 const updateControlSchema = controlSchema.partial().extend({ id: z.string().min(1) }).omit({ frameworkId: true });
 
 function slugify(value: string): string {
-  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'framework';
+}
+
+async function uniqueFrameworkSlug(ctx: any, organizationId: string, name: string): Promise<string> {
+  const baseSlug = slugify(name);
+  let slug = baseSlug;
+  let suffix = 2;
+
+  while (await (ctx.prisma as any).customFramework.findFirst({ where: { organizationId, slug }, select: { id: true } })) {
+    slug = `${baseSlug}-${suffix}`;
+    suffix += 1;
+  }
+
+  return slug;
 }
 
 async function audit(ctx: any, action: string, entityId: string, metadata: Record<string, unknown>) {
@@ -62,7 +77,7 @@ async function getFrameworkOrThrow(ctx: any, id: string, organizationId: string)
       versions: { orderBy: { version: 'desc' } },
     },
   });
-  if (!framework) throw new TRPCError({ code: 'NOT_FOUND', message: 'Custom framework not found.' });
+  if (!framework) throw new TRPCError({ code: 'FORBIDDEN', message: 'Custom framework not found or inaccessible.' });
   return framework;
 }
 
@@ -103,7 +118,7 @@ export const customFrameworkRouter = router({
     .input(metadataSchema)
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.orgMembership!.organizationId;
-      const baseSlug = slugify(input.name);
+      const baseSlug = await uniqueFrameworkSlug(ctx, organizationId, input.name);
       const framework = await (ctx.prisma as any).customFramework.create({
         data: {
           organizationId,
@@ -165,7 +180,7 @@ export const customFrameworkRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.orgMembership!.organizationId;
       const section = await (ctx.prisma as any).customFrameworkSection.findFirst({ where: { id: input.id, organizationId } });
-      if (!section) throw new TRPCError({ code: 'NOT_FOUND', message: 'Section not found.' });
+      if (!section) throw new TRPCError({ code: 'FORBIDDEN', message: 'Section not found or inaccessible.' });
       const framework = await getFrameworkOrThrow(ctx, section.frameworkId, organizationId);
       assertDraft(framework);
       const { id, ...data } = input;
@@ -179,7 +194,7 @@ export const customFrameworkRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.orgMembership!.organizationId;
       const section = await (ctx.prisma as any).customFrameworkSection.findFirst({ where: { id: input.id, organizationId } });
-      if (!section) throw new TRPCError({ code: 'NOT_FOUND', message: 'Section not found.' });
+      if (!section) throw new TRPCError({ code: 'FORBIDDEN', message: 'Section not found or inaccessible.' });
       const framework = await getFrameworkOrThrow(ctx, section.frameworkId, organizationId);
       assertDraft(framework);
       await (ctx.prisma as any).customFrameworkSection.delete({ where: { id: input.id } });
@@ -212,7 +227,7 @@ export const customFrameworkRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.orgMembership!.organizationId;
       const control = await (ctx.prisma as any).customFrameworkControl.findFirst({ where: { id: input.id, organizationId } });
-      if (!control) throw new TRPCError({ code: 'NOT_FOUND', message: 'Control not found.' });
+      if (!control) throw new TRPCError({ code: 'FORBIDDEN', message: 'Control not found or inaccessible.' });
       const framework = await getFrameworkOrThrow(ctx, control.frameworkId, organizationId);
       assertDraft(framework);
       const { id, ...data } = input;
@@ -226,7 +241,7 @@ export const customFrameworkRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.orgMembership!.organizationId;
       const control = await (ctx.prisma as any).customFrameworkControl.findFirst({ where: { id: input.id, organizationId } });
-      if (!control) throw new TRPCError({ code: 'NOT_FOUND', message: 'Control not found.' });
+      if (!control) throw new TRPCError({ code: 'FORBIDDEN', message: 'Control not found or inaccessible.' });
       const framework = await getFrameworkOrThrow(ctx, control.frameworkId, organizationId);
       assertDraft(framework);
       await (ctx.prisma as any).customFrameworkControl.delete({ where: { id: input.id } });

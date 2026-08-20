@@ -63,6 +63,7 @@ class AlertService {
         summary: input.summary,
         body: input.body,
         sourceUrl: input.sourceUrl ?? null,
+        jurisdictionCode: input.jurisdictionCode,
         regulatoryBody: input.regulatoryBody,
         category: input.category,
         severity: input.severity,
@@ -97,6 +98,7 @@ class AlertService {
 
     const subscriptions = await prisma.alertSubscription.findMany({
       where: {
+        jurisdictions: { has: publishedAlert.jurisdictionCode },
         regulatoryBodies: { has: publishedAlert.regulatoryBody },
         categories: { has: publishedAlert.category },
       },
@@ -199,7 +201,7 @@ class AlertService {
     plan: EffectivePlan,
     params: GetAlertsInput
   ): Promise<GetAlertsResult> {
-    const { page, limit, regulatoryBody, severity, unreadOnly } = params;
+    const { page, limit, jurisdictionCode, regulatoryBody, severity, unreadOnly } = params;
 
     const historyDays = PLAN_ENTITLEMENTS[plan]?.alerts?.historyDays ?? 90;
     const publishedAfter =
@@ -210,6 +212,7 @@ class AlertService {
     const baseWhere = {
       isActive: true,
       ...(publishedAfter ? { publishedAt: { gte: publishedAfter } } : {}),
+      ...(jurisdictionCode ? { jurisdictionCode } : {}),
       ...(regulatoryBody ? { regulatoryBody } : {}),
       ...(severity ? { severity } : {}),
     };

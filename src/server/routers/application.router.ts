@@ -14,17 +14,20 @@ import {
 import { logger } from '@/utils/logger';
 
 async function assertApplicationAccess(ctx: any, applicationId: string) {
-  const application = await ctx.prisma.regulatoryApplication.findUnique({
-    where: { id: applicationId },
-    select: { id: true, organizationId: true, deletedAt: true },
+  const application = await ctx.prisma.regulatoryApplication.findFirst({
+    where: {
+      id: applicationId,
+      organizationId: ctx.orgMembership!.organizationId,
+      deletedAt: null,
+    },
+    select: { id: true, organizationId: true },
   });
 
-  if (!application || application.deletedAt) {
-    throw new TRPCError({ code: 'NOT_FOUND', message: 'Application not found' });
-  }
-
-  if (application.organizationId !== ctx.orgMembership!.organizationId && ctx.user!.role !== 'ADMIN') {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this application' });
+  if (!application) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Application not found or inaccessible.',
+    });
   }
 
   return application;
@@ -42,6 +45,7 @@ export const applicationRouter = router({
       };
 
       if (input.status) where.status = input.status;
+      if (input.jurisdictionCode) where.jurisdictionCode = input.jurisdictionCode;
       if (input.search) {
         where.OR = [
           { title: { contains: input.search, mode: 'insensitive' } },
@@ -118,7 +122,12 @@ export const applicationRouter = router({
         },
       });
 
-      logger.info({ type: 'application_created', userId: ctx.user!.id, applicationId: application.id });
+      logger.info({
+        type: 'application_created',
+        userId: ctx.user!.id,
+        applicationId: application.id,
+        jurisdictionCode: application.jurisdictionCode,
+      });
       return application;
     }),
 
