@@ -18,10 +18,12 @@ import {
 import {
   buildCitationsFromAcceptedRefs,
   buildCitationsFromChunks,
+  buildCitationsFromSupportedClaims,
   hasUsableCitations,
 } from './citations';
 import {
   buildComplianceSourceInsufficiencyAnswer,
+  buildPartiallySupportedClaimsAnswer,
   hasUsableSourceContext,
 } from './source-insufficiency';
 import type { SearchResult } from '@/lib/rag/rag.service';
@@ -193,6 +195,35 @@ describe('source citation enforcement', () => {
 
     expect(citations[0].verified).toBe(false);
     expect(citations[0].verificationStatus).toBe('unverified');
+  });
+
+  it('builds partial answers and citations from supported claims only', () => {
+    const supportedClaim = {
+      claimText: 'A data controller shall ensure personal data is processed lawfully.',
+      claimType: 'legal_obligation',
+      requiresCitation: true,
+      status: 'supported',
+      confidence: 0.9,
+      supportingChunk: chunks[0],
+      supportExcerpt: chunks[0].chunkText,
+    } as const;
+    const unsupportedClaim = {
+      claimText: 'A controller must notify every complaint within 24 hours.',
+      claimType: 'deadline',
+      requiresCitation: true,
+      status: 'unsupported',
+      confidence: 0.2,
+    } as const;
+
+    const answer = buildPartiallySupportedClaimsAnswer([supportedClaim], [unsupportedClaim]);
+    const citations = buildCitationsFromSupportedClaims([supportedClaim], 'verified');
+
+    expect(answer).toContain(supportedClaim.claimText);
+    expect(answer).not.toContain(unsupportedClaim.claimText);
+    expect(answer).toContain('1 unsupported claim candidate');
+    expect(citations).toHaveLength(1);
+    expect(citations[0].documentId).toBe('doc-1');
+    expect(citations[0].verificationStatus).toBe('verified');
   });
 
   it('does not accept chunks when the grader response cannot be parsed', async () => {

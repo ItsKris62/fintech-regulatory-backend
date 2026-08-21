@@ -30,6 +30,7 @@ import { storageService } from '@/lib/storage/storage.service';
 import { GapAnalysisResultSchema } from '@/lib/ai/prompts/gap-analysis';
 import {
   buildComplianceSourceInsufficiencyAnswer,
+  buildPartiallySupportedClaimsAnswer,
   buildUnsupportedClaimsAnswer,
   hasUsableSourceContext,
   type ComplianceFallbackReason,
@@ -37,6 +38,7 @@ import {
 import {
   buildCitationsFromAcceptedRefs,
   buildCitationsFromChunks,
+  buildCitationsFromSupportedClaims,
   findAcceptedChunks,
   hasUsableCitations,
   validateCitationsForJurisdiction,
@@ -285,10 +287,18 @@ export const complianceRouter = router({
         const legacyClaimVerification = !appConfig.features.orchestratorEnabled
           ? verifyAnswerClaims(answer.content, acceptedResults)
           : null;
-        const finalAnswerContent = legacyClaimVerification?.unsupportedClaims.length
-          ? buildUnsupportedClaimsAnswer(legacyClaimVerification.unsupportedClaims.map((claim) => claim.claimText))
-          : answer.content;
-        const finalQueryCitations = legacyClaimVerification?.unsupportedClaims.length ? [] : queryCitations;
+        let finalAnswerContent = answer.content;
+        let finalQueryCitations = queryCitations;
+        if (legacyClaimVerification?.verdict === 'PARTIAL' && legacyClaimVerification.supportedClaims.length > 0) {
+          finalAnswerContent = buildPartiallySupportedClaimsAnswer(
+            legacyClaimVerification.supportedClaims,
+            legacyClaimVerification.unsupportedClaims,
+          );
+          finalQueryCitations = buildCitationsFromSupportedClaims(legacyClaimVerification.supportedClaims, 'verified');
+        } else if (legacyClaimVerification?.verdict === 'FAIL') {
+          finalAnswerContent = buildUnsupportedClaimsAnswer(legacyClaimVerification.unsupportedClaims.map((claim) => claim.claimText));
+          finalQueryCitations = [];
+        }
         const finalCitationValidation = validateCitationsForJurisdiction(finalQueryCitations, jurisdictionContext);
         const safeFinalAnswerContent = finalCitationValidation.valid ? finalAnswerContent : buildComplianceSourceInsufficiencyAnswer();
         const safeFinalQueryCitations = finalCitationValidation.valid ? finalQueryCitations : [];
@@ -383,15 +393,37 @@ export const complianceRouter = router({
           const acceptedChunksForClaims = findAcceptedChunks(run?.acceptedChunkIds, ragContext.results);
           const claimVerification = verifyAnswerClaims(answer.content, acceptedChunksForClaims);
           await persistClaimVerification(ctx.prisma, query.id, claimVerification);
+          let responseContent = answer.content;
+          let responseCitations = acceptedCitations;
+          let responseCitationValidation = acceptedCitationValidation;
+          let responseGrounded = grounded;
+          let responseAbstained = abstained;
+          let responseConfidence = confidence;
+
+          if (claimVerification.verdict === 'PARTIAL' && claimVerification.supportedClaims.length > 0) {
+            const supportedCitations = buildCitationsFromSupportedClaims(claimVerification.supportedClaims, 'verified');
+            const supportedCitationValidation = validateCitationsForJurisdiction(supportedCitations, jurisdictionContext);
+            if (hasUsableCitations(supportedCitations) && supportedCitationValidation.valid) {
+              responseContent = buildPartiallySupportedClaimsAnswer(
+                claimVerification.supportedClaims,
+                claimVerification.unsupportedClaims,
+              );
+              responseCitations = supportedCitations;
+              responseCitationValidation = supportedCitationValidation;
+              responseGrounded = true;
+              responseAbstained = false;
+              responseConfidence = responseConfidence ?? 0.7;
+            }
+          }
 
           if (
-            abstained ||
+            responseAbstained ||
             run?.verifierVerdict === 'FAIL' ||
-            !hasUsableCitations(acceptedCitations) ||
-            !acceptedCitationValidation.valid ||
-            claimVerification.unsupportedClaims.length > 0
+            !hasUsableCitations(responseCitations) ||
+            !responseCitationValidation.valid ||
+            claimVerification.verdict === 'FAIL'
           ) {
-            const sourceInsufficientAnswer = claimVerification.unsupportedClaims.length > 0
+            const sourceInsufficientAnswer = claimVerification.verdict === 'FAIL'
               ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
               : buildComplianceSourceInsufficiencyAnswer();
             await ctx.prisma.complianceQuery.update({
@@ -410,8 +442,8 @@ export const complianceRouter = router({
                   sourceInsufficient: true,
                   ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
                   verifierVerdict: run?.verifierVerdict ?? null,
-                  citationJurisdictionValid: acceptedCitationValidation.valid,
-                  citationJurisdictionInvalidCount: acceptedCitationValidation.invalidCitations.length,
+                  citationJurisdictionValid: responseCitationValidation.valid,
+                  citationJurisdictionInvalidCount: responseCitationValidation.invalidCitations.length,
                   claimVerificationVerdict: claimVerification.verdict,
                   unsupportedClaims: claimVerification.unsupportedClaims.map((claim) => claim.claimText),
                   organizationType: input.organizationType,
@@ -441,23 +473,24 @@ export const complianceRouter = router({
           await ctx.prisma.complianceQuery.update({
             where: { id: query.id },
             data: {
-              citations: acceptedCitations,
-              confidence,
+              response: responseContent,
+              citations: responseCitations,
+              confidence: responseConfidence,
               metadata: {
                 model: answer.model,
                 tokensUsed: answer.inputTokens + answer.outputTokens,
                 ragSources: ragContext.results.length,
-                acceptedSources: acceptedCitations.length,
-                grounded,
-                abstained,
+                acceptedSources: responseCitations.length,
+                grounded: responseGrounded,
+                abstained: responseAbstained,
                 ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
                 verifierVerdict: run?.verifierVerdict ?? null,
                 claimVerificationVerdict: claimVerification.verdict,
                 verifiedClaims: claimVerification.supportedClaims.length,
-                unsupportedClaims: [],
+                unsupportedClaims: claimVerification.unsupportedClaims.map((claim) => claim.claimText),
                 verificationStatus: run?.verifierVerdict === 'PASS' ? 'verified' : 'unverified',
-                citationJurisdictionValid: acceptedCitationValidation.valid,
-                citationJurisdictionInvalidCount: acceptedCitationValidation.invalidCitations.length,
+                citationJurisdictionValid: responseCitationValidation.valid,
+                citationJurisdictionInvalidCount: responseCitationValidation.invalidCitations.length,
                 organizationType: input.organizationType,
                 industry: input.industry,
                 context: input.context,
@@ -471,27 +504,27 @@ export const complianceRouter = router({
             queryId: query.id,
             duration,
             tokensUsed: answer.inputTokens + answer.outputTokens,
-            citationsCount: acceptedCitations.length,
+            citationsCount: responseCitations.length,
             route,
-            grounded,
-            abstained,
-            confidence,
+            grounded: responseGrounded,
+            abstained: responseAbstained,
+            confidence: responseConfidence,
             orchestrated: true,
           });
 
           return {
             queryId: query.id,
-            answer: answer.content,
-            citations: acceptedCitations,
-            confidence,
+            answer: responseContent,
+            citations: responseCitations,
+            confidence: responseConfidence,
             suggestedFollowUps: [],
             mode: jurisdictionContext.mode,
             jurisdictions: [...jurisdictionContext.jurisdictions],
             primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
             jurisdictionSource: jurisdictionContext.jurisdictionSource,
             route,
-            grounded,
-            abstained,
+            grounded: responseGrounded,
+            abstained: responseAbstained,
             // null only on double-failure (orchestrator threw AND error-row write failed).
             // Frontend must disable the reportGap affordance when runId is null.
             runId: run?.id ?? null,
@@ -732,10 +765,18 @@ export const complianceRouter = router({
         // the Citation table (which has a FK constraint to Policy.id).
         const queryCitations = buildCitationsFromChunks(acceptedResults, 'not_checked');
         const claimVerification = verifyAnswerClaims(answer.content, acceptedResults);
-        const finalAnswer = claimVerification.unsupportedClaims.length > 0
-          ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
-          : answer.content;
-        const finalCitations = claimVerification.unsupportedClaims.length > 0 ? [] : queryCitations;
+        let finalAnswer = answer.content;
+        let finalCitations = queryCitations;
+        if (claimVerification.verdict === 'PARTIAL' && claimVerification.supportedClaims.length > 0) {
+          finalAnswer = buildPartiallySupportedClaimsAnswer(
+            claimVerification.supportedClaims,
+            claimVerification.unsupportedClaims,
+          );
+          finalCitations = buildCitationsFromSupportedClaims(claimVerification.supportedClaims, 'verified');
+        } else if (claimVerification.verdict === 'FAIL') {
+          finalAnswer = buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText));
+          finalCitations = [];
+        }
         const finalCitationValidation = validateCitationsForJurisdiction(finalCitations, jurisdictionContext);
         const safeFinalAnswer = finalCitationValidation.valid ? finalAnswer : buildComplianceSourceInsufficiencyAnswer();
         const safeFinalCitations = finalCitationValidation.valid ? finalCitations : [];

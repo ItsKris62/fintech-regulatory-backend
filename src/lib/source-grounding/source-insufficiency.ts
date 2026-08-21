@@ -1,4 +1,5 @@
 import type { SearchResult } from '@/lib/rag/rag.service';
+import type { AnswerClaimVerification } from './claim-verification';
 
 export type ComplianceFallbackReason =
   | 'NO_RAG_CHUNKS'
@@ -71,6 +72,29 @@ ${claims ? `## Unsupported claim candidates\n\n${claims}\n\n` : ''}## Next steps
 - Narrow the question to the exact regulator, framework, Act, Regulation, Guideline, or Circular.
 - Add or select stronger source documents if the corpus is missing the relevant provision.
 - Re-run the question after the relevant source material is available.`;
+}
+
+export function buildPartiallySupportedClaimsAnswer(
+  supportedClaims: AnswerClaimVerification[],
+  unsupportedClaims: AnswerClaimVerification[],
+): string {
+  const verifiedClaims = supportedClaims
+    .slice(0, 10)
+    .map((claim) => `- ${claim.claimText}`)
+    .join('\n');
+
+  const excludedCount = unsupportedClaims.length;
+  const excludedNote = excludedCount > 0
+    ? `\n\n${excludedCount} unsupported claim candidate${excludedCount === 1 ? '' : 's'} were excluded from this answer.`
+    : '';
+
+  return `## Verified answer
+
+${verifiedClaims}
+
+## Verification note
+
+Only claims supported by accepted corpus evidence are shown.${excludedNote}`;
 }
 
 export class SourceInsufficiencyError extends Error {

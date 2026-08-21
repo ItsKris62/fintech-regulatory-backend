@@ -29,6 +29,7 @@ import {
 import type { OrgMembershipEntry } from '@/server/trpc/context';
 import {
   buildComplianceSourceInsufficiencyAnswer,
+  buildPartiallySupportedClaimsAnswer,
   buildUnsupportedClaimsAnswer,
   type ComplianceFallbackReason,
   hasUsableSourceContext,
@@ -36,6 +37,7 @@ import {
 import {
   buildCitationsFromAcceptedRefs,
   buildCitationsFromChunks,
+  buildCitationsFromSupportedClaims,
   findAcceptedChunks,
   hasUsableCitations,
   validateCitationsForJurisdiction,
@@ -941,20 +943,36 @@ export async function registerComplianceStreamRoute(
 
         const claimVerification = verifyAnswerClaims(fullContent, acceptedChunksForClaims);
         await persistClaimVerification(prisma, query.id, claimVerification);
-        const citationValidation = validateCitationsForJurisdiction(citations, jurisdictionContext);
+        let citationValidation = validateCitationsForJurisdiction(citations, jurisdictionContext);
+
+        if (claimVerification.verdict === 'PARTIAL' && claimVerification.supportedClaims.length > 0) {
+          const supportedCitations = buildCitationsFromSupportedClaims(claimVerification.supportedClaims, 'verified');
+          const supportedCitationValidation = validateCitationsForJurisdiction(supportedCitations, jurisdictionContext);
+          if (hasUsableCitations(supportedCitations) && supportedCitationValidation.valid) {
+            fullContent = buildPartiallySupportedClaimsAnswer(
+              claimVerification.supportedClaims,
+              claimVerification.unsupportedClaims,
+            );
+            citations = supportedCitations;
+            citationValidation = supportedCitationValidation;
+            confidence = confidence ?? 0.7;
+            grounded = true;
+            abstained = false;
+          }
+        }
 
         if (
           abstained ||
           !hasUsableCitations(citations) ||
           !citationValidation.valid ||
-          claimVerification.unsupportedClaims.length > 0
+          claimVerification.verdict === 'FAIL'
         ) {
           fallbackReason =
             fallbackReason ??
-            (!hasUsableCitations(citations) || !citationValidation.valid || claimVerification.unsupportedClaims.length > 0
+            (!hasUsableCitations(citations) || !citationValidation.valid || claimVerification.verdict === 'FAIL'
               ? 'ALL_CHUNKS_FAILED_VERIFICATION'
               : 'LOW_RELEVANCE');
-          const sourceInsufficientAnswer = claimVerification.unsupportedClaims.length > 0
+          const sourceInsufficientAnswer = claimVerification.verdict === 'FAIL'
             ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
             : buildComplianceSourceInsufficiencyAnswer(fallbackReason);
           fullContent = sourceInsufficientAnswer;

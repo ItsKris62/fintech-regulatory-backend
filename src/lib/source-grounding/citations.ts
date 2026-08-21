@@ -1,4 +1,5 @@
 import type { SearchResult } from '@/lib/rag/rag.service';
+import type { AnswerClaimVerification } from '@/lib/source-grounding/claim-verification';
 import type { AcceptedChunkRef } from '@/modules/compliance/orchestrator/types';
 import type { JurisdictionContext, JurisdictionCode } from '@/types/jurisdiction';
 
@@ -61,6 +62,25 @@ export function buildCitationsFromChunks(
   verificationStatus: CitationVerificationStatus = 'not_checked',
 ): SourceCitation[] {
   return chunks.map((chunk) => buildCitationFromSearchResult(chunk, verificationStatus));
+}
+
+export function buildCitationsFromSupportedClaims(
+  claims: AnswerClaimVerification[],
+  verificationStatus: CitationVerificationStatus = 'verified',
+): SourceCitation[] {
+  const seen = new Set<string>();
+  const chunks: SearchResult[] = [];
+
+  for (const claim of claims) {
+    const chunk = claim.supportingChunk;
+    if (!chunk) continue;
+    const key = `${chunk.vectorId ?? ''}:${chunk.chunkId ?? ''}:${chunk.documentId ?? ''}:${chunk.section ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chunks.push(chunk);
+  }
+
+  return buildCitationsFromChunks(chunks, verificationStatus);
 }
 
 export function hasUsableCitations(citations: SourceCitation[]): boolean {
