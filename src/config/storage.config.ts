@@ -40,7 +40,7 @@ export const storageConfig = {
   limits: {
     // Maximum file size (bytes)
     maxFileSize: {
-      documents: 10 * 1024 * 1024, // 10 MB for legal documents
+      documents: 50 * 1024 * 1024, // 50 MB for legal/regulatory documents
       images: 5 * 1024 * 1024, // 5 MB for images
       exports: 50 * 1024 * 1024, // 50 MB for exports
       vault: 25 * 1024 * 1024, // 25 MB for user vault documents

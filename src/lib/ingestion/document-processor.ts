@@ -2,7 +2,10 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import mammoth from 'mammoth'
-import { extractPdfText } from '@/lib/pdf/extract-text'
+import {
+  extractPdfTextWithOcrFallback,
+  type ExtractionMetadata,
+} from '@/lib/ingestion/text-extraction'
 
 import { prisma } from '@/lib/prisma/client'
 import { logger } from '@/utils/logger'
@@ -51,6 +54,7 @@ export interface DocumentIngestionInput {
   effectiveEndDate?: Date;
   sourceRegistryId?: string;
   sourceDocumentVersionId?: string;
+  forceReprocessExisting?: boolean;
 }
 
 export interface IngestionResult {
@@ -131,6 +135,18 @@ function defaultBindingForAuthority(
   return authorityStatus === 'IN_FORCE'
 }
 
+function pruneUndefined(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(pruneUndefined)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entryValue]) => entryValue !== undefined)
+        .map(([key, entryValue]) => [key, pruneUndefined(entryValue)])
+    )
+  }
+  return value
+}
+
 function assertFileReadable(filePath: string): { size: number } {
   if (!fs.existsSync(filePath)) {
     throw new DocumentParsingError(`File not found: ${filePath}`)
@@ -192,17 +208,6 @@ async function withRetry<T>(
 // Text Extraction
 // ============================================================================
 
-async function extractFromPdf(buffer: Buffer): Promise<string> {
-  try {
-    const text = await extractPdfText(buffer)
-    return normaliseText(text)
-  } catch (err: any) {
-    throw new DocumentParsingError(
-      `PDF parsing failed: ${err?.message ?? 'Unknown error'}`
-    )
-  }
-}
-
 async function extractFromDocx(buffer: Buffer): Promise<string> {
   try {
     const result = await mammoth.extractRawText({ buffer })
@@ -226,16 +231,37 @@ function extractFromTxt(buffer: Buffer): string {
 
 async function extractText(
   buffer: Buffer,
-  fileExt: string
-): Promise<string> {
+  fileExt: string,
+  context: { documentId: string; title: string; jurisdiction: string }
+): Promise<{ text: string; metadata: ExtractionMetadata }> {
+  const startedAt = Date.now()
   switch (fileExt) {
-    case 'pdf':
-      return extractFromPdf(buffer)
+    case 'pdf': {
+      return extractPdfTextWithOcrFallback(buffer, context)
+    }
     case 'docx':
-    case 'doc':
-      return extractFromDocx(buffer)
-    case 'txt':
-      return extractFromTxt(buffer)
+    case 'doc': {
+      const text = await extractFromDocx(buffer)
+      return {
+        text,
+        metadata: {
+          extractionMethod: 'NATIVE',
+          extractedCharacterCount: text.length,
+          durationMs: Date.now() - startedAt,
+        },
+      }
+    }
+    case 'txt': {
+      const text = extractFromTxt(buffer)
+      return {
+        text,
+        metadata: {
+          extractionMethod: 'NATIVE',
+          extractedCharacterCount: text.length,
+          durationMs: Date.now() - startedAt,
+        },
+      }
+    }
     default:
       throw new DocumentParsingError(`Unsupported file type: .${fileExt}`)
   }
@@ -250,7 +276,12 @@ async function processDocument(
   buffer: Buffer,
   fileExt: string
 ) {
-  const extractedText = await extractText(buffer, fileExt)
+  const extraction = await extractText(buffer, fileExt, {
+    documentId: doc.id,
+    title: doc.title,
+    jurisdiction: doc.jurisdiction,
+  })
+  const extractedText = extraction.text
 
   if (!extractedText || extractedText.length < MIN_EXTRACTABLE_TEXT) {
     throw new DocumentParsingError(
@@ -260,9 +291,13 @@ async function processDocument(
 
   // Upload original file
   try {
-    await ingestStorage.uploadBuffer(doc.storageKey, buffer, {
-      contentType: getMimeType(fileExt),
-    })
+    await withRetry(
+      () => ingestStorage.uploadBuffer(doc.storageKey, buffer, {
+        contentType: getMimeType(fileExt),
+        category: 'documents',
+      }),
+      'storage_upload',
+    )
   } catch (err: any) {
     throw new DocumentUploadError(
       `Storage upload failed: ${err?.message ?? 'Unknown error'}`
@@ -282,6 +317,7 @@ async function processDocument(
   const chunkRows: any[] = []
   const documentMetadata = mapV1DocumentToV2Metadata(doc)
   const jurisdictionCode = doc.jurisdictionCode ?? jurisdictionCodeFromLabel(doc.jurisdiction)
+  const extractionMetadata = extraction.metadata
 
   for (let i = 0; i < chunks.length; i += VECTOR_BATCH_SIZE) {
     const batch = chunks.slice(i, i + VECTOR_BATCH_SIZE)
@@ -357,6 +393,10 @@ async function processDocument(
         sectionNumber: v2Metadata.sectionNumber ?? undefined,
         provisionId: v2Metadata.provisionId,
         contentHash: v2Metadata.contentHash,
+        extractionMethod: extractionMetadata.extractionMethod,
+        ocrEngine: extractionMetadata.ocrEngine,
+        ocrVersion: extractionMetadata.ocrVersion,
+        ocrQualityStatus: extractionMetadata.ocrQualityStatus,
         documentChecksum: doc.checksum ?? undefined,
         effectiveDate: doc.effectiveDate ? new Date(doc.effectiveDate).toISOString() : undefined,
         effectiveEndDate: doc.effectiveEndDate ? new Date(doc.effectiveEndDate).toISOString() : undefined,
@@ -395,6 +435,11 @@ async function processDocument(
         }).contentHash,
         sourceDocumentVersionId: doc.sourceDocumentVersionId ?? null,
         indexVersion: doc.indexVersion ?? 'v1',
+        metadata: pruneUndefined({
+          extractionMethod: extractionMetadata.extractionMethod,
+          ocrEngine: extractionMetadata.ocrEngine ?? null,
+          ocrQualityStatus: extractionMetadata.ocrQualityStatus ?? null,
+        }),
       })
     })
   }
@@ -404,6 +449,7 @@ async function processDocument(
     totalCharacters: extractedText.length,
     vectorIds,
     chunkRows,
+    extractionMetadata,
   }
 }
 
@@ -428,11 +474,45 @@ export class DocumentIngestionService {
     const buffer = Buffer.concat(bufChunks)
 
     const checksum = computeChecksum(buffer)
+    const fileName = input.fileName ?? path.basename(input.filePath)
+    const fileExt = getFileExt(fileName)
+
+    const storageKey = `regulations/${safeSlug(
+      input.jurisdiction
+    )}/${fileName}`
+
+    const baseDocumentData = {
+        title: input.title,
+        source: input.source,
+        category: input.category,
+        jurisdiction: input.jurisdiction,
+        jurisdictionCode: jurisdictionCodeFromLabel(input.jurisdiction),
+        documentType: input.documentType,
+        effectiveDate: input.effectiveDate,
+        effectiveEndDate: input.effectiveEndDate,
+        officialUrl: input.officialUrl,
+        publicationDate: input.publicationDate,
+        retrievedAt: input.retrievedAt,
+        sourceRegistryId: input.sourceRegistryId,
+        sourceDocumentVersionId: input.sourceDocumentVersionId,
+        version: input.version,
+        authorityStatus: input.authorityStatus ?? 'IN_FORCE',
+        isBinding: input.isBinding ?? defaultBindingForAuthority(input.authorityStatus),
+        fileName,
+        fileType: fileExt,
+        storageKey,
+        status: 'PROCESSING',
+        checksum,
+        indexVersion: 'v1',
+        errorMessage: null,
+      }
 
     // Checksum deduplication  -  skip if already indexed
     const existing = await (prisma as any).regulatoryDocument.findFirst({
       where: { checksum, status: { not: 'FAILED' } },
     })
+
+    let reprocessExisting: any | null = null
 
     if (existing) {
       if (existing.status === 'PROCESSING' || existing.status === 'PENDING') {
@@ -442,6 +522,11 @@ export class DocumentIngestionService {
             status: 'FAILED',
             errorMessage: 'Marked failed so ingestion can resume after an interrupted run.',
           },
+        })
+      } else if (input.forceReprocessExisting) {
+        reprocessExisting = await (prisma as any).regulatoryDocument.update({
+          where: { id: existing.id },
+          data: baseDocumentData,
         })
       } else {
       const nextAuthorityStatus = input.authorityStatus ?? 'IN_FORCE'
@@ -471,44 +556,30 @@ export class DocumentIngestionService {
       }
     }
 
-    const fileName = input.fileName ?? path.basename(input.filePath)
-    const fileExt = getFileExt(fileName)
+    const failedExisting = reprocessExisting
+      ? null
+      : await (prisma as any).regulatoryDocument.findFirst({
+          where: { checksum, status: 'FAILED' },
+          orderBy: { updatedAt: 'desc' },
+        })
 
-    const storageKey = `regulations/${safeSlug(
-      input.jurisdiction
-    )}/${fileName}`
-
-    const doc = await (prisma as any).regulatoryDocument.create({
-      data: {
-        title: input.title,
-        source: input.source,
-        category: input.category,
-        jurisdiction: input.jurisdiction,
-        jurisdictionCode: jurisdictionCodeFromLabel(input.jurisdiction),
-        documentType: input.documentType,
-        effectiveDate: input.effectiveDate,
-        effectiveEndDate: input.effectiveEndDate,
-        officialUrl: input.officialUrl,
-        publicationDate: input.publicationDate,
-        retrievedAt: input.retrievedAt,
-        sourceRegistryId: input.sourceRegistryId,
-        sourceDocumentVersionId: input.sourceDocumentVersionId,
-        version: input.version,
-        authorityStatus: input.authorityStatus ?? 'IN_FORCE',
-        isBinding: input.isBinding ?? defaultBindingForAuthority(input.authorityStatus),
-        fileName,
-        fileType: fileExt,
-        storageKey,
-        status: 'PROCESSING',
-        checksum,
-        indexVersion: 'v1',
-      },
-    })
+    const doc = reprocessExisting ?? (failedExisting
+      ? await (prisma as any).regulatoryDocument.update({
+          where: { id: failedExisting.id },
+          data: baseDocumentData,
+        })
+      : await (prisma as any).regulatoryDocument.create({
+          data: baseDocumentData,
+        }))
 
     try {
       const processing = await processDocument(doc, buffer, fileExt)
 
       await prisma.$transaction(async (tx) => {
+        await (tx as any).regulatoryDocumentChunk.deleteMany({
+          where: { documentId: doc.id },
+        })
+
         await (tx as any).regulatoryDocumentChunk.createMany({
           data: processing.chunkRows.map((r) => ({
             documentId: doc.id,
@@ -518,6 +589,12 @@ export class DocumentIngestionService {
             content: r.content,
             section: r.section,
             tokenCount: r.tokenCount,
+            sectionNumber: r.sectionNumber,
+            provisionId: r.provisionId,
+            contentHash: r.contentHash,
+            sourceDocumentVersionId: r.sourceDocumentVersionId,
+            indexVersion: r.indexVersion,
+            metadata: r.metadata,
           })),
         })
 
@@ -528,8 +605,14 @@ export class DocumentIngestionService {
             chunkCount: processing.chunkCount,
             totalCharacters: processing.totalCharacters,
             processedAt: new Date(),
+            metadata: pruneUndefined({
+              extraction: processing.extractionMetadata,
+            }),
           },
         })
+      }, {
+        maxWait: 10_000,
+        timeout: 120_000,
       })
 
       if (input.supersedesDocumentId) {
@@ -548,6 +631,19 @@ export class DocumentIngestionService {
         }
       }
 
+      if (processing.extractionMetadata.extractionMethod === 'OCR') {
+        logger.info({
+          type: 'ocr_document_ingested',
+          documentId: doc.id,
+          title: doc.title,
+          jurisdiction: doc.jurisdiction,
+          pageCount: processing.extractionMetadata.pageCount,
+          durationMs: processing.extractionMetadata.durationMs,
+          characterCount: processing.totalCharacters,
+          chunkCount: processing.chunkCount,
+        })
+      }
+
       return {
         documentId: doc.id,
         chunkCount: processing.chunkCount,
@@ -561,6 +657,12 @@ export class DocumentIngestionService {
         data: {
           status: 'FAILED',
           errorMessage: error.message,
+          metadata: pruneUndefined({
+            extractionFailure: {
+              message: error.message,
+              failedAt: new Date().toISOString(),
+            },
+          }),
         },
       })
 

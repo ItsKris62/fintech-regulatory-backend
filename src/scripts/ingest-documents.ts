@@ -52,7 +52,8 @@ type DocumentCategory =
 // Document Registry
 // ============================================================================
 
-interface RegistryEntry extends Omit<DocumentIngestionInput, 'filePath' | 'category'> {
+export interface RegistryEntry extends Omit<DocumentIngestionInput, 'filePath' | 'category'> {
+  manifestId?: string;
   /**
    * Path relative to the `documents/` folder at the project root.
    * Example: 'kenya/data-protection-act-2019.pdf'
@@ -75,7 +76,7 @@ const COUNTRY_ARG_MAP: Record<string, ManifestCountry> = {
   rwanda: 'Rwanda',
 };
 
-const MANIFEST_BACKED_COUNTRIES = new Set<ManifestCountry>(['Malawi', 'Rwanda']);
+const MANIFEST_BACKED_COUNTRIES = new Set<ManifestCountry>(['Malawi', 'Nigeria', 'Rwanda']);
 
 function parseCountryFilter(): ManifestCountry | null {
   const countryArg = process.argv
@@ -164,6 +165,7 @@ function registryEntryFromManifest(entry: CorpusManifestEntry): RegistryEntry {
   const authorityStatus = authorityStatusFromManifest(entry.authorityStatus);
 
   return {
+    manifestId: entry.id,
     fileName: fileNameFromLocalPath(entry.localPath),
     title: entry.title,
     source: entry.regulator,
@@ -200,7 +202,7 @@ function loadManifestRegistryEntries(country: ManifestCountry): RegistryEntry[] 
     .map(registryEntryFromManifest);
 }
 
-function buildRegistry(countryFilter: ManifestCountry | null): RegistryEntry[] {
+export function buildRegistry(countryFilter: ManifestCountry | null): RegistryEntry[] {
   const manifestEntries: RegistryEntry[] = [];
 
   for (const country of MANIFEST_BACKED_COUNTRIES) {
@@ -850,7 +852,7 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
 
 const DOCS_ROOT = path.resolve(process.cwd(), 'documents');
 
-function resolvePath(fileName: string): string {
+export function resolveDocumentPath(fileName: string): string {
   return path.join(DOCS_ROOT, fileName);
 }
 
@@ -896,7 +898,7 @@ async function main(): Promise<void> {
       break;
     }
 
-    const filePath = resolvePath(entry.fileName);
+    const filePath = resolveDocumentPath(entry.fileName);
 
     // Skip files that haven't been placed in the documents/ folder yet
     if (!fs.existsSync(filePath)) {
@@ -990,6 +992,7 @@ async function main(): Promise<void> {
 // Run
 // ============================================================================
 
+if (require.main === module) {
 main()
   .catch((error: unknown) => {
     const err = error as Error;
@@ -1000,3 +1003,4 @@ main()
   .finally(async () => {
     await (prisma as any).$disconnect();
   });
+}

@@ -79,6 +79,10 @@ export interface SearchResult {
   headingPath?: string[] | string;
   provisionId?: string;
   contentHash?: string;
+  extractionMethod?: string;
+  ocrEngine?: string;
+  ocrVersion?: string;
+  ocrQualityStatus?: string;
   documentChecksum?: string;
   effectiveDate?: string;
   effectiveEndDate?: string;
@@ -443,6 +447,10 @@ export class RAGService {
           headingPath: result.metadata.headingPath,
           provisionId: result.metadata.provisionId,
           contentHash: result.metadata.contentHash,
+          extractionMethod: result.metadata.extractionMethod,
+          ocrEngine: result.metadata.ocrEngine,
+          ocrVersion: result.metadata.ocrVersion,
+          ocrQualityStatus: result.metadata.ocrQualityStatus,
           documentChecksum: result.metadata.documentChecksum,
           effectiveDate: result.metadata.effectiveDate,
           effectiveEndDate: result.metadata.effectiveEndDate,

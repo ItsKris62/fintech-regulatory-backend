@@ -16,7 +16,13 @@ const pdfParseModule = require('pdf-parse') as Record<string, unknown>;
  * Resolve the `PDFParse` constructor from whatever shape `require('pdf-parse')`
  * returns (bare export, `.default` wrapper, or named export).
  */
-function resolvePDFParse(): new (opts: { data: Buffer }) => { getText: () => Promise<{ text: string }> } {
+type PDFParseInstance = {
+  destroy?: () => Promise<void> | void;
+  getInfo: () => Promise<{ total?: number }>;
+  getText: () => Promise<{ text: string }>;
+};
+
+function resolvePDFParse(): new (opts: { data: Buffer }) => PDFParseInstance {
   // v2.x named export
   if (typeof pdfParseModule.PDFParse === 'function') {
     return pdfParseModule.PDFParse as any;
@@ -58,17 +64,41 @@ function stripPdfParsePageMarkers(text: string): string {
  * @throws Error if the buffer is not a valid PDF or pdf-parse is misconfigured
  */
 export async function extractPdfText(buffer: Buffer): Promise<string> {
+  const result = await extractPdfTextWithMetadata(buffer);
+  if (!result.meaningfulText) {
+    throw new Error('Extraction failed: Document contains no readable text. It may be an image-based scanned document or an empty file.');
+  }
+
+  return result.text;
+}
+
+export interface PdfTextExtractionResult {
+  text: string;
+  meaningfulText: string;
+  pageCount: number | null;
+}
+
+/**
+ * Extract text and page metadata from a PDF buffer without rejecting empty text.
+ * Ingestion uses this to decide whether local OCR fallback is eligible.
+ */
+export async function extractPdfTextWithMetadata(buffer: Buffer): Promise<PdfTextExtractionResult> {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     throw new Error('extractPdfText: buffer must be a non-empty Buffer');
   }
   const parser = new PDFParseClass({ data: buffer });
-  const result = await parser.getText();
-  const extractedText = result?.text ?? '';
-  const meaningfulText = stripPdfParsePageMarkers(extractedText);
+  try {
+    const info = await parser.getInfo().catch(() => ({ total: undefined }));
+    const result = await parser.getText();
+    const extractedText = result?.text ?? '';
+    const meaningfulText = stripPdfParsePageMarkers(extractedText);
 
-  if (!meaningfulText) {
-    throw new Error('Extraction failed: Document contains no readable text. It may be an image-based scanned document or an empty file.');
+    return {
+      text: extractedText,
+      meaningfulText,
+      pageCount: Number.isFinite(info.total) ? Number(info.total) : null,
+    };
+  } finally {
+    await parser.destroy?.();
   }
-
-  return extractedText;
 }

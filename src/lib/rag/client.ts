@@ -53,6 +53,10 @@ export interface VectorMetadata {
   headingPath?: string[] | string;
   provisionId?: string;
   contentHash?: string;
+  extractionMethod?: string;
+  ocrEngine?: string;
+  ocrVersion?: string;
+  ocrQualityStatus?: string;
   documentChecksum?: string;
   effectiveDate?: string;
   effectiveEndDate?: string;

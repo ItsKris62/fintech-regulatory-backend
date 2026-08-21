@@ -57,6 +57,8 @@
     "test:ci": "vitest run --reporter=verbose",
     "corpus:validate": "tsx src/scripts/corpus/validate-manifest.ts",
     "corpus:inventory": "tsx src/scripts/corpus/inventory.ts",
+    "corpus:ocr:scan": "tsx src/scripts/corpus/ocr-remediation.ts",
+    "corpus:ocr:run": "tsx src/scripts/corpus/ocr-remediation.ts --run-ocr",
     "corpus:discover": "tsx src/scripts/corpus/discover-sources.ts",
     "corpus:download": "tsx src/scripts/corpus/download-approved.ts",
     "corpus:intake": "tsx src/scripts/corpus/manual-intake.ts"
