@@ -8,6 +8,7 @@ import { ragService, searchAndGetRegulatoryEvidenceContext } from '@/lib/rag/rag
 import { getPineconeDiagnostics } from '@/lib/rag/client';
 import { runOrchestrator } from '@/modules/compliance/orchestrator';
 import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
+import type { GraderAgentResult } from '@/modules/compliance/orchestrator/grader.agent';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import { getPilotEntitlements } from '@/utils/entitlements';
 import { appConfig } from '@/config/app.config';
@@ -149,19 +150,32 @@ export function selectGenerationSources<T>(
   retrievedResults: T[],
   acceptedResults: T[],
   gradeFailed: boolean,
-): { sources: T[]; usedVerifierFallback: boolean; allChunksFailedVerification: boolean } {
+  graderDiagnostics?: GraderAgentResult['diagnostics'],
+): {
+  sources: T[];
+  usedVerifierFallback: boolean;
+  allChunksFailedVerification: boolean;
+  externalProviderBillingBlocked: boolean;
+} {
   if (acceptedResults.length > 0) {
-    return { sources: acceptedResults, usedVerifierFallback: false, allChunksFailedVerification: false };
+    return {
+      sources: acceptedResults,
+      usedVerifierFallback: false,
+      allChunksFailedVerification: false,
+      externalProviderBillingBlocked: false,
+    };
   }
 
-  if (gradeFailed && retrievedResults.length > 0) {
-    return { sources: retrievedResults, usedVerifierFallback: true, allChunksFailedVerification: false };
-  }
+  const externalProviderBillingBlocked =
+    gradeFailed &&
+    graderDiagnostics?.failureClassification === 'EXTERNAL_PROVIDER_BILLING_BLOCKER' &&
+    retrievedResults.length > 0;
 
   return {
     sources: [],
     usedVerifierFallback: false,
-    allChunksFailedVerification: retrievedResults.length > 0,
+    allChunksFailedVerification: retrievedResults.length > 0 && !externalProviderBillingBlocked,
+    externalProviderBillingBlocked,
   };
 }
 
@@ -666,6 +680,7 @@ export async function registerComplianceStreamRoute(
         ragContext.results,
         preGenerationGrade.accepted,
         preGenerationGrade.gradeFailed,
+        preGenerationGrade.diagnostics,
       );
       const acceptedResults = generationSelection.sources;
       const contextChunkLimit = input.answerDetail === 'detailed' ? DETAILED_CONTEXT_CHUNKS : STANDARD_CONTEXT_CHUNKS;
@@ -687,13 +702,19 @@ export async function registerComplianceStreamRoute(
         verificationInputCount: ragContext.results.length,
         verifiedSourcesCount: preGenerationGrade.accepted.length,
         rejectedSourcesCount: preGenerationGrade.rejected.length,
-        fallbackTriggered: generationSelection.allChunksFailedVerification,
-        fallbackReason: generationSelection.allChunksFailedVerification ? 'ALL_CHUNKS_FAILED_VERIFICATION' : null,
+        fallbackTriggered: generationSelection.allChunksFailedVerification || generationSelection.externalProviderBillingBlocked,
+        fallbackReason:
+          generationSelection.externalProviderBillingBlocked ? 'EXTERNAL_PROVIDER_BILLING_BLOCKER' :
+          generationSelection.allChunksFailedVerification ? 'ALL_CHUNKS_FAILED_VERIFICATION' :
+          null,
         verifierFailedOpen: generationSelection.usedVerifierFallback,
+        graderFailureClassification: preGenerationGrade.diagnostics?.failureClassification,
       });
 
       if (generationSelection.allChunksFailedVerification || !hasUsableRetrievedChunks(acceptedResults) || !acceptedContext.trim()) {
-        const fallbackReason: ComplianceFallbackReason = 'ALL_CHUNKS_FAILED_VERIFICATION';
+        const fallbackReason: ComplianceFallbackReason = generationSelection.externalProviderBillingBlocked
+          ? 'EXTERNAL_PROVIDER_BILLING_BLOCKER'
+          : 'ALL_CHUNKS_FAILED_VERIFICATION';
         const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
 
         await prisma.complianceQuery.update({
@@ -708,6 +729,7 @@ export async function registerComplianceStreamRoute(
               ragSources: ragContext.results.length,
               acceptedSources: preGenerationGrade.accepted.length,
               graderFailed: preGenerationGrade.gradeFailed,
+              graderFailureClassification: preGenerationGrade.diagnostics?.failureClassification,
               verifierFailedOpen: generationSelection.usedVerifierFallback,
               grounded: false,
               abstained: true,

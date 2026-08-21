@@ -124,21 +124,35 @@ describe('Compliance Stream Routing & Billing Logic', () => {
       ])).toBe(true);
     });
 
-    it('does not trigger fallback when relevant chunks were retrieved but the verifier failed open', () => {
+    it('does not fail open when the grader fails without accepted chunks', () => {
       const retrieved = [{ id: 'chunk-1' }];
       const selected = selectGenerationSources(retrieved, [], true);
 
-      expect(selected.sources).toEqual(retrieved);
-      expect(selected.usedVerifierFallback).toBe(true);
-      expect(selected.allChunksFailedVerification).toBe(false);
+      expect(selected.sources).toEqual([]);
+      expect(selected.usedVerifierFallback).toBe(false);
+      expect(selected.allChunksFailedVerification).toBe(true);
+      expect(selected.externalProviderBillingBlocked).toBe(false);
     });
 
-    it('triggers all-chunks-failed only when verification completes with zero accepted chunks', () => {
+    it('classifies provider billing failures separately from evidence insufficiency', () => {
+      const retrieved = [{ id: 'chunk-1' }];
+      const selected = selectGenerationSources(retrieved, [], true, {
+        failureClassification: 'EXTERNAL_PROVIDER_BILLING_BLOCKER',
+      } as any);
+
+      expect(selected.sources).toEqual([]);
+      expect(selected.usedVerifierFallback).toBe(false);
+      expect(selected.allChunksFailedVerification).toBe(false);
+      expect(selected.externalProviderBillingBlocked).toBe(true);
+    });
+
+    it('triggers all-chunks-failed when verification completes with zero accepted chunks', () => {
       const selected = selectGenerationSources([{ id: 'chunk-1' }], [], false);
 
       expect(selected.sources).toEqual([]);
       expect(selected.usedVerifierFallback).toBe(false);
       expect(selected.allChunksFailedVerification).toBe(true);
+      expect(selected.externalProviderBillingBlocked).toBe(false);
     });
 
     it('returns referenced documents from actual retrieved chunks even without section metadata', () => {

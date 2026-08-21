@@ -59,6 +59,16 @@ describe('source insufficiency guards', () => {
     expectNoUnsafePhrases(answer);
   });
 
+  it('distinguishes upstream verification service blockers from evidence insufficiency', () => {
+    const answer = buildComplianceSourceInsufficiencyAnswer('EXTERNAL_PROVIDER_BILLING_BLOCKER');
+
+    expect(answer).toContain('source verification could not be completed');
+    expect(answer).toContain('upstream AI verification service is temporarily unavailable');
+    expect(answer).not.toContain('not strong enough');
+    expect(answer).not.toContain('No sufficiently relevant indexed documents');
+    expectNoUnsafePhrases(answer);
+  });
+
   it('removes model-memory fallback language from no-context gap analysis prompt', () => {
     const prompt = generateGapAnalysisUserPrompt({
       policyText: 'Internal policy text',

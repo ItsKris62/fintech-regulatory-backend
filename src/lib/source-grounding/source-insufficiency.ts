@@ -3,6 +3,7 @@ import type { SearchResult } from '@/lib/rag/rag.service';
 export type ComplianceFallbackReason =
   | 'NO_RAG_CHUNKS'
   | 'ALL_CHUNKS_FAILED_VERIFICATION'
+  | 'EXTERNAL_PROVIDER_BILLING_BLOCKER'
   | 'LOW_RELEVANCE'
   | 'OUT_OF_SCOPE'
   | 'ROUTE_ERROR';
@@ -13,6 +14,7 @@ export const COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE =
 export const COMPLIANCE_FALLBACK_MESSAGES: Record<ComplianceFallbackReason, string> = {
   NO_RAG_CHUNKS: 'No sufficiently relevant indexed documents were retrieved for this question.',
   ALL_CHUNKS_FAILED_VERIFICATION: 'SheriaBot found potentially related documents, but they were not strong enough to support a verified answer.',
+  EXTERNAL_PROVIDER_BILLING_BLOCKER: 'SheriaBot could not complete source verification because an upstream AI verification service is temporarily unavailable.',
   LOW_RELEVANCE: COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE,
   OUT_OF_SCOPE: 'This question is outside SheriaBot\'s Kenyan fintech compliance scope.',
   ROUTE_ERROR: COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE,
@@ -37,6 +39,8 @@ export function buildComplianceSourceInsufficiencyAnswer(
   const message = fallbackReason ? COMPLIANCE_FALLBACK_MESSAGES[fallbackReason] : COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE;
   const noSourceClaim = fallbackReason === 'NO_RAG_CHUNKS'
     ? 'no sufficiently relevant source chunk was retrieved.'
+    : fallbackReason === 'EXTERNAL_PROVIDER_BILLING_BLOCKER'
+      ? 'source verification could not be completed.'
     : 'no supporting source chunk was verified.';
 
   return `## Source status

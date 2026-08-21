@@ -40,6 +40,7 @@ import {
   GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE,
   hasUsableSourceContext,
   SourceInsufficiencyError,
+  type ComplianceFallbackReason,
 } from '@/lib/source-grounding/source-insufficiency';
 import { buildCitationsFromChunks, hasUsableCitations } from '@/lib/source-grounding/citations';
 import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
@@ -82,6 +83,14 @@ import {
 } from './compliance.types';
 
 const { REDIS_KEYS, MAX_QUERIES_PER_HOUR, MAX_QUICK_CHECKS_PER_HOUR, QUERY_CACHE_TTL } = COMPLIANCE_CONSTANTS;
+
+function fallbackReasonForNoAcceptedSources(
+  graderFailureClassification?: string,
+): ComplianceFallbackReason {
+  return graderFailureClassification === 'EXTERNAL_PROVIDER_BILLING_BLOCKER'
+    ? 'EXTERNAL_PROVIDER_BILLING_BLOCKER'
+    : 'ALL_CHUNKS_FAILED_VERIFICATION';
+}
 
 // --- Gap Analysis Async Helpers -----------------------------------------------
 
@@ -678,7 +687,8 @@ class ComplianceModule {
       const citations = buildCitationsFromChunks(acceptedResults, 'not_checked');
 
       if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext }) || !hasUsableCitations(citations)) {
-        const answer = buildComplianceSourceInsufficiencyAnswer();
+        const fallbackReason = fallbackReasonForNoAcceptedSources(grade.diagnostics?.failureClassification);
+        const answer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
         const detectedAreas = validated.regulatoryAreas ?? [];
         const savedQuery = await prisma.complianceQuery.create({
           data: {
@@ -694,9 +704,12 @@ class ComplianceModule {
               ragSources: ragResults.length,
               acceptedSources: acceptedResults.length,
               graderFailed: grade.gradeFailed,
+              graderFailureClassification: grade.diagnostics?.failureClassification,
               grounded: false,
               abstained: true,
               sourceInsufficient: true,
+              fallbackTriggered: true,
+              fallbackReason,
             },
           },
         });

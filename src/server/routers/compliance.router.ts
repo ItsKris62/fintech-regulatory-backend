@@ -32,6 +32,7 @@ import {
   buildComplianceSourceInsufficiencyAnswer,
   buildUnsupportedClaimsAnswer,
   hasUsableSourceContext,
+  type ComplianceFallbackReason,
 } from '@/lib/source-grounding/source-insufficiency';
 import {
   buildCitationsFromAcceptedRefs,
@@ -68,6 +69,14 @@ function buildJurisdictionMetadata(context: JurisdictionContext, corpusVersions:
     corpusVersionSnapshot: corpusVersions,
     retrievalVersion,
   };
+}
+
+function fallbackReasonForNoAcceptedSources(
+  graderFailureClassification?: string,
+): ComplianceFallbackReason {
+  return graderFailureClassification === 'EXTERNAL_PROVIDER_BILLING_BLOCKER'
+    ? 'EXTERNAL_PROVIDER_BILLING_BLOCKER'
+    : 'ALL_CHUNKS_FAILED_VERIFICATION';
 }
 
 /**
@@ -192,7 +201,8 @@ export const complianceRouter = router({
         const acceptedContext = ragService.getContextForPrompt(acceptedResults, 10, 4000);
 
         if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext })) {
-          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+          const fallbackReason = fallbackReasonForNoAcceptedSources(preGenerationGrade.diagnostics?.failureClassification);
+          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
           const query = await (ctx.prisma.complianceQuery.create as any)({
             data: {
               query: input.question,
@@ -212,9 +222,12 @@ export const complianceRouter = router({
                 ragSources: ragContext.results.length,
                 acceptedSources: acceptedResults.length,
                 graderFailed: preGenerationGrade.gradeFailed,
+                graderFailureClassification: preGenerationGrade.diagnostics?.failureClassification,
                 grounded: false,
                 abstained: true,
                 sourceInsufficient: true,
+                fallbackTriggered: true,
+                fallbackReason,
                 organizationType: input.organizationType,
                 industry: input.industry,
                 context: input.context,
@@ -228,6 +241,8 @@ export const complianceRouter = router({
             queryId: query.id,
             retrievedSources: ragContext.results.length,
             graderFailed: preGenerationGrade.gradeFailed,
+            graderFailureClassification: preGenerationGrade.diagnostics?.failureClassification,
+            fallbackReason,
           });
 
           return {
@@ -650,7 +665,8 @@ export const complianceRouter = router({
         const acceptedContext = ragService.getContextForPrompt(acceptedResults, 10, 4000);
 
         if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext })) {
-          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
+          const fallbackReason = fallbackReasonForNoAcceptedSources(preGenerationGrade.diagnostics?.failureClassification);
+          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
           const query = await (ctx.prisma.complianceQuery.create as any)({
             data: {
               query: input.question,
@@ -670,9 +686,12 @@ export const complianceRouter = router({
                 ragSources: ragContext.results.length,
                 acceptedSources: acceptedResults.length,
                 graderFailed: preGenerationGrade.gradeFailed,
+                graderFailureClassification: preGenerationGrade.diagnostics?.failureClassification,
                 grounded: false,
                 abstained: true,
                 sourceInsufficient: true,
+                fallbackTriggered: true,
+                fallbackReason,
               },
             },
           });
@@ -684,6 +703,8 @@ export const complianceRouter = router({
             originalQueryId: input.originalQueryId,
             retrievedSources: ragContext.results.length,
             graderFailed: preGenerationGrade.gradeFailed,
+            graderFailureClassification: preGenerationGrade.diagnostics?.failureClassification,
+            fallbackReason,
           });
 
           return {

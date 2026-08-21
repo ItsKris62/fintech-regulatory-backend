@@ -111,6 +111,13 @@ Example (note the blank lines surrounding the table):
 - Use ONLY the provided regulatory context for legal claims. Do not invent citations to documents not in the provided context.
 - Refer only to document titles, sections, regulators, and legal instruments that appear in the retrieved context.
 - Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs. The application attaches source-list citations from accepted retrieved chunks separately.
+- Keep grounded legal claims short and evidence-close: one legal requirement per sentence or bullet, preferably under 30 words.
+- Do not combine several legal requirements, limitations, recommendations, and citations into a single sentence.
+- For standard answers, avoid Markdown tables unless the user explicitly asks for a table; short bullets verify more reliably.
+- Use the regulated actor exactly as the evidence states. Do not broaden "bank", "financial institution", "digital credit provider", "data controller", or "data processor" into "PSP" or "fintech company" unless the accepted evidence expressly supports that actor.
+- If the question asks about PSPs or fintechs but the accepted evidence is broader or narrower, state the limited evidence scope instead of generalising.
+- Avoid interpretive filler such as "foundational requirement" unless that phrasing is directly supported by the evidence.
+- Avoid vague meta-claims such as "the retrieved evidence confirms that these actors must comply"; state the concrete source-backed rule instead.
 - If the provided context is insufficient to fully answer the question, state this clearly: "The available regulatory corpus does not contain sufficient information on [topic]."
 - Distinguish between:
   - Corpus-supported answers: claims backed by the retrieved regulatory evidence.
@@ -141,15 +148,17 @@ export function generateComplianceUserPrompt(params: ComplianceQueryParams): str
 
 ---
 
-Provide a ${answerDetail === 'standard' ? 'concise but complete compliance analysis focusing on practical next actions' : 'comprehensive, enterprise-grade compliance analysis with enough detail for a board, compliance lead, or product owner to act on'}. Use the exact structure below. Use Markdown tables wherever applicable  -  especially for requirement comparisons, penalty schedules, controls, risks, and timeline summaries.
+Provide a ${answerDetail === 'standard' ? 'concise but complete compliance analysis focusing on practical next actions' : 'comprehensive, enterprise-grade compliance analysis with enough detail for a board, compliance lead, or product owner to act on'}. Use the exact structure below. ${answerDetail === 'standard' ? 'Use short paragraphs and bullets; avoid tables unless the user explicitly asks for a table.' : 'Use Markdown tables wherever applicable  -  especially for requirement comparisons, penalty schedules, controls, risks, and timeline summaries.'}
 
 ${answerDetail === 'standard' ? `## Direct Answer
 
 State clearly, in 2-3 sentences, what is required and whether this organisation type must comply.
+Only state that the organisation type must comply when the accepted evidence directly supports that scope; otherwise state the narrower or broader actor named in the evidence.
 
 ## Key Obligations
 
 List the main mandatory obligations derived from the regulatory evidence. Mention the source document or section beside each obligation where available.
+Use the exact regulated actor named in the evidence for each obligation.
 
 ## Practical Next Steps
 
