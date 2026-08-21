@@ -13,7 +13,7 @@ import {
   getSuggestedQueriesSchema,
   recordSuggestionClickSchema,
 } from '../schemas/compliance.schema';
-import { ragService, searchAndGetContext } from '@/lib/rag/rag.service';
+import { ragService, searchAndGetRegulatoryEvidenceContext } from '@/lib/rag/rag.service';
 import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
 import { incrementTrialUsage } from '@/modules/trial';
@@ -38,12 +38,37 @@ import {
   buildCitationsFromChunks,
   findAcceptedChunks,
   hasUsableCitations,
+  validateCitationsForJurisdiction,
   type SourceCitation,
 } from '@/lib/source-grounding/citations';
 import {
   persistClaimVerification,
   verifyAnswerClaims,
 } from '@/lib/source-grounding/claim-verification';
+import {
+  JURISDICTION_CAPABILITIES,
+  JurisdictionContractError,
+  resolveJurisdictionContext,
+  resolvePersistedJurisdictionContext,
+  serializeJurisdictionContext,
+  type JurisdictionContext,
+} from '@/types/jurisdiction';
+
+function toTrpcJurisdictionError(error: JurisdictionContractError): TRPCError {
+  return new TRPCError({
+    code: error.code === 'JURISDICTION_NOT_AVAILABLE' ? 'BAD_REQUEST' : 'BAD_REQUEST',
+    message: error.message,
+    cause: error,
+  });
+}
+
+function buildJurisdictionMetadata(context: JurisdictionContext, corpusVersions: Record<string, string | undefined>, retrievalVersion: string): Record<string, unknown> {
+  return {
+    ...serializeJurisdictionContext(context),
+    corpusVersionSnapshot: corpusVersions,
+    retrievalVersion,
+  };
+}
 
 /**
  * Compliance Router
@@ -52,6 +77,16 @@ import {
  * and compliance checking features.
  */
 export const complianceRouter = router({
+  jurisdictionCapabilities: protectedProcedure
+    .query(() => ({
+      jurisdictions: Object.values(JURISDICTION_CAPABILITIES).map((capability) => ({
+        code: capability.code,
+        name: capability.label,
+        queryEnabled: capability.queryEnabled,
+        status: capability.status,
+      })),
+    })),
+
   /**
    * Submit compliance query with RAG
    *
@@ -65,16 +100,27 @@ export const complianceRouter = router({
     .input(complianceQuerySchema)
     .mutation(async ({ input, ctx }) => {
       const startTime = Date.now();
+      let jurisdictionContext: JurisdictionContext;
+      try {
+        jurisdictionContext = resolveJurisdictionContext(input, { allowLegacyDefault: true });
+      } catch (error) {
+        if (error instanceof JurisdictionContractError) throw toTrpcJurisdictionError(error);
+        throw error;
+      }
 
       try {
         logger.info({
           type: 'compliance_query_start',
           userId: ctx.user!.id,
           question: input.question.substring(0, 100),
+          jurisdiction: jurisdictionContext.primaryJurisdiction,
+          jurisdictionSource: jurisdictionContext.jurisdictionSource,
         });
 
         // Search RAG for relevant context
-        const ragContext = await searchAndGetContext(input.question, {
+        const ragContext = await searchAndGetRegulatoryEvidenceContext({
+          query: input.question,
+          jurisdictionContext,
           topK: 10,
           minScore: 0.7,
           preferActiveSources: true,
@@ -94,7 +140,13 @@ export const complianceRouter = router({
               citations: [],
               confidence: null,
               status: 'completed',
+              mode: jurisdictionContext.mode,
+              jurisdictions: [...jurisdictionContext.jurisdictions],
+              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              jurisdictionSource: jurisdictionContext.jurisdictionSource,
+              corpusVersionSnapshot: ragContext.corpusVersions,
               metadata: {
+                ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
                 ragSources: ragContext.results.length,
                 ragContextChars: ragContext.context?.length ?? 0,
                 grounded: false,
@@ -119,6 +171,10 @@ export const complianceRouter = router({
             citations: [],
             confidence: null,
             suggestedFollowUps: [],
+            mode: jurisdictionContext.mode,
+            jurisdictions: [...jurisdictionContext.jurisdictions],
+            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            jurisdictionSource: jurisdictionContext.jurisdictionSource,
             route: 'abstain',
             grounded: false,
             abstained: true,
@@ -129,6 +185,7 @@ export const complianceRouter = router({
         const preGenerationGrade = await runGraderAgent(
           input.question,
           ragContext.results,
+          jurisdictionContext,
           10,
         );
         const acceptedResults = preGenerationGrade.accepted;
@@ -145,7 +202,13 @@ export const complianceRouter = router({
               citations: [],
               confidence: null,
               status: 'completed',
+              mode: jurisdictionContext.mode,
+              jurisdictions: [...jurisdictionContext.jurisdictions],
+              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              jurisdictionSource: jurisdictionContext.jurisdictionSource,
+              corpusVersionSnapshot: ragContext.corpusVersions,
               metadata: {
+                ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
                 ragSources: ragContext.results.length,
                 acceptedSources: acceptedResults.length,
                 graderFailed: preGenerationGrade.gradeFailed,
@@ -173,6 +236,10 @@ export const complianceRouter = router({
             citations: [],
             confidence: null,
             suggestedFollowUps: [],
+            mode: jurisdictionContext.mode,
+            jurisdictions: [...jurisdictionContext.jurisdictions],
+            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            jurisdictionSource: jurisdictionContext.jurisdictionSource,
             route: 'abstain',
             grounded: false,
             abstained: true,
@@ -186,6 +253,7 @@ export const complianceRouter = router({
           organizationType: input.organizationType,
           industry: input.industry,
           context: input.context,
+          jurisdictionContext,
           ragContext: acceptedContext || undefined,
         });
 
@@ -206,9 +274,12 @@ export const complianceRouter = router({
           ? buildUnsupportedClaimsAnswer(legacyClaimVerification.unsupportedClaims.map((claim) => claim.claimText))
           : answer.content;
         const finalQueryCitations = legacyClaimVerification?.unsupportedClaims.length ? [] : queryCitations;
+        const finalCitationValidation = validateCitationsForJurisdiction(finalQueryCitations, jurisdictionContext);
+        const safeFinalAnswerContent = finalCitationValidation.valid ? finalAnswerContent : buildComplianceSourceInsufficiencyAnswer();
+        const safeFinalQueryCitations = finalCitationValidation.valid ? finalQueryCitations : [];
 
         // Guard: warn if RAG chunks are missing documentIds (ingestion gap)
-        const missingDocIds = finalQueryCitations.filter((c: SourceCitation) => !c.documentId).length;
+        const missingDocIds = safeFinalQueryCitations.filter((c: SourceCitation) => !c.documentId).length;
         if (missingDocIds > 0) {
           logger.warn({
             type: 'compliance_query_citations_missing_doc_ids',
@@ -224,15 +295,23 @@ export const complianceRouter = router({
             query: input.question,
             userId: ctx.user!.id,
             organizationId: ctx.orgMembership!.organizationId,
-            response: finalAnswerContent,
-            citations: finalQueryCitations.length > 0 ? finalQueryCitations : undefined,
+            response: safeFinalAnswerContent,
+            citations: safeFinalQueryCitations.length > 0 ? safeFinalQueryCitations : undefined,
+            mode: jurisdictionContext.mode,
+            jurisdictions: [...jurisdictionContext.jurisdictions],
+            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            jurisdictionSource: jurisdictionContext.jurisdictionSource,
+            corpusVersionSnapshot: ragContext.corpusVersions,
             metadata: {
+              ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
               model: answer.model,
               tokensUsed: answer.inputTokens + answer.outputTokens,
               ragSources: ragContext.results.length,
               acceptedSources: acceptedResults.length,
               ragContextChars: acceptedContext.length,
-              grounded: hasUsableCitations(finalQueryCitations),
+              grounded: hasUsableCitations(safeFinalQueryCitations),
+              citationJurisdictionValid: finalCitationValidation.valid,
+              citationJurisdictionInvalidCount: finalCitationValidation.invalidCitations.length,
               cacheBypassed: true,
               graderFailed: preGenerationGrade.gradeFailed,
               claimVerificationVerdict: legacyClaimVerification?.verdict,
@@ -258,6 +337,9 @@ export const complianceRouter = router({
             question: input.question,
             answer: answer.content,
             ragResults: ragContext.results,
+            jurisdictionContext,
+            corpusVersionSnapshot: ragContext.corpusVersions,
+            retrievalVersion: ragContext.retrievalVersion,
             agenticComplexityLevel,
             shadow: false,
           });
@@ -282,6 +364,7 @@ export const complianceRouter = router({
             ragContext.results,
             run?.verifierVerdict === 'PASS' ? 'verified' : 'unverified',
           );
+          const acceptedCitationValidation = validateCitationsForJurisdiction(acceptedCitations, jurisdictionContext);
           const acceptedChunksForClaims = findAcceptedChunks(run?.acceptedChunkIds, ragContext.results);
           const claimVerification = verifyAnswerClaims(answer.content, acceptedChunksForClaims);
           await persistClaimVerification(ctx.prisma, query.id, claimVerification);
@@ -290,6 +373,7 @@ export const complianceRouter = router({
             abstained ||
             run?.verifierVerdict === 'FAIL' ||
             !hasUsableCitations(acceptedCitations) ||
+            !acceptedCitationValidation.valid ||
             claimVerification.unsupportedClaims.length > 0
           ) {
             const sourceInsufficientAnswer = claimVerification.unsupportedClaims.length > 0
@@ -309,7 +393,10 @@ export const complianceRouter = router({
                   grounded: false,
                   abstained: true,
                   sourceInsufficient: true,
+                  ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
                   verifierVerdict: run?.verifierVerdict ?? null,
+                  citationJurisdictionValid: acceptedCitationValidation.valid,
+                  citationJurisdictionInvalidCount: acceptedCitationValidation.invalidCitations.length,
                   claimVerificationVerdict: claimVerification.verdict,
                   unsupportedClaims: claimVerification.unsupportedClaims.map((claim) => claim.claimText),
                   organizationType: input.organizationType,
@@ -325,6 +412,10 @@ export const complianceRouter = router({
               citations: [],
               confidence: null,
               suggestedFollowUps: [],
+              mode: jurisdictionContext.mode,
+              jurisdictions: [...jurisdictionContext.jurisdictions],
+              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              jurisdictionSource: jurisdictionContext.jurisdictionSource,
               route,
               grounded: false,
               abstained: true,
@@ -344,11 +435,14 @@ export const complianceRouter = router({
                 acceptedSources: acceptedCitations.length,
                 grounded,
                 abstained,
+                ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
                 verifierVerdict: run?.verifierVerdict ?? null,
                 claimVerificationVerdict: claimVerification.verdict,
                 verifiedClaims: claimVerification.supportedClaims.length,
                 unsupportedClaims: [],
                 verificationStatus: run?.verifierVerdict === 'PASS' ? 'verified' : 'unverified',
+                citationJurisdictionValid: acceptedCitationValidation.valid,
+                citationJurisdictionInvalidCount: acceptedCitationValidation.invalidCitations.length,
                 organizationType: input.organizationType,
                 industry: input.industry,
                 context: input.context,
@@ -376,6 +470,10 @@ export const complianceRouter = router({
             citations: acceptedCitations,
             confidence,
             suggestedFollowUps: [],
+            mode: jurisdictionContext.mode,
+            jurisdictions: [...jurisdictionContext.jurisdictions],
+            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            jurisdictionSource: jurisdictionContext.jurisdictionSource,
             route,
             grounded,
             abstained,
@@ -396,6 +494,9 @@ export const complianceRouter = router({
           question: input.question,
           answer: answer.content,
           ragResults: ragContext.results,
+          jurisdictionContext,
+          corpusVersionSnapshot: ragContext.corpusVersions,
+          retrievalVersion: ragContext.retrievalVersion,
           agenticComplexityLevel,
           shadow: true,
         }).catch(() => { });
@@ -413,13 +514,17 @@ export const complianceRouter = router({
 
         return {
           queryId: query.id,
-          answer: finalAnswerContent,
-          citations: finalQueryCitations,
+          answer: safeFinalAnswerContent,
+          citations: safeFinalQueryCitations,
           confidence: null,
           suggestedFollowUps: [],
+          mode: jurisdictionContext.mode,
+          jurisdictions: [...jurisdictionContext.jurisdictions],
+          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          jurisdictionSource: jurisdictionContext.jurisdictionSource,
           route: null as string | null,
-          grounded: hasUsableCitations(finalQueryCitations),
-          abstained: finalQueryCitations.length === 0,
+          grounded: hasUsableCitations(safeFinalQueryCitations),
+          abstained: safeFinalQueryCitations.length === 0,
           runId: null as string | null,
         };
       } catch (error: any) {
@@ -484,8 +589,12 @@ export const complianceRouter = router({
           });
         }
 
+        const jurisdictionContext = resolvePersistedJurisdictionContext(originalQuery);
+
         // Search RAG with context from original query
-        const ragContext = await searchAndGetContext(input.question, {
+        const ragContext = await searchAndGetRegulatoryEvidenceContext({
+          query: input.question,
+          jurisdictionContext,
           topK: 10,
           minScore: 0.7,
           preferActiveSources: true,
@@ -501,7 +610,13 @@ export const complianceRouter = router({
               response: sourceInsufficientAnswer,
               citations: [],
               status: 'completed',
+              mode: jurisdictionContext.mode,
+              jurisdictions: [...jurisdictionContext.jurisdictions],
+              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              jurisdictionSource: jurisdictionContext.jurisdictionSource,
+              corpusVersionSnapshot: ragContext.corpusVersions,
               metadata: {
+                ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
                 followUpTo: input.originalQueryId,
                 ragSources: ragContext.results.length,
                 ragContextChars: ragContext.context?.length ?? 0,
@@ -523,10 +638,14 @@ export const complianceRouter = router({
             queryId: query.id,
             answer: sourceInsufficientAnswer,
             citations: [],
+            mode: jurisdictionContext.mode,
+            jurisdictions: [...jurisdictionContext.jurisdictions],
+            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            jurisdictionSource: jurisdictionContext.jurisdictionSource,
           };
         }
 
-        const preGenerationGrade = await runGraderAgent(input.question, ragContext.results, 10);
+        const preGenerationGrade = await runGraderAgent(input.question, ragContext.results, jurisdictionContext, 10);
         const acceptedResults = preGenerationGrade.accepted;
         const acceptedContext = ragService.getContextForPrompt(acceptedResults, 10, 4000);
 
@@ -540,7 +659,13 @@ export const complianceRouter = router({
               response: sourceInsufficientAnswer,
               citations: [],
               status: 'completed',
+              mode: jurisdictionContext.mode,
+              jurisdictions: [...jurisdictionContext.jurisdictions],
+              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              jurisdictionSource: jurisdictionContext.jurisdictionSource,
+              corpusVersionSnapshot: ragContext.corpusVersions,
               metadata: {
+                ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
                 followUpTo: input.originalQueryId,
                 ragSources: ragContext.results.length,
                 acceptedSources: acceptedResults.length,
@@ -565,6 +690,10 @@ export const complianceRouter = router({
             queryId: query.id,
             answer: sourceInsufficientAnswer,
             citations: [],
+            mode: jurisdictionContext.mode,
+            jurisdictions: [...jurisdictionContext.jurisdictions],
+            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            jurisdictionSource: jurisdictionContext.jurisdictionSource,
           };
         }
 
@@ -574,6 +703,7 @@ export const complianceRouter = router({
           originalQuery.response || originalQuery.summary || '',
           input.question,
           acceptedContext || undefined,
+          jurisdictionContext,
         );
 
         // Same citation pattern as the primary query mutation:
@@ -585,6 +715,9 @@ export const complianceRouter = router({
           ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
           : answer.content;
         const finalCitations = claimVerification.unsupportedClaims.length > 0 ? [] : queryCitations;
+        const finalCitationValidation = validateCitationsForJurisdiction(finalCitations, jurisdictionContext);
+        const safeFinalAnswer = finalCitationValidation.valid ? finalAnswer : buildComplianceSourceInsufficiencyAnswer();
+        const safeFinalCitations = finalCitationValidation.valid ? finalCitations : [];
 
         // Save follow-up query with citations as JSON
         const query = await (ctx.prisma.complianceQuery.create as any)({
@@ -592,18 +725,26 @@ export const complianceRouter = router({
             query: input.question,
             userId,
             organizationId,
-            response: finalAnswer,
-            citations: finalCitations.length > 0 ? finalCitations : undefined,
+            response: safeFinalAnswer,
+            citations: safeFinalCitations.length > 0 ? safeFinalCitations : undefined,
+            mode: jurisdictionContext.mode,
+            jurisdictions: [...jurisdictionContext.jurisdictions],
+            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            jurisdictionSource: jurisdictionContext.jurisdictionSource,
+            corpusVersionSnapshot: ragContext.corpusVersions,
             metadata: {
+              ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
               followUpTo: input.originalQueryId,
               model: answer.model,
               tokensUsed: answer.inputTokens + answer.outputTokens,
               ragSources: ragContext.results.length,
               acceptedSources: acceptedResults.length,
-              grounded: hasUsableCitations(finalCitations),
+              grounded: hasUsableCitations(safeFinalCitations),
               graderFailed: preGenerationGrade.gradeFailed,
               claimVerificationVerdict: claimVerification.verdict,
               unsupportedClaims: claimVerification.unsupportedClaims.map((claim) => claim.claimText),
+              citationJurisdictionValid: finalCitationValidation.valid,
+              citationJurisdictionInvalidCount: finalCitationValidation.invalidCitations.length,
             },
           },
         });
@@ -625,14 +766,18 @@ export const complianceRouter = router({
           organizationId,
           queryId: query.id,
           originalQueryId: input.originalQueryId,
-          citationsCount: finalCitations.length,
+          citationsCount: safeFinalCitations.length,
           claimVerificationVerdict: claimVerification.verdict,
         });
 
         return {
           queryId: query.id,
-          answer: finalAnswer,
-          citations: finalCitations,
+          answer: safeFinalAnswer,
+          citations: safeFinalCitations,
+          mode: jurisdictionContext.mode,
+          jurisdictions: [...jurisdictionContext.jurisdictions],
+          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          jurisdictionSource: jurisdictionContext.jurisdictionSource,
         };
       } catch (error: any) {
         logger.error({
@@ -752,6 +897,9 @@ export const complianceRouter = router({
               id: true,
               query: true,
               createdAt: true,
+              primaryJurisdiction: true,
+              jurisdictionSource: true,
+              jurisdictions: true,
               user: {
                 select: {
                   id: true,
@@ -887,6 +1035,9 @@ export const complianceRouter = router({
           citations: true,
           confidence: true,
           createdAt: true,
+          primaryJurisdiction: true,
+          jurisdictionSource: true,
+          jurisdictions: true,
         },
       });
 

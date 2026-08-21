@@ -3,6 +3,7 @@ import { logger } from '@/utils/logger';
 import { extractJson } from './utils';
 import type { AgentTokens } from './types';
 import type { SearchResult } from '@/lib/rag/rag.service';
+import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
 
 export type VerifierVerdict = 'PASS' | 'PARTIAL' | 'FAIL';
 
@@ -15,11 +16,16 @@ export interface VerifierAgentResult {
 
 const VALID_VERDICTS: VerifierVerdict[] = ['PASS', 'PARTIAL', 'FAIL'];
 
-const SYSTEM = `You are a hallucination verifier for a Kenyan financial-services compliance RAG system.
+function buildSystemPrompt(jurisdictionContext: JurisdictionContext): string {
+  const label = jurisdictionLabel(jurisdictionContext.primaryJurisdiction);
+  return `You are a hallucination verifier for a ${label} financial-services compliance RAG system.
+Active jurisdiction: ${label} (${jurisdictionContext.primaryJurisdiction}).
 Given an answer and the retrieved evidence used to generate it, assess grounding quality:
 - PASS    : all substantive claims are supported by the evidence
 - PARTIAL : most claims are supported, but some cannot be verified from the evidence
 - FAIL    : significant claims are not supported by or contradict the evidence
+
+Treat any legal claim or citation attributed to a different jurisdiction as unsupported.
 
 Respond with a single JSON object:
 {
@@ -31,10 +37,12 @@ Respond with a single JSON object:
 unsupportedClaims should list specific claims in the answer that cannot be traced to the evidence.
 For a PASS verdict, unsupportedClaims should be an empty array [].
 No markdown, no other text outside the JSON object.`;
+}
 
 export async function runVerifierAgent(
   answer: string,
-  evidence: SearchResult[]
+  evidence: SearchResult[],
+  jurisdictionContext: JurisdictionContext,
 ): Promise<VerifierAgentResult> {
   if (evidence.length === 0) {
     // No accepted chunks means there is no source-list basis for a legal answer.
@@ -54,8 +62,9 @@ export async function runVerifierAgent(
   const prompt = `Answer (first 800 chars):\n${answer.slice(0, 800)}\n\nEvidence:\n${evidenceText}`;
 
   try {
+    const systemPrompt = buildSystemPrompt(jurisdictionContext);
     const result = await complete(
-      { prompt, systemPrompt: SYSTEM, maxTokens: 300, temperature: 0.0 },
+      { prompt, systemPrompt, maxTokens: 300, temperature: 0.0 },
       'query'
     );
 

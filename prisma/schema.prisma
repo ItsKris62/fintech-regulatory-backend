@@ -458,6 +458,11 @@ model ComplianceQuery {
   recommendations    Json?
   processingTimeMs   Int?
   metadata           Json?
+  mode               String?
+  jurisdictions      String[]                @default([])
+  primaryJurisdiction String?
+  jurisdictionSource String?
+  corpusVersionSnapshot Json?
   productCategory    String?
   summary            String?
   regulations        Json?
@@ -477,6 +482,8 @@ model ComplianceQuery {
   @@index([userId])
   @@index([createdAt])
   @@index([organizationId])
+  @@index([primaryJurisdiction])
+  @@index([mode])
   @@index([status])
   @@index([userId, createdAt(sort: Desc)])
 }
@@ -494,6 +501,12 @@ model ComplianceQueryRun {
   ragSources            Int                 @default(0)
   subQuestions          Json?
   retrievalQueries      Json?
+  jurisdictions         String[]             @default([])
+  primaryJurisdiction   String?
+  jurisdictionSource    String?
+  corpusVersionSnapshot Json?
+  retrievalVersion      String?
+  retrievedVectorIds    Json?
   gradeChunksInspected  Int                 @default(0)
   acceptedChunkIds      Json?
   rejectedChunkCount    Int?
@@ -517,6 +530,8 @@ model ComplianceQueryRun {
   @@index([complianceQueryId])
   @@index([shadow])
   @@index([route])
+  @@index([primaryJurisdiction])
+  @@index([retrievalVersion])
   @@index([verifierVerdict])
   @@index([createdAt])
   @@index([status])
@@ -1193,6 +1208,7 @@ model RegulatoryDocument {
   source                  String
   category                RegulatoryDocumentCategory
   jurisdiction            String
+  jurisdictionCode        String?
   documentType            String
   effectiveDate           DateTime?
   version                 String?
@@ -1226,6 +1242,7 @@ model RegulatoryDocument {
   @@index([status])
   @@index([category])
   @@index([jurisdiction])
+  @@index([jurisdictionCode])
   @@index([authorityStatus])
   @@index([checksum])
   @@index([sourceRegistryId])
@@ -1254,6 +1271,7 @@ model RegulatoryDocumentChunk {
   contentHash             String?
   sourceDocumentVersionId String?
   indexVersion            String                    @default("v1")
+  jurisdictionCode        String?
   metadata                Json?
   createdAt               DateTime                  @default(now())
   document                RegulatoryDocument        @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -1262,9 +1280,23 @@ model RegulatoryDocumentChunk {
 
   @@index([documentId])
   @@index([sourceDocumentVersionId])
+  @@index([jurisdictionCode])
   @@index([contentHash])
   @@index([provisionId])
   @@index([indexVersion])
+}
+
+model JurisdictionCorpusVersion {
+  id               String   @id @default(cuid())
+  jurisdictionCode String   @unique
+  version          Int      @default(1)
+  reason           String?
+  updatedBy        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([jurisdictionCode])
+  @@index([updatedAt])
 }
 
 model ApprovedSource {

@@ -3,6 +3,7 @@ import { logger } from '@/utils/logger';
 import { extractJson } from './utils';
 import type { AgentTokens } from './types';
 import type { SearchResult } from '@/lib/rag/rag.service';
+import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
 
 export interface GraderAgentResult {
   accepted: SearchResult[];
@@ -11,19 +12,35 @@ export interface GraderAgentResult {
   gradeFailed: boolean;
 }
 
-const SYSTEM = `You are a relevance grader for a Kenyan financial-services compliance RAG system.
+function buildSystemPrompt(jurisdictionContext: JurisdictionContext): string {
+  const label = jurisdictionLabel(jurisdictionContext.primaryJurisdiction);
+  return `You are a relevance grader for a ${label} financial-services compliance RAG system.
+Active jurisdiction: ${label} (${jurisdictionContext.primaryJurisdiction}).
 Given a compliance question and retrieved document chunks, decide which chunks are relevant.
-A chunk is relevant if it contains information that directly helps answer the question.
+A chunk is relevant only if it contains information that directly helps answer the question and belongs to the active jurisdiction.
 
 Respond with a single JSON object:
 {"grades":[{"index":0,"relevant":true},{"index":1,"relevant":false},...]}
 One entry per chunk in order. No markdown, no other text.`;
+}
 
 export async function runGraderAgent(
   question: string,
   chunks: SearchResult[],
-  maxGradeChunks: number
+  jurisdictionContextOrMaxGradeChunks: JurisdictionContext | number,
+  maxGradeChunksMaybe?: number
 ): Promise<GraderAgentResult> {
+  const jurisdictionContext: JurisdictionContext = typeof jurisdictionContextOrMaxGradeChunks === 'number'
+    ? {
+        mode: 'SINGLE',
+        jurisdictions: ['KE'],
+        primaryJurisdiction: 'KE',
+        jurisdictionSource: 'LEGACY_DEFAULT',
+      }
+    : jurisdictionContextOrMaxGradeChunks;
+  const maxGradeChunks = typeof jurisdictionContextOrMaxGradeChunks === 'number'
+    ? jurisdictionContextOrMaxGradeChunks
+    : maxGradeChunksMaybe ?? 10;
   const toGrade = chunks.slice(0, maxGradeChunks);
 
   if (toGrade.length === 0) {
@@ -38,8 +55,9 @@ export async function runGraderAgent(
   const maxTokens = Math.max(60, 20 + toGrade.length * 15);
 
   try {
+    const systemPrompt = buildSystemPrompt(jurisdictionContext);
     const result = await complete(
-      { prompt, systemPrompt: SYSTEM, maxTokens, temperature: 0.0 },
+      { prompt, systemPrompt, maxTokens, temperature: 0.0 },
       'query'
     );
 

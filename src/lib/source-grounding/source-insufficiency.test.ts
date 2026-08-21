@@ -24,6 +24,7 @@ import {
   buildComplianceSourceInsufficiencyAnswer,
   hasUsableSourceContext,
 } from './source-insufficiency';
+import type { SearchResult } from '@/lib/rag/rag.service';
 
 const unsafePhrases = [
   'use your knowledge',
@@ -122,10 +123,14 @@ describe('source insufficiency guards', () => {
 });
 
 describe('source citation enforcement', () => {
-  const chunks = [
+  const chunks: SearchResult[] = [
     {
+      vectorId: 'doc-1-chunk-0',
+      chunkId: 'doc-1-chunk-0',
       documentId: 'doc-1',
       documentTitle: 'Data Protection Act',
+      jurisdictionCode: 'KE',
+      jurisdiction: 'Kenya',
       section: 'Section 25',
       chunkText: 'A data controller shall ensure personal data is processed lawfully.',
       score: 0.91,
@@ -136,8 +141,12 @@ describe('source citation enforcement', () => {
       isBinding: true,
     },
     {
+      vectorId: 'doc-2-chunk-0',
+      chunkId: 'doc-2-chunk-0',
       documentId: 'doc-2',
       documentTitle: 'Rejected Guidance',
+      jurisdictionCode: 'KE',
+      jurisdiction: 'Kenya',
       section: 'Part 2',
       chunkText: 'Rejected source text.',
       score: 0.72,

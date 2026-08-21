@@ -9,6 +9,7 @@
  * Compliance Query Prompt Templates
  * Answers specific regulatory compliance questions with citations
  */
+import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
 
 /**
  * Compliance query request parameters
@@ -21,25 +22,28 @@ export interface ComplianceQueryParams {
   urgency?: 'LOW' | 'MEDIUM' | 'HIGH';
   ragContext?: string; // formatted retrieved evidence injected by the router; bypasses answer cache
   answerDetail?: 'standard' | 'detailed';
+  jurisdictionContext?: JurisdictionContext;
 }
 
 /**
  * Generate system prompt for compliance queries
  */
-export function generateComplianceSystemPrompt(answerDetail: 'standard' | 'detailed' = 'standard'): string {
-  return `You are SheriaBot, an authoritative AI compliance intelligence system specialising in Kenyan regulatory law for the financial services sector. Your audience is compliance officers, legal teams, and fintech founders at licensed and aspiring financial institutions.
+export function generateComplianceSystemPrompt(
+  answerDetail: 'standard' | 'detailed' = 'standard',
+  jurisdictionContext?: JurisdictionContext,
+): string {
+  const jurisdictionName = jurisdictionContext ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : 'Kenya';
+  const jurisdictionCode = jurisdictionContext?.primaryJurisdiction ?? 'KE';
+  return `You are SheriaBot, an authoritative AI compliance intelligence system specialising in ${jurisdictionName} regulatory law for the financial services sector. Your audience is compliance officers, legal teams, and fintech founders at licensed and aspiring financial institutions.
+
+Active jurisdiction: ${jurisdictionName} (${jurisdictionCode}).
+Do not infer or substitute a different jurisdiction. If the provided evidence does not support a legal claim for ${jurisdictionName}, say the available corpus is insufficient.
 
 ## EXPERTISE AREAS
-- Data Protection Act 2019 and ODPC regulations
-- CBK Digital Credit Providers Regulations 2022 and associated Guidance Notes
-- National Payment Systems Act 2011 and Payment Service Provider (PSP) licensing framework
-- Proceeds of Crime and Anti-Money Laundering Act 2009 (POCAMLA) and AML/CFT Guidelines
-- CBK Prudential Guidelines (Capital Adequacy, Liquidity, Risk Classification)
-- Kenya Information and Communications Act and ICT Authority regulations
-- Consumer Protection Act 2012
-- Banking Act Cap 488 and associated regulations
-- Insurance Regulatory Authority Act and regulations
-- Capital Markets Authority regulations
+- Financial-services licensing and regulatory perimeter obligations in ${jurisdictionName}
+- Payment service provider, e-money, banking, lending, insurance, and capital-markets obligations where supported by retrieved evidence
+- Data protection, cybersecurity, AML/CFT, consumer protection, governance, reporting, and prudential obligations where supported by retrieved evidence
+- Regulator-specific circulars, directives, regulations, guidance, and legislation for ${jurisdictionName}
 
 ## OUTPUT FORMAT
 Structure every response using Markdown. Use level-2 headings (\`##\`) for all main sections and level-3 headings (\`###\`) for sub-sections within a section.
@@ -88,7 +92,7 @@ Example (note the blank lines surrounding the table):
 - Cite specific Acts, Section numbers, and sub-clauses (e.g., "Data Protection Act 2019, Section 25(1)(a)")
 - Reference CBK Circulars, Guidance Notes, and Prudential Guidelines by number and date where known
 - Distinguish: Acts (primary legislation) | Regulations (statutory instruments) | Guidelines (regulatory guidance) | Circulars (supervisory directives)
-- State which regulatory authority (CBK, FRC, CAK, IRA, CMA, ODPC, NCA) has jurisdiction
+- State which regulatory authority has jurisdiction where the retrieved evidence identifies it
 
 ## TONE & STYLE
 - Authoritative and precise  -  write as a senior compliance counsel would
@@ -98,7 +102,7 @@ Example (note the blank lines surrounding the table):
 - Flag explicitly where independent legal counsel is essential
 
 ## ACCURACY
-- Only cite laws that are actually in force in Kenya
+- Only cite laws that are actually in force in ${jurisdictionName}, unless a retrieved source is explicitly labelled DRAFT, CONSULTATION, or SUPERSEDED
 - If uncertain about a specific clause, state the uncertainty explicitly rather than guessing
 - Note where regulations are recently amended, pending, or under consultation
 - Distinguish obligations that apply to banks, MFBs, PSPs, and digital lenders respectively
@@ -119,9 +123,11 @@ Example (note the blank lines surrounding the table):
  * Generate user prompt for compliance query
  */
 export function generateComplianceUserPrompt(params: ComplianceQueryParams): string {
-  const { question, organizationType, industry, context, urgency, ragContext, answerDetail = 'standard' } = params;
+  const { question, organizationType, industry, context, urgency, ragContext, answerDetail = 'standard', jurisdictionContext } = params;
+  const jurisdictionName = jurisdictionContext ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : 'Kenya';
+  const jurisdictionCode = jurisdictionContext?.primaryJurisdiction ?? 'KE';
 
-  let prompt = `## Compliance Question\n\n${question}\n`;
+  let prompt = `## Active Jurisdiction\n\n${jurisdictionName} (${jurisdictionCode})\n\n## Compliance Question\n\n${question}\n`;
 
   if (organizationType) prompt += `\n**Organisation Type:** ${organizationType}`;
   if (industry)         prompt += `\n**Industry / Sector:** ${industry}`;
@@ -129,7 +135,7 @@ export function generateComplianceUserPrompt(params: ComplianceQueryParams): str
   if (context)          prompt += `\n\n**Additional Context:**\n${context}`;
 
   if (ragContext) {
-    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus and accepted for this answer. Ground your answer exclusively in this evidence. Refer only to document titles and sections present below. Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs; the application attaches source-list citations from accepted chunks separately. If a claim cannot be supported by the evidence below, explicitly state that the corpus does not contain relevant provisions rather than relying on model memory or fabricating citations.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every reference to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}\n`;
+    prompt += `\n\n## Retrieved Regulatory Evidence\n\nThe following passages were retrieved from the SheriaBot regulatory corpus for ${jurisdictionName} (${jurisdictionCode}) and accepted for this answer. Ground your answer exclusively in this evidence. Refer only to document titles and sections present below. Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs; the application attaches source-list citations from accepted chunks separately. If a claim cannot be supported by the evidence below, explicitly state that the corpus does not contain relevant provisions rather than relying on model memory or fabricating citations.\n\nSome retrieved sources may be labelled Authority Status: DRAFT, CONSULTATION, or SUPERSEDED with Binding Law: No. You may use those sources, but every reference to them must be clearly labelled as non-binding draft/consultation/superseded material and must not be framed as current binding law.\n\n${ragContext}\n`;
   }
   prompt += `
 
@@ -157,7 +163,7 @@ Summarise the conclusion in 3-5 sentences. State what the organisation must do, 
 
 ## Applicable Legal Context
 
-Explain the legal and regulatory context using only retrieved evidence. Cite applicable Kenyan Acts, Regulations, Guidelines, and Circulars with section references where they appear in the retrieved chunks. Present them in a table:
+Explain the legal and regulatory context using only retrieved evidence. Cite applicable ${jurisdictionName} Acts, Regulations, Guidelines, and Circulars with section references where they appear in the retrieved chunks. Present them in a table:
 
 | Instrument | Section / Clause | Obligation | Regulator |
 |---|---|---|---|
@@ -209,9 +215,14 @@ export function generateFollowUpQueryPrompt(
   originalQuestion: string,
   originalAnswer: string,
   followUpQuestion: string,
-  ragContext?: string
+  ragContext?: string,
+  jurisdictionContext?: JurisdictionContext,
 ): string {
-  let prompt = `You previously answered a compliance question. The user has a follow-up question.
+  const jurisdictionName = jurisdictionContext ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : 'Kenya';
+  const jurisdictionCode = jurisdictionContext?.primaryJurisdiction ?? 'KE';
+  let prompt = `You previously answered a compliance question for ${jurisdictionName} (${jurisdictionCode}). The user has a follow-up question.
+
+Active jurisdiction: ${jurisdictionName} (${jurisdictionCode}). Do not change jurisdictions unless explicitly instructed by the system.
 
 ## Original Question
 ${originalQuestion}

@@ -2,6 +2,7 @@ import { complete } from '@/lib/ai/client';
 import { logger } from '@/utils/logger';
 import { extractJson } from './utils';
 import type { AgentTokens, OrchestratorRoute } from './types';
+import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
 
 export interface RouterAgentResult {
   route: OrchestratorRoute;
@@ -13,13 +14,16 @@ export interface RouterAgentResult {
 
 const VALID_ROUTES: OrchestratorRoute[] = ['simple', 'complex', 'abstain'];
 
-const SYSTEM = `You are a query router for SheriaBot, a Kenyan financial-services compliance assistant.
+function buildSystemPrompt(jurisdictionContext: JurisdictionContext): string {
+  const label = jurisdictionLabel(jurisdictionContext.primaryJurisdiction);
+  return `You are a query router for SheriaBot, a ${label} financial-services compliance assistant.
+Active jurisdiction: ${label} (${jurisdictionContext.primaryJurisdiction}).
 Classify the user's compliance question into exactly one route:
 - "simple"  : single-regulation lookup, specific numeric threshold, or definition question
-- "complex" : requires synthesising multiple regulations, multi-step procedural guidance, or cross-jurisdictional analysis
-- "abstain" : question is outside Kenyan fintech / financial-services regulatory scope
+- "complex" : requires synthesising multiple regulations or multi-step procedural guidance
+- "abstain" : question is outside the active jurisdiction's fintech / financial-services regulatory scope
 
-Important: an unknown, imaginary, or unverified named regulation inside an otherwise Kenyan fintech,
+Important: an unknown, imaginary, or unverified named regulation inside an otherwise in-scope ${label} fintech,
 banking, payments, lending, data protection, AML/CFT, tax, company, or capital markets compliance
 question is not "abstain". Route it as "simple" or "complex" so source verification can decide whether
 the named regulation is supported by the corpus.
@@ -35,11 +39,13 @@ Respond with a single JSON object:
 subQuestions should contain the discrete sub-questions that must be answered to fully address the query.
 For "simple" and "abstain" routes, subQuestions should be an empty array [].
 No markdown, no other text outside the JSON object.`;
+}
 
-export async function runRouterAgent(question: string): Promise<RouterAgentResult> {
+export async function runRouterAgent(question: string, jurisdictionContext: JurisdictionContext): Promise<RouterAgentResult> {
   try {
+    const systemPrompt = buildSystemPrompt(jurisdictionContext);
     const result = await complete(
-      { prompt: question, systemPrompt: SYSTEM, maxTokens: 500, temperature: 0.0 },
+      { prompt: question, systemPrompt, maxTokens: 500, temperature: 0.0 },
       'query'
     );
 

@@ -26,6 +26,7 @@ import {
   omitNullishMetadata,
   prepareV2ChunkMetadata,
 } from '@/lib/source-grounding/source-metadata'
+import { jurisdictionCodeFromLabel } from '@/types/jurisdiction'
 
 // ============================================================================
 // Types
@@ -280,6 +281,7 @@ async function processDocument(
   const vectorIds: string[] = []
   const chunkRows: any[] = []
   const documentMetadata = mapV1DocumentToV2Metadata(doc)
+  const jurisdictionCode = doc.jurisdictionCode ?? jurisdictionCodeFromLabel(doc.jurisdiction)
 
   for (let i = 0; i < chunks.length; i += VECTOR_BATCH_SIZE) {
     const batch = chunks.slice(i, i + VECTOR_BATCH_SIZE)
@@ -334,8 +336,11 @@ async function processDocument(
         documentType: doc.documentType,
         chunkIndex,
         section: safeSection,
+        chunkId: id,
         // Metadata used by RAG filter auto-detection
         jurisdiction: doc.jurisdiction,
+        jurisdictionCode: jurisdictionCode ?? undefined,
+        country: doc.jurisdiction,
         category: doc.category,
         year: doc.effectiveDate
           ? new Date(doc.effectiveDate).getFullYear()
@@ -369,6 +374,7 @@ async function processDocument(
     batch.forEach((chunk, idx) => {
       chunkRows.push({
         pineconeId: `${doc.id}-chunk-${i + idx}`,
+        jurisdictionCode: jurisdictionCode ?? null,
         chunkIndex: i + idx,
         content: chunk.text,
         section: chunk.section ?? null,
@@ -478,6 +484,7 @@ export class DocumentIngestionService {
         source: input.source,
         category: input.category,
         jurisdiction: input.jurisdiction,
+        jurisdictionCode: jurisdictionCodeFromLabel(input.jurisdiction),
         documentType: input.documentType,
         effectiveDate: input.effectiveDate,
         effectiveEndDate: input.effectiveEndDate,
@@ -506,6 +513,7 @@ export class DocumentIngestionService {
           data: processing.chunkRows.map((r) => ({
             documentId: doc.id,
             pineconeId: r.pineconeId,
+            jurisdictionCode: r.jurisdictionCode,
             chunkIndex: r.chunkIndex,
             content: r.content,
             section: r.section,

@@ -461,7 +461,7 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
       };
     }
 
-    const systemPrompt = generateComplianceSystemPrompt();
+    const systemPrompt = generateComplianceSystemPrompt(params.answerDetail, params.jurisdictionContext);
     const userPrompt = generateComplianceUserPrompt(params);
 
     // Grounded answers skip the 24hr cache — injected ragContext makes each prompt unique.
@@ -506,7 +506,8 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
     originalQuestion: string,
     originalAnswer: string,
     followUpQuestion: string,
-    ragContext?: string
+    ragContext?: string,
+    jurisdictionContext?: ComplianceQueryParams['jurisdictionContext'],
   ): Promise<ComplianceQueryResult> {
     logger.info({
       type: 'followup_query_started',
@@ -533,12 +534,13 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
       };
     }
 
-    const systemPrompt = generateComplianceSystemPrompt();
+    const systemPrompt = generateComplianceSystemPrompt('standard', jurisdictionContext);
     const userPrompt = generateFollowUpQueryPrompt(
       originalQuestion,
       originalAnswer,
       followUpQuestion,
-      ragContext
+      ragContext,
+      jurisdictionContext
     );
 
     const maxTokens = ragContext ? 3000 : aiConfig.parameters.queryMaxTokens;

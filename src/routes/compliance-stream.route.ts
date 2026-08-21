@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { stream } from '@/lib/ai/client';
-import { ragService, searchAndGetContext } from '@/lib/rag/rag.service';
+import { ragService, searchAndGetRegulatoryEvidenceContext } from '@/lib/rag/rag.service';
 import { getPineconeDiagnostics } from '@/lib/rag/client';
 import { runOrchestrator } from '@/modules/compliance/orchestrator';
 import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
@@ -28,6 +28,7 @@ import {
 import type { OrgMembershipEntry } from '@/server/trpc/context';
 import {
   buildComplianceSourceInsufficiencyAnswer,
+  buildUnsupportedClaimsAnswer,
   type ComplianceFallbackReason,
   hasUsableSourceContext,
 } from '@/lib/source-grounding/source-insufficiency';
@@ -36,12 +37,21 @@ import {
   buildCitationsFromChunks,
   findAcceptedChunks,
   hasUsableCitations,
+  validateCitationsForJurisdiction,
   type SourceCitation,
 } from '@/lib/source-grounding/citations';
 import {
   persistClaimVerification,
   verifyAnswerClaims,
 } from '@/lib/source-grounding/claim-verification';
+import {
+  JURISDICTION_CODES,
+  JurisdictionContractError,
+  jurisdictionLabel,
+  resolveJurisdictionContext,
+  serializeJurisdictionContext,
+  type JurisdictionContext,
+} from '@/types/jurisdiction';
 
 // Constants
 const RATE_LIMIT_MAX     = 100; // same window as tRPC rateLimited('complianceQuery')
@@ -61,6 +71,8 @@ const METRIC_KEY = 'COMPLIANCE_QUERIES';
 // Input schema
 const inputSchema = z.object({
   question:         z.string().min(1).max(5000),
+  mode:             z.enum(['SINGLE', 'COMPARE']).optional(),
+  jurisdictions:    z.array(z.enum(JURISDICTION_CODES)).max(1).optional(),
   organizationType: z.string().optional(),
   industry:         z.string().optional(),
   context:          z.string().optional(),
@@ -74,9 +86,15 @@ export function extractNamedRegulations(question: string): string[] {
   return Array.from(new Set(matches.map(m => m.trim())));
 }
 
-export function buildComplianceRagQuery(question: string, detectedRegulations: string[] = []): string {
+export function buildComplianceRagQuery(
+  question: string,
+  detectedRegulations: string[] = [],
+  jurisdictionContext?: JurisdictionContext,
+): string {
   const lower = question.toLowerCase();
   const boosts = new Set<string>();
+  const jurisdiction = jurisdictionContext?.primaryJurisdiction ?? 'KE';
+  const jurisdictionName = jurisdictionLabel(jurisdiction);
 
   if (detectedRegulations.length > 0) {
     for (const regulation of detectedRegulations) boosts.add(regulation);
@@ -87,11 +105,23 @@ export function buildComplianceRagQuery(question: string, detectedRegulations: s
   }
 
   if (/\b(payment|psp|payment service provider|mobile money|e-money|m-pesa|mpesa|national payment|cbk)\b/i.test(question)) {
-    ['Central Bank of Kenya', 'CBK', 'National Payment System', 'payment service provider', 'mobile money', 'e-money'].forEach((term) => boosts.add(term));
+    const paymentTermsByJurisdiction = {
+      KE: ['Central Bank of Kenya', 'CBK', 'National Payment System', 'payment service provider', 'mobile money', 'e-money'],
+      RW: ['National Bank of Rwanda', 'BNR', 'payment service provider', 'payment systems', 'e-money'],
+      MW: ['Reserve Bank of Malawi', 'RBM', 'payment service provider', 'payment systems', 'mobile money', 'e-money'],
+      NG: ['Central Bank of Nigeria', 'CBN', 'payment service provider', 'payment systems', 'mobile money'],
+    };
+    paymentTermsByJurisdiction[jurisdiction].forEach((term) => boosts.add(term));
   }
 
   if (lower.includes('data protection') || lower.includes('personal data') || lower.includes('privacy') || lower.includes('odpc')) {
-    ['Data Protection Act', 'ODPC', 'data controller', 'data processor', 'personal data'].forEach((term) => boosts.add(term));
+    const privacyRegulatorByJurisdiction = {
+      KE: 'ODPC',
+      RW: 'Data Protection and Privacy Office',
+      MW: 'Malawi data protection authority',
+      NG: 'Nigeria Data Protection Commission',
+    };
+    ['Data Protection Act', privacyRegulatorByJurisdiction[jurisdiction], 'data controller', 'data processor', 'personal data'].forEach((term) => boosts.add(term));
   }
 
   if (lower.includes('digital lender') || lower.includes('digital lending') || lower.includes('digital credit')) {
@@ -99,7 +129,7 @@ export function buildComplianceRagQuery(question: string, detectedRegulations: s
   }
 
   if (lower.includes('fintech')) {
-    ['Kenya fintech compliance', 'banking', 'payments', 'lending', 'capital markets'].forEach((term) => boosts.add(term));
+    [`${jurisdictionName} fintech compliance`, 'banking', 'payments', 'lending', 'capital markets'].forEach((term) => boosts.add(term));
   }
 
   return [question, ...boosts].join(' ');
@@ -155,6 +185,14 @@ function getRetrievedChunkScores(results: Array<{ score: number; documentTitle: 
     pageEnd: result.pageEnd,
     score: Number(result.score.toFixed(4)),
   }));
+}
+
+function buildJurisdictionMetadata(context: JurisdictionContext, corpusVersions: Record<string, string | undefined>, retrievalVersion: string): Record<string, unknown> {
+  return {
+    ...serializeJurisdictionContext(context),
+    corpusVersionSnapshot: corpusVersions,
+    retrievalVersion,
+  };
 }
 
 // Auth resolution
@@ -387,6 +425,15 @@ export async function registerComplianceStreamRoute(
         return reply.status(400).send({ error: 'Invalid input', issues: parsed.error.flatten() });
       }
       const input = parsed.data;
+      let jurisdictionContext: JurisdictionContext;
+      try {
+        jurisdictionContext = resolveJurisdictionContext(input, { allowLegacyDefault: true });
+      } catch (error) {
+        if (error instanceof JurisdictionContractError) {
+          return reply.status(400).send({ error: error.code, message: error.message });
+        }
+        throw error;
+      }
       const requiredCredits = input.answerDetail === 'detailed' ? 2 : 1;
 
       // Rate limiting (same Redis counter as tRPC rateLimited('complianceQuery'))
@@ -405,7 +452,7 @@ export async function registerComplianceStreamRoute(
 
       // Named regulation detection
       const detectedRegulations = extractNamedRegulations(input.question);
-      const ragQuery = buildComplianceRagQuery(input.question, detectedRegulations);
+      const ragQuery = buildComplianceRagQuery(input.question, detectedRegulations, jurisdictionContext);
       const pineconeDiagnostics = getPineconeDiagnostics();
 
       logger.info({
@@ -414,20 +461,35 @@ export async function registerComplianceStreamRoute(
         orgId: auth.organizationId,
         query: input.question,
         answerDetail: input.answerDetail,
+        jurisdiction: jurisdictionContext.primaryJurisdiction,
+        jurisdictionSource: jurisdictionContext.jurisdictionSource,
         detectedRegulations,
         ragQuery,
         pinecone: pineconeDiagnostics,
       });
 
       // RAG retrieval (before hijack so we can return HTTP 500 if needed)
-      const ragContext = await searchAndGetContext(ragQuery, { topK: RAG_TOP_K, minScore: RAG_MIN_SCORE, preferActiveSources: true }).catch((err: unknown) => {
+      const ragContext = await searchAndGetRegulatoryEvidenceContext({
+        query: ragQuery,
+        jurisdictionContext,
+        topK: RAG_TOP_K,
+        minScore: RAG_MIN_SCORE,
+        preferActiveSources: true,
+      }).catch((err: unknown) => {
         logger.error({
           type: 'compliance_stream_rag_error',
           userId: auth.userId,
           orgId: auth.organizationId,
+          jurisdiction: jurisdictionContext.primaryJurisdiction,
           error: err instanceof Error ? err.message : String(err),
         });
-        return { results: [], context: null };
+        return {
+          results: [],
+          context: '',
+          citations: [],
+          corpusVersions: {},
+          retrievalVersion: 'regulatory-evidence-v1',
+        };
       });
 
       logger.info({
@@ -452,7 +514,13 @@ export async function registerComplianceStreamRoute(
           userId:         auth.userId,
           organizationId: auth.organizationId,
           status:         'processing',
+          mode:           jurisdictionContext.mode,
+          jurisdictions:  [...jurisdictionContext.jurisdictions],
+          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          jurisdictionSource:  jurisdictionContext.jurisdictionSource,
+          corpusVersionSnapshot: ragContext.corpusVersions,
           metadata: {
+            ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
             streaming:        true,
             ragSources:       ragContext.results.length,
             organizationType: input.organizationType,
@@ -507,7 +575,14 @@ export async function registerComplianceStreamRoute(
         if (!reply.raw.destroyed) reply.raw.write(sseComment('heartbeat'));
       }, HEARTBEAT_INTERVAL);
 
-      write({ type: 'connected', queryId: query.id, ragSources: ragContext.results.length });
+      write({
+        type: 'connected',
+        queryId: query.id,
+        ragSources: ragContext.results.length,
+        mode: jurisdictionContext.mode,
+        jurisdictions: [...jurisdictionContext.jurisdictions],
+        primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+      });
 
       if (!hasUsableSourceContext(ragContext) || !hasUsableRetrievedChunks(ragContext.results)) {
         const fallbackReason = getFallbackReasonForRetrieval(ragContext.results.length, ragContext.context);
@@ -520,6 +595,7 @@ export async function registerComplianceStreamRoute(
             status: 'completed',
             citations: [],
             metadata: {
+              ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
               streaming: true,
               ragSources: ragContext.results.length,
               ragContextChars: ragContext.context?.length ?? 0,
@@ -551,6 +627,11 @@ export async function registerComplianceStreamRoute(
           citations: [],
           confidence: null,
           fallbackReason,
+          mode: jurisdictionContext.mode,
+          jurisdictions: [...jurisdictionContext.jurisdictions],
+          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          corpusVersionSnapshot: ragContext.corpusVersions,
+          retrievalVersion: ragContext.retrievalVersion,
         });
 
         clearInterval(heartbeatTimer);
@@ -580,7 +661,7 @@ export async function registerComplianceStreamRoute(
         return;
       }
 
-      const preGenerationGrade = await runGraderAgent(input.question, ragContext.results, 10);
+      const preGenerationGrade = await runGraderAgent(input.question, ragContext.results, jurisdictionContext, 10);
       const generationSelection = selectGenerationSources(
         ragContext.results,
         preGenerationGrade.accepted,
@@ -622,6 +703,7 @@ export async function registerComplianceStreamRoute(
             status: 'completed',
             citations: [],
             metadata: {
+              ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
               streaming: true,
               ragSources: ragContext.results.length,
               acceptedSources: preGenerationGrade.accepted.length,
@@ -655,6 +737,11 @@ export async function registerComplianceStreamRoute(
           citations: [],
           confidence: null,
           fallbackReason,
+          mode: jurisdictionContext.mode,
+          jurisdictions: [...jurisdictionContext.jurisdictions],
+          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          corpusVersionSnapshot: ragContext.corpusVersions,
+          retrievalVersion: ragContext.retrievalVersion,
         });
 
         clearInterval(heartbeatTimer);
@@ -688,13 +775,14 @@ export async function registerComplianceStreamRoute(
       }
 
       // Stream AI synthesis
-      const systemPrompt = generateComplianceSystemPrompt(input.answerDetail);
+      const systemPrompt = generateComplianceSystemPrompt(input.answerDetail, jurisdictionContext);
       const userPrompt   = generateComplianceUserPrompt({
         question:         input.question,
         organizationType: input.organizationType,
         industry:         input.industry,
         context:          input.context,
         answerDetail:     input.answerDetail,
+        jurisdictionContext,
         ragContext:       acceptedContext || undefined,
       });
       const maxTokens = input.answerDetail === 'detailed'
@@ -728,6 +816,7 @@ export async function registerComplianceStreamRoute(
             response: fullContent,
             status:   'completed',
             metadata: {
+              ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
               streaming:        true,
               ragSources:       ragContext.results.length,
               acceptedSources:   acceptedResults.length,
@@ -772,6 +861,9 @@ export async function registerComplianceStreamRoute(
             question:               input.question,
             answer:                 fullContent,
             ragResults:             ragContext.results,
+            jurisdictionContext,
+            corpusVersionSnapshot:  ragContext.corpusVersions,
+            retrievalVersion:       ragContext.retrievalVersion,
             agenticComplexityLevel,
             shadow:                 false,
           });
@@ -817,6 +909,9 @@ export async function registerComplianceStreamRoute(
             question:               input.question,
             answer:                 fullContent,
             ragResults:             ragContext.results,
+            jurisdictionContext,
+            corpusVersionSnapshot:  ragContext.corpusVersions,
+            retrievalVersion:       ragContext.retrievalVersion,
             agenticComplexityLevel,
             shadow:                 true,
           }).catch(() => {});
@@ -824,12 +919,22 @@ export async function registerComplianceStreamRoute(
 
         const claimVerification = verifyAnswerClaims(fullContent, acceptedChunksForClaims);
         await persistClaimVerification(prisma, query.id, claimVerification);
+        const citationValidation = validateCitationsForJurisdiction(citations, jurisdictionContext);
 
-        if (abstained || !hasUsableCitations(citations)) {
+        if (
+          abstained ||
+          !hasUsableCitations(citations) ||
+          !citationValidation.valid ||
+          claimVerification.unsupportedClaims.length > 0
+        ) {
           fallbackReason =
             fallbackReason ??
-            (!hasUsableCitations(citations) ? 'ALL_CHUNKS_FAILED_VERIFICATION' : 'LOW_RELEVANCE');
-          const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
+            (!hasUsableCitations(citations) || !citationValidation.valid || claimVerification.unsupportedClaims.length > 0
+              ? 'ALL_CHUNKS_FAILED_VERIFICATION'
+              : 'LOW_RELEVANCE');
+          const sourceInsufficientAnswer = claimVerification.unsupportedClaims.length > 0
+            ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
+            : buildComplianceSourceInsufficiencyAnswer(fallbackReason);
           fullContent = sourceInsufficientAnswer;
           citations = [];
           confidence = null;
@@ -844,6 +949,7 @@ export async function registerComplianceStreamRoute(
             citations,
             confidence,
             metadata: {
+              ...buildJurisdictionMetadata(jurisdictionContext, ragContext.corpusVersions, ragContext.retrievalVersion),
               streaming: true,
               ragSources: ragContext.results.length,
               acceptedSources: citations.length,
@@ -858,6 +964,8 @@ export async function registerComplianceStreamRoute(
               claimVerificationVerdict: claimVerification.verdict,
               verifiedClaims: claimVerification.supportedClaims.length,
               unsupportedClaims: claimVerification.unsupportedClaims.map((claim) => claim.claimText),
+              citationJurisdictionValid: citationValidation.valid,
+              citationJurisdictionInvalidCount: citationValidation.invalidCitations.length,
               organizationType: input.organizationType,
               industry: input.industry,
               context: input.context,
@@ -883,7 +991,22 @@ export async function registerComplianceStreamRoute(
         }
 
         write({ type: 'chunk', text: fullContent });
-        write({ type: 'done', queryId: query.id, route, grounded, abstained, runId, citations, confidence, fallbackReason });
+        write({
+          type: 'done',
+          queryId: query.id,
+          route,
+          grounded,
+          abstained,
+          runId,
+          citations,
+          confidence,
+          fallbackReason,
+          mode: jurisdictionContext.mode,
+          jurisdictions: [...jurisdictionContext.jurisdictions],
+          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          corpusVersionSnapshot: ragContext.corpusVersions,
+          retrievalVersion: ragContext.retrievalVersion,
+        });
 
         logger.info({
           type:         'compliance_stream_complete',

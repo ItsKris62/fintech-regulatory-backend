@@ -91,6 +91,25 @@ describe('Compliance Stream Routing & Billing Logic', () => {
       expect(ragQuery).toContain('Kenya fintech compliance');
     });
 
+    it('uses jurisdiction-specific boosts when a non-Kenya context is supplied', () => {
+      const question = 'What licensing rules apply to a payment fintech in Rwanda?';
+      const ragQuery = buildComplianceRagQuery(
+        question,
+        extractNamedRegulations(question),
+        {
+          mode: 'SINGLE',
+          jurisdictions: ['RW'],
+          primaryJurisdiction: 'RW',
+          jurisdictionSource: 'REQUEST',
+        },
+      );
+
+      expect(ragQuery).toContain('National Bank of Rwanda');
+      expect(ragQuery).toContain('Rwanda fintech compliance');
+      expect(ragQuery).not.toContain('Central Bank of Kenya');
+      expect(ragQuery).not.toContain('Kenya fintech compliance');
+    });
+
     it('uses explicit fallback reasons for no retrieval and post-retrieval insufficiency', () => {
       expect(getFallbackReasonForRetrieval(0, null)).toBe('NO_RAG_CHUNKS');
       expect(getFallbackReasonForRetrieval(3, '')).toBe('LOW_RELEVANCE');
@@ -124,8 +143,12 @@ describe('Compliance Stream Routing & Billing Logic', () => {
 
     it('returns referenced documents from actual retrieved chunks even without section metadata', () => {
       const chunk: SearchResult = {
+        vectorId: 'doc-1-chunk-0',
+        chunkId: 'doc-1-chunk-0',
         documentId: 'doc-1',
         documentTitle: 'National Payment System Act 2011',
+        jurisdictionCode: 'KE',
+        jurisdiction: 'Kenya',
         chunkText: 'A payment service provider must comply with requirements issued by the Central Bank.',
         score: 0.91,
         rank: 1,

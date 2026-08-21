@@ -3,9 +3,13 @@ import { evaluateRetrievalResults, scoreSourceMetadataCompleteness } from './eva
 import type { SearchResult } from '@/lib/rag/rag.service';
 
 const result = (overrides: Partial<SearchResult>): SearchResult => ({
+  vectorId: overrides.vectorId ?? `vector-${overrides.documentId ?? 'doc-1'}`,
+  chunkId: overrides.chunkId ?? `vector-${overrides.documentId ?? 'doc-1'}`,
   documentId: 'doc-1',
   documentTitle: 'Data Protection Act',
   chunkText: 'source text',
+  jurisdictionCode: 'KE',
+  jurisdiction: 'Kenya',
   score: 0.9,
   rank: 1,
   ...overrides,

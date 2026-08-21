@@ -5,12 +5,17 @@ import { runGraderAgent } from './grader.agent';
 import { runVerifierAgent } from './verifier.agent';
 import { TOKEN_BUDGETS, type ControlTokens, type QueryRunTrace, type AcceptedChunkRef } from './types';
 import type { SearchResult } from '@/lib/rag/rag.service';
+import type { CorpusVersionSnapshot } from '@/lib/rag/corpus-version';
+import { resolveJurisdictionContext, type JurisdictionContext } from '@/types/jurisdiction';
 
 export interface OrchestratorInput {
   complianceQueryId: string;
   question: string;
   answer: string;
   ragResults: SearchResult[];
+  jurisdictionContext?: JurisdictionContext;
+  corpusVersionSnapshot?: CorpusVersionSnapshot;
+  retrievalVersion?: string;
   agenticComplexityLevel: 'simple' | 'complex';
   shadow: boolean;
 }
@@ -19,10 +24,14 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
   const t0 = Date.now();
   const budget = TOKEN_BUDGETS[input.agenticComplexityLevel];
   const controlTokens: ControlTokens = {};
+  const jurisdictionContext = input.jurisdictionContext
+    ?? resolveJurisdictionContext({}, { allowLegacyDefault: true });
+  const corpusVersionSnapshot = input.corpusVersionSnapshot ?? {};
+  const retrievalVersion = input.retrievalVersion ?? 'legacy-unscoped';
 
   try {
     // ── 1. Router ──────────────────────────────────────────────────────────────
-    const routerResult = await runRouterAgent(input.question);
+    const routerResult = await runRouterAgent(input.question, jurisdictionContext);
     controlTokens.router = routerResult.tokens;
 
     // Tier gating: downgrade 'complex' to 'simple' when plan only allows 'simple'
@@ -52,6 +61,12 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
           routeDowngradeReason: null,
           grounded:             false,
           ragSources:           input.ragResults.length,
+          jurisdictions:         [...jurisdictionContext.jurisdictions],
+          primaryJurisdiction:   jurisdictionContext.primaryJurisdiction,
+          jurisdictionSource:    jurisdictionContext.jurisdictionSource,
+          corpusVersionSnapshot,
+          retrievalVersion,
+          retrievedVectorIds:    input.ragResults.map((result) => result.vectorId),
           gradeChunksInspected: 0,
           acceptedChunkIds:     [],
           rejectedChunkCount:   0,
@@ -84,6 +99,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
     const graderResult = await runGraderAgent(
       input.question,
       input.ragResults,
+      jurisdictionContext,
       budget.maxGradeChunks
     );
     controlTokens.grader = graderResult.tokens;
@@ -91,14 +107,18 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
     const gradeChunksInspected = graderResult.accepted.length + graderResult.rejected.length;
 
     const acceptedChunkIds: AcceptedChunkRef[] = graderResult.accepted.map(r => ({
+      vectorId:      r.vectorId,
+      chunkId:       r.chunkId,
       documentId:    r.documentId,
       documentTitle: r.documentTitle,
+      jurisdictionCode: r.jurisdictionCode,
       section:       r.section,
+      contentHash:   r.contentHash,
       rank:          r.rank,
     }));
 
     // ── 3. Verifier ────────────────────────────────────────────────────────────
-    const verifierResult = await runVerifierAgent(input.answer, graderResult.accepted);
+    const verifierResult = await runVerifierAgent(input.answer, graderResult.accepted, jurisdictionContext);
     controlTokens.verifier = verifierResult.tokens;
 
     // ── 4. Token accounting ────────────────────────────────────────────────────
@@ -144,6 +164,12 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       ragSources:           input.ragResults.length,
       subQuestions:         routerResult.subQuestions,
       retrievalQueries:     [input.question],
+      jurisdictions:        [...jurisdictionContext.jurisdictions],
+      primaryJurisdiction:  jurisdictionContext.primaryJurisdiction,
+      jurisdictionSource:   jurisdictionContext.jurisdictionSource,
+      corpusVersionSnapshot,
+      retrievalVersion,
+      retrievedVectorIds:   input.ragResults.map((result) => result.vectorId),
       gradeChunksInspected,
       acceptedChunkIds,
       rejectedChunkCount:   graderResult.rejected.length,
@@ -175,6 +201,12 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         ragSources:           trace.ragSources,
         subQuestions:         trace.subQuestions.length > 0 ? trace.subQuestions : undefined,
         retrievalQueries:     trace.retrievalQueries as any,
+        jurisdictions:        trace.jurisdictions,
+        primaryJurisdiction:  trace.primaryJurisdiction,
+        jurisdictionSource:   trace.jurisdictionSource,
+        corpusVersionSnapshot: trace.corpusVersionSnapshot,
+        retrievalVersion:     trace.retrievalVersion,
+        retrievedVectorIds:   trace.retrievedVectorIds,
         gradeChunksInspected: trace.gradeChunksInspected,
         acceptedChunkIds:     trace.acceptedChunkIds as any,
         rejectedChunkCount:   trace.rejectedChunkCount,
@@ -225,6 +257,12 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         route:             'simple',
         grounded:          input.ragResults.length > 0,
         ragSources:        input.ragResults.length,
+        jurisdictions:      [...jurisdictionContext.jurisdictions],
+        primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+        jurisdictionSource: jurisdictionContext.jurisdictionSource,
+        corpusVersionSnapshot,
+        retrievalVersion,
+        retrievedVectorIds: input.ragResults.map((result) => result.vectorId),
         wallMs,
         errorMessage:      String(err?.message ?? err),
       },

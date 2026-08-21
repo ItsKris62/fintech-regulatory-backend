@@ -4,12 +4,21 @@ import { logger } from '@/utils/logger';
 import { hashString } from '@/utils/helpers';
 import { redis } from '@/lib/redis/client';
 import { buildPreferredActiveSourceFilter } from '@/lib/source-grounding/source-metadata';
+import {
+  jurisdictionCodeFromLabel,
+  jurisdictionLabel,
+  type JurisdictionCode,
+  type JurisdictionContext,
+} from '@/types/jurisdiction';
+import { getCorpusVersionSnapshot, type CorpusVersionSnapshot } from '@/lib/rag/corpus-version';
 
 const RAG_CTX_CACHE_TTL = 1800; // 30 minutes — caches Pinecone lookup, not AI answer
 
 /**
  * Document to index
  */
+export const REGULATORY_EVIDENCE_RETRIEVAL_VERSION = 'regulatory-evidence-v1';
+
 export interface DocumentToIndex {
   id: string;
   title: string;
@@ -18,6 +27,9 @@ export interface DocumentToIndex {
   actName?: string;
   year?: number;
   regulatoryArea?: string;
+  jurisdictionCode?: JurisdictionCode;
+  jurisdiction?: string;
+  country?: string;
   authorityStatus?: string;
   isBinding?: boolean;
   source?: string;
@@ -36,9 +48,14 @@ export interface DocumentToIndex {
  * Search result with context
  */
 export interface SearchResult {
+  vectorId: string;
+  chunkId: string;
   documentId: string;
   documentTitle: string;
   chunkText: string;
+  jurisdictionCode?: JurisdictionCode;
+  jurisdiction?: string;
+  country?: string;
   section?: string;
   citation?: string;
   score: number;
@@ -66,6 +83,7 @@ export interface SearchResult {
   effectiveDate?: string;
   effectiveEndDate?: string;
   sourceLimited?: boolean;
+  matchingStrategy?: 'vectorId' | 'chunkId' | 'document_section_rank' | 'document_section';
 }
 
 /**
@@ -90,6 +108,16 @@ export interface SearchOptions {
   };
 }
 
+export interface RegulatoryEvidenceSearchOptions {
+  query: string;
+  jurisdictionContext: JurisdictionContext;
+  topK?: number;
+  minScore?: number;
+  namespace?: string;
+  preferActiveSources?: boolean;
+  sourceIndexMode?: SearchOptions['sourceIndexMode'];
+}
+
 function andFilters(...filters: Array<Record<string, any> | undefined | null>): Record<string, any> | undefined {
   const present = filters.filter((filter): filter is Record<string, any> => !!filter && Object.keys(filter).length > 0);
   if (present.length === 0) return undefined;
@@ -111,6 +139,33 @@ function indexVersionFilter(mode: SearchOptions['sourceIndexMode'] = 'v1', fallb
     };
   }
   return undefined;
+}
+
+export function buildRegulatoryEvidenceFilter(
+  context: JurisdictionContext,
+  sourceIndexMode?: SearchOptions['sourceIndexMode'],
+): Record<string, unknown> {
+  const code = context.primaryJurisdiction;
+  const legacyLabel = jurisdictionLabel(code);
+  const jurisdictionFilter = {
+    $or: [
+      { jurisdictionCode: { $eq: code } },
+      { jurisdiction: { $eq: legacyLabel } },
+    ],
+  };
+  return andFilters(jurisdictionFilter, indexVersionFilter(sourceIndexMode)) ?? jurisdictionFilter;
+}
+
+function resolveResultJurisdictionCode(metadata: {
+  jurisdictionCode?: string;
+  jurisdiction?: string;
+  country?: string;
+}): JurisdictionCode | undefined {
+  if (metadata.jurisdictionCode) {
+    const code = jurisdictionCodeFromLabel(metadata.jurisdictionCode);
+    if (code) return code;
+  }
+  return jurisdictionCodeFromLabel(metadata.jurisdiction) ?? jurisdictionCodeFromLabel(metadata.country) ?? undefined;
 }
 
 /**
@@ -166,6 +221,9 @@ export class RAGService {
         actName: document.actName,
         year: document.year,
         regulatoryArea: document.regulatoryArea,
+        jurisdictionCode: document.jurisdictionCode ?? document.metadata?.jurisdictionCode,
+        jurisdiction: document.jurisdiction ?? document.metadata?.jurisdiction,
+        country: document.country ?? document.metadata?.country ?? document.jurisdiction,
         authorityStatus: document.authorityStatus ?? document.metadata?.authorityStatus,
         isBinding: document.isBinding ?? document.metadata?.isBinding,
         source: document.source ?? document.metadata?.source,
@@ -354,9 +412,14 @@ export class RAGService {
       const searchResults: SearchResult[] = results
         .filter(result => result.score >= minScore)
         .map((result, index) => ({
+          vectorId: result.id,
+          chunkId: result.metadata.chunkId ?? result.id,
           documentId: result.metadata.documentId,
           documentTitle: result.metadata.documentTitle,
           chunkText: result.metadata.chunk_text ?? '',
+          jurisdictionCode: resolveResultJurisdictionCode(result.metadata),
+          jurisdiction: result.metadata.jurisdiction,
+          country: result.metadata.country,
           section: result.metadata.section,
           citation: result.metadata.citation,
           score: result.score,
@@ -454,6 +517,48 @@ export class RAGService {
     const topK = options.topK || 10;
     
     return reranked.slice(0, topK).map((result, index) => ({
+      ...result,
+      rank: index + 1,
+    }));
+  }
+
+  async searchRegulatoryEvidence(
+    options: RegulatoryEvidenceSearchOptions,
+  ): Promise<SearchResult[]> {
+    const {
+      query,
+      jurisdictionContext,
+      topK = 10,
+      minScore = 0.7,
+      namespace,
+      preferActiveSources = true,
+      sourceIndexMode,
+    } = options;
+    const filter = buildRegulatoryEvidenceFilter(jurisdictionContext, sourceIndexMode);
+
+    const results = await this.searchWithReranking(query, {
+      topK,
+      minScore,
+      namespace,
+      filter,
+      preferActiveSources,
+      sourceIndexMode,
+    });
+
+    const scopedResults = results.filter(
+      (result) => result.jurisdictionCode === jurisdictionContext.primaryJurisdiction,
+    );
+
+    if (scopedResults.length !== results.length) {
+      logger.warn({
+        type: 'rag_regulatory_evidence_jurisdiction_mismatch_filtered',
+        requestedJurisdiction: jurisdictionContext.primaryJurisdiction,
+        removedCount: results.length - scopedResults.length,
+        resultCount: results.length,
+      });
+    }
+
+    return scopedResults.map((result, index) => ({
       ...result,
       rank: index + 1,
     }));
@@ -660,6 +765,96 @@ export async function searchAndGetContext(
     logger.debug({ type: 'rag_ctx_cache_set', cacheKey, ttl: RAG_CTX_CACHE_TTL });
   } catch {
     // Cache write failure is non-fatal
+  }
+
+  return payload;
+}
+
+export async function searchAndGetRegulatoryEvidenceContext(
+  options: RegulatoryEvidenceSearchOptions,
+): Promise<{
+  context: string;
+  results: SearchResult[];
+  citations: string[];
+  corpusVersions: CorpusVersionSnapshot;
+  retrievalVersion: string;
+}> {
+  const {
+    query,
+    jurisdictionContext,
+    topK = 10,
+    minScore = 0.7,
+    namespace,
+    preferActiveSources = true,
+    sourceIndexMode,
+  } = options;
+  const normalizedQuestion = query.trim().replace(/\s+/g, ' ');
+  const corpusVersions = await getCorpusVersionSnapshot(jurisdictionContext);
+  const cacheKey = `sheriabot:rag:ctx:v4:${hashString(JSON.stringify({
+    normalizedQuestion,
+    mode: jurisdictionContext.mode,
+    jurisdictions: [...jurisdictionContext.jurisdictions],
+    primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+    corpusVersions,
+    retrievalVersion: REGULATORY_EVIDENCE_RETRIEVAL_VERSION,
+    topK,
+    minScore,
+    namespace: namespace ?? null,
+    preferActiveSources,
+    sourceIndexMode: sourceIndexMode ?? null,
+    jurisdictionFilterMode: 'jurisdictionCode-or-legacy-label',
+  }))}`;
+
+  try {
+    const cached = await redis.get<string>(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached) as {
+        context: string;
+        results: SearchResult[];
+        citations: string[];
+        corpusVersions: CorpusVersionSnapshot;
+        retrievalVersion: string;
+      };
+      logger.debug({
+        type: 'rag_regulatory_evidence_cache_hit',
+        cacheKey,
+        jurisdiction: jurisdictionContext.primaryJurisdiction,
+      });
+      return parsed;
+    }
+  } catch {
+    // Cache read failure is non-fatal.
+  }
+
+  const results = await ragService.searchRegulatoryEvidence({
+    query,
+    jurisdictionContext,
+    topK,
+    minScore,
+    namespace,
+    preferActiveSources,
+    sourceIndexMode,
+  });
+  const context = ragService.getContextForPrompt(results);
+  const citations = ragService.extractCitations(results);
+  const payload = {
+    context,
+    results,
+    citations,
+    corpusVersions,
+    retrievalVersion: REGULATORY_EVIDENCE_RETRIEVAL_VERSION,
+  };
+
+  try {
+    await redis.set(cacheKey, JSON.stringify(payload), { ex: RAG_CTX_CACHE_TTL });
+    logger.debug({
+      type: 'rag_regulatory_evidence_cache_set',
+      cacheKey,
+      ttl: RAG_CTX_CACHE_TTL,
+      jurisdiction: jurisdictionContext.primaryJurisdiction,
+    });
+  } catch {
+    // Cache write failure is non-fatal.
   }
 
   return payload;
