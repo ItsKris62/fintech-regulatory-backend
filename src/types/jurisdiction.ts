@@ -19,29 +19,29 @@ export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCap
     code: 'KE',
     label: 'Kenya',
     queryEnabled: true,
-    comparisonEnabled: false,
+    comparisonEnabled: true,
     status: 'ACTIVE',
   },
   RW: {
     code: 'RW',
     label: 'Rwanda',
     queryEnabled: true,
-    comparisonEnabled: false,
+    comparisonEnabled: true,
     status: 'ACTIVE',
   },
   MW: {
     code: 'MW',
     label: 'Malawi',
     queryEnabled: true,
-    comparisonEnabled: false,
+    comparisonEnabled: true,
     status: 'ACTIVE',
   },
   NG: {
     code: 'NG',
     label: 'Nigeria',
-    queryEnabled: false,
-    comparisonEnabled: false,
-    status: 'COMING_SOON',
+    queryEnabled: true,
+    comparisonEnabled: true,
+    status: 'ACTIVE',
   },
 };
 
@@ -85,7 +85,13 @@ export interface SingleJurisdictionContext {
   jurisdictionSource: JurisdictionSource;
 }
 
-export type JurisdictionContext = SingleJurisdictionContext;
+export interface CompareJurisdictionContext {
+  mode: 'COMPARE';
+  jurisdictions: readonly JurisdictionCode[];
+  jurisdictionSource: JurisdictionSource;
+}
+
+export type JurisdictionContext = SingleJurisdictionContext | CompareJurisdictionContext;
 
 export interface JurisdictionContractInput {
   mode?: QueryMode;
@@ -98,7 +104,10 @@ export class JurisdictionContractError extends Error {
       | 'JURISDICTION_REQUIRED'
       | 'JURISDICTION_UNSUPPORTED'
       | 'JURISDICTION_NOT_AVAILABLE'
-      | 'COMPARISON_NOT_ENABLED',
+      | 'COMPARISON_NOT_ENABLED'
+      | 'COMPARISON_MIN_JURISDICTIONS'
+      | 'COMPARISON_MAX_JURISDICTIONS'
+      | 'COMPARISON_DUPLICATE_JURISDICTION',
     message: string,
   ) {
     super(message);
@@ -122,15 +131,45 @@ export function resolveJurisdictionContext(
     };
   }
 
-  if (mode === 'COMPARE') {
-    throw new JurisdictionContractError(
-      'COMPARISON_NOT_ENABLED',
-      'Comparison mode is not enabled for Compliance Query yet.',
-    );
+  if (!mode || (mode !== 'SINGLE' && mode !== 'COMPARE')) {
+    throw new JurisdictionContractError('JURISDICTION_UNSUPPORTED', 'Unsupported Compliance Query mode.');
   }
 
-  if (mode && mode !== 'SINGLE') {
-    throw new JurisdictionContractError('JURISDICTION_UNSUPPORTED', 'Unsupported Compliance Query mode.');
+  if (mode === 'COMPARE') {
+    if (jurisdictions.length < 2) {
+      throw new JurisdictionContractError('COMPARISON_MIN_JURISDICTIONS', 'Compare mode requires at least 2 jurisdictions.');
+    }
+    if (jurisdictions.length > 4) {
+      throw new JurisdictionContractError('COMPARISON_MAX_JURISDICTIONS', 'Compare mode supports a maximum of 4 jurisdictions.');
+    }
+    
+    const uniqueJurisdictions = new Set(jurisdictions);
+    if (uniqueJurisdictions.size !== jurisdictions.length) {
+      throw new JurisdictionContractError('COMPARISON_DUPLICATE_JURISDICTION', 'Duplicate jurisdictions are not allowed in compare mode.');
+    }
+    
+    const sortedJurisdictions = [...jurisdictions].sort((a, b) => {
+      return JURISDICTION_CODES.indexOf(a as JurisdictionCode) - JURISDICTION_CODES.indexOf(b as JurisdictionCode);
+    });
+
+    for (const j of sortedJurisdictions) {
+      if (!isJurisdictionCode(j)) {
+        throw new JurisdictionContractError('JURISDICTION_UNSUPPORTED', 'Unsupported jurisdiction.');
+      }
+      const capability = JURISDICTION_CAPABILITIES[j];
+      if (!capability.comparisonEnabled) {
+        throw new JurisdictionContractError(
+          'COMPARISON_NOT_ENABLED',
+          `${capability.label} does not support comparison mode yet.`,
+        );
+      }
+    }
+
+    return {
+      mode: 'COMPARE',
+      jurisdictions: sortedJurisdictions as JurisdictionCode[],
+      jurisdictionSource: options.source ?? 'REQUEST',
+    };
   }
 
   if (jurisdictions.length !== 1) {
@@ -196,15 +235,15 @@ export function resolvePersistedJurisdictionContext(input: {
 }
 
 export function serializeJurisdictionContext(context: JurisdictionContext): {
-  mode: 'SINGLE';
+  mode: QueryMode;
   jurisdictions: JurisdictionCode[];
-  primaryJurisdiction: JurisdictionCode;
+  primaryJurisdiction: JurisdictionCode | null;
   jurisdictionSource: JurisdictionSource;
 } {
   return {
     mode: context.mode,
     jurisdictions: [...context.jurisdictions],
-    primaryJurisdiction: context.primaryJurisdiction,
+    primaryJurisdiction: context.mode === 'SINGLE' ? context.primaryJurisdiction : null,
     jurisdictionSource: context.jurisdictionSource,
   };
 }

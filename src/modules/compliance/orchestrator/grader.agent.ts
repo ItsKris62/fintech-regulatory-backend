@@ -18,7 +18,7 @@ export type GraderFailureClassification =
 
 export interface GraderDiagnostics {
   questionHash: string;
-  jurisdiction: string;
+  jurisdiction?: string;
   inputChunkCount: number;
   gradedChunkCount: number;
   acceptedCount: number;
@@ -71,11 +71,12 @@ function classifyModelError(error: unknown): GraderFailureClassification {
 }
 
 function buildSystemPrompt(jurisdictionContext: JurisdictionContext): string {
-  const label = jurisdictionLabel(jurisdictionContext.primaryJurisdiction);
+  const label = jurisdictionContext.mode === 'SINGLE' ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
+  const jurisdictionString = jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(', ');
   return `You are a relevance grader for a ${label} financial-services compliance RAG system.
-Active jurisdiction: ${label} (${jurisdictionContext.primaryJurisdiction}).
+Active jurisdiction(s): ${label} (${jurisdictionString}).
 Given a compliance question and retrieved document chunks, decide which chunks are relevant.
-A chunk is relevant only if it belongs to the active jurisdiction and provides evidence that can help answer the question.
+A chunk is relevant only if it belongs to one of the active jurisdictions and provides evidence that can help answer the question.
 
 Mark relevant=true when the chunk provides any of:
 - a direct legal requirement
@@ -109,7 +110,7 @@ function buildDiagnostics(input: {
   const rejectedCount = input.rejected?.length ?? input.toGrade.length;
   return {
     questionHash: sha256Hex(input.question.trim().toLowerCase()).slice(0, 16),
-    jurisdiction: input.jurisdictionContext.primaryJurisdiction,
+    jurisdiction: input.jurisdictionContext.mode === 'SINGLE' ? input.jurisdictionContext.primaryJurisdiction : undefined,
     inputChunkCount: input.toGrade.length,
     gradedChunkCount: input.toGrade.length,
     acceptedCount,
@@ -159,11 +160,11 @@ export async function runGraderAgent(
   }
 
   const chunkList = toGrade
-    .map((c, i) => `[${i}] ${c.documentTitle}${c.section ? ` § ${c.section}` : ''}: ${c.chunkText.slice(0, 800)}`)
+    .map((c, i) => `[${i}] [${c.jurisdictionCode}] ${c.documentTitle}${c.section ? ` § ${c.section}` : ''}: ${c.chunkText.slice(0, 800)}`)
     .join('\n\n');
 
   const prompt = `Question: ${question}\n\nChunks:\n${chunkList}`;
-  const maxTokens = Math.max(200, 64 + toGrade.length * 35);
+  const maxTokens = Math.max(2048, 64 + toGrade.length * 35);
 
   try {
     const systemPrompt = buildSystemPrompt(jurisdictionContext);
@@ -190,7 +191,7 @@ export async function runGraderAgent(
         const chunk = toGrade[grade.index];
         if (!chunk) continue;
         gradedIndices.add(grade.index);
-        if (grade.relevant && chunk.jurisdictionCode === jurisdictionContext.primaryJurisdiction) {
+        if (grade.relevant && (jurisdictionContext.mode === 'SINGLE' ? chunk.jurisdictionCode === jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.includes(chunk.jurisdictionCode as any))) {
           accepted.push(chunk);
         } else if (grade.relevant) {
           jurisdictionMismatchCount++;

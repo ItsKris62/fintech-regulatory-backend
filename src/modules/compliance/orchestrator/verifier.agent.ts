@@ -17,15 +17,15 @@ export interface VerifierAgentResult {
 const VALID_VERDICTS: VerifierVerdict[] = ['PASS', 'PARTIAL', 'FAIL'];
 
 function buildSystemPrompt(jurisdictionContext: JurisdictionContext): string {
-  const label = jurisdictionLabel(jurisdictionContext.primaryJurisdiction);
+  const label = jurisdictionContext.mode === 'SINGLE' ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
   return `You are a hallucination verifier for a ${label} financial-services compliance RAG system.
-Active jurisdiction: ${label} (${jurisdictionContext.primaryJurisdiction}).
+Active jurisdiction: ${label} (${jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(', ')}).
 Given an answer and the retrieved evidence used to generate it, assess grounding quality:
 - PASS    : all substantive claims are supported by the evidence
 - PARTIAL : most claims are supported, but some cannot be verified from the evidence
 - FAIL    : significant claims are not supported by or contradict the evidence
 
-Treat any legal claim or citation attributed to a different jurisdiction as unsupported.
+Treat any legal claim or citation attributed to a jurisdiction that is not supported by evidence from that specific jurisdiction as unsupported.
 
 Respond with a single JSON object:
 {
@@ -56,7 +56,7 @@ export async function runVerifierAgent(
 
   const evidenceText = evidence
     .slice(0, 5)
-    .map((c, i) => `[${i + 1}] ${c.documentTitle}${c.section ? ` § ${c.section}` : ''}: ${c.chunkText.slice(0, 400)}`)
+    .map((c, i) => `[${i + 1}] [${c.jurisdictionCode}] ${c.documentTitle}${c.section ? ` § ${c.section}` : ''}: ${c.chunkText.slice(0, 400)}`)
     .join('\n\n');
 
   const prompt = `Answer (first 800 chars):\n${answer.slice(0, 800)}\n\nEvidence:\n${evidenceText}`;
@@ -64,7 +64,7 @@ export async function runVerifierAgent(
   try {
     const systemPrompt = buildSystemPrompt(jurisdictionContext);
     const result = await complete(
-      { prompt, systemPrompt, maxTokens: 300, temperature: 0.0 },
+      { prompt, systemPrompt, maxTokens: 2048, temperature: 0.0 },
       'query'
     );
 

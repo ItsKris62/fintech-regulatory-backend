@@ -32,8 +32,8 @@ export function generateComplianceSystemPrompt(
   answerDetail: 'standard' | 'detailed' = 'standard',
   jurisdictionContext?: JurisdictionContext,
 ): string {
-  const jurisdictionName = jurisdictionContext ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : 'Kenya';
-  const jurisdictionCode = jurisdictionContext?.primaryJurisdiction ?? 'KE';
+  const jurisdictionName = jurisdictionContext ? (jurisdictionContext.mode === 'SINGLE' ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ')) : 'Kenya';
+  const jurisdictionCode = jurisdictionContext ? (jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(', ')) : 'KE';
   return `You are SheriaBot, an authoritative AI compliance intelligence system specialising in ${jurisdictionName} regulatory law for the financial services sector. Your audience is compliance officers, legal teams, and fintech founders at licensed and aspiring financial institutions.
 
 Active jurisdiction: ${jurisdictionName} (${jurisdictionCode}).
@@ -131,8 +131,8 @@ Example (note the blank lines surrounding the table):
  */
 export function generateComplianceUserPrompt(params: ComplianceQueryParams): string {
   const { question, organizationType, industry, context, urgency, ragContext, answerDetail = 'standard', jurisdictionContext } = params;
-  const jurisdictionName = jurisdictionContext ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : 'Kenya';
-  const jurisdictionCode = jurisdictionContext?.primaryJurisdiction ?? 'KE';
+  const jurisdictionName = jurisdictionContext ? (jurisdictionContext.mode === 'SINGLE' ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ')) : 'Kenya';
+  const jurisdictionCode = jurisdictionContext ? (jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(', ')) : 'KE';
 
   let prompt = `## Active Jurisdiction\n\n${jurisdictionName} (${jurisdictionCode})\n\n## Compliance Question\n\n${question}\n`;
 
@@ -227,8 +227,8 @@ export function generateFollowUpQueryPrompt(
   ragContext?: string,
   jurisdictionContext?: JurisdictionContext,
 ): string {
-  const jurisdictionName = jurisdictionContext ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : 'Kenya';
-  const jurisdictionCode = jurisdictionContext?.primaryJurisdiction ?? 'KE';
+  const jurisdictionName = jurisdictionContext ? (jurisdictionContext.mode === 'SINGLE' ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ')) : 'Kenya';
+  const jurisdictionCode = jurisdictionContext ? (jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(', ')) : 'KE';
   let prompt = `You previously answered a compliance question for ${jurisdictionName} (${jurisdictionCode}). The user has a follow-up question.
 
 Active jurisdiction: ${jurisdictionName} (${jurisdictionCode}). Do not change jurisdictions unless explicitly instructed by the system.

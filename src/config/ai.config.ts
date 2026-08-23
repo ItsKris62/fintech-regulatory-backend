@@ -23,22 +23,22 @@ export const aiConfig = {
     default: appConfig.ai.model,
 
     // Policy generation (Sonnet 4.6 for balance of speed/quality)
-    policyGeneration: 'claude-sonnet-4-6',
-
-    // Checklist generation (Sonnet 4.6  -  quality legal citations)
-    checklistGeneration: 'claude-sonnet-4-6',
-
-    // Compliance queries (Haiku 4.5 for speed and cost efficiency)
-    complianceQuery: 'claude-haiku-4-5-20251001',
-
-    // Citation verification (Haiku 4.5 for cost efficiency)
-    citationVerification: 'claude-haiku-4-5-20251001',
-
-    // Complex analysis (Opus 4.6 for highest quality)
-    complexAnalysis: 'claude-opus-4-6',
-
-    // Embedding generation (Haiku 4.5 for cost efficiency)
-    embedding: 'claude-haiku-4-5-20251001',
+    policyGeneration: 'gemini:gemini-3.6-flash',
+    
+    // Checklist generation
+    checklistGeneration: 'gemini:gemini-3.6-flash',
+    
+    // Compliance query
+    complianceQuery: 'gemini:gemini-3.6-flash',
+    
+    // Citation verification
+    citationVerification: 'gemini:gemini-3.6-flash',
+    
+    // Complex analysis
+    complexAnalysis: 'gemini:gemini-3.6-flash',
+    
+    // Embedding model (currently just placeholder for future usage)
+    embedding: 'gemini:gemini-1.5-flash',
   },
 
   /**

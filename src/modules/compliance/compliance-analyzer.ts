@@ -380,7 +380,7 @@ Provide practical recommendations considering Kenyan regulatory context.
 Format as a JSON array of strings.
 `;
 
-      const result = await complete({ prompt, maxTokens: 500 });
+      const result = await complete({ prompt, maxTokens: 2048 });
 
       try {
         return JSON.parse(result.content);

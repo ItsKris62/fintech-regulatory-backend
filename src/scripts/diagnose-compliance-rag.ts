@@ -50,9 +50,9 @@ async function runLegacyGraderProbe(
   if (process.env.DIAGNOSE_LEGACY_GRADER !== '1') return;
 
   const toGrade = chunks.slice(0, 10);
-  const label = jurisdictionLabel(jurisdictionContext.primaryJurisdiction);
+  const label = jurisdictionLabel(jurisdictionContext.jurisdictions[0]);
   const systemPrompt = `You are a relevance grader for a ${label} financial-services compliance RAG system.
-Active jurisdiction: ${label} (${jurisdictionContext.primaryJurisdiction}).
+Active jurisdiction: ${label} (${jurisdictionContext.jurisdictions[0]}).
 Given a compliance question and retrieved document chunks, decide which chunks are relevant.
 A chunk is relevant only if it contains information that directly helps answer the question and belongs to the active jurisdiction.
 

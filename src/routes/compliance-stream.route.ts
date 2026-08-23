@@ -54,6 +54,7 @@ import {
   resolveJurisdictionContext,
   serializeJurisdictionContext,
   type JurisdictionContext,
+  type JurisdictionCode,
 } from '@/types/jurisdiction';
 
 // Constants
@@ -96,8 +97,8 @@ export function buildComplianceRagQuery(
 ): string {
   const lower = question.toLowerCase();
   const boosts = new Set<string>();
-  const jurisdiction = jurisdictionContext?.primaryJurisdiction ?? 'KE';
-  const jurisdictionName = jurisdictionLabel(jurisdiction);
+  const jurisdictions = jurisdictionContext ? (jurisdictionContext.mode === 'SINGLE' ? [jurisdictionContext.primaryJurisdiction] : jurisdictionContext.jurisdictions) : ['KE' as JurisdictionCode];
+  const jurisdictionNames = jurisdictions.map(jurisdictionLabel);
 
   if (detectedRegulations.length > 0) {
     for (const regulation of detectedRegulations) boosts.add(regulation);
@@ -108,23 +109,27 @@ export function buildComplianceRagQuery(
   }
 
   if (/\b(payment|psp|payment service provider|mobile money|e-money|m-pesa|mpesa|national payment|cbk)\b/i.test(question)) {
-    const paymentTermsByJurisdiction = {
+    const paymentTermsByJurisdiction: Record<JurisdictionCode, string[]> = {
       KE: ['Central Bank of Kenya', 'CBK', 'National Payment System', 'payment service provider', 'mobile money', 'e-money'],
       RW: ['National Bank of Rwanda', 'BNR', 'payment service provider', 'payment systems', 'e-money'],
       MW: ['Reserve Bank of Malawi', 'RBM', 'payment service provider', 'payment systems', 'mobile money', 'e-money'],
       NG: ['Central Bank of Nigeria', 'CBN', 'payment service provider', 'payment systems', 'mobile money'],
     };
-    paymentTermsByJurisdiction[jurisdiction].forEach((term) => boosts.add(term));
+    jurisdictions.forEach((j) => {
+      paymentTermsByJurisdiction[j].forEach((term) => boosts.add(term));
+    });
   }
 
   if (lower.includes('data protection') || lower.includes('personal data') || lower.includes('privacy') || lower.includes('odpc')) {
-    const privacyRegulatorByJurisdiction = {
+    const privacyRegulatorByJurisdiction: Record<JurisdictionCode, string> = {
       KE: 'ODPC',
       RW: 'Data Protection and Privacy Office',
       MW: 'Malawi data protection authority',
       NG: 'Nigeria Data Protection Commission',
     };
-    ['Data Protection Act', privacyRegulatorByJurisdiction[jurisdiction], 'data controller', 'data processor', 'personal data'].forEach((term) => boosts.add(term));
+    jurisdictions.forEach((j) => {
+      ['Data Protection Act', privacyRegulatorByJurisdiction[j], 'data controller', 'data processor', 'personal data'].forEach((term) => boosts.add(term));
+    });
   }
 
   if (lower.includes('digital lender') || lower.includes('digital lending') || lower.includes('digital credit')) {
@@ -132,7 +137,9 @@ export function buildComplianceRagQuery(
   }
 
   if (lower.includes('fintech')) {
-    [`${jurisdictionName} fintech compliance`, 'banking', 'payments', 'lending', 'capital markets'].forEach((term) => boosts.add(term));
+    jurisdictionNames.forEach((name) => {
+      [`${name} fintech compliance`, 'banking', 'payments', 'lending', 'capital markets'].forEach((term) => boosts.add(term));
+    });
   }
 
   return [question, ...boosts].join(' ');
@@ -477,7 +484,7 @@ export async function registerComplianceStreamRoute(
         orgId: auth.organizationId,
         query: input.question,
         answerDetail: input.answerDetail,
-        jurisdiction: jurisdictionContext.primaryJurisdiction,
+        jurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(','),
         jurisdictionSource: jurisdictionContext.jurisdictionSource,
         detectedRegulations,
         ragQuery,
@@ -496,7 +503,7 @@ export async function registerComplianceStreamRoute(
           type: 'compliance_stream_rag_error',
           userId: auth.userId,
           orgId: auth.organizationId,
-          jurisdiction: jurisdictionContext.primaryJurisdiction,
+          jurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(','),
           error: err instanceof Error ? err.message : String(err),
         });
         return {
@@ -532,7 +539,7 @@ export async function registerComplianceStreamRoute(
           status:         'processing',
           mode:           jurisdictionContext.mode,
           jurisdictions:  [...jurisdictionContext.jurisdictions],
-          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
           jurisdictionSource:  jurisdictionContext.jurisdictionSource,
           corpusVersionSnapshot: ragContext.corpusVersions,
           metadata: {
@@ -597,7 +604,7 @@ export async function registerComplianceStreamRoute(
         ragSources: ragContext.results.length,
         mode: jurisdictionContext.mode,
         jurisdictions: [...jurisdictionContext.jurisdictions],
-        primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+        primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
       });
 
       if (!hasUsableSourceContext(ragContext) || !hasUsableRetrievedChunks(ragContext.results)) {
@@ -645,7 +652,7 @@ export async function registerComplianceStreamRoute(
           fallbackReason,
           mode: jurisdictionContext.mode,
           jurisdictions: [...jurisdictionContext.jurisdictions],
-          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
           corpusVersionSnapshot: ragContext.corpusVersions,
           retrievalVersion: ragContext.retrievalVersion,
         });
@@ -763,7 +770,7 @@ export async function registerComplianceStreamRoute(
           fallbackReason,
           mode: jurisdictionContext.mode,
           jurisdictions: [...jurisdictionContext.jurisdictions],
-          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
           corpusVersionSnapshot: ragContext.corpusVersions,
           retrievalVersion: ragContext.retrievalVersion,
         });
@@ -1043,7 +1050,7 @@ export async function registerComplianceStreamRoute(
           fallbackReason,
           mode: jurisdictionContext.mode,
           jurisdictions: [...jurisdictionContext.jurisdictions],
-          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
           corpusVersionSnapshot: ragContext.corpusVersions,
           retrievalVersion: ragContext.retrievalVersion,
         });

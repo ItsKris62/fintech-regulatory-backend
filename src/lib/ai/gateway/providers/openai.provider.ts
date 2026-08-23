@@ -13,7 +13,7 @@ export class OpenAIProvider implements ILLMProvider {
       throw new LLMProviderNotConfiguredError(this.name);
     }
     if (this.currentApiKey !== apiKey || !this.client) {
-      this.client = new OpenAI({ apiKey, maxRetries: 0 });
+      this.client = new OpenAI({ apiKey, maxRetries: 0, timeout: 60000 });
       this.currentApiKey = apiKey;
     }
     return this.client;
@@ -37,9 +37,10 @@ export class OpenAIProvider implements ILLMProvider {
         ? (req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(req.overrideTimeoutMs)]) : AbortSignal.timeout(req.overrideTimeoutMs))
         : req.signal;
 
+      const actualModel = req.model?.replace(/^openai:/, '') || 'gpt-4o-mini';
       const response = await client.chat.completions.create(
         {
-          model: req.model!,
+          model: actualModel,
           messages,
           max_tokens: req.maxTokens,
           temperature: req.temperature,
@@ -83,9 +84,10 @@ export class OpenAIProvider implements ILLMProvider {
         ? (opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(opts.overrideTimeoutMs)]) : AbortSignal.timeout(opts.overrideTimeoutMs))
         : opts.signal;
 
+      const actualModel = opts.model?.replace(/^openai:/, '') || 'gpt-4o-mini';
       const streamResponse = await client.chat.completions.create(
         {
-          model: opts.model!,
+          model: actualModel,
           messages,
           max_tokens: opts.maxTokens,
           temperature: opts.temperature,

@@ -45,15 +45,18 @@ describe('jurisdiction foundation', () => {
     ]);
   });
 
-  it('resolves enabled single-country contexts and rejects disabled Nigeria', () => {
+  it('resolves enabled single-country contexts', () => {
     expect(resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['RW'] })).toMatchObject({
       mode: 'SINGLE',
       primaryJurisdiction: 'RW',
       jurisdictionSource: 'REQUEST',
     });
 
-    expect(() => resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['NG'] }))
-      .toThrow(JurisdictionContractError);
+    expect(resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['NG'] })).toMatchObject({
+      mode: 'SINGLE',
+      primaryJurisdiction: 'NG',
+      jurisdictionSource: 'REQUEST',
+    });
   });
 
   it('rejects malformed new contract but keeps isolated legacy KE fallback', () => {
@@ -67,8 +70,7 @@ describe('jurisdiction foundation', () => {
   });
 
   it('constructs a mandatory country filter with temporary legacy label compatibility', () => {
-    const context = resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['MW'] });
-    expect(buildRegulatoryEvidenceFilter(context)).toEqual({
+    expect(buildRegulatoryEvidenceFilter('MW')).toEqual({
       $and: [
         {
           $or: [

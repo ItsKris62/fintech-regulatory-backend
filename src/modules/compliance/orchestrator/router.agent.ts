@@ -15,9 +15,9 @@ export interface RouterAgentResult {
 const VALID_ROUTES: OrchestratorRoute[] = ['simple', 'complex', 'abstain'];
 
 function buildSystemPrompt(jurisdictionContext: JurisdictionContext): string {
-  const label = jurisdictionLabel(jurisdictionContext.primaryJurisdiction);
+  const label = jurisdictionContext.mode === 'SINGLE' ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction) : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
   return `You are a query router for SheriaBot, a ${label} financial-services compliance assistant.
-Active jurisdiction: ${label} (${jurisdictionContext.primaryJurisdiction}).
+Active jurisdiction: ${label} (${jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(', ')}).
 Classify the user's compliance question into exactly one route:
 - "simple"  : single-regulation lookup, specific numeric threshold, or definition question
 - "complex" : requires synthesising multiple regulations or multi-step procedural guidance
@@ -45,7 +45,7 @@ export async function runRouterAgent(question: string, jurisdictionContext: Juri
   try {
     const systemPrompt = buildSystemPrompt(jurisdictionContext);
     const result = await complete(
-      { prompt: question, systemPrompt, maxTokens: 500, temperature: 0.0 },
+      { prompt: question, systemPrompt, maxTokens: 2048, temperature: 0.0 },
       'query'
     );
 

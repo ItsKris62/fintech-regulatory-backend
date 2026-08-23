@@ -124,7 +124,7 @@ export const complianceRouter = router({
           type: 'compliance_query_start',
           userId: ctx.user!.id,
           question: input.question.substring(0, 100),
-          jurisdiction: jurisdictionContext.primaryJurisdiction,
+          jurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(','),
           jurisdictionSource: jurisdictionContext.jurisdictionSource,
         });
 
@@ -153,7 +153,7 @@ export const complianceRouter = router({
               status: 'completed',
               mode: jurisdictionContext.mode,
               jurisdictions: [...jurisdictionContext.jurisdictions],
-              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
               jurisdictionSource: jurisdictionContext.jurisdictionSource,
               corpusVersionSnapshot: ragContext.corpusVersions,
               metadata: {
@@ -184,7 +184,7 @@ export const complianceRouter = router({
             suggestedFollowUps: [],
             mode: jurisdictionContext.mode,
             jurisdictions: [...jurisdictionContext.jurisdictions],
-            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
             jurisdictionSource: jurisdictionContext.jurisdictionSource,
             route: 'abstain',
             grounded: false,
@@ -216,7 +216,7 @@ export const complianceRouter = router({
               status: 'completed',
               mode: jurisdictionContext.mode,
               jurisdictions: [...jurisdictionContext.jurisdictions],
-              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
               jurisdictionSource: jurisdictionContext.jurisdictionSource,
               corpusVersionSnapshot: ragContext.corpusVersions,
               metadata: {
@@ -255,7 +255,7 @@ export const complianceRouter = router({
             suggestedFollowUps: [],
             mode: jurisdictionContext.mode,
             jurisdictions: [...jurisdictionContext.jurisdictions],
-            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
             jurisdictionSource: jurisdictionContext.jurisdictionSource,
             route: 'abstain',
             grounded: false,
@@ -324,7 +324,7 @@ export const complianceRouter = router({
             citations: safeFinalQueryCitations.length > 0 ? safeFinalQueryCitations : undefined,
             mode: jurisdictionContext.mode,
             jurisdictions: [...jurisdictionContext.jurisdictions],
-            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
             jurisdictionSource: jurisdictionContext.jurisdictionSource,
             corpusVersionSnapshot: ragContext.corpusVersions,
             metadata: {
@@ -461,7 +461,7 @@ export const complianceRouter = router({
               suggestedFollowUps: [],
               mode: jurisdictionContext.mode,
               jurisdictions: [...jurisdictionContext.jurisdictions],
-              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
               jurisdictionSource: jurisdictionContext.jurisdictionSource,
               route,
               grounded: false,
@@ -520,7 +520,7 @@ export const complianceRouter = router({
             suggestedFollowUps: [],
             mode: jurisdictionContext.mode,
             jurisdictions: [...jurisdictionContext.jurisdictions],
-            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
             jurisdictionSource: jurisdictionContext.jurisdictionSource,
             route,
             grounded: responseGrounded,
@@ -568,7 +568,7 @@ export const complianceRouter = router({
           suggestedFollowUps: [],
           mode: jurisdictionContext.mode,
           jurisdictions: [...jurisdictionContext.jurisdictions],
-          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
           jurisdictionSource: jurisdictionContext.jurisdictionSource,
           route: null as string | null,
           grounded: hasUsableCitations(safeFinalQueryCitations),
@@ -660,7 +660,7 @@ export const complianceRouter = router({
               status: 'completed',
               mode: jurisdictionContext.mode,
               jurisdictions: [...jurisdictionContext.jurisdictions],
-              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
               jurisdictionSource: jurisdictionContext.jurisdictionSource,
               corpusVersionSnapshot: ragContext.corpusVersions,
               metadata: {
@@ -688,7 +688,7 @@ export const complianceRouter = router({
             citations: [],
             mode: jurisdictionContext.mode,
             jurisdictions: [...jurisdictionContext.jurisdictions],
-            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
             jurisdictionSource: jurisdictionContext.jurisdictionSource,
           };
         }
@@ -710,7 +710,7 @@ export const complianceRouter = router({
               status: 'completed',
               mode: jurisdictionContext.mode,
               jurisdictions: [...jurisdictionContext.jurisdictions],
-              primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+              primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
               jurisdictionSource: jurisdictionContext.jurisdictionSource,
               corpusVersionSnapshot: ragContext.corpusVersions,
               metadata: {
@@ -746,7 +746,7 @@ export const complianceRouter = router({
             citations: [],
             mode: jurisdictionContext.mode,
             jurisdictions: [...jurisdictionContext.jurisdictions],
-            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
             jurisdictionSource: jurisdictionContext.jurisdictionSource,
           };
         }
@@ -791,7 +791,7 @@ export const complianceRouter = router({
             citations: safeFinalCitations.length > 0 ? safeFinalCitations : undefined,
             mode: jurisdictionContext.mode,
             jurisdictions: [...jurisdictionContext.jurisdictions],
-            primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+            primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
             jurisdictionSource: jurisdictionContext.jurisdictionSource,
             corpusVersionSnapshot: ragContext.corpusVersions,
             metadata: {
@@ -838,7 +838,7 @@ export const complianceRouter = router({
           citations: safeFinalCitations,
           mode: jurisdictionContext.mode,
           jurisdictions: [...jurisdictionContext.jurisdictions],
-          primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+          primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
           jurisdictionSource: jurisdictionContext.jurisdictionSource,
         };
       } catch (error: any) {

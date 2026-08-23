@@ -21,7 +21,7 @@ import { JURISDICTION_CODES } from '@/types/jurisdiction';
 export const complianceQuerySchema = z.object({
   question: z.string().min(10).max(1000),
   mode: z.enum(['SINGLE', 'COMPARE']).optional(),
-  jurisdictions: z.array(z.enum(JURISDICTION_CODES)).max(1).optional(),
+  jurisdictions: z.array(z.enum(JURISDICTION_CODES)).max(4).optional(),
   organizationType: z.enum(['FINTECH', 'BANK', 'TELECOM', 'INSURANCE', 'OTHER']).optional(),
   industry: z.string().max(100).optional(),
   context: z.string().max(2000).optional(),

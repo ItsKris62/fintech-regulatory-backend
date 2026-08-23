@@ -146,14 +146,13 @@ function indexVersionFilter(mode: SearchOptions['sourceIndexMode'] = 'v1', fallb
 }
 
 export function buildRegulatoryEvidenceFilter(
-  context: JurisdictionContext,
+  jurisdictionCode: JurisdictionCode,
   sourceIndexMode?: SearchOptions['sourceIndexMode'],
 ): Record<string, unknown> {
-  const code = context.primaryJurisdiction;
-  const legacyLabel = jurisdictionLabel(code);
+  const legacyLabel = jurisdictionLabel(jurisdictionCode);
   const jurisdictionFilter = {
     $or: [
-      { jurisdictionCode: { $eq: code } },
+      { jurisdictionCode: { $eq: jurisdictionCode } },
       { jurisdiction: { $eq: legacyLabel } },
     ],
   };
@@ -542,31 +541,47 @@ export class RAGService {
       preferActiveSources = true,
       sourceIndexMode,
     } = options;
-    const filter = buildRegulatoryEvidenceFilter(jurisdictionContext, sourceIndexMode);
-
-    const results = await this.searchWithReranking(query, {
-      topK,
-      minScore,
-      namespace,
-      filter,
-      preferActiveSources,
-      sourceIndexMode,
+    const jurisdictionsToSearch = jurisdictionContext.mode === 'SINGLE' ? [jurisdictionContext.primaryJurisdiction] : jurisdictionContext.jurisdictions;
+    
+    // Balanced concurrent retrieval: fetch topK for each jurisdiction independently
+    const fetchPromises = jurisdictionsToSearch.map(async (jcode) => {
+      const filter = buildRegulatoryEvidenceFilter(jcode, sourceIndexMode);
+      const jResults = await this.searchWithReranking(query, {
+        topK,
+        minScore,
+        namespace,
+        filter,
+        preferActiveSources,
+        sourceIndexMode,
+      });
+      // Filter out any leaked chunks
+      const scoped = jResults.filter(r => r.jurisdictionCode === jcode);
+      if (scoped.length !== jResults.length) {
+        logger.warn({
+          type: 'rag_regulatory_evidence_jurisdiction_mismatch_filtered',
+          requestedJurisdiction: jcode,
+          removedCount: jResults.length - scoped.length,
+          resultCount: jResults.length,
+        });
+      }
+      return scoped;
     });
 
-    const scopedResults = results.filter(
-      (result) => result.jurisdictionCode === jurisdictionContext.primaryJurisdiction,
-    );
-
-    if (scopedResults.length !== results.length) {
-      logger.warn({
-        type: 'rag_regulatory_evidence_jurisdiction_mismatch_filtered',
-        requestedJurisdiction: jurisdictionContext.primaryJurisdiction,
-        removedCount: results.length - scopedResults.length,
-        resultCount: results.length,
-      });
+    const settled = await Promise.allSettled(fetchPromises);
+    const combinedResults: SearchResult[] = [];
+    
+    for (const res of settled) {
+      if (res.status === 'fulfilled') {
+        combinedResults.push(...res.value);
+      } else {
+        logger.error({ type: 'rag_search_jurisdiction_failure', error: res.reason });
+      }
     }
 
-    return scopedResults.map((result, index) => ({
+    // Sort globally by score, taking the overall top chunks (balanced across jurisdictions since each has up to topK)
+    combinedResults.sort((a, b) => b.score - a.score);
+
+    return combinedResults.map((result, index) => ({
       ...result,
       rank: index + 1,
     }));
@@ -802,7 +817,7 @@ export async function searchAndGetRegulatoryEvidenceContext(
     normalizedQuestion,
     mode: jurisdictionContext.mode,
     jurisdictions: [...jurisdictionContext.jurisdictions],
-    primaryJurisdiction: jurisdictionContext.primaryJurisdiction,
+    primaryJurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
     corpusVersions,
     retrievalVersion: REGULATORY_EVIDENCE_RETRIEVAL_VERSION,
     topK,
@@ -826,7 +841,7 @@ export async function searchAndGetRegulatoryEvidenceContext(
       logger.debug({
         type: 'rag_regulatory_evidence_cache_hit',
         cacheKey,
-        jurisdiction: jurisdictionContext.primaryJurisdiction,
+        jurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(','),
       });
       return parsed;
     }
@@ -859,7 +874,7 @@ export async function searchAndGetRegulatoryEvidenceContext(
       type: 'rag_regulatory_evidence_cache_set',
       cacheKey,
       ttl: RAG_CTX_CACHE_TTL,
-      jurisdiction: jurisdictionContext.primaryJurisdiction,
+      jurisdiction: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.join(','),
     });
   } catch {
     // Cache write failure is non-fatal.

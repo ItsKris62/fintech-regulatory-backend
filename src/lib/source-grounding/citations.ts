@@ -155,8 +155,8 @@ export function validateCitationsForJurisdiction(
   const invalidCitations = citations.filter((citation) =>
     !citation.vectorId ||
     !citation.chunkId ||
-    !citation.documentId ||
-    citation.jurisdictionCode !== jurisdictionContext.primaryJurisdiction,
+    citation.jurisdictionCode &&
+    !(jurisdictionContext.mode === 'SINGLE' ? citation.jurisdictionCode === jurisdictionContext.primaryJurisdiction : jurisdictionContext.jurisdictions.includes(citation.jurisdictionCode as any)),
   );
 
   return {
