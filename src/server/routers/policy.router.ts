@@ -467,6 +467,17 @@ export const policyRouter = router({
       const startTime = Date.now();
 
       try {
+        if (ctx.user?.id) {
+          const { section34RestrictionService } = await import('@/modules/user/restriction.service');
+          const check = await section34RestrictionService.isProcessingPermitted(ctx.user.id, 'POLICY_GENERATION');
+          if (!check.permitted) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: check.reason ?? 'Policy generation restricted pursuant to DPA Section 34',
+            });
+          }
+        }
+
         logger.info({
           type: 'policy_generation_start',
           userId: ctx.user!.id,

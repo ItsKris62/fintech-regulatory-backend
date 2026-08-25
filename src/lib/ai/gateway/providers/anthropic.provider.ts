@@ -11,7 +11,7 @@ function sanitizeAnthropicMetadata(metadata: LLMCompletionRequest['metadata']): 
 }
 
 function assertUsableAnthropicModel(model: string | undefined): string {
-  const normalized = model?.trim();
+  const normalized = model?.trim().replace(/^anthropic:/, '');
   if (!normalized) {
     logger.error({ type: 'anthropic_model_config_invalid', reason: 'missing_model' });
     throw new LLMProviderError('anthropic', 'Anthropic model is not configured.', 400, false);
@@ -127,11 +127,12 @@ export class AnthropicProvider implements ILLMProvider {
         : req.signal;
 
       const metadata = sanitizeAnthropicMetadata(req.metadata);
+      const noTemp = model.includes('sonnet-5') || model.includes('opus-5') || model.includes('fable-5');
       const response = await client.messages.create(
         {
           model,
           max_tokens: req.maxTokens!,
-          temperature: req.temperature,
+          ...(noTemp ? {} : { temperature: req.temperature }),
           system: req.systemPrompt,
           messages,
           stop_sequences: req.stopSequences,
@@ -180,11 +181,12 @@ export class AnthropicProvider implements ILLMProvider {
         ? (opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(opts.overrideTimeoutMs)]) : AbortSignal.timeout(opts.overrideTimeoutMs))
         : opts.signal;
 
+      const noTemp = model.includes('sonnet-5') || model.includes('opus-5') || model.includes('fable-5');
       const streamResponse = await client.messages.create(
         {
           model,
           max_tokens: opts.maxTokens!,
-          temperature: opts.temperature,
+          ...(noTemp ? {} : { temperature: opts.temperature }),
           system: opts.systemPrompt,
           messages,
           stop_sequences: opts.stopSequences,

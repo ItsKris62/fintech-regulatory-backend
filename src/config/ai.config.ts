@@ -20,25 +20,25 @@ export const aiConfig = {
    */
   models: {
     // Default model for most operations
-    default: appConfig.ai.model,
+    default: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
 
     // Policy generation (Sonnet 4.6 for balance of speed/quality)
-    policyGeneration: 'gemini:gemini-3.6-flash',
+    policyGeneration: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
     
     // Checklist generation
-    checklistGeneration: 'gemini:gemini-3.6-flash',
+    checklistGeneration: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
     
     // Compliance query
-    complianceQuery: 'gemini:gemini-3.6-flash',
+    complianceQuery: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
     
     // Citation verification
-    citationVerification: 'gemini:gemini-3.6-flash',
+    citationVerification: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
     
     // Complex analysis
-    complexAnalysis: 'gemini:gemini-3.6-flash',
+    complexAnalysis: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
     
     // Embedding model (currently just placeholder for future usage)
-    embedding: 'gemini:gemini-1.5-flash',
+    embedding: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
   },
 
   /**

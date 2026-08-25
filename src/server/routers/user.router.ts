@@ -923,4 +923,72 @@ export const userRouter = router({
         });
       }
     }),
+
+  // ============================================================
+  // Section 34 Restriction of Processing (DPA 2019 / DSAR)
+  // ============================================================
+
+  /**
+   * Get Section 34 restriction status for the current or specified user
+   */
+  getRestrictionStatus: protectedProcedure
+    .input(z.object({ userId: z.string().optional() }).optional())
+    .query(async ({ input, ctx }) => {
+      const targetUserId = input?.userId ?? ctx.user.id;
+      const { section34RestrictionService } = await import('@/modules/user/restriction.service');
+      return await section34RestrictionService.getRestrictionStatus(targetUserId);
+    }),
+
+  /**
+   * Apply Section 34 restriction (DPO / Admin / DSAR Workflow)
+   */
+  restrictProcessing: protectedProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        reason: z.enum([
+          'ACCURACY_CONTESTED',
+          'DATA_NO_LONGER_REQUIRED_LEGAL_CLAIM',
+          'UNLAWFUL_PROCESSING_ERASURE_OPPOSED',
+          'OBJECTION_PENDING_VERIFICATION',
+        ]),
+        requestId: z.string(),
+        restrictedPurposes: z
+          .array(
+            z.enum([
+              'AI_QUERYING',
+              'DIRECT_MARKETING',
+              'PRODUCT_TELEMETRY',
+              'POLICY_GENERATION',
+              'GAP_ANALYSIS',
+            ]),
+          )
+          .optional(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const { section34RestrictionService } = await import('@/modules/user/restriction.service');
+      return await section34RestrictionService.restrictProcessing({
+        ...input,
+        dpoAdminId: ctx.user.id,
+      });
+    }),
+
+  /**
+   * Lift Section 34 restriction after accuracy verification or statutory resolution
+   */
+  liftProcessingRestriction: protectedProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        liftReason: z.string().min(5),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const { section34RestrictionService } = await import('@/modules/user/restriction.service');
+      return await section34RestrictionService.liftRestriction({
+        ...input,
+        dpoAdminId: ctx.user.id,
+      });
+    }),
 });

@@ -45,6 +45,17 @@ export const checklistRouter = router({
         const orgId  = ctx.orgMembership!.organizationId;
         const userId = ctx.user!.id;
 
+        if (userId) {
+          const { section34RestrictionService } = await import('@/modules/user/restriction.service');
+          const check = await section34RestrictionService.isProcessingPermitted(userId, 'AI_QUERYING');
+          if (!check.permitted) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: check.reason ?? 'Checklist generation restricted pursuant to DPA Section 34',
+            });
+          }
+        }
+
         logger.info({
           type:          'checklist_generate_request',
           userId,

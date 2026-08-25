@@ -120,6 +120,17 @@ export const complianceRouter = router({
       }
 
       try {
+        if (ctx.user?.id) {
+          const { section34RestrictionService } = await import('@/modules/user/restriction.service');
+          const check = await section34RestrictionService.isProcessingPermitted(ctx.user.id, 'AI_QUERYING');
+          if (!check.permitted) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: check.reason ?? 'Processing restricted pursuant to DPA Section 34',
+            });
+          }
+        }
+
         logger.info({
           type: 'compliance_query_start',
           userId: ctx.user!.id,

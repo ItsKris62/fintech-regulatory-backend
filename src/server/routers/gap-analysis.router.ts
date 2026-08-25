@@ -81,6 +81,17 @@ export const gapAnalysisRouter = router({
           });
         }
 
+        if (ctx.user?.id) {
+          const { section34RestrictionService } = await import('@/modules/user/restriction.service');
+          const check = await section34RestrictionService.isProcessingPermitted(ctx.user.id, 'GAP_ANALYSIS');
+          if (!check.permitted) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: check.reason ?? 'Gap analysis restricted pursuant to DPA Section 34',
+            });
+          }
+        }
+
         // Per-tier file size enforcement
         const decodedBytes = Math.ceil(input.fileContent.length * 0.75);
         const gapLimits = GAP_ANALYSIS_UPLOAD_LIMITS[ctx.plan ?? SubscriptionPlan.REGULATOR];

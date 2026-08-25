@@ -11,19 +11,34 @@
  *   VAULT_DELETED_RETENTION_DAYS=30 pnpm vault:cleanup-deleted
  */
 
+import 'dotenv/config';
 import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { prisma } from '@/lib/prisma/client';
 import { vaultS3Client, vaultStorageConfig } from '@/lib/storage/client';
 import { logger } from '@/utils/logger';
 import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 
-const retentionDays = Number(process.env.VAULT_DELETED_RETENTION_DAYS ?? '30');
-const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+export interface VaultCleanupOptions {
+  retentionDays?: number;
+  now?: Date;
+}
 
-async function main(): Promise<void> {
+export interface VaultCleanupResult {
+  scanned: number;
+  purged: number;
+  failed: number;
+  retentionDays: number;
+}
+
+export async function cleanupDeletedVaultDocuments(options: VaultCleanupOptions = {}): Promise<VaultCleanupResult> {
+  const retentionDays = options.retentionDays ?? Number(process.env.VAULT_DELETED_RETENTION_DAYS ?? '30');
+  const now = options.now ?? new Date();
+
   if (!Number.isInteger(retentionDays) || retentionDays <= 0) {
     throw new Error('VAULT_DELETED_RETENTION_DAYS must be a positive integer');
   }
+
+  const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
 
   const rows = await prisma.vaultDocument.findMany({
     where: {
@@ -95,13 +110,22 @@ async function main(): Promise<void> {
     failed,
     retentionDays,
   });
+
+  return {
+    scanned: rows.length,
+    purged,
+    failed,
+    retentionDays,
+  };
 }
 
-main()
-  .catch((error) => {
-    logger.error({ type: 'vault.deleted_document.cleanup_failed', error: sanitizeErrorMessage(error) });
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+if (process.argv[1]?.endsWith('cleanup-deleted-vault-documents.ts') || process.argv[1]?.endsWith('cleanup-deleted-vault-documents.js')) {
+  cleanupDeletedVaultDocuments()
+    .catch((error) => {
+      logger.error({ type: 'vault.deleted_document.cleanup_failed', error: sanitizeErrorMessage(error) });
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+    });
+}

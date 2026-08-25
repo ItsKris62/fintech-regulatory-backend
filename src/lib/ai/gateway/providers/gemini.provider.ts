@@ -31,7 +31,7 @@ export class GeminiProvider implements ILLMProvider {
         ? (req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(req.overrideTimeoutMs)]) : AbortSignal.timeout(req.overrideTimeoutMs))
         : req.signal;
 
-      const actualModel = req.model?.replace(/^gemini:/, '') || 'gemini-3.6-flash';
+      const actualModel = req.model?.replace(/^gemini:/, '') || 'gemini-3.5-flash';
 
       const promise = client.models.generateContent({
         model: actualModel,
@@ -81,7 +81,7 @@ export class GeminiProvider implements ILLMProvider {
         ? (opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(opts.overrideTimeoutMs)]) : AbortSignal.timeout(opts.overrideTimeoutMs))
         : opts.signal;
 
-      const actualModel = opts.model?.replace(/^gemini:/, '') || 'gemini-3.6-flash';
+      const actualModel = opts.model?.replace(/^gemini:/, '') || 'gemini-3.5-flash';
 
       const promise = client.models.generateContentStream({
         model: actualModel,
