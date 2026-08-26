@@ -21,7 +21,8 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
  * rate across all known models to fail-safe cost limits.
  */
 export function getModelPricing(provider: LLMProviderName, model: string): { input: number; output: number; isMissing: boolean } {
-  const key = `${provider}:${model}`;
+  const normalizedModel = model.startsWith(`${provider}:`) ? model.slice(provider.length + 1) : model;
+  const key = `${provider}:${normalizedModel}`;
   const pricing = MODEL_PRICING[key];
 
   if (pricing) {

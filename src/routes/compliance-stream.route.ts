@@ -51,11 +51,14 @@ import {
   JURISDICTION_CODES,
   JurisdictionContractError,
   jurisdictionLabel,
-  resolveJurisdictionContext,
   serializeJurisdictionContext,
   type JurisdictionContext,
   type JurisdictionCode,
 } from '@/types/jurisdiction';
+import {
+  JurisdictionAuthorizationError,
+  resolveJurisdictionEntitlement,
+} from '@/modules/jurisdiction/jurisdiction-entitlements';
 
 // Constants
 const RATE_LIMIT_MAX     = 100; // same window as tRPC rateLimited('complianceQuery')
@@ -76,7 +79,7 @@ const METRIC_KEY = 'COMPLIANCE_QUERIES';
 const inputSchema = z.object({
   question:         z.string().min(1).max(5000),
   mode:             z.enum(['SINGLE', 'COMPARE']).optional(),
-  jurisdictions:    z.array(z.enum(JURISDICTION_CODES)).max(1).optional(),
+  jurisdictions:    z.array(z.enum(JURISDICTION_CODES)).max(4).optional(),
   organizationType: z.string().optional(),
   industry:         z.string().optional(),
   context:          z.string().optional(),
@@ -450,10 +453,26 @@ export async function registerComplianceStreamRoute(
       const input = parsed.data;
       let jurisdictionContext: JurisdictionContext;
       try {
-        jurisdictionContext = resolveJurisdictionContext(input, { allowLegacyDefault: true });
+        const entitlement = await resolveJurisdictionEntitlement({
+          prisma,
+          organizationId: auth.organizationId,
+          effectivePlan: auth.plan,
+          requestedMode: input.mode,
+          requestedJurisdictions: input.jurisdictions,
+          allowLegacyDefault: true,
+          source: 'REQUEST',
+          audit: {
+            userId: auth.userId,
+            route: 'sse.compliance.stream',
+          },
+        });
+        jurisdictionContext = entitlement.jurisdictionContext;
       } catch (error) {
         if (error instanceof JurisdictionContractError) {
           return reply.status(400).send({ error: error.code, message: error.message });
+        }
+        if (error instanceof JurisdictionAuthorizationError) {
+          return reply.status(error.statusCode).send({ error: error.code, message: error.message });
         }
         throw error;
       }

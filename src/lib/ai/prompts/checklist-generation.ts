@@ -1,11 +1,12 @@
 /**
  * Compliance Checklist Generation Prompts
  * AI prompts for generating RAG-grounded compliance checklists
- * for Kenyan fintech regulatory requirements.
+ * for jurisdiction-scoped fintech regulatory requirements.
  */
 
 import { z } from 'zod';
 import { logger } from '@/utils/logger';
+import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
 
 // --- Input Types ------------------------------------------------------------
 
@@ -17,6 +18,7 @@ export interface ChecklistGenerationParams {
   additionalConcerns?: string;
   ragContext?: string;     // Retrieved regulatory context from Pinecone
   ragSourcesUsed?: number; // Number of RAG chunks retrieved (for metadata)
+  jurisdictionContext?: JurisdictionContext;
 }
 
 // --- Zod Schemas (strict validation of Claude API output) --------------------
@@ -47,7 +49,7 @@ export const ChecklistCategorySchema = z.object({
 });
 
 export const GeneratedChecklistSchema = z.object({
-  categories: z.array(ChecklistCategorySchema).min(5, 'Response must contain at least 5 categories'),
+  categories: z.array(ChecklistCategorySchema).min(3, 'Response must contain at least 3 categories'),
   metadata: z.object({
     productType:             z.string(),
     businessStage:           z.string(),
@@ -57,6 +59,11 @@ export const GeneratedChecklistSchema = z.object({
     estimatedCompletionDays: z.number().int().positive(),
     generatedAt:             z.string(),
     ragSourcesUsed:          z.number().int().min(0),
+    generationStatus:        z.enum(['COMPLETE', 'PARTIAL', 'FAILED']).default('COMPLETE'),
+    generationComplete:      z.boolean().default(true),
+    expectedCategories:      z.number().int().min(0).optional(),
+    completedCategories:     z.number().int().min(0).optional(),
+    truncated:               z.boolean().default(false),
   }),
 });
 
@@ -71,7 +78,38 @@ export type GeneratedChecklist = z.infer<typeof GeneratedChecklistSchema>;
 /**
  * System prompt establishing the AI persona and output contract.
  */
-export function generateChecklistSystemPrompt(): string {
+export function generateChecklistSystemPrompt(jurisdictionContext?: JurisdictionContext): string {
+  if (jurisdictionContext) {
+    const jurisdictionName = jurisdictionContext.mode === 'SINGLE'
+      ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction)
+      : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
+    const jurisdictionCodes = jurisdictionContext.jurisdictions.join(', ');
+
+    return `You are SheriaBot, a senior regulatory compliance advisor specializing in financial-services compliance for ${jurisdictionName}.
+
+AUTHORIZED JURISDICTION:
+- Jurisdiction: ${jurisdictionName}
+- Country code(s): ${jurisdictionCodes}
+- Regulatory corpus scope: ${jurisdictionCodes}
+
+OUTPUT RULES  -  FOLLOW EXACTLY:
+1. Respond ONLY with valid JSON. No markdown fences, no preamble, no trailing text. Start with { and end with }.
+2. Every legal checklist item MUST be grounded in the retrieved regulatory context for the authorized jurisdiction. Do not rely on model memory as a source of law.
+3. Do not cite a law, regulator, section, penalty, threshold, deadline, licence, or filing requirement unless it appears in the retrieved evidence.
+4. Reject wrong-country assumptions. Kenya examples apply only when KE is the authorized jurisdiction and the evidence supports them.
+5. Action items must be specific and practical, but legal claims must stay tied to retrieved evidence.
+6. If source context is insufficient, do not fabricate legal obligations; provide only non-legal operational source-selection next steps.
+7. Generate 10 to 15 concise, high-value checklist items across 3 to 5 relevant categories when evidence supports that scope.
+8. Priority must be defensible:
+   - CRITICAL = licence/registration blocker or explicit legal prohibition
+   - HIGH = required near launch or faces regulatory enforcement
+   - MEDIUM = required ongoing controls or periodic compliance
+   - LOW = lower-risk operational task or best practice supported by evidence
+
+ANTI-TRUNCATION PROTOCOL:
+If you approach the response limit, finish the current JSON object, close all arrays/objects, emit accurate metadata, and stop with valid JSON.`;
+  }
+
   return `You are SheriaBot, a senior regulatory compliance advisor specializing in Kenya's fintech sector with 15+ years of experience advising CBK-licensed institutions, digital lenders, payment service providers, and insurtech companies. You have deep expertise in:
 
 KENYAN LEGISLATION:
@@ -135,6 +173,67 @@ NEVER stop mid-string, mid-array, or mid-object. Always close every open bracket
  * User prompt with full context for checklist generation.
  */
 export function generateChecklistUserPrompt(params: ChecklistGenerationParams): string {
+  if (params.jurisdictionContext) {
+    const jurisdictionName = params.jurisdictionContext.mode === 'SINGLE'
+      ? jurisdictionLabel(params.jurisdictionContext.primaryJurisdiction)
+      : params.jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
+    const jurisdictionCodes = params.jurisdictionContext.jurisdictions.join(', ');
+    const ragSection = params.ragContext
+      ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from the SheriaBot regulatory corpus for ${jurisdictionName} (${jurisdictionCodes}) and accepted for checklist generation. Ground legal checklist items exclusively in this evidence:\n\n${params.ragContext}\n`
+      : `\n\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context was provided. Do not generate legal obligations, penalties, deadlines, statutory thresholds, filing requirements, or compliance conclusions. Provide only non-legal source-selection next steps.\n`;
+
+    return `Generate a professional compliance checklist for the following financial-services business.
+
+## AUTHORIZED JURISDICTION
+${jurisdictionName} (${jurisdictionCodes})
+
+## BUSINESS PROFILE
+- **Product / Service Type:** ${params.productType}
+- **Business Stage:** ${params.businessStage}
+- **Target Customer Segments:** ${params.targetSegments.join(', ')}
+- **Services Offered:** ${params.servicesOffered.join(', ')}
+${params.additionalConcerns ? `- **Specific Compliance Concerns:** ${params.additionalConcerns}` : '- **Specific Compliance Concerns:** None provided'}
+${ragSection}
+
+## REQUIRED COVERAGE
+Cover 3 to 4 core categories grounded in the retrieved evidence (e.g., Licensing & Authorisation, AML/CFT & Reporting, Data & Consumer Protection, Operational Controls), generating 3 to 4 concise items per category (10 to 14 total items). Keep descriptions and action items succinct and direct.
+
+## REQUIRED JSON STRUCTURE
+Return exactly this structure:
+{
+  "categories": [
+    {
+      "id": "LIC",
+      "name": "Licensing & Registration",
+      "description": "Core licensing and registration requirements supported by retrieved evidence.",
+      "items": [
+        {
+          "id": "LIC-001",
+          "title": "Specific action title",
+          "regulatoryBasis": "Source document and section/clause from retrieved evidence",
+          "priority": "CRITICAL",
+          "description": "What must be done and why it matters.",
+          "guidance": "Short implementation guidance.",
+          "actionItems": ["Concrete step the team can perform"],
+          "deadline": "Evidence-supported deadline or ongoing obligation",
+          "penalty": "Evidence-supported penalty, or 'Not specified in retrieved evidence'"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "productType": "${params.productType}",
+    "businessStage": "${params.businessStage}",
+    "totalItems": 0,
+    "criticalItems": 0,
+    "highItems": 0,
+    "estimatedCompletionDays": 90,
+    "generatedAt": "${new Date().toISOString()}",
+    "ragSourcesUsed": ${params.ragSourcesUsed ?? (params.ragContext ? 1 : 0)}
+  }
+}`;
+  }
+
   const ragSection = params.ragContext
     ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from a database of actual Kenyan regulatory documents. Use these to ground your checklist items in real law  -  cite the source document and section where applicable:\n\n${params.ragContext}\n`
     : `\n\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context was provided. Do not generate legal obligations, penalties, deadlines, statutory thresholds, filing requirements, or compliance conclusions. State that verified regulatory source documents are required and provide only non-legal operational next steps.\n`;
@@ -497,6 +596,10 @@ NEVER stop mid-string. A small valid JSON beats a large broken one.`;
 // -- Tier-specific user prompts -------------------------------------------------
 
 function generateTier2UserPrompt(params: ChecklistGenerationParams): string {
+  if (params.jurisdictionContext) {
+    return generateChecklistUserPrompt(params);
+  }
+
   const ragSection = params.ragContext
     ? `\n\n## RETRIEVED REGULATORY CONTEXT (use to cite specific laws)\n${params.ragContext}\n`
     : `\n\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context is available. Do not generate legal obligations, legal citations, penalties, statutory thresholds, filing requirements, legal deadlines, or compliance conclusions. Return only non-legal operational next steps for adding or selecting verified regulatory sources.\n`;
@@ -549,7 +652,22 @@ PRE-SUBMISSION SELF-CHECK: Does your response start with \`{\` and end with \`}\
 Return ONLY valid JSON. Start with { and end with }. No other text.`;
 }
 
-function generateTier3UserPrompt(params: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>): string {
+function generateTier3UserPrompt(params: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns' | 'jurisdictionContext'>): string {
+  if (params.jurisdictionContext) {
+    const jurisdictionName = params.jurisdictionContext.mode === 'SINGLE'
+      ? jurisdictionLabel(params.jurisdictionContext.primaryJurisdiction)
+      : params.jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
+    return `No retrieved regulatory source context is available for this ${jurisdictionName} checklist request. Do not generate legal obligations, legal citations, penalties, statutory thresholds, filing requirements, legal deadlines, or compliance conclusions. Generate 3-5 non-legal operational checklist items that help the user add or select verified regulatory sources.
+
+## BUSINESS PROFILE
+- **Product / Service Type:** ${params.productType}
+- **Business Stage:** ${params.businessStage}
+- **Services Offered:** ${params.servicesOffered.join(', ')}
+${params.additionalConcerns ? `- **Specific Concerns:** ${params.additionalConcerns}` : ''}
+
+Return ONLY valid JSON. Start with { and end with }. No other text.`;
+  }
+
   return `No retrieved regulatory source context is available for this Kenyan fintech checklist request. Do not generate legal obligations, legal citations, penalties, statutory thresholds, filing requirements, legal deadlines, or compliance conclusions. Generate 3-5 non-legal operational checklist items that help the user add or select verified regulatory sources.
 
 ## BUSINESS PROFILE
@@ -599,13 +717,13 @@ Return ONLY valid JSON. Start with { and end with }. No other text.`;
 // -- Tier prompt builders (public API for checklist.service.ts) -----------------
 
 export function buildTier1Prompt(
-  input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>,
+  input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns' | 'jurisdictionContext'>,
   passages: RagPassage[]
 ): { system: string; user: string } {
   const trimmed = trimRagPassages(passages, 8000);
   const ragContext = trimmed.length > 0 ? buildRagContextString(trimmed) : undefined;
   return {
-    system: generateChecklistSystemPrompt(),
+    system: generateChecklistSystemPrompt(input.jurisdictionContext),
     user: generateChecklistUserPrompt({
       productType:        input.productType,
       businessStage:      input.businessStage,
@@ -614,18 +732,19 @@ export function buildTier1Prompt(
       additionalConcerns: input.additionalConcerns,
       ragContext,
       ragSourcesUsed: trimmed.length,
+      jurisdictionContext: input.jurisdictionContext,
     }),
   };
 }
 
 export function buildTier2Prompt(
-  input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>,
+  input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns' | 'jurisdictionContext'>,
   passages: RagPassage[]
 ): { system: string; user: string } {
   const trimmed = trimRagPassages(passages, 3000);
   const ragContext = trimmed.length > 0 ? buildRagContextString(trimmed) : undefined;
   return {
-    system: generateTier2SystemPrompt(),
+    system: input.jurisdictionContext ? generateChecklistSystemPrompt(input.jurisdictionContext) : generateTier2SystemPrompt(),
     user: generateTier2UserPrompt({
       productType:        input.productType,
       businessStage:      input.businessStage,
@@ -634,15 +753,16 @@ export function buildTier2Prompt(
       additionalConcerns: input.additionalConcerns,
       ragContext,
       ragSourcesUsed: trimmed.length,
+      jurisdictionContext: input.jurisdictionContext,
     }),
   };
 }
 
 export function buildTier3Prompt(
-  input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns'>
+  input: Pick<ChecklistGenerationParams, 'productType' | 'businessStage' | 'targetSegments' | 'servicesOffered' | 'additionalConcerns' | 'jurisdictionContext'>
 ): { system: string; user: string } {
   return {
-    system: generateTier3SystemPrompt(),
+    system: input.jurisdictionContext ? generateChecklistSystemPrompt(input.jurisdictionContext) : generateTier3SystemPrompt(),
     user: generateTier3UserPrompt(input),
   };
 }
@@ -653,7 +773,12 @@ function synthesizeMetadata(
   rawMetadata: Record<string, unknown> | null | undefined,
   validCategories: ChecklistCategory[],
   input: { productType: string; businessStage: string },
-  ragSourcesUsed: number
+  ragSourcesUsed: number,
+  options?: {
+    truncated?: boolean;
+    expectedCategories?: number;
+    completedCategories?: number;
+  }
 ): GeneratedChecklist['metadata'] {
   let totalItems = 0;
   let criticalItems = 0;
@@ -667,6 +792,13 @@ function synthesizeMetadata(
     }
   }
 
+  const truncated = options?.truncated ?? (rawMetadata?.truncated === true);
+  const completedCategories = options?.completedCategories ?? validCategories.length;
+  const expectedCategories = options?.expectedCategories ?? ((rawMetadata?.expectedCategories as number | undefined) ?? completedCategories);
+  const isPartial = truncated || completedCategories < expectedCategories;
+  const generationStatus: 'COMPLETE' | 'PARTIAL' | 'FAILED' = isPartial ? 'PARTIAL' : 'COMPLETE';
+  const generationComplete = !isPartial;
+
   return {
     productType:             (rawMetadata?.productType  as string | undefined) ?? input.productType,
     businessStage:           (rawMetadata?.businessStage as string | undefined) ?? input.businessStage,
@@ -676,6 +808,53 @@ function synthesizeMetadata(
     estimatedCompletionDays: (rawMetadata?.estimatedCompletionDays as number | undefined) ?? 90,
     generatedAt:             new Date().toISOString(),
     ragSourcesUsed:          (rawMetadata?.ragSourcesUsed as number | undefined) ?? ragSourcesUsed,
+    generationStatus,
+    generationComplete,
+    expectedCategories,
+    completedCategories,
+    truncated,
+  };
+}
+
+/**
+ * Deterministically deduplicate checklist items across/within categories.
+ * Identifies duplicate obligations based on normalized title & legalBasis.
+ */
+export function deduplicateChecklistCategories(categories: ChecklistCategory[]): {
+  categories: ChecklistCategory[];
+  duplicatesRemoved: number;
+  duplicateLog: Array<{ originalTitle: string; duplicateTitle: string; category: string }>;
+} {
+  const seenSignatures = new Set<string>();
+  const duplicateLog: Array<{ originalTitle: string; duplicateTitle: string; category: string }> = [];
+  let duplicatesRemoved = 0;
+
+  const deduplicatedCategories: ChecklistCategory[] = categories.map((cat) => {
+    const uniqueItems: ChecklistItem[] = [];
+    for (const item of cat.items) {
+      const normalizedTitle = item.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const normalizedBasis = (item.regulatoryBasis ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const signature = `${normalizedTitle}::${normalizedBasis}`;
+
+      if (seenSignatures.has(signature)) {
+        duplicatesRemoved++;
+        duplicateLog.push({
+          originalTitle: item.title,
+          duplicateTitle: item.title,
+          category: cat.name,
+        });
+      } else {
+        seenSignatures.add(signature);
+        uniqueItems.push(item);
+      }
+    }
+    return { ...cat, items: uniqueItems };
+  });
+
+  return {
+    categories: deduplicatedCategories,
+    duplicatesRemoved,
+    duplicateLog,
   };
 }
 
@@ -720,16 +899,24 @@ function extractJsonObject(rawContent: string, checklistId?: string): unknown {
   } catch { /* fall through to repair */ }
 
   // Step 4  -  brace/bracket balancing for truncated responses
+  let candidate = jsonMatch[0].trim();
+
+  // If truncated mid-string/mid-item, slice back to last complete object closing brace '}'
+  const lastCompleteObject = candidate.lastIndexOf('}');
+  if (lastCompleteObject > 0) {
+    candidate = candidate.slice(0, lastCompleteObject + 1);
+  }
+
   let braces = 0;
   let brackets = 0;
-  for (const char of jsonMatch[0]) {
+  for (const char of candidate) {
     if      (char === '{') braces++;
     else if (char === '}') braces--;
     else if (char === '[') brackets++;
     else if (char === ']') brackets--;
   }
 
-  let repaired = jsonMatch[0].trim().replace(/,\s*$/, '');
+  let repaired = candidate.trim().replace(/,\s*$/, '');
   while (brackets > 0) { repaired += ']'; brackets--; }
   while (braces   > 0) { repaired += '}'; braces--;   }
 
@@ -770,8 +957,8 @@ function attemptPartialCategoryRecovery(
   tier: 1 | 2 | 3,
   checklistId: string | undefined
 ): ChecklistCategory[] {
-  const tierMinCats  = tier === 1 ? 4 : tier === 2 ? 3 : 2;
-  const tierMinItems = tier === 1 ? 20 : tier === 2 ? 10 : 5;
+  const tierMinCats  = tier === 1 ? 3 : tier === 2 ? 2 : 1;
+  const tierMinItems = tier === 1 ? 8 : tier === 2 ? 5 : 3;
 
   if (!Array.isArray(rawData.categories)) {
     throw new Error(`Tier ${tier}: AI response missing 'categories' array`);
@@ -863,6 +1050,7 @@ export function parseWithTierSchema(
   const fullResult = tierSchema.safeParse(rawData);
 
   let validCategories: ChecklistCategory[];
+  let isPartialRecovery = false;
 
   if (fullResult.success) {
     validCategories = fullResult.data.categories;
@@ -875,14 +1063,23 @@ export function parseWithTierSchema(
       issues:      fullResult.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
     });
     validCategories = attemptPartialCategoryRecovery(rawData, tier, checklistId);
+    isPartialRecovery = true;
   }
+
+  const rawCategoriesCount = Array.isArray(rawData.categories) ? rawData.categories.length : validCategories.length;
+  const rawExpectedCats = (rawData.metadata as Record<string, unknown> | undefined)?.expectedCategories as number | undefined;
 
   // Step 4  -  synthesize complete metadata (always recomputes counts)
   const metadata = synthesizeMetadata(
     rawData.metadata as Record<string, unknown> | null | undefined,
     validCategories,
     input,
-    ragSourcesUsed
+    ragSourcesUsed,
+    {
+      truncated: isPartialRecovery || (rawData.metadata as Record<string, unknown> | undefined)?.truncated === true,
+      expectedCategories: rawExpectedCats ?? Math.max(rawCategoriesCount, validCategories.length),
+      completedCategories: validCategories.length,
+    }
   );
 
   return { categories: validCategories, metadata };

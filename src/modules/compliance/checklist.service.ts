@@ -19,7 +19,8 @@
 
 import { prisma } from '@/lib/prisma/client';
 import { logPilotEvent } from '@/modules/pilot';
-import { ragService, type SearchResult } from '@/lib/rag/rag.service';
+import type { SearchResult } from '@/lib/rag/rag.service';
+import { regulatoryIntelligenceService } from '@/modules/regulatory-intelligence/regulatory-intelligence.service';
 import { aiService } from '@/lib/ai/ai.service';
 import {
   buildTier1Prompt,
@@ -59,6 +60,7 @@ import {
   type RawChecklistItemRow,
 } from './checklist.types';
 import { COMPLIANCE_SOURCE_INSUFFICIENCY_MESSAGE } from '@/lib/source-grounding/source-insufficiency';
+import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
 
 // ---------------------------------------------------------------------------
 // ChecklistService
@@ -80,6 +82,7 @@ class ChecklistService {
     userId: string,
     orgId:  string,
     input:  GenerateChecklistAsyncInput,
+    jurisdictionContext: JurisdictionContext,
     trialUserId?: string
   ): Promise<ChecklistGenerateResult> {
     logger.info({
@@ -127,7 +130,7 @@ class ChecklistService {
 
     // Fire-and-forget.  Errors are caught inside runGeneration and persisted
     // as a FAILED status on the DB record  -  they do NOT propagate here.
-    this.runGeneration(checklist.id, input, userId, trialUserId).catch((err: Error) => {
+    this.runGeneration(checklist.id, input, userId, orgId, jurisdictionContext, trialUserId).catch((err: Error) => {
       // This branch should not be reached; runGeneration has its own catch.
       // Guard against unhandled promise rejection in case of unexpected throw.
       logger.error({
@@ -154,18 +157,23 @@ class ChecklistService {
     checklistId:  string,
     input:        GenerateChecklistAsyncInput,
     userId:       string,
+    orgId:        string,
+    jurisdictionContext: JurisdictionContext,
     trialUserId?: string
   ): Promise<void> {
     const startTime = Date.now();
 
     // -- 1. Build RAG query ---------------------------------------------------
+    const jurisdictionName = jurisdictionContext.mode === 'SINGLE'
+      ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction)
+      : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
     const ragQueryParts: string[] = [
-      'Kenya fintech compliance requirements',
+      `${jurisdictionName} fintech compliance requirements`,
       input.productType,
       input.servicesOffered.join(' '),
       input.targetSegments.join(' '),
       input.businessStage,
-      'licensing KYC AML data protection CBK regulations',
+      `licensing KYC AML data protection regulations ${jurisdictionName}`,
     ];
     if (input.additionalConcerns) ragQueryParts.push(input.additionalConcerns);
     const ragQuery = ragQueryParts.filter(Boolean).join(' ');
@@ -183,10 +191,17 @@ class ChecklistService {
     let ragPassages: SearchResult[] = [];
 
     try {
-      const ragResults = await ragService.search(ragQuery, {
-        topK:     12,
-        minScore: 0.65,
+      const intelligence = await regulatoryIntelligenceService.retrieveAndGrade({
+        question: ragQuery,
+        feature: 'CHECKLIST',
+        jurisdictionContext,
+        organizationContext: { organizationId: orgId },
+        retrievalProfile: {
+          topK: 12,
+          minScore: 0.65,
+        },
       });
+      const ragResults = intelligence.evidence;
 
       if (ragResults.length > 0) {
         // Deduplicate by first 100 chars of chunkText to avoid repetitive context.
@@ -242,7 +257,7 @@ class ChecklistService {
     recordAttempt(); // fire-and-forget metric counter
     await this.runGenerationWithFallback(
       checklistId,
-      input,
+      { ...input, jurisdictionContext },
       ragPassages,
       userId,
       startTime,
@@ -264,7 +279,7 @@ class ChecklistService {
    */
   private async runGenerationWithFallback(
     checklistId:  string,
-    input:        GenerateChecklistAsyncInput,
+    input:        GenerateChecklistAsyncInput & { jurisdictionContext?: JurisdictionContext },
     ragPassages:  SearchResult[],
     userId:       string,
     startTime:    number,
@@ -399,7 +414,7 @@ class ChecklistService {
   private async runTier(
     tier:        1 | 2 | 3,
     checklistId: string,
-    input:       GenerateChecklistAsyncInput,
+    input:       GenerateChecklistAsyncInput & { jurisdictionContext?: JurisdictionContext },
     passages:    SearchResult[]
   ): Promise<GeneratedChecklist> {
     const tierStart = Date.now();
@@ -585,7 +600,8 @@ class ChecklistService {
   async retryChecklist(
     checklistId: string,
     userId:      string,
-    orgId:       string
+    orgId:       string,
+    jurisdictionContext: JurisdictionContext
   ): Promise<{ checklistId: string; status: 'GENERATING'; retryCount: number }> {
     const checklist = await prisma.checklist.findUnique({
       where:  { id: checklistId },
@@ -661,7 +677,7 @@ class ChecklistService {
 
     recordRetryAttempt(); // fire-and-forget metric counter
     // Fire-and-forget  -  same pattern as generateChecklist().
-    this.runGeneration(checklistId, input, userId, undefined).catch((err: Error) => {
+    this.runGeneration(checklistId, input, userId, orgId, jurisdictionContext, undefined).catch((err: Error) => {
       logger.error({
         type:        'checklist_retry_unhandled_rejection',
         checklistId,

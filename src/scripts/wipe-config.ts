@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma/client';
-import { redis } from '../lib/redis/client';
+import { disconnectRedis, redis } from '../lib/redis/client';
 
 async function wipeConfig() {
   await prisma.systemConfig.deleteMany({
@@ -10,7 +10,7 @@ async function wipeConfig() {
   await redis.del('admin:system_config');
   await redis.del('admin:system_config:persisted');
   console.log("Deleted hardcoded DB system configs for AI models");
-  await redis.quit();
+  await disconnectRedis();
   await prisma.$disconnect();
   process.exit(0);
 }

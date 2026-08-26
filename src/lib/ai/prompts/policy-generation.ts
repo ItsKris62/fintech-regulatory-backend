@@ -1,6 +1,8 @@
+import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
+
 /**
  * Policy Generation Prompt Templates
- * Generates comprehensive policy frameworks based on Kenyan regulations
+ * Generates comprehensive policy frameworks based on retrieved regulatory evidence.
  */
 
 /**
@@ -14,20 +16,35 @@ export interface PolicyGenerationParams {
   targetAudience?: string;
   existingPolicies?: string;
   ragContext?: string;
+  jurisdictionContext?: JurisdictionContext;
 }
 
 /**
  * Generate system prompt for policy generation
  */
-export function generatePolicySystemPrompt(): string {
-  return `You are an expert AI assistant specializing in Kenyan regulatory compliance and policy framework development. Your role is to help regulators and organizations create comprehensive, legally sound policy frameworks based on Kenya's laws and regulations.
+export function generatePolicySystemPrompt(jurisdictionContext?: JurisdictionContext): string {
+  const jurisdictionName = jurisdictionContext
+    ? (jurisdictionContext.mode === 'SINGLE'
+      ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction)
+      : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', '))
+    : 'Kenya';
+  const jurisdictionCodes = jurisdictionContext
+    ? jurisdictionContext.jurisdictions.join(', ')
+    : 'KE';
+
+  return `You are an expert AI assistant specializing in ${jurisdictionName} regulatory compliance and policy framework development. Your role is to help regulators and organizations create comprehensive, legally sound policy frameworks based only on retrieved regulatory evidence for the authorized jurisdiction.
+
+AUTHORIZED JURISDICTION:
+- Jurisdiction: ${jurisdictionName}
+- Country code(s): ${jurisdictionCodes}
+- Regulatory corpus scope: ${jurisdictionCodes}
 
 EXPERTISE AREAS:
-- Kenya's legal and regulatory framework
-- Data Protection Act 2019 and GDPR alignment
+- The authorized jurisdiction's legal and regulatory framework
+- Data protection and privacy requirements
 - Digital lending and fintech regulations
-- Central Bank of Kenya (CBK) regulations
-- National Payment Systems (NPS) regulations
+- Central bank, payments, telecoms, capital markets, insurance, and other financial regulators where present in the retrieved evidence
+- National payment systems regulations
 - Anti-Money Laundering (AML) and Counter-Terrorism Financing (CTF)
 - Know Your Customer (KYC) requirements
 - Consumer protection laws
@@ -36,21 +53,21 @@ EXPERTISE AREAS:
 
 OUTPUT REQUIREMENTS:
 1. **Executive Summary**: Brief overview of the policy framework
-2. **Regulatory Analysis**: Relevant Kenyan laws and regulations with specific citations
+2. **Regulatory Analysis**: Relevant laws and regulations for the authorized jurisdiction with specific citations
 3. **Policy Recommendations**: Detailed, actionable policy recommendations
 4. **Compliance Checklist**: Step-by-step compliance requirements
 5. **Legal Citations**: Exact references to laws, acts, and regulations
 
 CITATION FORMAT:
-- Always cite specific sections of acts (e.g., "Data Protection Act 2019, Section 25(1)")
-- Reference specific regulations (e.g., "CBK Prudential Guidelines 2013, Clause 4.2")
+- Always cite specific sections of acts only when those sections appear in the retrieved evidence
+- Reference specific regulations, circulars, and guidelines only when present in the retrieved evidence
 - Include regulation numbers and dates
 - Link recommendations to specific legal requirements
 
 WRITING STYLE:
 - Professional and formal tone
 - Clear, actionable language
-- Kenyan legal terminology
+- Terminology appropriate to the authorized jurisdiction
 - Structured and well-organized
 - Use bullet points and numbered lists for clarity
 
@@ -60,7 +77,7 @@ IMPORTANT:
 - Refer only to laws, regulators, section numbers, and clauses that appear in the retrieved source context
 - Do not create standalone citation lists, fake citation labels, page numbers, source URLs, or provision IDs. The application attaches source-list citations from retrieved chunks separately
 - Distinguish between mandatory requirements and best practices
-- Consider the Kenyan business and regulatory environment
+- Consider the authorized jurisdiction's business and regulatory environment
 - Address practical implementation challenges`;
 }
 
@@ -69,8 +86,19 @@ IMPORTANT:
  */
 export function generatePolicyUserPrompt(params: PolicyGenerationParams): string {
   const { scenario, organizationType, regulatoryAreas, specificRequirements, targetAudience, existingPolicies, ragContext } = params;
+  const jurisdictionName = params.jurisdictionContext
+    ? (params.jurisdictionContext.mode === 'SINGLE'
+      ? jurisdictionLabel(params.jurisdictionContext.primaryJurisdiction)
+      : params.jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', '))
+    : 'Kenya';
+  const jurisdictionCodes = params.jurisdictionContext
+    ? params.jurisdictionContext.jurisdictions.join(', ')
+    : 'KE';
 
   let prompt = `Generate a comprehensive policy framework for the following scenario:
+
+**AUTHORIZED JURISDICTION:**
+${jurisdictionName} (${jurisdictionCodes})
 
 **SCENARIO:**
 ${scenario}
@@ -122,7 +150,7 @@ Please provide a comprehensive policy framework with the following sections:
    - Summary of main recommendations
 
 2. **REGULATORY LANDSCAPE**
-   - Relevant Kenyan laws and regulations
+   - Relevant laws and regulations for ${jurisdictionName}
    - Specific sections and clauses that apply
    - Regulatory authorities with jurisdiction
    - Recent regulatory changes or updates

@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric, SubscriptionPlan } from '@prisma/client';
-import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
+import { rateLimited, withPlanContext, requirePlanFeature, resolveUsageLimit } from '../trpc/middleware';
 import { complianceModule } from '@/modules/compliance';
 import { checklistService } from '@/modules/compliance/checklist.service';
 import {
@@ -13,6 +13,38 @@ import {
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
 import { getQuota } from '@/utils/entitlements';
+import {
+  JurisdictionContractError,
+  type JurisdictionContext,
+} from '@/types/jurisdiction';
+import {
+  JurisdictionAuthorizationError,
+  resolveJurisdictionEntitlement,
+  toTrpcJurisdictionAuthorizationError,
+} from '@/modules/jurisdiction/jurisdiction-entitlements';
+
+async function resolveChecklistJurisdictionContext(ctx: any, route: string): Promise<JurisdictionContext> {
+  try {
+    const entitlement = await resolveJurisdictionEntitlement({
+      prisma: ctx.prisma as any,
+      organizationId: ctx.orgMembership!.organizationId,
+      effectivePlan: ctx.plan ?? 'REGULATOR',
+      requestedJurisdictions: undefined,
+      source: 'ORGANIZATION_HOME',
+      audit: {
+        userId: ctx.user!.id,
+        route,
+      },
+    });
+    return entitlement.jurisdictionContext;
+  } catch (error) {
+    if (error instanceof JurisdictionContractError) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: error.message, cause: error });
+    }
+    if (error instanceof JurisdictionAuthorizationError) throw toTrpcJurisdictionAuthorizationError(error);
+    throw error;
+  }
+}
 
 export const checklistRouter = router({
   /**
@@ -29,7 +61,6 @@ export const checklistRouter = router({
     .use(rateLimited('complianceQuery'))
     .use(withPlanContext)
     .use(requirePlanFeature('checklistGenerations'))
-    .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS))
     .input(
       z.object({
         productType: z.string().min(1).max(100),
@@ -44,6 +75,7 @@ export const checklistRouter = router({
         // orgId is always session-derived -- never client-supplied (IDOR closed)
         const orgId  = ctx.orgMembership!.organizationId;
         const userId = ctx.user!.id;
+        const jurisdictionContext = await resolveChecklistJurisdictionContext(ctx, 'trpc.checklist.generateChecklist');
 
         if (userId) {
           const { section34RestrictionService } = await import('@/modules/user/restriction.service');
@@ -55,6 +87,7 @@ export const checklistRouter = router({
             });
           }
         }
+        await resolveUsageLimit(ctx, BillingMetric.CHECKLIST_GENERATIONS);
 
         logger.info({
           type:          'checklist_generate_request',
@@ -71,6 +104,7 @@ export const checklistRouter = router({
           servicesOffered:    input.servicesOffered,
           additionalConcerns: input.additionalConcerns,
           organizationId:     orgId,
+          jurisdictionContext,
         });
 
         logger.info({
@@ -222,12 +256,10 @@ export const checklistRouter = router({
   generateChecklistAsync: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
     .use(withPlanContext)
-    // Reserve quota before queuing background AI work. The middleware increment
-    // is atomic, so concurrent regulator/free-trial requests cannot all pass.
-    .use(checkUsageLimit(BillingMetric.CHECKLIST_GENERATIONS))
     .input(generateChecklistAsyncInputSchema)
     .mutation(async ({ input, ctx }) => {
       const orgId = ctx.orgMembership!.organizationId;
+      const jurisdictionContext = await resolveChecklistJurisdictionContext(ctx, 'trpc.checklist.generateChecklistAsync');
 
       // B7.3 (TD-009): Redis dedup lock -- prevents double-submit from starting two
       // Claude AI pipelines simultaneously. Lock is keyed on userId+productType+stage
@@ -243,6 +275,8 @@ export const checklistRouter = router({
       }
 
       try {
+        await resolveUsageLimit(ctx, BillingMetric.CHECKLIST_GENERATIONS);
+
         logger.info({
           type: 'checklist_generate_async_start',
           userId: ctx.user!.id,
@@ -255,6 +289,7 @@ export const checklistRouter = router({
           ctx.user!.id,
           orgId,
           input,
+          jurisdictionContext,
           ctx.plan === 'FREE_TRIAL' ? ctx.user!.id : undefined,
         );
 
@@ -414,7 +449,8 @@ export const checklistRouter = router({
       const orgId = ctx.orgMembership!.organizationId;
 
       try {
-        const result = await checklistService.retryChecklist(input.checklistId, userId, orgId);
+        const jurisdictionContext = await resolveChecklistJurisdictionContext(ctx, 'trpc.checklist.retryChecklist');
+        const result = await checklistService.retryChecklist(input.checklistId, userId, orgId, jurisdictionContext);
         logger.info({ type: 'checklist_retry_queued', userId, checklistId: input.checklistId, retryCount: result.retryCount });
         return result;
       } catch (error: unknown) {

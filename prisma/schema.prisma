@@ -180,6 +180,7 @@ model Organization {
   planStartDate           DateTime?
   planEndDate             DateTime?
   maxSeats                Int                @default(1)
+  homeJurisdictionCode    String?
   stripeCustomerId        String?            @unique
   stripeSubId             String?            @unique
   customLimits            Json?
@@ -261,6 +262,7 @@ model Organization {
   @@index([name])
   @@index([verificationStatus])
   @@index([plan])
+  @@index([homeJurisdictionCode])
 }
 
 model Session {

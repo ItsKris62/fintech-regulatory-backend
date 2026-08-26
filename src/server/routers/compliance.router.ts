@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric } from '@prisma/client';
-import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
+import { rateLimited, withPlanContext, requirePlanFeature, resolveUsageLimit } from '../trpc/middleware';
 import {
   complianceQuerySchema,
   searchDocumentsSchema,
@@ -51,11 +51,15 @@ import {
 import {
   JURISDICTION_CAPABILITIES,
   JurisdictionContractError,
-  resolveJurisdictionContext,
   resolvePersistedJurisdictionContext,
   serializeJurisdictionContext,
   type JurisdictionContext,
 } from '@/types/jurisdiction';
+import {
+  JurisdictionAuthorizationError,
+  resolveJurisdictionEntitlement,
+  toTrpcJurisdictionAuthorizationError,
+} from '@/modules/jurisdiction/jurisdiction-entitlements';
 
 function toTrpcJurisdictionError(error: JurisdictionContractError): TRPCError {
   return new TRPCError({
@@ -94,6 +98,8 @@ export const complianceRouter = router({
         code: capability.code,
         name: capability.label,
         queryEnabled: capability.queryEnabled,
+        comparisonEnabled: capability.comparisonEnabled,
+        corpusReady: capability.corpusReady,
         status: capability.status,
       })),
     })),
@@ -107,16 +113,28 @@ export const complianceRouter = router({
   query: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
     .use(withPlanContext)
-    .use(checkUsageLimit(BillingMetric.COMPLIANCE_QUERIES))
     .input(complianceQuerySchema)
     .mutation(async ({ input, ctx }) => {
       const startTime = Date.now();
       let jurisdictionContext: JurisdictionContext;
       try {
-        jurisdictionContext = resolveJurisdictionContext(input, { allowLegacyDefault: true });
+        const entitlement = await resolveJurisdictionEntitlement({
+          prisma: ctx.prisma as any,
+          organizationId: ctx.orgMembership!.organizationId,
+          effectivePlan: ctx.plan ?? 'REGULATOR',
+          requestedMode: input.mode,
+          requestedJurisdictions: input.jurisdictions,
+          allowLegacyDefault: true,
+          source: 'REQUEST',
+          audit: {
+            userId: ctx.user!.id,
+            route: 'trpc.compliance.query',
+          },
+        });
+        jurisdictionContext = entitlement.jurisdictionContext;
       } catch (error) {
         if (error instanceof JurisdictionContractError) throw toTrpcJurisdictionError(error);
-        throw error;
+        throw toTrpcJurisdictionAuthorizationError(error);
       }
 
       try {
@@ -130,6 +148,8 @@ export const complianceRouter = router({
             });
           }
         }
+
+        await resolveUsageLimit(ctx, BillingMetric.COMPLIANCE_QUERIES);
 
         logger.info({
           type: 'compliance_query_start',
@@ -600,6 +620,9 @@ export const complianceRouter = router({
           throw error;
         }
 
+        if (error instanceof JurisdictionContractError) throw toTrpcJurisdictionError(error);
+        if (error instanceof JurisdictionAuthorizationError) throw toTrpcJurisdictionAuthorizationError(error);
+
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to process compliance query',
@@ -617,12 +640,12 @@ export const complianceRouter = router({
   followUp: orgMemberProcedure
     .use(rateLimited('complianceQuery'))
     .use(withPlanContext)
-    .use(checkUsageLimit(BillingMetric.COMPLIANCE_QUERIES, { deferIncrement: true }))
     .input(followUpQuerySchema)
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
       const organizationId = ctx.orgMembership!.organizationId;
       logger.info({ type: 'compliance_query_followup', userId, organizationId });
+      let incrementUsage: (() => Promise<void>) | undefined;
       try {
         // Get original query
         const originalQuery = await ctx.prisma.complianceQuery.findUnique({
@@ -648,7 +671,22 @@ export const complianceRouter = router({
           });
         }
 
-        const jurisdictionContext = resolvePersistedJurisdictionContext(originalQuery);
+        const persistedJurisdictionContext = resolvePersistedJurisdictionContext(originalQuery);
+        const entitlement = await resolveJurisdictionEntitlement({
+          prisma: ctx.prisma as any,
+          organizationId,
+          effectivePlan: ctx.plan ?? 'REGULATOR',
+          requestedMode: persistedJurisdictionContext.mode,
+          requestedJurisdictions: persistedJurisdictionContext.jurisdictions,
+          source: 'PERSISTED_QUERY',
+          audit: {
+            userId,
+            route: 'trpc.compliance.followUp',
+          },
+        });
+        const jurisdictionContext = entitlement.jurisdictionContext;
+        const usagePatch = await resolveUsageLimit(ctx, BillingMetric.COMPLIANCE_QUERIES, { deferIncrement: true });
+        incrementUsage = usagePatch.incrementUsage;
 
         // Search RAG with context from original query
         const ragContext = await searchAndGetRegulatoryEvidenceContext({
@@ -824,7 +862,7 @@ export const complianceRouter = router({
 
         await persistClaimVerification(ctx.prisma, query.id, claimVerification);
 
-        await ctx.incrementUsage?.();
+        await incrementUsage?.();
 
         if (ctx.plan === 'FREE_TRIAL') {
           const tokensUsed = answer.inputTokens + answer.outputTokens;
@@ -863,6 +901,9 @@ export const complianceRouter = router({
         if (error instanceof TRPCError) {
           throw error;
         }
+
+        if (error instanceof JurisdictionContractError) throw toTrpcJurisdictionError(error);
+        if (error instanceof JurisdictionAuthorizationError) throw toTrpcJurisdictionAuthorizationError(error);
 
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',

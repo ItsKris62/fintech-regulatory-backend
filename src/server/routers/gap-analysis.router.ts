@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createHash } from 'crypto';
 import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric, SubscriptionPlan } from '@prisma/client';
-import { rateLimited, withPlanContext, requirePlanFeature, checkUsageLimit } from '../trpc/middleware';
+import { rateLimited, withPlanContext, requirePlanFeature, resolveUsageLimit } from '../trpc/middleware';
 import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError } from '@/utils/error';
@@ -12,6 +12,15 @@ import { prisma } from '@/lib/prisma/client';
 import { GAP_ANALYSIS_UPLOAD_LIMITS, GAP_ANALYSIS_MAX_BASE64_CHARS } from '@/config/upload-limits.config';
 import { validateAuthorizedBenchmarkDocumentIds } from '../services/benchmark-document.service';
 import { canAccessFrameworkTier } from '../services/framework-access.service';
+import {
+  JurisdictionContractError,
+  type JurisdictionContext,
+} from '@/types/jurisdiction';
+import {
+  JurisdictionAuthorizationError,
+  resolveJurisdictionEntitlement,
+  toTrpcJurisdictionAuthorizationError,
+} from '@/modules/jurisdiction/jurisdiction-entitlements';
 
 export const gapAnalysisRouter = router({
   /**
@@ -59,7 +68,6 @@ export const gapAnalysisRouter = router({
     .use(withPlanContext)
     .use(requirePlanFeature('gapAnalysis'))
     .use(requirePlanFeature('benchmarkDocuments'))
-    .use(checkUsageLimit(BillingMetric.GAP_ANALYSES, { deferIncrement: true }))
     .input(
       z.object({
         fileName: z.string().min(1).max(255),
@@ -138,6 +146,28 @@ export const gapAnalysisRouter = router({
         // orgId is always session-derived -- never client-supplied (IDOR closed)
         const orgId   = ctx.orgMembership!.organizationId;
         const userId  = ctx.user!.id;
+        let jurisdictionContext: JurisdictionContext;
+        try {
+          const entitlement = await resolveJurisdictionEntitlement({
+            prisma: ctx.prisma as any,
+            organizationId: orgId,
+            effectivePlan: ctx.plan ?? 'REGULATOR',
+            requestedJurisdictions: undefined,
+            source: 'ORGANIZATION_HOME',
+            audit: {
+              userId,
+              route: 'trpc.gapAnalysis.runGapAnalysis',
+            },
+          });
+          jurisdictionContext = entitlement.jurisdictionContext;
+        } catch (error) {
+          if (error instanceof JurisdictionContractError) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: error.message, cause: error });
+          }
+          if (error instanceof JurisdictionAuthorizationError) throw toTrpcJurisdictionAuthorizationError(error);
+          throw error;
+        }
+        const usagePatch = await resolveUsageLimit(ctx, BillingMetric.GAP_ANALYSES, { deferIncrement: true });
         const benchmarkDocumentIds = [...new Set(input.benchmarkDocumentIds ?? [])];
 
         // Idempotency: v2 key scoped to submitting user, preventing cross-tenant
@@ -203,6 +233,7 @@ export const gapAnalysisRouter = router({
           analysisDepth:        input.analysisDepth,
           focusAreas:           input.focusAreas,
           organizationId:       orgId,
+          jurisdictionContext,
           ipAddress:            ctx.req.ip,
           userAgent:            ctx.req.headers['user-agent'] as string | undefined,
           trialUserId:          ctx.plan === 'FREE_TRIAL' ? userId : undefined,
@@ -222,7 +253,7 @@ export const gapAnalysisRouter = router({
         });
 
         await redis.set(dedupKey, result.id, { ex: 900 });
-        await ctx.incrementUsage?.();
+        await usagePatch.incrementUsage?.();
 
         logger.info({ type: 'gap_analysis_request_success', userId, analysisId: result.id, status: result.status });
         return result;

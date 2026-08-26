@@ -1,18 +1,21 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma/client';
 import { aiService } from '@/lib/ai/ai.service';
-import { ragService, type SearchResult } from '@/lib/rag/rag.service';
+import type { SearchResult } from '@/lib/rag/rag.service';
+import { regulatoryIntelligenceService } from '@/modules/regulatory-intelligence/regulatory-intelligence.service';
 import { buildCitationsFromChunks, hasUsableCitations } from '@/lib/source-grounding/citations';
 import { POLICY_SOURCE_INSUFFICIENCY_MESSAGE, SourceInsufficiencyError } from '@/lib/source-grounding/source-insufficiency';
 import { policyCache } from '@/lib/redis/cache.service';
 import { policyProgressPubSub } from '@/lib/redis/pubsub';
 import { mailer } from '@/lib/email/mailer.service';
 import { logger } from '@/utils/logger';
+import { jurisdictionLabel, resolvePersistedJurisdictionContext, type JurisdictionContext } from '@/types/jurisdiction';
 
 type JobLike = {
   id: string;
   targetEntityId: string;
   userId: string | null;
+  organizationId?: string | null;
   payload: Prisma.JsonValue;
 };
 
@@ -29,6 +32,7 @@ type PolicyGenerationPayload = {
   specificRequirements?: string;
   targetAudience?: string;
   requestedByEmail?: string;
+  jurisdictionContext: JurisdictionContext;
 };
 
 function parsePayload(payload: Prisma.JsonValue): PolicyGenerationPayload {
@@ -36,6 +40,11 @@ function parsePayload(payload: Prisma.JsonValue): PolicyGenerationPayload {
     throw new Error('Invalid policy generation payload.');
   }
   const value = payload as Record<string, unknown>;
+  const jurisdictionContext = resolvePersistedJurisdictionContext(value);
+  if (jurisdictionContext.jurisdictionSource === 'LEGACY_DEFAULT') {
+    throw new Error('Policy generation payload is missing jurisdiction context.');
+  }
+
   return {
     scenario: String(value.scenario ?? ''),
     organizationType: String(value.organizationType ?? 'OTHER'),
@@ -43,22 +52,33 @@ function parsePayload(payload: Prisma.JsonValue): PolicyGenerationPayload {
     specificRequirements: typeof value.specificRequirements === 'string' ? value.specificRequirements : undefined,
     targetAudience: typeof value.targetAudience === 'string' ? value.targetAudience : undefined,
     requestedByEmail: typeof value.requestedByEmail === 'string' ? value.requestedByEmail : undefined,
+    jurisdictionContext,
   };
 }
 
-async function buildPolicySources(regulatoryAreas: string[]): Promise<{ context: string | undefined; results: SearchResult[] }> {
+async function buildPolicySources(input: PolicyGenerationPayload, job: JobLike): Promise<{ context: string | undefined; results: SearchResult[] }> {
   const chunks: string[] = [];
   const acceptedResults: SearchResult[] = [];
   const seen = new Set<string>();
+  const jurisdictionName = input.jurisdictionContext.mode === 'SINGLE'
+    ? jurisdictionLabel(input.jurisdictionContext.primaryJurisdiction)
+    : input.jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
 
-  for (const area of regulatoryAreas) {
-    const results = await ragService.search(`${area} Kenya regulatory requirements policy obligations`, {
-      topK: 5,
-      minScore: 0.7,
+  for (const area of input.regulatoryAreas) {
+    const intelligence = await regulatoryIntelligenceService.retrieveAndGrade({
+      question: `${area} ${jurisdictionName} regulatory requirements policy obligations`,
+      feature: 'POLICY',
+      jurisdictionContext: input.jurisdictionContext,
+      organizationContext: job.organizationId ? { organizationId: job.organizationId } : undefined,
+      retrievalProfile: {
+        topK: 5,
+        minScore: 0.7,
+      },
     });
+    const results = intelligence.evidence;
 
     for (const result of results) {
-      const key = `${result.documentId}:${result.section ?? ''}:${result.chunkText.slice(0, 80)}`;
+      const key = result.vectorId || result.chunkId || `${result.documentId}:${result.section ?? ''}:${result.chunkText.slice(0, 80)}`;
       if (seen.has(key)) continue;
       seen.add(key);
       acceptedResults.push(result);
@@ -86,7 +106,7 @@ export async function runPolicyGenerationJob(job: JobLike, progress: ProgressFn)
     message: 'Starting policy generation...',
   });
 
-  const policySources = await buildPolicySources(input.regulatoryAreas);
+  const policySources = await buildPolicySources(input, job);
   const sourceCitations = buildCitationsFromChunks(policySources.results, 'verified');
   if (!policySources.context || !hasUsableCitations(sourceCitations)) {
     throw new SourceInsufficiencyError(POLICY_SOURCE_INSUFFICIENCY_MESSAGE);
@@ -99,6 +119,7 @@ export async function runPolicyGenerationJob(job: JobLike, progress: ProgressFn)
     specificRequirements: input.specificRequirements,
     targetAudience: input.targetAudience as never,
     ragContext: policySources.context,
+    jurisdictionContext: input.jurisdictionContext,
   });
 
   await progress(70, 'Policy content generated, adding citations.', {

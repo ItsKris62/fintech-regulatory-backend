@@ -3,13 +3,13 @@ import { phoneSchema } from '@/utils/validation';
 
 /**
  * Organization Schemas
- * 
+ *
  * Zod validation schemas for organization management.
  */
 
 /**
  * Create organization
- * 
+ *
  * @example
  * {
  *   name: "FinTech Solutions Ltd",
@@ -37,7 +37,7 @@ export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>;
 
 /**
  * Update organization
- * 
+ *
  * All fields optional (partial update)
  */
 export const updateOrganizationSchema = z.object({
@@ -51,6 +51,8 @@ export const updateOrganizationSchema = z.object({
   address: z.string().optional(),
   website: z.string().url().optional(),
   description: z.string().max(1000).optional(),
+  homeJurisdictionCode: z.enum(['KE', 'RW', 'MW']).optional(),
+  homeJurisdictionReason: z.string().max(500).optional(),
 });
 
 export type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>;
@@ -151,4 +153,4 @@ export interface OrganizationMemberDTO {
   orgRole: string;
   joinedAt: Date;
   [key: string]: any;
-}
+}

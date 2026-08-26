@@ -146,17 +146,21 @@ export class LLMGateway {
 
   private resolveProviderAndModel(req: LLMCompletionRequest, resolvedAIConfig: any): { provider: LLMProviderName, model: string } {
     let providerName = req.provider || 'anthropic';
-    let model = req.model || resolvedAIConfig.model;
+    let model = req.model;
     if (!model) {
-      if (providerName === 'openai') model = appConfig.openai.model;
-      else if (providerName === 'gemini') model = appConfig.gemini.model;
-      else model = appConfig.ai.model;
+      if (req.provider === 'openai') model = appConfig.openai.model;
+      else if (req.provider === 'gemini') model = appConfig.gemini.model;
+      else if (req.provider === 'anthropic') model = appConfig.ai.model;
+      else model = resolvedAIConfig.model || appConfig.ai.model;
     }
-    if (model && model.startsWith('openai:')) {
+    if (!model) {
+      throw new LLMProviderNotConfiguredError(providerName as LLMProviderName);
+    }
+    if (req.model && model.startsWith('openai:')) {
       providerName = 'openai';
-    } else if (model && model.startsWith('gemini:')) {
+    } else if (req.model && model.startsWith('gemini:')) {
       providerName = 'gemini';
-    } else if (model && model.startsWith('claude-')) {
+    } else if (req.model && model.startsWith('claude-')) {
       providerName = 'anthropic';
     }
     return { provider: providerName as LLMProviderName, model };

@@ -1,10 +1,12 @@
 /**
  * Gap Analysis Generation Prompts
  * AI prompts for comparing uploaded policy documents against
- * Kenyan regulatory requirements using RAG-retrieved context.
+ * jurisdiction-scoped regulatory requirements using RAG-retrieved context.
  */
 
 import { z } from 'zod';
+import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
+export type { JurisdictionContext };
 
 // --- Input Types -------------------------------------------------------------
 
@@ -17,6 +19,7 @@ export interface GapAnalysisParams {
   analysisDepth: 'quick' | 'standard' | 'deep';
   focusAreas?: string[];
   ragContext?: string; // Retrieved regulatory passages from Pinecone
+  jurisdictionContext?: JurisdictionContext;
 }
 
 export interface BenchmarkDocumentSummary {
@@ -74,7 +77,7 @@ export const ActionPlanItemSchema = z.object({
   deadline: z.string(),
   effort: z.enum(['LOW', 'MEDIUM', 'HIGH']),
   resources: z.array(z.string()),
-  dependsOn: z.array(z.string()).default([]),
+  dependsOn: z.array(z.union([z.string(), z.number().transform((n) => String(n))])).default([]),
   /** Role accountable for delivering this action. */
   responsibleRole: z.string().optional(),
 });
@@ -95,12 +98,20 @@ export const GapAnalysisResultSchema = z.object({
     mediumGaps: z.number().int().min(0).optional(),
     lowGaps: z.number().int().min(0).optional(),
     analysisDate: z.string(),
-    selectedBenchmarkDocuments: z.array(z.object({
-      id: z.string(),
-      title: z.string(),
-      documentType: z.string().nullable().optional(),
-      regulatoryBody: z.string().nullable().optional(),
-    })).default([]),
+    calculatedScore: z.number().min(0).max(100).optional(),
+    scoringVersion: z.string().optional(),
+    modelSuggestedScore: z.number().min(0).max(100).optional(),
+    selectedBenchmarkDocuments: z.array(
+      z.union([
+        z.string().transform((title) => ({ id: title, title, documentType: null, regulatoryBody: null })),
+        z.object({
+          id: z.string().optional().default(''),
+          title: z.string(),
+          documentType: z.string().nullable().optional(),
+          regulatoryBody: z.string().nullable().optional(),
+        }),
+      ])
+    ).default([]),
     chunksProcessed: z.number().int().positive().optional(),
     tokenCost: z.object({
       inputTokens: z.number().int().min(0),
@@ -341,7 +352,31 @@ function buildRequiredJsonSchema(params: {
 /**
  * System prompt for gap analysis (T4: expanded regulation list).
  */
-export function generateGapAnalysisSystemPrompt(): string {
+export function generateGapAnalysisSystemPrompt(jurisdictionContext?: JurisdictionContext): string {
+  if (jurisdictionContext) {
+    const jurisdictionName = jurisdictionContext.mode === 'SINGLE'
+      ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction)
+      : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
+    const jurisdictionCodes = jurisdictionContext.jurisdictions.join(', ');
+
+    return `You are a senior financial regulatory compliance auditor specializing in source-grounded gap analysis for ${jurisdictionName}.
+
+AUTHORIZED JURISDICTION:
+- Jurisdiction: ${jurisdictionName}
+- Country code(s): ${jurisdictionCodes}
+- Regulatory corpus scope: ${jurisdictionCodes}
+
+Your task is to compare the uploaded organization policy against retrieved regulatory evidence only.
+
+MANDATORY RULES:
+1. Use only retrieved regulatory context for legal obligations, penalties, deadlines, thresholds, licences, filings, and citations.
+2. Do not rely on model memory as a source of law.
+3. Do not import Kenya, CBK, ODPC, KES, or other country-specific assumptions unless that country is the authorized jurisdiction and the retrieved evidence supports it.
+4. Every gap must cite a source document and section/clause when present in the retrieved evidence.
+5. If evidence is insufficient, abstain from legal conclusions and state that verified regulatory sources are required.
+6. Return only valid JSON that matches the requested schema.`;
+  }
+
   return `You are a senior Kenyan financial regulatory compliance auditor with 15+ years of experience. You specialise in reviewing internal compliance policies and procedures against Kenyan regulatory requirements.
 
 Your expertise covers:
@@ -496,6 +531,14 @@ Analyse EVERY specified framework  -  include frameworks with no gaps (score the
  * User prompt for gap analysis  -  used for single-pass (document <= CHUNK_SIZE).
  */
 export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string {
+  const jurisdictionName = params.jurisdictionContext
+    ? (params.jurisdictionContext.mode === 'SINGLE'
+      ? jurisdictionLabel(params.jurisdictionContext.primaryJurisdiction)
+      : params.jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', '))
+    : 'Kenya';
+  const jurisdictionCodes = params.jurisdictionContext
+    ? params.jurisdictionContext.jurisdictions.join(', ')
+    : 'KE';
   const depthInstructions: Record<string, string> = {
     quick: 'Focus on CRITICAL and HIGH severity gaps only. Generate 2-3 gaps per framework maximum. Provide a high-level executive summary.',
     standard: 'Cover all severity levels. Generate 3-7 gaps per framework. Provide detailed analysis of each gap.',
@@ -503,7 +546,7 @@ export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string
   };
 
   const ragSection = params.ragContext
-    ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from the Kenyan regulatory document database. Use these to ground your gap identification:\n\n${params.ragContext}\n`
+    ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from the SheriaBot regulatory corpus for ${jurisdictionName} (${jurisdictionCodes}). Use these to ground your gap identification:\n\n${params.ragContext}\n`
     : `\n\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context was provided. Do not identify legal gaps, legal obligations, penalties, deadlines, or compliance conclusions. State that verified source documents are required and do not rely on model memory.\n`;
 
   const focusSection =
@@ -511,9 +554,10 @@ export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string
       ? `\n## PRIORITY FOCUS AREAS\nPay particular attention to these areas: ${params.focusAreas.join(', ')}\n`
       : '';
 
-  return `Conduct a ${params.analysisDepth.toUpperCase()} gap analysis of the following policy document against the specified Kenyan regulatory frameworks.
+  return `Conduct a ${params.analysisDepth.toUpperCase()} gap analysis of the following policy document against the specified ${jurisdictionName} regulatory frameworks.
 
 ## ANALYSIS SCOPE
+- **Authorized Jurisdiction:** ${jurisdictionName} (${jurisdictionCodes})
 - **Document:** ${params.documentName} (${params.documentType.toUpperCase()})
 - **Regulatory Frameworks:** ${params.regulatoryFrameworks.join(', ')}
 - **Analysis Depth:** ${params.analysisDepth}  -  ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
@@ -532,6 +576,78 @@ ${buildRequiredJsonSchema(params)}
 \`\`\`
 
 Analyse EVERY specified framework. Compute metadata counts from your actual gaps after writing all frameworks. Overall score = weighted average of framework scores, with CRITICAL gaps reducing it proportionally. Return ONLY valid JSON.`;
+}
+
+// --- Deterministic Gap Scoring Service -----------------------------------------
+
+export const GAP_SCORING_VERSION = 'v1.0-deterministic';
+
+export interface DeterministicScoreBreakdown {
+  calculatedScore: number;
+  modelSuggestedScore?: number;
+  scoringVersion: string;
+  penalties: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    totalPenalty: number;
+  };
+  gapCounts: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    total: number;
+  };
+}
+
+/**
+ * Authoritative deterministic score calculation for policy gap analysis.
+ * Formula: 100 - (25 * CRITICAL) - (15 * HIGH) - (8 * MEDIUM) - (3 * LOW), clamped to [0, 100].
+ */
+export function calculateDeterministicGapScore(
+  gaps: Array<{ severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' }>,
+  modelSuggestedScore?: number
+): DeterministicScoreBreakdown {
+  let critical = 0;
+  let high = 0;
+  let medium = 0;
+  let low = 0;
+
+  for (const gap of gaps) {
+    if (gap.severity === 'CRITICAL') critical++;
+    else if (gap.severity === 'HIGH') high++;
+    else if (gap.severity === 'MEDIUM') medium++;
+    else if (gap.severity === 'LOW') low++;
+  }
+
+  const criticalPenalty = critical * 25;
+  const highPenalty = high * 15;
+  const mediumPenalty = medium * 8;
+  const lowPenalty = low * 3;
+  const totalPenalty = criticalPenalty + highPenalty + mediumPenalty + lowPenalty;
+  const calculatedScore = Math.max(0, Math.min(100, 100 - totalPenalty));
+
+  return {
+    calculatedScore,
+    modelSuggestedScore,
+    scoringVersion: GAP_SCORING_VERSION,
+    penalties: {
+      critical: criticalPenalty,
+      high: highPenalty,
+      medium: mediumPenalty,
+      low: lowPenalty,
+      totalPenalty,
+    },
+    gapCounts: {
+      critical,
+      high,
+      medium,
+      low,
+      total: gaps.length,
+    },
+  };
 }
 
 // --- Output Parser ------------------------------------------------------------
@@ -600,22 +716,37 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
   let totalGaps = 0;
   let criticalGaps = 0;
   let highGaps = 0;
+  let mediumGaps = 0;
+  let lowGaps = 0;
+
+  const allGaps: Array<{ severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' }> = [];
 
   for (const framework of validated.frameworks) {
     totalGaps += framework.gaps.length;
     for (const gap of framework.gaps) {
+      allGaps.push({ severity: gap.severity });
       if (gap.severity === 'CRITICAL') criticalGaps++;
-      if (gap.severity === 'HIGH') highGaps++;
+      else if (gap.severity === 'HIGH') highGaps++;
+      else if (gap.severity === 'MEDIUM') mediumGaps++;
+      else if (gap.severity === 'LOW') lowGaps++;
     }
   }
+
+  // Calculate authoritative deterministic score
+  const scoreResult = calculateDeterministicGapScore(allGaps, validated.overallScore);
 
   validated.metadata.totalGaps = totalGaps;
   validated.metadata.criticalGaps = criticalGaps;
   validated.metadata.highGaps = highGaps;
+  validated.metadata.mediumGaps = mediumGaps;
+  validated.metadata.lowGaps = lowGaps;
   validated.metadata.analysisDate = new Date().toISOString();
+  validated.metadata.modelSuggestedScore = validated.overallScore;
+  validated.metadata.scoringVersion = scoreResult.scoringVersion;
+  validated.metadata.calculatedScore = scoreResult.calculatedScore;
 
-  // Clamp score to valid range (belt-and-suspenders, Zod already enforces min/max)
-  validated.overallScore = Math.max(0, Math.min(100, Math.round(validated.overallScore)));
+  // Authoritative overallScore is assigned deterministically
+  validated.overallScore = scoreResult.calculatedScore;
 
   return validated as GapAnalysisResult;
 }

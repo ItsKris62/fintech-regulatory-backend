@@ -40,7 +40,7 @@ const envSchema = z.object({
 
   // Anthropic Claude
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-', 'Invalid Anthropic API key'),
-  ANTHROPIC_MODEL: z.string().default('claude-3-haiku-20240307'),
+  ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-6'),
 
   // OpenAI
   OPENAI_API_KEY: z.string().optional(),

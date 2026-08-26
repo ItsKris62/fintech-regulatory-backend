@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { BillingMetric, MemberRole, MemberStatus, SubscriptionPlan } from '@prisma/client';
-import type { OrgMembershipEntry } from './context';
+import type { Context, OrgMembershipEntry, User } from './context';
 import { middleware } from './init';
 import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { rateLimiter } from '@/lib/redis/rate-limiter';
@@ -600,133 +600,169 @@ const AI_METRICS = new Set<BillingMetric>([
  *
  * Must run after withPlanContext.
  */
-export const checkUsageLimit = (
-  metric:  BillingMetric,
-  opts?:   { deferIncrement?: boolean },
-) =>
-  middleware(async ({ ctx, next }) => {
-    // Re-assert auth (always runs after isAuthenticated + withPlanContext)
-    if (!ctx.user) {
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required.' });
-    }
-    const user = ctx.user;
-    const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
+export interface UsageLimitOptions {
+  deferIncrement?: boolean;
+}
 
-    // -- FREE_TRIAL branch --------------------------------------------------
-    // Trial users bypass the Redis monthly quota path entirely.
-    // Caps are enforced against the freeTrialUsage JSON column via trialService.
-    if (plan === 'FREE_TRIAL') {
-      const trialFeature = mapMetricToTrialFeature(metric);
+export interface UsageLimitPatch {
+  user: User;
+  usageInfo: { metric: BillingMetric; current: number; limit: number };
+  incrementUsage?: () => Promise<void>;
+}
 
-      if (trialFeature !== null) {
-        // 1. Feature-specific lifetime cap
-        const featureCheck = await checkTrialLimit(user.id, trialFeature);
-        if (!featureCheck.allowed) {
-          logger.warn({
-            type:    'trial_limit_reached',
-            userId:  user.id,
-            feature: trialFeature,
-            current: featureCheck.current,
-            limit:   featureCheck.limit,
-          });
-          throw new TRPCError({
-            code:    'FORBIDDEN',
-            message: `Trial limit reached for this feature (${featureCheck.current}/${featureCheck.limit}). Upgrade to continue.`,
-          });
-        }
+/**
+ * Enforce and optionally consume a feature quota for an already-authenticated
+ * request. Routers that must authorize domain scope before quota consumption
+ * can call this helper after their feature-specific authorization succeeds.
+ */
+export async function resolveUsageLimit(
+  ctx: Context,
+  metric: BillingMetric,
+  opts?: UsageLimitOptions,
+): Promise<UsageLimitPatch> {
+  if (!ctx.user) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required.' });
+  }
+  const user = ctx.user;
+  const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
 
-        // 2. Cross-feature token budget (AI-generating features only)
-        if (AI_METRICS.has(metric)) {
-          const tokenCheck = await checkTrialLimit(user.id, 'totalTokensUsed');
-          if (!tokenCheck.allowed) {
-            logger.warn({
-              type:    'trial_token_budget_exhausted',
-              userId:  user.id,
-              current: tokenCheck.current,
-              limit:   tokenCheck.limit,
-            });
-            throw new TRPCError({
-              code:    'FORBIDDEN',
-              message: `Trial token budget exhausted (${tokenCheck.current.toLocaleString()}/${tokenCheck.limit.toLocaleString()} tokens). Upgrade to continue.`,
-            });
-          }
-        }
+  // -- FREE_TRIAL branch --------------------------------------------------
+  // Trial users bypass the Redis monthly quota path entirely.
+  // Caps are enforced against the freeTrialUsage JSON column via trialService.
+  if (plan === 'FREE_TRIAL') {
+    const trialFeature = mapMetricToTrialFeature(metric);
 
-        // Atomic pre-handler consumption closes the check-then-increment race:
-        // if a parallel request wins the final slot, this request is blocked
-        // before the procedure handler runs.
-        const featureIncrement = await incrementTrialUsageAtomic(user.id, trialFeature, 1);
-        if (!featureIncrement.allowed) {
-          logger.warn({
-            type:    'trial_limit_reached_atomic',
-            userId:  user.id,
-            feature: trialFeature,
-            current: featureIncrement.newCount,
-            limit:   featureIncrement.limit,
-          });
-          throw new TRPCError({
-            code:    'FORBIDDEN',
-            message: `Trial limit reached for this feature (${featureIncrement.newCount}/${featureIncrement.limit}). Upgrade to continue.`,
-          });
-        }
-
-        return next({
-          ctx: {
-            ...ctx,
-            user,
-            usageInfo:      { metric, current: featureIncrement.newCount, limit: featureIncrement.limit },
-            incrementUsage: async () => {},
-          },
+    if (trialFeature !== null) {
+      // 1. Feature-specific lifetime cap
+      const featureCheck = await checkTrialLimit(user.id, trialFeature);
+      if (!featureCheck.allowed) {
+        logger.warn({
+          type:    'trial_limit_reached',
+          userId:  user.id,
+          feature: trialFeature,
+          current: featureCheck.current,
+          limit:   featureCheck.limit,
+        });
+        throw new TRPCError({
+          code:    'FORBIDDEN',
+          message: `Trial limit reached for this feature (${featureCheck.current}/${featureCheck.limit}). Upgrade to continue.`,
         });
       }
 
-      // Metric has no trial cap (e.g. API_CALLS, POLICY_GENERATIONS are not trial features)
-      return next({
-        ctx: { ...ctx, user, usageInfo: { metric, current: 0, limit: FREE_TRIAL_LIMITS.complianceQueries } },
-      });
+      // 2. Cross-feature token budget (AI-generating features only)
+      if (AI_METRICS.has(metric)) {
+        const tokenCheck = await checkTrialLimit(user.id, 'totalTokensUsed');
+        if (!tokenCheck.allowed) {
+          logger.warn({
+            type:    'trial_token_budget_exhausted',
+            userId:  user.id,
+            current: tokenCheck.current,
+            limit:   tokenCheck.limit,
+          });
+          throw new TRPCError({
+            code:    'FORBIDDEN',
+            message: `Trial token budget exhausted (${tokenCheck.current.toLocaleString()}/${tokenCheck.limit.toLocaleString()} tokens). Upgrade to continue.`,
+          });
+        }
+      }
+
+      // Atomic pre-handler consumption closes the check-then-increment race:
+      // if a parallel request wins the final slot, this request is blocked
+      // before the procedure handler runs.
+      const featureIncrement = await incrementTrialUsageAtomic(user.id, trialFeature, 1);
+      if (!featureIncrement.allowed) {
+        logger.warn({
+          type:    'trial_limit_reached_atomic',
+          userId:  user.id,
+          feature: trialFeature,
+          current: featureIncrement.newCount,
+          limit:   featureIncrement.limit,
+        });
+        throw new TRPCError({
+          code:    'FORBIDDEN',
+          message: `Trial limit reached for this feature (${featureIncrement.newCount}/${featureIncrement.limit}). Upgrade to continue.`,
+        });
+      }
+
+      return {
+        user,
+        usageInfo: { metric, current: featureIncrement.newCount, limit: featureIncrement.limit },
+        incrementUsage: async () => {},
+      };
     }
 
-    // -- Standard Redis monthly / lifetime quota path (paid plans + REGULATOR) -
-    const featureKey = METRIC_FEATURE_MAP[metric];
-    const { limit, period } = ctx.entitlements
-      ? getQuotaFromEntitlements(ctx.entitlements, featureKey)
-      : getQuota(plan, featureKey);
+    // Metric has no trial cap (e.g. API_CALLS, POLICY_GENERATIONS are not trial features)
+    return {
+      user,
+      usageInfo: { metric, current: 0, limit: FREE_TRIAL_LIMITS.complianceQueries },
+    };
+  }
 
-    // Unlimited: skip all Redis I/O
-    if (limit === -1) {
-      return next({
-        ctx: { ...ctx, user, usageInfo: { metric, current: -1, limit: -1 } },
-      });
-    }
+  // -- Standard Redis monthly / lifetime quota path (paid plans + REGULATOR) -
+  const featureKey = METRIC_FEATURE_MAP[metric];
+  const { limit, period } = ctx.entitlements
+    ? getQuotaFromEntitlements(ctx.entitlements, featureKey)
+    : getQuota(plan, featureKey);
 
-    // Feature unavailable on this plan -- FORBIDDEN (plan issue, not quota issue)
-    if (limit === 0) {
-      const planName = plan.charAt(0) + plan.slice(1).toLowerCase();
-      throw new TRPCError({
-        code:    'FORBIDDEN',
-        message: `This feature is not available on the ${planName} plan. Please upgrade your subscription.`,
-      });
-    }
+  // Unlimited: skip all Redis I/O
+  if (limit === -1) {
+    return { user, usageInfo: { metric, current: -1, limit: -1 } };
+  }
 
-    // Build the Redis key using the correct period bucket
-    const scopeId   = user.organizationId ?? user.id;
-    const periodKey = period === 'lifetime'
-      ? 'lifetime'
-      : new Date().toISOString().slice(0, 7); // 'YYYY-MM'
-    const usageKey  = `sheriabot:usage:${scopeId}:${metric}:${periodKey}`;
+  // Feature unavailable on this plan -- FORBIDDEN (plan issue, not quota issue)
+  if (limit === 0) {
+    const planName = plan.charAt(0) + plan.slice(1).toLowerCase();
+    throw new TRPCError({
+      code:    'FORBIDDEN',
+      message: `This feature is not available on the ${planName} plan. Please upgrade your subscription.`,
+    });
+  }
 
-    // Read current count for user-facing diagnostics. Enforcement happens at
-    // increment time below so concurrent requests cannot all pass this precheck.
-    const currentRaw = await redis.get<number>(usageKey);
-    const current    = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw ?? 0);
+  // Build the Redis key using the correct period bucket
+  const scopeId   = user.organizationId ?? user.id;
+  const periodKey = period === 'lifetime'
+    ? 'lifetime'
+    : new Date().toISOString().slice(0, 7); // 'YYYY-MM'
+  const usageKey  = `sheriabot:usage:${scopeId}:${metric}:${periodKey}`;
 
-    if (current >= limit) {
+  // Read current count for user-facing diagnostics. Enforcement happens at
+  // increment time below so concurrent requests cannot all pass this precheck.
+  const currentRaw = await redis.get<number>(usageKey);
+  const current    = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw ?? 0);
+
+  if (current >= limit) {
+    logger.warn({
+      type:    'usage_limit_reached',
+      userId:  user.id,
+      orgId:   scopeId,
+      metric,
+      current,
+      limit,
+      period,
+      plan,
+    });
+
+    const limitLabel = period === 'lifetime' ? 'Lifetime' : 'Monthly';
+    throw new TRPCError({
+      code:    'TOO_MANY_REQUESTS',
+      message: `${limitLabel} limit reached (${current}/${limit}). Upgrade your plan for more.`,
+    });
+  }
+
+  // -----------------------------------------------------------------
+  // Increment logic -- either immediately or deferred.
+  // -----------------------------------------------------------------
+  const doIncrement = async (): Promise<void> => {
+    const newCount = await redis.incr(usageKey);
+    if (newCount > limit) {
+      await redis.decr(usageKey);
+
       logger.warn({
-        type:    'usage_limit_reached',
+        type:    'usage_limit_reached_atomic',
         userId:  user.id,
         orgId:   scopeId,
         metric,
-        current,
+        attempted: newCount,
         limit,
         period,
         plan,
@@ -735,67 +771,50 @@ export const checkUsageLimit = (
       const limitLabel = period === 'lifetime' ? 'Lifetime' : 'Monthly';
       throw new TRPCError({
         code:    'TOO_MANY_REQUESTS',
-        message: `${limitLabel} limit reached (${current}/${limit}). Upgrade your plan for more.`,
+        message: `${limitLabel} limit reached (${limit}/${limit}). Upgrade your plan for more.`,
       });
     }
 
-    // -----------------------------------------------------------------
-    // Increment logic -- either immediately or deferred.
-    // -----------------------------------------------------------------
-    const doIncrement = async (): Promise<void> => {
-      const newCount = await redis.incr(usageKey);
-      if (newCount > limit) {
-        await redis.decr(usageKey);
+    // Set TTL only for monthly keys (lifetime keys never expire)
+    if (newCount === 1 && period === 'month') {
+      await redis.expire(usageKey, USAGE_TTL);
+    }
+    logger.debug({
+      type:    'usage_incremented',
+      orgId:   scopeId,
+      metric,
+      current: newCount,
+      limit,
+      period,
+      deferred: opts?.deferIncrement ?? false,
+    });
+  };
 
-        logger.warn({
-          type:    'usage_limit_reached_atomic',
-          userId:  user.id,
-          orgId:   scopeId,
-          metric,
-          attempted: newCount,
-          limit,
-          period,
-          plan,
-        });
-
-        const limitLabel = period === 'lifetime' ? 'Lifetime' : 'Monthly';
-        throw new TRPCError({
-          code:    'TOO_MANY_REQUESTS',
-          message: `${limitLabel} limit reached (${limit}/${limit}). Upgrade your plan for more.`,
-        });
-      }
-
-      // Set TTL only for monthly keys (lifetime keys never expire)
-      if (newCount === 1 && period === 'month') {
-        await redis.expire(usageKey, USAGE_TTL);
-      }
-      logger.debug({
-        type:    'usage_incremented',
-        orgId:   scopeId,
-        metric,
-        current: newCount,
-        limit,
-        period,
-        deferred: opts?.deferIncrement ?? false,
-      });
+  if (opts?.deferIncrement) {
+    return {
+      user,
+      usageInfo: { metric, current, limit },
+      incrementUsage: doIncrement,
     };
+  }
 
-    if (opts?.deferIncrement) {
-      return next({
-        ctx: {
-          ...ctx,
-          user,
-          usageInfo:      { metric, current, limit },
-          incrementUsage: doIncrement,
-        },
-      });
-    }
+  // Default (eager) path: increment now, before the handler runs.
+  await doIncrement();
 
-    // Default (eager) path: increment now, before the handler runs.
-    await doIncrement();
+  return { user, usageInfo: { metric, current: current + 1, limit } };
+}
 
+export const checkUsageLimit = (
+  metric:  BillingMetric,
+  opts?:   UsageLimitOptions,
+) =>
+  middleware(async ({ ctx, next }) => {
+    const usagePatch = await resolveUsageLimit(ctx, metric, opts);
     return next({
-      ctx: { ...ctx, user, usageInfo: { metric, current: current + 1, limit } },
+      ctx: {
+        ...ctx,
+        ...usagePatch,
+      },
     });
   });
 

@@ -5,7 +5,6 @@ import path from 'path';
 import { prisma } from '../lib/prisma/client';
 import { redis } from '../lib/redis/client';
 import { rateLimiter } from '../lib/redis/rate-limiter';
-import { ragService } from '../lib/rag/rag.service';
 
 const OUT_DIR = path.join(__dirname, '../../../uat-results');
 
@@ -131,6 +130,9 @@ async function runUAT() {
       const res = await caller.compliance.query(payload);
       const timing = Date.now() - qStart;
       console.log(`  ✅ Success (${timing}ms) - Grounded: ${res.grounded}, Abstained: ${res.abstained}`);
+      const graderFailed = 'graderFailed' in res ? res.graderFailed : undefined;
+      const fallbackReason = 'fallbackReason' in res ? res.fallbackReason : undefined;
+      const cacheBypassed = 'cacheBypassed' in res ? res.cacheBypassed : undefined;
       results.push({
         name,
         payload,
@@ -142,10 +144,10 @@ async function runUAT() {
         jurisdictions: res.jurisdictions,
         grounded: res.grounded,
         abstained: res.abstained,
-        graderFailed: res.graderFailed,
-        fallbackReason: res.fallbackReason,
+        graderFailed,
+        fallbackReason,
         queryId: res.queryId,
-        cacheBypassed: res.cacheBypassed
+        cacheBypassed
       });
       return res;
     } catch (err: any) {
@@ -292,37 +294,12 @@ async function runUAT() {
   await runSSE(`SSE Parity 4-Country`, { question: sseQ, mode: 'COMPARE', jurisdictions: ['KE', 'RW', 'MW', 'NG'] });
   await new Promise(r => setTimeout(r, 20000));
 
-  // 10. Partial Evidence A/B/C/D Controlled Cases
-  console.log(`▶️ Running: A/B/C/D Controlled Cases...`);
-  const originalSearch = ragService.searchAndGetRegulatoryEvidenceContext;
-  const mockChunks = (c_ng: boolean, c_ke: boolean, c_rw: boolean, c_mw: boolean) => {
-    return [
-      ...(c_ng ? [{ vectorId: 'ng1', chunkId: 'ng1', documentId: 'ng1', documentTitle: 'NG Doc', jurisdictionCode: 'NG', section: 'NG 1', textSnippet: 'NG establishes rules for electronic money.', score: 0.9 }] : []),
-      ...(c_ke ? [{ vectorId: 'ke1', chunkId: 'ke1', documentId: 'ke1', documentTitle: 'KE Doc', jurisdictionCode: 'KE', section: 'KE 1', textSnippet: 'KE establishes rules for electronic money.', score: 0.9 }] : []),
-      ...(c_rw ? [{ vectorId: 'rw1', chunkId: 'rw1', documentId: 'rw1', documentTitle: 'RW Doc', jurisdictionCode: 'RW', section: 'RW 1', textSnippet: 'RW establishes rules for electronic money.', score: 0.9 }] : []),
-      ...(c_mw ? [{ vectorId: 'mw1', chunkId: 'mw1', documentId: 'mw1', documentTitle: 'MW Doc', jurisdictionCode: 'MW', section: 'MW 1', textSnippet: 'MW establishes rules for electronic money.', score: 0.9 }] : []),
-    ];
-  };
-
-  const runMockedQuery = async (name: string, a:boolean,b:boolean,c:boolean,d:boolean) => {
-    ragService.searchAndGetRegulatoryEvidenceContext = async () => {
-      return { chunks: mockChunks(a,b,c,d), corpusVersionSnapshot: {}, retrievalVersion: 'mock' } as any;
-    };
-    await runQuery(name, { question: "Compare electronic money rules.", mode: 'COMPARE', jurisdictions: ['NG', 'KE', 'RW', 'MW'] });
-    await new Promise(r => setTimeout(r, 20000));
-  };
-
-  // A: 3 sufficient, 1 insufficient (NG missing)
-  await runMockedQuery(`Controlled Case A (3 suff, 1 insuff)`, false, true, true, true);
-  // B: 2 sufficient, 2 insufficient (NG, KE missing)
-  await runMockedQuery(`Controlled Case B (2 suff, 2 insuff)`, false, false, true, true);
-  // C: 1 sufficient, 3 insufficient (NG, KE, RW missing)
-  await runMockedQuery(`Controlled Case C (1 suff, 3 insuff)`, false, false, false, true);
-  // D: 0 sufficient
-  await runMockedQuery(`Controlled Case D (0 suff)`, false, false, false, false);
-
-  // Restore
-  ragService.searchAndGetRegulatoryEvidenceContext = originalSearch;
+  results.push({
+    name: 'Controlled partial-evidence cases',
+    success: true,
+    skippedInLiveScript: true,
+    reason: 'Controlled retrieval mocks are covered by Vitest transport and regulatory-intelligence tests.',
+  });
 
   fs.writeFileSync(path.join(OUT_DIR, 'uat_results.json'), JSON.stringify(results, null, 2));
 

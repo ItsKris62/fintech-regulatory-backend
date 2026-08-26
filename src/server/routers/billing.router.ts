@@ -137,6 +137,7 @@ export const billingRouter = router({
                   mpesaNextPaymentDueDate: true,
                   subscriptionCycleEnd: true,
                   mpesaPhoneNumber: true,
+                  homeJurisdictionCode: true,
                 },
               })
             : Promise.resolve(null),
@@ -204,6 +205,7 @@ export const billingRouter = router({
             mpesaNextPaymentDueDate: org?.mpesaNextPaymentDueDate?.toISOString() ?? null,
             subscriptionCycleEnd:    org?.subscriptionCycleEnd?.toISOString()    ?? null,
             mpesaPhoneNumber:        org?.mpesaPhoneNumber ?? null,
+            homeJurisdictionCode:    org?.homeJurisdictionCode ?? null,
             catalogPrice,
             activePaymentProvider: appConfig.payments.activeProvider,
             stripeEnabled: appConfig.payments.stripeEnabled,

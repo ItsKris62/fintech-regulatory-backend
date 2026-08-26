@@ -20,25 +20,25 @@ export const aiConfig = {
    */
   models: {
     // Default model for most operations
-    default: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
+    default: appConfig.ai.model || 'anthropic:claude-sonnet-4-6',
 
     // Policy generation (Sonnet 4.6 for balance of speed/quality)
-    policyGeneration: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
+    policyGeneration: appConfig.ai.model || 'anthropic:claude-sonnet-4-6',
     
     // Checklist generation
-    checklistGeneration: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
+    checklistGeneration: appConfig.ai.model || 'anthropic:claude-sonnet-4-6',
     
     // Compliance query
-    complianceQuery: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
+    complianceQuery: appConfig.ai.model || 'anthropic:claude-sonnet-4-6',
     
     // Citation verification
-    citationVerification: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
+    citationVerification: appConfig.ai.model || 'anthropic:claude-sonnet-4-6',
     
     // Complex analysis
-    complexAnalysis: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
+    complexAnalysis: appConfig.ai.model || 'anthropic:claude-sonnet-4-6',
     
     // Embedding model (currently just placeholder for future usage)
-    embedding: appConfig.ai.model || 'anthropic:claude-3-5-sonnet-latest',
+    embedding: appConfig.ai.model || 'anthropic:claude-sonnet-4-6',
   },
 
   /**

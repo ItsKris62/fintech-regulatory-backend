@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { appRouter } from '../server/trpc/router';
 import { prisma } from '../lib/prisma/client';
-import { redis } from '../lib/redis/client';
 
 async function runSmokeTest() {
   console.log('🚀 Starting Anthropic Claude RAG Smoke Test...');
@@ -55,7 +54,8 @@ async function runSmokeTest() {
   if (!hasValidCitation) throw new Error("No valid NG citation found");
   console.log('✅ Answer includes grounded citations with correct jurisdictionCode');
   
-  if (res.abstained || res.fallbackReason) throw new Error("Provider error or fallback triggered: " + res.fallbackReason);
+  const fallbackReason = 'fallbackReason' in res ? res.fallbackReason : undefined;
+  if (res.abstained || fallbackReason) throw new Error("Provider error or fallback triggered: " + fallbackReason);
   console.log('✅ No provider 429 or billing error');
 
   console.log(`🎉 Smoke test passed in ${Date.now() - start}ms`);

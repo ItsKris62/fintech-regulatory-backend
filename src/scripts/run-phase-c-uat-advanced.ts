@@ -59,7 +59,7 @@ async function runAdvancedUAT() {
       const res = await caller.compliance.query(payload);
       const timing = Date.now() - qStart;
       console.log(`  ✅ Success (${timing}ms) - Route: ${res.route}`);
-      results.push({ name, payload, timing, success: true, route: res.route, queryId: res.id, answer: res.answer });
+      results.push({ name, payload, timing, success: true, route: res.route, queryId: res.queryId, answer: res.answer });
       return res;
     } catch (err: any) {
       console.error(`  ❌ Failed: ${err.message}`);
@@ -86,8 +86,8 @@ async function runAdvancedUAT() {
   if (cache1) {
     console.log('▶️ Running Follow-up test...');
     try {
-      const followUp = await caller.compliance.followUpQuery({
-        originalQueryId: cache1.id,
+      const followUp = await caller.compliance.followUp({
+        originalQueryId: cache1.queryId,
         question: "Can you provide more details on the exact timeline for that?"
       });
       console.log('  ✅ Follow-up Success');

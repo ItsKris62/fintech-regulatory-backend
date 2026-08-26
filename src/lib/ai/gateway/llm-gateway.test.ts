@@ -59,7 +59,7 @@ describe('LLMGateway Unit Tests', () => {
     expect(res.provider).toBe('anthropic');
     const calledReq = spy.mock.calls[0][0];
     expect(calledReq.prompt).toBe('hello');
-    expect(calledReq.model).toBe('claude-haiku-4-5-20251001'); // default applied
+    expect(calledReq.model).toBe('claude-sonnet-5'); // runtime query default applied
   });
 
   it('cache key differs across provider and model', () => {
@@ -97,7 +97,7 @@ describe('LLMGateway Unit Tests', () => {
 
   it('unconfigured provider throws LLMProviderNotConfiguredError', async () => {
     (appConfig as any).openai.apiKey = undefined;
-    const req: LLMCompletionRequest = { prompt: 'hello', provider: 'openai' };
+    const req: LLMCompletionRequest = { prompt: 'hello', provider: 'openai', model: 'openai:gpt-4o' };
     await expect(llmGateway.complete(req)).rejects.toThrowError(LLMProviderNotConfiguredError);
   });
 

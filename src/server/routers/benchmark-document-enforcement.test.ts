@@ -56,7 +56,8 @@ describe('benchmark document enforcement and alignment map', () => {
     expect(complianceModule).toContain('const frameworkSlug = regulatoryFrameworkSlugs[index]');
     expect(complianceModule).toContain('...(frameworkSlug ? { frameworkSlug } : {})');
     expect(complianceModule).toContain('documentId: pineconeInFilter(benchmarkDocumentIds)');
-    expect(complianceModule).toContain('fallbackIfTooFew');
+    expect(complianceModule).toContain('regulatoryIntelligenceService');
+    expect(complianceModule).toContain("feature: 'GAP_ANALYSIS'");
     expect(complianceModule).toContain('const relaxedFilter = frameworkSlug ? { frameworkSlug } : undefined');
   });
 

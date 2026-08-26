@@ -11,6 +11,7 @@ export interface JurisdictionCapability {
   label: string;
   queryEnabled: boolean;
   comparisonEnabled: boolean;
+  corpusReady: boolean;
   status: JurisdictionAvailabilityStatus;
 }
 
@@ -20,6 +21,7 @@ export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCap
     label: 'Kenya',
     queryEnabled: true,
     comparisonEnabled: true,
+    corpusReady: true,
     status: 'ACTIVE',
   },
   RW: {
@@ -27,6 +29,7 @@ export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCap
     label: 'Rwanda',
     queryEnabled: true,
     comparisonEnabled: true,
+    corpusReady: true,
     status: 'ACTIVE',
   },
   MW: {
@@ -34,14 +37,16 @@ export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCap
     label: 'Malawi',
     queryEnabled: true,
     comparisonEnabled: true,
+    corpusReady: true,
     status: 'ACTIVE',
   },
   NG: {
     code: 'NG',
     label: 'Nigeria',
-    queryEnabled: true,
-    comparisonEnabled: true,
-    status: 'ACTIVE',
+    queryEnabled: false,
+    comparisonEnabled: false,
+    corpusReady: false,
+    status: 'COMING_SOON',
   },
 };
 
@@ -76,7 +81,7 @@ export function jurisdictionCodeFromLabel(value: string | null | undefined): Jur
   return CODE_BY_NORMALIZED_LABEL[value.trim().toLowerCase()] ?? null;
 }
 
-export type JurisdictionSource = 'REQUEST' | 'LEGACY_DEFAULT' | 'PERSISTED_QUERY';
+export type JurisdictionSource = 'REQUEST' | 'LEGACY_DEFAULT' | 'PERSISTED_QUERY' | 'ORGANIZATION_HOME';
 
 export interface SingleJurisdictionContext {
   mode: 'SINGLE';

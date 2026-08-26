@@ -117,6 +117,7 @@ export interface RegulatoryEvidenceSearchOptions {
   jurisdictionContext: JurisdictionContext;
   topK?: number;
   minScore?: number;
+  filter?: Record<string, any>;
   namespace?: string;
   preferActiveSources?: boolean;
   sourceIndexMode?: SearchOptions['sourceIndexMode'];
@@ -537,6 +538,7 @@ export class RAGService {
       jurisdictionContext,
       topK = 10,
       minScore = 0.7,
+      filter: additionalFilter,
       namespace,
       preferActiveSources = true,
       sourceIndexMode,
@@ -545,7 +547,10 @@ export class RAGService {
     
     // Balanced concurrent retrieval: fetch topK for each jurisdiction independently
     const fetchPromises = jurisdictionsToSearch.map(async (jcode) => {
-      const filter = buildRegulatoryEvidenceFilter(jcode, sourceIndexMode);
+      const filter = andFilters(
+        buildRegulatoryEvidenceFilter(jcode, sourceIndexMode),
+        additionalFilter,
+      );
       const jResults = await this.searchWithReranking(query, {
         topK,
         minScore,
@@ -807,6 +812,7 @@ export async function searchAndGetRegulatoryEvidenceContext(
     jurisdictionContext,
     topK = 10,
     minScore = 0.7,
+    filter,
     namespace,
     preferActiveSources = true,
     sourceIndexMode,
@@ -822,6 +828,7 @@ export async function searchAndGetRegulatoryEvidenceContext(
     retrievalVersion: REGULATORY_EVIDENCE_RETRIEVAL_VERSION,
     topK,
     minScore,
+    filter: filter ?? null,
     namespace: namespace ?? null,
     preferActiveSources,
     sourceIndexMode: sourceIndexMode ?? null,
@@ -854,6 +861,7 @@ export async function searchAndGetRegulatoryEvidenceContext(
     jurisdictionContext,
     topK,
     minScore,
+    filter,
     namespace,
     preferActiveSources,
     sourceIndexMode,

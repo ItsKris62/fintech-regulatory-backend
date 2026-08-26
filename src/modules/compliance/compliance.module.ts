@@ -16,6 +16,7 @@ import { logPilotEvent } from '@/modules/pilot';
 import { redis } from '@/lib/redis/client';
 import { aiService } from '@/lib/ai/ai.service';
 import { ragService } from '@/lib/rag/rag.service';
+import { regulatoryIntelligenceService } from '@/modules/regulatory-intelligence/regulatory-intelligence.service';
 import { mailer as _mailer } from '@/lib/email/mailer.service';
 import { sendEmail } from '@/lib/email/client';
 import { storageService } from '@/lib/storage/storage.service';
@@ -32,6 +33,7 @@ import { complianceTracker } from './compliance-tracker';
 import type { GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
 import type { BenchmarkDocumentSummary, GapAnalysisResult } from '@/lib/ai/prompts/gap-analysis';
 import type { SearchResult } from '@/lib/rag/rag.service';
+import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
 import { sanitizePolicyText, chunkPolicyText } from '@/lib/ai/prompts/gap-analysis';
 import { extractPdfText } from '@/lib/pdf/extract-text';
 import {
@@ -282,6 +284,7 @@ async function verifyCitationsAgainstCorpus(gapResults: GapAnalysisResult): Prom
 interface GapAnalysisPipelineParams {
   analysisId: string;
   userId: string;
+  organizationId?: string;
   trialUserId?: string;
   fileName: string;
   fileContent: string;  // base64-encoded
@@ -290,6 +293,7 @@ interface GapAnalysisPipelineParams {
   regulatoryFrameworkSlugs?: string[];
   benchmarkDocumentIds?: string[];
   benchmarkDocuments?: BenchmarkDocumentSummary[];
+  jurisdictionContext: JurisdictionContext;
   analysisDepth: 'quick' | 'standard' | 'deep';
   focusAreas?: string[];
   ipAddress?: string;
@@ -308,9 +312,9 @@ function pineconeInFilter(values: string[]): string | { $in: string[] } | undefi
  */
 export async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Promise<void> {
   const {
-    analysisId, userId, trialUserId, fileName, fileContent, fileType,
+    analysisId, userId, organizationId, trialUserId, fileName, fileContent, fileType,
     regulatoryFrameworks, regulatoryFrameworkSlugs = [], benchmarkDocumentIds = [],
-    benchmarkDocuments = [], analysisDepth, focusAreas, ipAddress, userAgent,
+    benchmarkDocuments = [], jurisdictionContext, analysisDepth, focusAreas, ipAddress, userAgent,
   } = params;
 
   const startTime = Date.now();
@@ -346,6 +350,10 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
     const policyKeywords = extractPolicyKeywords(policyText);
     const keywordSuffix = policyKeywords.length > 0 ? ` ${policyKeywords.join(' ')}` : '';
 
+    const jurisdictionNames = jurisdictionContext.mode === 'SINGLE'
+      ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction)
+      : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
+
     const ragPromises = regulatoryFrameworks.map((framework, index) => {
       const frameworkSlug = regulatoryFrameworkSlugs[index];
       const strictFilter = {
@@ -356,19 +364,22 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
       };
       const relaxedFilter = frameworkSlug ? { frameworkSlug } : undefined;
 
-      return ragService
-        .search(`${framework} Kenya regulatory compliance obligations${keywordSuffix}`, {
-          topK: 8,
-          minScore: 0.6,
-          filter: Object.keys(strictFilter).length > 0 ? strictFilter : undefined,
-          fallbackIfTooFew: {
-            minResults: 3,
-            relaxedFilter,
+      return regulatoryIntelligenceService
+        .retrieveAndGrade({
+          question: `${framework} regulatory compliance obligations ${jurisdictionNames}${keywordSuffix}`,
+          feature: 'GAP_ANALYSIS',
+          jurisdictionContext,
+          organizationContext: organizationId ? { organizationId } : undefined,
+          retrievalProfile: {
+            topK: 8,
+            minScore: 0.6,
+            filter: Object.keys(strictFilter).length > 0 ? strictFilter : relaxedFilter,
           },
         })
+        .then((result) => result.evidence)
         .catch((err: unknown) => {
           logger.warn({ type: 'gap_analysis_rag_framework_failed', userId, analysisId, framework, error: (err as Error).message });
-          return [] as Awaited<ReturnType<typeof ragService.search>>;
+          return [] as SearchResult[];
         });
     });
 
@@ -451,6 +462,7 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
         analysisDepth,
         focusAreas,
         ragContext,
+        jurisdictionContext,
       });
       gapResults = gapAiResult.result;
       gapResults.metadata.selectedBenchmarkDocuments = benchmarkDocuments;
@@ -467,9 +479,10 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
         documentType: ext,
         regulatoryFrameworks,
         analysisDepth,
-        focusAreas,
-        ragContext,
-      });
+          focusAreas,
+          ragContext,
+          jurisdictionContext,
+        });
       gapResults = multiResult.result;
       gapResults.metadata.selectedBenchmarkDocuments = benchmarkDocuments;
       gapInputTokens = multiResult.totalInputTokens;
@@ -2046,6 +2059,7 @@ Follow-up Question: ${followUp}
       servicesOffered: string[];
       additionalConcerns?: string;
       organizationId: string;
+      jurisdictionContext: JurisdictionContext;
     }
   ): Promise<{
     id: string;
@@ -2093,17 +2107,27 @@ Follow-up Question: ${followUp}
       });
 
       // 2. Build rich RAG query from product + services + stage
+      const jurisdictionName = params.jurisdictionContext.mode === 'SINGLE'
+        ? jurisdictionLabel(params.jurisdictionContext.primaryJurisdiction)
+        : params.jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
       const ragQuery = [
-        'Kenya fintech compliance requirements',
+        `${jurisdictionName} fintech compliance requirements`,
         params.productType,
         params.servicesOffered.join(' '),
         params.businessStage,
-        'licensing KYC AML data protection CBK regulations',
+        `licensing KYC AML data protection regulations ${jurisdictionName}`,
       ].join(' ');
 
       let ragContext: string | undefined;
       try {
-        const ragResults = await ragService.search(ragQuery, { topK: 15, minScore: 0.5 });
+        const intelligence = await regulatoryIntelligenceService.retrieveAndGrade({
+          question: ragQuery,
+          feature: 'CHECKLIST',
+          jurisdictionContext: params.jurisdictionContext,
+          organizationContext: { organizationId: params.organizationId },
+          retrievalProfile: { topK: 15, minScore: 0.5 },
+        });
+        const ragResults = intelligence.evidence;
         if (ragResults.length > 0) {
           // Deduplicate by chunkText to avoid repetitive context
           const seen = new Set<string>();
@@ -2494,6 +2518,7 @@ Follow-up Question: ${followUp}
       ipAddress?: string;
       userAgent?: string;
       trialUserId?: string;
+      jurisdictionContext: JurisdictionContext;
     }
   ): Promise<{ id: string; status: string; progress: number }> {
     logger.info({
@@ -2572,6 +2597,7 @@ Follow-up Question: ${followUp}
       const pipelinePayload = JSON.parse(JSON.stringify({
         analysisId: record.id,
         userId,
+        organizationId: params.organizationId,
         trialUserId: params.trialUserId,
         fileName: params.fileName,
         fileContent: params.fileContent,
@@ -2580,6 +2606,7 @@ Follow-up Question: ${followUp}
         regulatoryFrameworkSlugs: params.regulatoryFrameworkSlugs,
         benchmarkDocumentIds: params.benchmarkDocumentIds,
         benchmarkDocuments: params.benchmarkDocuments,
+        jurisdictionContext: params.jurisdictionContext,
         analysisDepth: params.analysisDepth,
         focusAreas: params.focusAreas,
         ipAddress: params.ipAddress,

@@ -37,6 +37,7 @@ import {
   parseGapAnalysisOutput,
   parseChunkAnalysisOutput,
   GapAnalysisResultSchema,
+  JurisdictionContext,
 } from './prompts/gap-analysis';
 import { aiConfig } from '@/config/ai.config';
 import { logger } from '@/utils/logger';
@@ -795,11 +796,11 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
       throw new SourceInsufficiencyError(GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE);
     }
 
-    const systemPrompt = generateGapAnalysisSystemPrompt();
+    const systemPrompt = generateGapAnalysisSystemPrompt(params.jurisdictionContext);
     const userPrompt = generateGapAnalysisUserPrompt(params);
 
-    // Deep analysis gets more tokens; quick gets fewer
-    const maxTokens = params.analysisDepth === 'deep' ? 8000 : params.analysisDepth === 'standard' ? 5000 : 3000;
+    // Allow full 8192 output token window so complete JSON can be generated without truncation
+    const maxTokens = 8192;
 
     const result = await complete(
       {
@@ -883,6 +884,7 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
     analysisDepth: 'quick' | 'standard' | 'deep';
     focusAreas?: string[];
     ragContext?: string;
+    jurisdictionContext?: JurisdictionContext;
   }): Promise<{ result: GapAnalysisResult; chunksProcessed: number; totalInputTokens: number; totalOutputTokens: number; totalCost: number }> {
     const startTime = Date.now();
     const { chunks, ...baseParams } = params;

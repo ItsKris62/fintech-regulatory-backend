@@ -403,7 +403,7 @@ export const organizationRouter = router({
     .input(updateOrganizationSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const { id, ...data } = input;
+        const { id, homeJurisdictionReason, ...data } = input;
 
         // Check if organization exists and user has access
         const existingOrg = await ctx.prisma.organization.findUnique({
@@ -418,6 +418,22 @@ export const organizationRouter = router({
         }
 
         await assertActiveOrganizationMember(ctx, id);
+
+        // Security check for homeJurisdictionCode changes: OWNER or ADMIN only
+        if (data.homeJurisdictionCode !== undefined && data.homeJurisdictionCode !== (existingOrg as any).homeJurisdictionCode) {
+          await assertOrganizationManager(ctx, id);
+
+          logger.info({
+            type: 'organization_home_jurisdiction_changed',
+            actorUserId: ctx.user.id,
+            organizationId: id,
+            oldJurisdiction: (existingOrg as any).homeJurisdictionCode ?? null,
+            newJurisdiction: data.homeJurisdictionCode,
+            reason: homeJurisdictionReason ?? 'Owner configuration onboarding',
+            timestamp: new Date().toISOString(),
+            source: 'organization.update',
+          });
+        }
 
         const organization = await ctx.prisma.organization.update({
           where: { id },

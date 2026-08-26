@@ -20,6 +20,26 @@ vi.mock('@/lib/rag/rag.service', () => ({
   },
 }));
 
+vi.mock('@/modules/regulatory-intelligence/regulatory-intelligence.service', () => ({
+  regulatoryIntelligenceService: {
+    retrieveAndGrade: vi.fn().mockResolvedValue({
+      evidence: [
+        {
+          vectorId: 'bench-doc-1:chunk-1',
+          chunkId: 'chunk-1',
+          documentId: 'bench-doc-1',
+          documentTitle: 'Data Protection Act 2019',
+          chunkText: 'DPA context about privacy rights, breach notification, consent, and data subject access.',
+          frameworkSlug: 'dpa_2019',
+          jurisdictionCode: 'KE',
+          score: 0.95,
+          rank: 1,
+        },
+      ],
+    }),
+  },
+}));
+
 vi.mock('@/lib/pdf/extract-text', () => ({
   extractPdfText: vi.fn(),
 }));
@@ -103,6 +123,12 @@ const basePipelineParams = {
   fileType: 'pdf',
   regulatoryFrameworks: ['Data Protection Act 2019'],
   regulatoryFrameworkSlugs: ['dpa_2019'],
+  jurisdictionContext: {
+    mode: 'SINGLE' as const,
+    jurisdictions: ['KE'] as const,
+    primaryJurisdiction: 'KE' as const,
+    jurisdictionSource: 'REQUEST' as const,
+  },
   analysisDepth: 'standard' as const,
 };
 
@@ -154,32 +180,34 @@ describe('Gap Analysis Pipeline Integration', () => {
       benchmarkDocumentIds: ['bench-doc-1', 'bench-doc-2'],
     });
 
-    expect(ragService.search).toHaveBeenCalledWith(
-      expect.stringContaining('Data Protection Act 2019'),
+    const { regulatoryIntelligenceService } = await import('@/modules/regulatory-intelligence/regulatory-intelligence.service');
+    expect(regulatoryIntelligenceService.retrieveAndGrade).toHaveBeenCalledWith(
       expect.objectContaining({
-        filter: {
-          frameworkSlug: 'dpa_2019',
-          documentId: { $in: ['bench-doc-1', 'bench-doc-2'] },
-        },
-        fallbackIfTooFew: {
-          minResults: 3,
-          relaxedFilter: { frameworkSlug: 'dpa_2019' },
-        },
+        question: expect.stringContaining('Data Protection Act 2019'),
+        feature: 'GAP_ANALYSIS',
+        jurisdictionContext: basePipelineParams.jurisdictionContext,
+        retrievalProfile: expect.objectContaining({
+          filter: {
+            frameworkSlug: 'dpa_2019',
+            documentId: { $in: ['bench-doc-1', 'bench-doc-2'] },
+          },
+        }),
       })
     );
-    expect(ragService.search).toHaveBeenCalledWith(
-      expect.stringContaining('CBK Prudential Guidelines'),
+    expect(regulatoryIntelligenceService.retrieveAndGrade).toHaveBeenCalledWith(
       expect.objectContaining({
-        filter: {
-          frameworkSlug: 'cbk_pg',
-          documentId: { $in: ['bench-doc-1', 'bench-doc-2'] },
-        },
-        fallbackIfTooFew: {
-          minResults: 3,
-          relaxedFilter: { frameworkSlug: 'cbk_pg' },
-        },
+        question: expect.stringContaining('CBK Prudential Guidelines'),
+        feature: 'GAP_ANALYSIS',
+        jurisdictionContext: basePipelineParams.jurisdictionContext,
+        retrievalProfile: expect.objectContaining({
+          filter: {
+            frameworkSlug: 'cbk_pg',
+            documentId: { $in: ['bench-doc-1', 'bench-doc-2'] },
+          },
+        }),
       })
     );
+    expect(ragService.search).not.toHaveBeenCalled();
   });
 
   it('passes selected benchmark document metadata into the completed result', async () => {

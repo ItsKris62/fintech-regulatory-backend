@@ -52,11 +52,14 @@ describe('jurisdiction foundation', () => {
       jurisdictionSource: 'REQUEST',
     });
 
-    expect(resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['NG'] })).toMatchObject({
+    expect(resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['MW'] })).toMatchObject({
       mode: 'SINGLE',
-      primaryJurisdiction: 'NG',
+      primaryJurisdiction: 'MW',
       jurisdictionSource: 'REQUEST',
     });
+
+    expect(() => resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['NG'] }))
+      .toThrow(JurisdictionContractError);
   });
 
   it('rejects malformed new contract but keeps isolated legacy KE fallback', () => {
