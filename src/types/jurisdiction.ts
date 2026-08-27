@@ -15,12 +15,14 @@ export interface JurisdictionCapability {
   status: JurisdictionAvailabilityStatus;
 }
 
+export const COMPARE_MODE_ENABLED = process.env.COMPARE_MODE_ENABLED === 'true';
+
 export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCapability> = {
   KE: {
     code: 'KE',
     label: 'Kenya',
     queryEnabled: true,
-    comparisonEnabled: true,
+    comparisonEnabled: COMPARE_MODE_ENABLED,
     corpusReady: true,
     status: 'ACTIVE',
   },
@@ -28,7 +30,7 @@ export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCap
     code: 'RW',
     label: 'Rwanda',
     queryEnabled: true,
-    comparisonEnabled: true,
+    comparisonEnabled: COMPARE_MODE_ENABLED,
     corpusReady: true,
     status: 'ACTIVE',
   },
@@ -36,7 +38,7 @@ export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCap
     code: 'MW',
     label: 'Malawi',
     queryEnabled: true,
-    comparisonEnabled: true,
+    comparisonEnabled: COMPARE_MODE_ENABLED,
     corpusReady: true,
     status: 'ACTIVE',
   },
@@ -109,6 +111,7 @@ export class JurisdictionContractError extends Error {
       | 'JURISDICTION_REQUIRED'
       | 'JURISDICTION_UNSUPPORTED'
       | 'JURISDICTION_NOT_AVAILABLE'
+      | 'COMPARE_MODE_DISABLED'
       | 'COMPARISON_NOT_ENABLED'
       | 'COMPARISON_MIN_JURISDICTIONS'
       | 'COMPARISON_MAX_JURISDICTIONS'
@@ -141,6 +144,10 @@ export function resolveJurisdictionContext(
   }
 
   if (mode === 'COMPARE') {
+    if (!COMPARE_MODE_ENABLED) {
+      throw new JurisdictionContractError('COMPARE_MODE_DISABLED', 'COMPARE_MODE_DISABLED');
+    }
+
     if (jurisdictions.length < 2) {
       throw new JurisdictionContractError('COMPARISON_MIN_JURISDICTIONS', 'Compare mode requires at least 2 jurisdictions.');
     }

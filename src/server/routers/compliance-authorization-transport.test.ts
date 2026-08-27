@@ -274,7 +274,7 @@ describe('compliance authorization transport isolation', () => {
     expect(fakeRedis.incr).not.toHaveBeenCalled();
   });
 
-  it('denies compare mode before usage, Pinecone/RAG, or Anthropic boundaries', async () => {
+  it('denies compare mode while globally disabled before usage, Pinecone/RAG, or Anthropic boundaries', async () => {
     const response = await post('compliance.query', {
       question: 'Compare KYC requirements for Kenya and Rwanda fintechs.',
       mode: 'COMPARE',
@@ -282,8 +282,8 @@ describe('compliance authorization transport isolation', () => {
       organizationType: 'FINTECH',
     });
 
-    expect(response.statusCode).toBe(403);
-    expect(response.json().error.message).toBe('COMPARISON_NOT_ENTITLED');
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.message).toBe('COMPARE_MODE_DISABLED');
     expect(searchAndGetRegulatoryEvidenceContext).not.toHaveBeenCalled();
     expect(answerComplianceQuery).not.toHaveBeenCalled();
     expect(fakeRedis.incr).not.toHaveBeenCalled();

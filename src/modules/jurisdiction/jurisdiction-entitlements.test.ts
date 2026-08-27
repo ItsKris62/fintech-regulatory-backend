@@ -45,7 +45,7 @@ describe('resolveJurisdictionEntitlement', () => {
     });
   });
 
-  it('denies comparison mode for restricted plans', async () => {
+  it('denies comparison mode while the release gate is disabled', async () => {
     await expect(resolveJurisdictionEntitlement({
       prisma: prismaForHome('KE'),
       organizationId: 'org-1',
@@ -53,8 +53,7 @@ describe('resolveJurisdictionEntitlement', () => {
       requestedMode: 'COMPARE',
       requestedJurisdictions: ['KE', 'RW'],
     })).rejects.toMatchObject({
-      code: JURISDICTION_AUTH_ERROR.COMPARISON_NOT_ENTITLED,
-      statusCode: 403,
+      code: 'COMPARE_MODE_DISABLED',
     });
   });
 
@@ -98,7 +97,7 @@ describe('resolveJurisdictionEntitlement', () => {
       effectivePlan: 'STARTUP',
       requestedMode: 'COMPARE',
       requestedJurisdictions: ['KE'],
-    })).rejects.toMatchObject({ code: 'COMPARISON_MIN_JURISDICTIONS' });
+    })).rejects.toMatchObject({ code: 'COMPARE_MODE_DISABLED' });
 
     expect(pineconeSearch).not.toHaveBeenCalled();
     expect(anthropicCall).not.toHaveBeenCalled();

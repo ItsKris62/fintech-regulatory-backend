@@ -134,6 +134,8 @@ export const updateOrganizationSettingsSchema = z.object({
   contactPosition: z.string().max(200).optional(),
   contactEmail: z.union([z.string().email('Invalid email format'), z.literal('')]).optional(),
   contactPhone: z.union([phoneSchema, z.literal('')]).optional(),
+  homeJurisdictionCode: z.enum(['KE', 'RW', 'MW']).optional(),
+  homeJurisdictionReason: z.string().max(500).optional(),
 });
 
 export type UpdateOrganizationSettingsInput = z.infer<typeof updateOrganizationSettingsSchema>;

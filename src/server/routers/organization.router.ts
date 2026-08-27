@@ -1066,6 +1066,11 @@ export const organizationRouter = router({
       }
       await assertActiveOrganizationMember(ctx, organizationId);
 
+      const member = await ctx.prisma.organizationMember.findUnique({
+        where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
+        select: { status: true, role: true },
+      });
+
       const organization = await ctx.prisma.organization.findUnique({
         where: { id: organizationId },
         select: {
@@ -1079,6 +1084,7 @@ export const organizationRouter = router({
           contactPosition: true,
           contactEmail: true,
           contactPhone: true,
+          homeJurisdictionCode: true,
         },
       });
 
@@ -1089,7 +1095,11 @@ export const organizationRouter = router({
         });
       }
 
-      return organization;
+      return {
+        ...organization,
+        currentMemberRole: member?.role ?? null,
+        canManageOrganizationSettings: canManageOrganization(member?.role, ctx.user.role),
+      };
     } catch (error: any) {
       logger.error({
         type: 'organization_get_settings_error',
@@ -1680,6 +1690,7 @@ export const organizationRouter = router({
     .mutation(async ({ input, ctx }) => {
       try {
         const { organizationId } = ctx.user;
+        const { homeJurisdictionReason, ...data } = input;
 
         if (!organizationId) {
           throw new TRPCError({
@@ -1696,10 +1707,15 @@ export const organizationRouter = router({
           });
         }
 
+        const existingOrg = await ctx.prisma.organization.findUnique({
+          where: { id: organizationId },
+          select: { homeJurisdictionCode: true },
+        });
+
         const organization = await ctx.prisma.organization.update({
           where: { id: organizationId },
           data: {
-            ...input,
+            ...data,
             updatedAt: new Date(),
           },
           select: {
@@ -1713,6 +1729,7 @@ export const organizationRouter = router({
             contactPosition: true,
             contactEmail: true,
             contactPhone: true,
+            homeJurisdictionCode: true,
           },
         });
 
@@ -1725,17 +1742,49 @@ export const organizationRouter = router({
             action: 'organization_settings_updated',
             entityType: 'Organization',
             entityId: organizationId,
-            metadata: { updatedFields: Object.keys(input) },
+            metadata: { updatedFields: Object.keys(data) },
             ipAddress: ctx.req.ip || undefined,
             userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
           },
         }).catch(() => {});
 
+        if (
+          data.homeJurisdictionCode !== undefined &&
+          data.homeJurisdictionCode !== existingOrg?.homeJurisdictionCode
+        ) {
+          const auditMetadata = {
+            oldJurisdiction: existingOrg?.homeJurisdictionCode ?? null,
+            newJurisdiction: data.homeJurisdictionCode,
+            reason: homeJurisdictionReason ?? 'Owner configuration onboarding',
+            source: 'organization.updateSettings',
+          };
+
+          await ctx.prisma.auditLog.create({
+            data: {
+              userId: ctx.user.id,
+              action: 'organization_home_jurisdiction_changed',
+              entityType: 'Organization',
+              entityId: organizationId,
+              metadata: auditMetadata,
+              ipAddress: ctx.req.ip || undefined,
+              userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
+            },
+          }).catch(() => {});
+
+          logger.info({
+            type: 'organization_home_jurisdiction_changed',
+            actorUserId: ctx.user.id,
+            organizationId,
+            ...auditMetadata,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
         logger.info({
           type: 'organization_settings_updated',
           userId: ctx.user.id,
           organizationId,
-          updatedFields: Object.keys(input),
+          updatedFields: Object.keys(data),
         });
 
         return organization;

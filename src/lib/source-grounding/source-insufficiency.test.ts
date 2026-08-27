@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/ai/client', () => ({
   complete: vi.fn(),
@@ -27,6 +27,10 @@ import {
   hasUsableSourceContext,
 } from './source-insufficiency';
 import type { SearchResult } from '@/lib/rag/rag.service';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 const unsafePhrases = [
   'use your knowledge',

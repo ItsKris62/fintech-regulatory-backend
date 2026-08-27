@@ -35,6 +35,11 @@ vi.mock('../rate-limiter', () => ({
 describe('LLMGateway Unit Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(redis.get).mockReset().mockResolvedValue(null);
+    vi.mocked(redis.set).mockReset().mockResolvedValue('OK' as never);
+    vi.mocked(redis.incrbyfloat).mockReset().mockResolvedValue(0 as never);
+    vi.mocked(redis.expire).mockReset().mockResolvedValue(1 as never);
+    vi.mocked(redis.del).mockReset().mockResolvedValue(1 as never);
     (appConfig as any).ai = { apiKey: 'test-ant', model: 'claude-haiku' };
     (appConfig as any).openai = { apiKey: 'test-open', model: 'gpt-4o' };
     (appConfig as any).gemini = { apiKey: 'test-gemini', model: 'gemini-2.5-flash' };

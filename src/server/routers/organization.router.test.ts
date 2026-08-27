@@ -75,4 +75,15 @@ describe('Business organization portal router contract', () => {
     expect(routerSrc).toContain("metadata: { path: ['organizationId'], equals: organizationId }");
     expect(routerSrc).not.toContain('targetToken');
   });
+
+  it('supports owner/admin home jurisdiction recovery through organization settings', () => {
+    const schemaSrc = src('../schemas/organization.schema.ts');
+
+    expect(schemaSrc).toContain("homeJurisdictionCode: z.enum(['KE', 'RW', 'MW']).optional()");
+    expect(routerSrc).toContain('homeJurisdictionCode: true');
+    expect(routerSrc).toContain('canManageOrganizationSettings: canManageOrganization');
+    expect(routerSrc).toContain("action: 'organization_home_jurisdiction_changed'");
+    expect(routerSrc).toContain("source: 'organization.updateSettings'");
+    expect(routerSrc).toContain('await assertOrganizationManager(ctx, organizationId)');
+  });
 });
