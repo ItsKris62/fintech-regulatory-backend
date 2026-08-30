@@ -5,6 +5,8 @@ import { router, orgMemberProcedureWithRole, orgMemberProcedure } from '../trpc/
 import { requirePlanFeature, withPlanContext } from '../trpc/middleware';
 import { logger } from '@/utils/logger';
 import { AUDITED_JURISDICTIONS } from '@/config/jurisdictions.config';
+import { resolveJurisdictionEntitlement, toTrpcJurisdictionAuthorizationError } from '@/modules/jurisdiction/jurisdiction-entitlements';
+import { generateCustomFramework, CustomFrameworkGenerationError } from '@/modules/custom-framework/custom-framework-generation.service';
 
 const managerRoles = [MemberRole.ADMIN, MemberRole.OWNER];
 
@@ -69,8 +71,9 @@ async function audit(ctx: any, action: string, entityId: string, metadata: Recor
 }
 
 async function getFrameworkOrThrow(ctx: any, id: string, organizationId: string) {
+  const entitlement = await resolveHomeJurisdiction(ctx, 'trpc.customFramework.recordAccess');
   const framework = await (ctx.prisma as any).customFramework.findFirst({
-    where: { id, organizationId, deletedAt: null },
+    where: { id, organizationId, jurisdiction: entitlement.homeJurisdiction, deletedAt: null },
     include: {
       sections: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] },
       controls: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] },
@@ -87,6 +90,21 @@ function assertDraft(framework: { status: string }) {
   }
 }
 
+async function resolveHomeJurisdiction(ctx: any, route: string) {
+  try {
+    return await resolveJurisdictionEntitlement({
+      prisma: ctx.prisma,
+      organizationId: ctx.orgMembership!.organizationId,
+      effectivePlan: ctx.plan ?? 'REGULATOR',
+      requestedJurisdictions: undefined,
+      source: 'ORGANIZATION_HOME',
+      audit: { userId: ctx.user!.id, route },
+    });
+  } catch (error) {
+    throw toTrpcJurisdictionAuthorizationError(error);
+  }
+}
+
 export const customFrameworkRouter = router({
   list: orgMemberProcedure
     .use(withPlanContext)
@@ -94,9 +112,11 @@ export const customFrameworkRouter = router({
     .input(z.object({ status: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED']).optional() }).optional())
     .query(async ({ ctx, input }) => {
       const organizationId = ctx.orgMembership!.organizationId;
+      const entitlement = await resolveHomeJurisdiction(ctx, 'trpc.customFramework.list');
       const frameworks = await (ctx.prisma as any).customFramework.findMany({
         where: {
           organizationId,
+          jurisdiction: entitlement.homeJurisdiction,
           deletedAt: null,
           ...(input?.status ? { status: input.status } : {}),
         },
@@ -118,6 +138,10 @@ export const customFrameworkRouter = router({
     .input(metadataSchema)
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.orgMembership!.organizationId;
+      const entitlement = await resolveHomeJurisdiction(ctx, 'trpc.customFramework.create');
+      if (input.jurisdiction && input.jurisdiction !== entitlement.homeJurisdiction) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'HOME_COUNTRY_ONLY' });
+      }
       const baseSlug = await uniqueFrameworkSlug(ctx, organizationId, input.name);
       const framework = await (ctx.prisma as any).customFramework.create({
         data: {
@@ -125,7 +149,7 @@ export const customFrameworkRouter = router({
           name: input.name,
           slug: baseSlug,
           description: input.description ?? null,
-          jurisdiction: input.jurisdiction ?? null,
+          jurisdiction: entitlement.homeJurisdiction,
           regulator: input.regulator ?? null,
           category: input.category ?? null,
           createdByUserId: ctx.user!.id,
@@ -141,14 +165,21 @@ export const customFrameworkRouter = router({
     .input(metadataSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.orgMembership!.organizationId;
+      const entitlement = await resolveHomeJurisdiction(ctx, 'trpc.customFramework.updateMetadata');
+      if (input.jurisdiction && input.jurisdiction !== entitlement.homeJurisdiction) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'HOME_COUNTRY_ONLY' });
+      }
       const framework = await getFrameworkOrThrow(ctx, input.id, organizationId);
+      if (framework.jurisdiction !== entitlement.homeJurisdiction) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'HOME_COUNTRY_ONLY' });
+      }
       assertDraft(framework);
       const updated = await (ctx.prisma as any).customFramework.update({
         where: { id: input.id },
         data: {
           name: input.name ?? undefined,
           description: input.description,
-          jurisdiction: input.jurisdiction,
+          jurisdiction: entitlement.homeJurisdiction,
           regulator: input.regulator,
           category: input.category,
           updatedByUserId: ctx.user!.id,
@@ -156,6 +187,76 @@ export const customFrameworkRouter = router({
       });
       await audit(ctx, 'custom_framework.metadata_updated', input.id, { organizationId });
       return updated;
+    }),
+
+  generate: orgMemberProcedureWithRole(managerRoles)
+    .use(withPlanContext)
+    .use(requirePlanFeature('customFrameworks'))
+    .input(z.object({ intent: z.string().trim().min(20).max(4000) }))
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.orgMembership!.organizationId;
+      const entitlement = await resolveHomeJurisdiction(ctx, 'trpc.customFramework.generate');
+      try {
+        const generated = await generateCustomFramework({
+          intent: input.intent,
+          organizationId,
+          jurisdictionContext: entitlement.jurisdictionContext,
+        });
+        const slug = await uniqueFrameworkSlug(ctx, organizationId, generated.framework.name);
+        const created = await (ctx.prisma as any).$transaction(async (tx: any) => {
+          const framework = await tx.customFramework.create({
+            data: {
+              organizationId,
+              name: generated.framework.name,
+              slug,
+              description: generated.framework.description ?? null,
+              jurisdiction: entitlement.homeJurisdiction,
+              createdByUserId: ctx.user!.id,
+              citations: generated.citations,
+              evidenceProvenance: generated.evidence.map((source) => ({
+                vectorId: source.vectorId,
+                chunkId: source.chunkId,
+                documentId: source.documentId,
+                jurisdictionCode: source.jurisdictionCode,
+                section: source.section,
+                score: source.score,
+              })),
+              generationMetadata: generated.metadata,
+            },
+          });
+          for (let sectionIndex = 0; sectionIndex < generated.framework.sections.length; sectionIndex += 1) {
+            const sectionInput = generated.framework.sections[sectionIndex];
+            const section = await tx.customFrameworkSection.create({
+              data: { frameworkId: framework.id, organizationId, title: sectionInput.title, description: sectionInput.description ?? null, order: sectionIndex },
+            });
+            for (let controlIndex = 0; controlIndex < sectionInput.controls.length; controlIndex += 1) {
+              const control = sectionInput.controls[controlIndex];
+              const source = generated.evidence[control.sourceIndex - 1];
+              const citation = generated.citations[control.sourceIndex - 1];
+              await tx.customFrameworkControl.create({
+                data: {
+                  frameworkId: framework.id, sectionId: section.id, organizationId,
+                  code: control.code ?? null, title: control.title, requirement: control.requirement,
+                  guidance: control.guidance ?? null, evidenceRequired: control.evidenceRequired,
+                  severity: control.severity ?? null, frequency: control.frequency ?? null,
+                  regulatorReference: citation?.citation ?? `${citation?.documentTitle ?? ''} ${citation?.section ?? ''}`.trim(),
+                  sourceDocumentId: source.documentId, sourceChunkId: source.chunkId,
+                  citation, order: controlIndex,
+                },
+              });
+            }
+          }
+          return framework;
+        });
+        await audit(ctx, 'custom_framework.generated', created.id, { organizationId, jurisdictionCode: entitlement.homeJurisdiction });
+        return getFrameworkOrThrow(ctx, created.id, organizationId);
+      } catch (error) {
+        if (error instanceof CustomFrameworkGenerationError) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: error.code, cause: error });
+        }
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'CUSTOM_FRAMEWORK_GENERATION_FAILED', cause: error });
+      }
     }),
 
   createSection: orgMemberProcedureWithRole(managerRoles)

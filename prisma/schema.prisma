@@ -703,6 +703,9 @@ model Checklist {
   totalItems         Int             @default(0)
   summary            Json?
   metadata           Json?
+  jurisdictionCode  String?
+  citations          Json?
+  evidenceProvenance Json?
   generatedAt        DateTime?
   status             String          @default("GENERATING")
   dueDate            DateTime?
@@ -717,6 +720,7 @@ model Checklist {
   @@index([userId])
   @@index([status])
   @@index([organizationId])
+  @@index([jurisdictionCode])
   @@index([deletedAt])
 }
 
@@ -759,6 +763,9 @@ model GapAnalysis {
   analysisDepth        String                 @default("standard")
   focusAreas           Json?
   results              Json?
+  jurisdictionCode     String?
+  citations             Json?
+  evidenceProvenance    Json?
   overallScore         Int?
   status               String                 @default("UPLOADING")
   progress             Int                    @default(0)
@@ -780,6 +787,7 @@ model GapAnalysis {
   @@index([userId])
   @@index([status])
   @@index([organizationId])
+  @@index([jurisdictionCode])
   @@index([createdAt])
   @@index([deletedAt])
 }
@@ -1617,6 +1625,9 @@ model CustomFramework {
   slug            String
   description     String?               @db.Text
   jurisdiction    String?
+  citations       Json?
+  evidenceProvenance Json?
+  generationMetadata Json?
   regulator       String?
   category        String?
   status          CustomFrameworkStatus @default(DRAFT)
@@ -1639,6 +1650,7 @@ model CustomFramework {
   @@index([status])
   @@index([deletedAt])
   @@index([createdAt])
+  @@index([jurisdiction])
 }
 
 model CustomFrameworkSection {
@@ -1672,6 +1684,8 @@ model CustomFrameworkControl {
   frequency          String?
   regulatorReference String?
   sourceDocumentId   String?
+  sourceChunkId      String?
+  citation           Json?
   order              Int      @default(0)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt

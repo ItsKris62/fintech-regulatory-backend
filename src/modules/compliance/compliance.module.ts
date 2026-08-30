@@ -46,6 +46,7 @@ import {
 } from '@/lib/source-grounding/source-insufficiency';
 import { buildCitationsFromChunks, hasUsableCitations } from '@/lib/source-grounding/citations';
 import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
+import { runVerifierAgent } from '@/modules/compliance/orchestrator/verifier.agent';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
 import {
@@ -217,7 +218,10 @@ function extractPolicyKeywords(policyText: string): string[] {
  * Runs all verification searches concurrently via Promise.all.
  * On any search failure, defaults citationVerified to false (graceful degradation).
  */
-async function verifyCitationsAgainstCorpus(gapResults: GapAnalysisResult): Promise<GapAnalysisResult> {
+/* Legacy post-hoc unfiltered citation lookup removed: accepted same-country
+ * evidence is now verified directly in executeGapAnalysisPipeline. */
+/* c8 ignore start */
+async function _legacyVerifyCitationsAgainstCorpus(gapResults: GapAnalysisResult): Promise<GapAnalysisResult> {
   const allGaps: Array<{ frameworkIdx: number; gapIdx: number; citation: string }> = [];
 
   for (let fi = 0; fi < gapResults.frameworks.length; fi++) {
@@ -280,6 +284,8 @@ async function verifyCitationsAgainstCorpus(gapResults: GapAnalysisResult): Prom
 
   return gapResults;
 }
+/* c8 ignore stop */
+void _legacyVerifyCitationsAgainstCorpus;
 
 interface GapAnalysisPipelineParams {
   analysisId: string;
@@ -385,7 +391,8 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
 
     const ragResultsByFramework = await Promise.all(ragPromises);
 
-    const seenDocumentIds = new Set<string>();
+    const seenEvidenceIds = new Set<string>();
+    const acceptedEvidence: SearchResult[] = [];
     const labeledResults: Array<{ text: string; framework: string }> = [];
     let groundedFrameworkCount = 0;
 
@@ -394,8 +401,10 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
       const results = ragResultsByFramework[fIdx] ?? [];
       if (results.length > 0) groundedFrameworkCount++;
       for (const r of results) {
-        if (!seenDocumentIds.has(r.documentId)) {
-          seenDocumentIds.add(r.documentId);
+        const evidenceId = r.vectorId ?? r.chunkId ?? `${r.documentId}:${r.section ?? ''}`;
+        if (!seenEvidenceIds.has(evidenceId)) {
+          seenEvidenceIds.add(evidenceId);
+          acceptedEvidence.push(r);
           labeledResults.push({ text: r.chunkText, framework });
         }
       }
@@ -503,16 +512,24 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
       incrementTrialUsage(trialUserId, 'totalTokensUsed', gapInputTokens + gapOutputTokens).catch(() => { });
     }
 
-    // -- CITATION VERIFICATION (progress: 88) --------------------------------
+    // -- CLAIM + CITATION VERIFICATION (progress: 88) ------------------------
     await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 88 });
     currentProgress = 88;
 
-    try {
-      gapResults = await verifyCitationsAgainstCorpus(gapResults);
-    } catch (verifyErr: unknown) {
-      // Graceful degradation: if verification fails entirely, leave all citations unverified
-      logger.warn({ type: 'gap_analysis_citation_verification_failed', analysisId, error: (verifyErr as Error).message });
+    const verifier = await runVerifierAgent(JSON.stringify(gapResults), acceptedEvidence, jurisdictionContext);
+    if (verifier.verdict !== 'PASS' || verifier.parseFailed || verifier.unsupportedClaims.length > 0) {
+      throw new Error('VERIFICATION_FAILURE');
     }
+    const citations = buildCitationsFromChunks(acceptedEvidence, 'verified');
+    if (!hasUsableCitations(citations)) throw new SourceInsufficiencyError(GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE);
+    const jurisdictionCode = jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null;
+    gapResults.metadata = {
+      ...gapResults.metadata,
+      jurisdictionCode,
+      verifierStatus: verifier.verdict,
+      unsupportedClaims: verifier.unsupportedClaims,
+      retrievalVersion: 'regulatory-intelligence-v1',
+    };
 
     // -- COMPLETING (progress: 90) ----------------------------------------
     await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 90 });
@@ -522,6 +539,16 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
       where: { id: analysisId },
       data: {
         results: gapResults,
+        jurisdictionCode,
+        citations: citations as unknown as Prisma.InputJsonValue,
+        evidenceProvenance: acceptedEvidence.map((source) => ({
+          vectorId: source.vectorId,
+          chunkId: source.chunkId,
+          documentId: source.documentId,
+          jurisdictionCode: source.jurisdictionCode,
+          section: source.section,
+          score: source.score,
+        })) as unknown as Prisma.InputJsonValue,
         overallScore: gapResults.overallScore,
         status: 'COMPLETED',
         progress: 100,
@@ -552,7 +579,7 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
       type: 'GAP_ANALYSIS_COMPLETED',
       category: 'COMPLIANCE',
       title: 'Gap Analysis Complete',
-      message: `Analysis of "${fileName}" complete. Score: ${gapResults.overallScore}%. Found ${gapResults.metadata.totalGaps} gaps.`,
+      message: `Analysis of "${fileName}" complete. Regulatory Readiness Score: ${gapResults.overallScore}/100. Found ${gapResults.metadata.totalGaps} gaps.`,
       link: `/startup/gap-analysis/${analysisId}`,
     }).catch(() => { /* non-blocking */ });
 
@@ -2558,6 +2585,9 @@ Follow-up Question: ${followUp}
         regulatoryFrameworks: params.regulatoryFrameworks,
         analysisDepth: params.analysisDepth,
         focusAreas: params.focusAreas ?? [],
+        jurisdictionCode: params.jurisdictionContext.mode === 'SINGLE'
+          ? params.jurisdictionContext.primaryJurisdiction
+          : null,
         status: 'UPLOADING',
         progress: 0,
       },

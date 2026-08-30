@@ -459,8 +459,8 @@ export async function registerComplianceStreamRoute(
           effectivePlan: auth.plan,
           requestedMode: input.mode,
           requestedJurisdictions: input.jurisdictions,
-          allowLegacyDefault: true,
-          source: 'REQUEST',
+          allowLegacyDefault: false,
+          source: input.jurisdictions?.length ? 'REQUEST' : 'ORGANIZATION_HOME',
           audit: {
             userId: auth.userId,
             route: 'sse.compliance.stream',

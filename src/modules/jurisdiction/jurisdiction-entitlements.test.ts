@@ -67,16 +67,37 @@ describe('resolveJurisdictionEntitlement', () => {
     })).rejects.toBeInstanceOf(JurisdictionAuthorizationError);
   });
 
-  it('keeps Nigeria contained until the backend capability registry marks it query-ready', async () => {
+  it('enforces the complete home-country-only matrix before downstream calls', async () => {
+    const countries = ['KE', 'RW', 'MW', 'NG'] as const;
+    for (const home of countries) {
+      for (const requested of countries) {
+        const operation = resolveJurisdictionEntitlement({
+          prisma: prismaForHome(home),
+          organizationId: 'org-1',
+          effectivePlan: 'FREE_TRIAL',
+          requestedMode: 'SINGLE',
+          requestedJurisdictions: [requested],
+        });
+        if (requested === home) {
+          await expect(operation).resolves.toMatchObject({ homeJurisdiction: home, requestedJurisdictions: [home] });
+        } else {
+          await expect(operation).rejects.toMatchObject({
+            code: JURISDICTION_AUTH_ERROR.JURISDICTION_NOT_ENTITLED,
+            statusCode: 403,
+          });
+        }
+      }
+    }
+  });
+
+  it('allows an existing multi-country entitlement to request Nigeria', async () => {
     await expect(resolveJurisdictionEntitlement({
       prisma: prismaForHome('KE'),
       organizationId: 'org-1',
       effectivePlan: 'STARTUP',
       requestedMode: 'SINGLE',
       requestedJurisdictions: ['NG'],
-    })).rejects.toMatchObject({
-      code: 'JURISDICTION_NOT_AVAILABLE',
-    });
+    })).resolves.toMatchObject({ requestedJurisdictions: ['NG'] });
   });
 
   it('rejects malformed SINGLE and COMPARE requests before downstream calls', async () => {

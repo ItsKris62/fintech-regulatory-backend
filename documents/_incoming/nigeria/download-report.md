@@ -1,13 +1,17 @@
 # Download Report — Nigeria
 
-Generated: 2026-06-10T20:04:19.252Z
+Generated: 2026-08-30T16:46:07.596Z
 Mode: LIVE
 
 ## Summary
 
 - Downloaded: 0
-- Skipped (not APPROVED): 24
-- Failed: 0
+- Skipped (not APPROVED): 23
+- Failed: 1
+
+## Failed
+
+- ❌ **Banks and Other Financial Institutions Act 2020**: HTTP 403: Forbidden
 
 ---
 

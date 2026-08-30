@@ -175,6 +175,8 @@ export const gapAnalysisRouter = router({
         const fileHash = createHash('sha256')
           .update(input.fileContent)
           .update(JSON.stringify({
+            organizationId: orgId,
+            jurisdictionCode: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
             frameworks: [...input.regulatoryFrameworks].sort(),
             benchmarkDocumentIds: [...benchmarkDocumentIds].sort(),
             analysisDepth: input.analysisDepth,

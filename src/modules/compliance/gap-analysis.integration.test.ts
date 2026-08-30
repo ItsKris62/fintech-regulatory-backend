@@ -40,6 +40,13 @@ vi.mock('@/modules/regulatory-intelligence/regulatory-intelligence.service', () 
   },
 }));
 
+vi.mock('@/modules/compliance/orchestrator/verifier.agent', () => ({
+  runVerifierAgent: vi.fn().mockResolvedValue({
+    verdict: 'PASS', unsupportedClaims: [], parseFailed: false,
+    tokens: { input: 10, output: 5 },
+  }),
+}));
+
 vi.mock('@/lib/pdf/extract-text', () => ({
   extractPdfText: vi.fn(),
 }));

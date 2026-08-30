@@ -51,7 +51,7 @@ export const updateOrganizationSchema = z.object({
   address: z.string().optional(),
   website: z.string().url().optional(),
   description: z.string().max(1000).optional(),
-  homeJurisdictionCode: z.enum(['KE', 'RW', 'MW']).optional(),
+  homeJurisdictionCode: z.enum(['KE', 'RW', 'MW', 'NG']).optional(),
   homeJurisdictionReason: z.string().max(500).optional(),
 });
 
@@ -134,7 +134,7 @@ export const updateOrganizationSettingsSchema = z.object({
   contactPosition: z.string().max(200).optional(),
   contactEmail: z.union([z.string().email('Invalid email format'), z.literal('')]).optional(),
   contactPhone: z.union([phoneSchema, z.literal('')]).optional(),
-  homeJurisdictionCode: z.enum(['KE', 'RW', 'MW']).optional(),
+  homeJurisdictionCode: z.enum(['KE', 'RW', 'MW', 'NG']).optional(),
   homeJurisdictionReason: z.string().max(500).optional(),
 });
 

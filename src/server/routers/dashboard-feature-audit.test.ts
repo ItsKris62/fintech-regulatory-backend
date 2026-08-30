@@ -19,9 +19,8 @@ describe('dashboard feature audit invariants', () => {
   const alertSchema = repo('fintech-regulatory-backend/src/modules/alert/alert.schema.ts');
   const alertService = repo('fintech-regulatory-backend/src/modules/alert/alert.service.ts');
 
-  it('limits audited dashboard jurisdictions to Kenya, Rwanda, and Malawi', () => {
-    expect(jurisdictionConfig).toContain("['KE', 'RW', 'MW']");
-    expect(jurisdictionConfig).not.toContain("'NG'");
+  it('limits audited dashboard jurisdictions to the four activated countries', () => {
+    expect(jurisdictionConfig).toContain("['KE', 'RW', 'MW', 'NG']");
   });
 
   it('persists and filters application jurisdictions without client-controlled ownership', () => {

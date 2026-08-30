@@ -21,6 +21,8 @@ import { prisma } from '@/lib/prisma/client';
 import { logPilotEvent } from '@/modules/pilot';
 import type { SearchResult } from '@/lib/rag/rag.service';
 import { regulatoryIntelligenceService } from '@/modules/regulatory-intelligence/regulatory-intelligence.service';
+import { buildCitationsFromChunks, hasUsableCitations } from '@/lib/source-grounding/citations';
+import { runVerifierAgent } from '@/modules/compliance/orchestrator/verifier.agent';
 import { aiService } from '@/lib/ai/ai.service';
 import {
   buildTier1Prompt,
@@ -109,6 +111,9 @@ class ChecklistService {
         progress:           0,
         completedItems:     0,
         status:             CHECKLIST_STATUS.GENERATING,
+        jurisdictionCode:   jurisdictionContext.mode === 'SINGLE'
+          ? jurisdictionContext.primaryJurisdiction
+          : null,
       },
       select: { id: true },
     });
@@ -295,7 +300,7 @@ class ChecklistService {
       await this.saveGenerationResult(
         checklistId, input, checklist,
         { generationTier: 'full' },
-        ragPassages.length, trialUserId, startTime
+        ragPassages, trialUserId, startTime
       );
       logger.info({
         type:          'checklist_generate_success',
@@ -323,7 +328,7 @@ class ChecklistService {
       await this.saveGenerationResult(
         checklistId, input, checklist,
         { generationTier: 'simplified', originalError: errors[0]?.error },
-        tier2Passages.length, trialUserId, startTime
+        tier2Passages, trialUserId, startTime
       );
       logger.info({
         type:          'checklist_generate_success',
@@ -342,35 +347,7 @@ class ChecklistService {
       logger.warn({ type: 'checklist_tier_failed', checklistId, userId, tier: 2, error: msg, durationMs: Date.now() - t2Start });
     }
 
-    // -- Tier 3: Minimal source-insufficiency fallback ------------------------
-    const t3Start = Date.now();
-    try {
-      const checklist = await this.runTier(3, checklistId, input, []);
-      recordSuccess('minimal'); // fire-and-forget metric counter
-      await this.saveGenerationResult(
-        checklistId, input, checklist,
-        {
-          generationTier: 'minimal',
-          note:           'Generated only after earlier source-grounded tiers failed; review before use',
-          originalError:  errors[0]?.error,
-        },
-        0, trialUserId, startTime
-      );
-      logger.info({
-        type:          'checklist_generate_success',
-        checklistId,
-        userId,
-        tier:          3,
-        totalItems:    checklist.metadata.totalItems,
-        ragPassagesUsed: 0,
-        durationMs:    Date.now() - startTime,
-        partial:       false,
-      });
-      return;
-    } catch (err: unknown) {
-      const msg = (err as Error).message ?? String(err);
-      errors.push({ tier: 3, error: msg, durationMs: Date.now() - t3Start });
-    }
+    // There is deliberately no evidence-free tier: legal generation fails closed.
 
     // -- All tiers failed -----------------------------------------------------
     recordFailure(); // fire-and-forget metric counter
@@ -495,10 +472,19 @@ class ChecklistService {
       originalError?: string;
       note?:          string;
     },
-    ragSourcesUsed: number,
+    ragPassages:    SearchResult[],
     trialUserId:    string | undefined,
     startTime:      number
   ): Promise<void> {
+    const jurisdictionContext = (input as GenerateChecklistAsyncInput & { jurisdictionContext?: JurisdictionContext }).jurisdictionContext;
+    if (!jurisdictionContext || ragPassages.length === 0) throw new Error('NO_ACCEPTED_EVIDENCE');
+    const verifier = await runVerifierAgent(JSON.stringify(generatedChecklist), ragPassages, jurisdictionContext);
+    if (verifier.verdict !== 'PASS' || verifier.parseFailed || verifier.unsupportedClaims.length > 0) {
+      throw new Error('VERIFICATION_FAILURE');
+    }
+    const citations = buildCitationsFromChunks(ragPassages, 'verified');
+    if (!hasUsableCitations(citations)) throw new Error('NO_ACCEPTED_EVIDENCE');
+    const ragSourcesUsed = ragPassages.length;
     // -- Map AI categories -> ChecklistItem rows -------------------------------
     const itemRows: Parameters<typeof prisma.checklistItem.createMany>[0]['data'] = [];
     for (const category of generatedChecklist.categories) {
@@ -546,6 +532,12 @@ class ChecklistService {
       estimatedCompletionDays: generatedChecklist.metadata.estimatedCompletionDays,
       generationDurationMs:    Date.now() - startTime,
       generationTier:          tierMeta.generationTier,
+      generationStatus:        'COMPLETE',
+      generationComplete:      true,
+      truncated:               false,
+      verifierStatus:          verifier.verdict,
+      unsupportedClaims:       verifier.unsupportedClaims,
+      jurisdictionCode:        jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
       ...(tierMeta.originalError ? { originalError: tierMeta.originalError } : {}),
       ...(tierMeta.note          ? { note: tierMeta.note }                   : {}),
     };
@@ -564,6 +556,15 @@ class ChecklistService {
           totalItems,
           summary:        generationSummary as unknown as Record<string, unknown>,
           metadata:       generationMetadata as unknown as Record<string, unknown>,
+          citations:      citations as unknown as Record<string, unknown>[],
+          evidenceProvenance: ragPassages.map((source) => ({
+            vectorId: source.vectorId,
+            chunkId: source.chunkId,
+            documentId: source.documentId,
+            jurisdictionCode: source.jurisdictionCode,
+            section: source.section,
+            score: source.score,
+          })) as unknown as Record<string, unknown>[],
           generatedAt:    new Date(),
           // Preserve the full AI blob  -  used by legacy PDF export paths.
           checklistData:  generatedChecklist as unknown as Record<string, unknown>,
@@ -819,6 +820,9 @@ class ChecklistService {
         status:             true,
         summary:            true,
         metadata:           true,
+        jurisdictionCode:   true,
+        citations:          true,
+        evidenceProvenance: true,
         checklistData:      true,
         generatedAt:        true,
         createdAt:          true,
@@ -915,6 +919,9 @@ class ChecklistService {
         metadata:           staleIds.includes(c.id)
           ? { errorMessage: 'Generation timed out. Please try again.' }
           : (c.metadata ?? null),
+        jurisdictionCode:   c.jurisdictionCode,
+        citations:          c.citations,
+        evidenceProvenance: c.evidenceProvenance,
         generatedAt:        c.generatedAt,
         createdAt:          c.createdAt,
         updatedAt:          c.updatedAt,
@@ -1000,6 +1007,9 @@ class ChecklistService {
       status,
       summary:            checklist.summary,
       metadata:           checklist.metadata,
+      jurisdictionCode:  checklist.jurisdictionCode,
+      citations:          checklist.citations,
+      evidenceProvenance: checklist.evidenceProvenance,
       generatedAt:        checklist.generatedAt,
       createdAt:          checklist.createdAt,
       updatedAt:          checklist.updatedAt,

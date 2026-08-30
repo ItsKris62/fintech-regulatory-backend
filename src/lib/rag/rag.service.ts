@@ -31,6 +31,8 @@ export interface DocumentToIndex {
   jurisdiction?: string;
   country?: string;
   authorityStatus?: string;
+  approvalStatus?: 'APPROVED';
+  provenanceConfidence?: string;
   isBinding?: boolean;
   source?: string;
   version?: string;

@@ -75,18 +75,14 @@ describe('source insufficiency guards', () => {
     expectNoUnsafePhrases(answer);
   });
 
-  it('removes model-memory fallback language from no-context gap analysis prompt', () => {
-    const prompt = generateGapAnalysisUserPrompt({
+  it('fails closed when gap analysis has no jurisdiction context', () => {
+    expect(() => generateGapAnalysisUserPrompt({
       policyText: 'Internal policy text',
       documentName: 'policy.pdf',
       documentType: 'pdf',
       regulatoryFrameworks: ['Data Protection Act 2019'],
       analysisDepth: 'standard',
-    });
-
-    expect(prompt).toContain('SOURCE INSUFFICIENCY');
-    expect(prompt).toContain('Do not identify legal gaps');
-    expectNoUnsafePhrases(prompt);
+    })).toThrow('HOME_JURISDICTION_REQUIRED');
   });
 
   it('removes model-memory fallback language from no-context policy generation prompt', () => {

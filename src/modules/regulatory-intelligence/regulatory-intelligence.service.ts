@@ -15,6 +15,7 @@ import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
 import type { GraderFailureClassification } from '@/modules/compliance/orchestrator/grader.agent';
 import type { JurisdictionContext } from '@/types/jurisdiction';
 import { logger } from '@/utils/logger';
+import { partitionEvidenceBySourceApproval } from '@/lib/source-grounding/approved-evidence';
 
 export type RegulatoryIntelligenceFeature =
   | 'COMPLIANCE_QUERY'
@@ -113,12 +114,18 @@ export class RegulatoryIntelligenceService {
       sourceIndexMode: input.retrievalProfile?.sourceIndexMode,
     });
 
-    if (!ragContext.context || ragContext.results.length === 0) {
+    const approvalPartition = await partitionEvidenceBySourceApproval(
+      ragContext.results,
+      input.jurisdictionContext.jurisdictions,
+    );
+    const approvedResults = approvalPartition.eligible;
+
+    if (!ragContext.context || approvedResults.length === 0) {
       const result: RegulatoryIntelligenceResult = {
         runId,
         grounded: false,
         evidence: [],
-        rejectedEvidence: [],
+        rejectedEvidence: approvalPartition.ineligible,
         citations: [],
         verifierVerdict: 'FAIL',
         unsupportedClaims: [],
@@ -126,16 +133,21 @@ export class RegulatoryIntelligenceService {
         failureReason: ragContext.results.length === 0 ? 'RAG_NO_EVIDENCE' : 'RAG_CORPUS_GAP',
         retrievedCount: ragContext.results.length,
         acceptedCount: 0,
-        rejectedCount: 0,
+        rejectedCount: approvalPartition.ineligible.length,
         corpusVersionSnapshot: ragContext.corpusVersions,
         retrievalVersion: ragContext.retrievalVersion,
         acceptedContext: '',
+        diagnostics: {
+          sourceApprovalEnforced: approvalPartition.enforcementApplied,
+          sourceApprovalRejectedCount: approvalPartition.ineligible.length,
+          providerGenerationInvoked: false,
+        },
       };
       this.logComplete(input, result, startedAt);
       return result;
     }
 
-    const grade = await runGraderAgent(input.question, ragContext.results, input.jurisdictionContext, topK);
+    const grade = await runGraderAgent(input.question, approvedResults, input.jurisdictionContext, topK);
     const acceptedContext = ragService.getContextForPrompt(grade.accepted, topK, 4000);
     const citations = buildCitationsFromChunks(grade.accepted, 'verified');
     const citationValidation = validateCitationsForJurisdiction(citations, input.jurisdictionContext);
@@ -146,7 +158,7 @@ export class RegulatoryIntelligenceService {
       runId,
       grounded,
       evidence: grounded ? grade.accepted : [],
-      rejectedEvidence: grade.rejected,
+      rejectedEvidence: [...approvalPartition.ineligible, ...grade.rejected],
       citations: grounded ? citations : [],
       verifierVerdict: grounded ? 'PASS' : 'FAIL',
       unsupportedClaims: [],
@@ -156,11 +168,13 @@ export class RegulatoryIntelligenceService {
         : undefined,
       retrievedCount: ragContext.results.length,
       acceptedCount: grounded ? grade.accepted.length : 0,
-      rejectedCount: grade.rejected.length,
+      rejectedCount: approvalPartition.ineligible.length + grade.rejected.length,
       corpusVersionSnapshot: ragContext.corpusVersions,
       retrievalVersion: ragContext.retrievalVersion,
       acceptedContext: grounded ? acceptedContext : '',
       diagnostics: {
+        sourceApprovalEnforced: approvalPartition.enforcementApplied,
+        sourceApprovalRejectedCount: approvalPartition.ineligible.length,
         graderFailed: grade.gradeFailed,
         graderFailureClassification: grade.diagnostics?.failureClassification,
         citationJurisdictionValid: citationValidation.valid,

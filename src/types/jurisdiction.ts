@@ -12,6 +12,9 @@ export interface JurisdictionCapability {
   queryEnabled: boolean;
   comparisonEnabled: boolean;
   corpusReady: boolean;
+  gapAnalysisEnabled: boolean;
+  checklistEnabled: boolean;
+  customFrameworkEnabled: boolean;
   status: JurisdictionAvailabilityStatus;
 }
 
@@ -24,6 +27,9 @@ export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCap
     queryEnabled: true,
     comparisonEnabled: COMPARE_MODE_ENABLED,
     corpusReady: true,
+    gapAnalysisEnabled: true,
+    checklistEnabled: true,
+    customFrameworkEnabled: true,
     status: 'ACTIVE',
   },
   RW: {
@@ -32,6 +38,9 @@ export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCap
     queryEnabled: true,
     comparisonEnabled: COMPARE_MODE_ENABLED,
     corpusReady: true,
+    gapAnalysisEnabled: true,
+    checklistEnabled: true,
+    customFrameworkEnabled: true,
     status: 'ACTIVE',
   },
   MW: {
@@ -40,15 +49,21 @@ export const JURISDICTION_CAPABILITIES: Record<JurisdictionCode, JurisdictionCap
     queryEnabled: true,
     comparisonEnabled: COMPARE_MODE_ENABLED,
     corpusReady: true,
+    gapAnalysisEnabled: true,
+    checklistEnabled: true,
+    customFrameworkEnabled: true,
     status: 'ACTIVE',
   },
   NG: {
     code: 'NG',
     label: 'Nigeria',
-    queryEnabled: false,
+    queryEnabled: true,
     comparisonEnabled: false,
-    corpusReady: false,
-    status: 'COMING_SOON',
+    corpusReady: true,
+    gapAnalysisEnabled: true,
+    checklistEnabled: true,
+    customFrameworkEnabled: true,
+    status: 'ACTIVE',
   },
 };
 

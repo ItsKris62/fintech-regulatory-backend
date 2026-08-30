@@ -110,6 +110,8 @@ ANTI-TRUNCATION PROTOCOL:
 If you approach the response limit, finish the current JSON object, close all arrays/objects, emit accurate metadata, and stop with valid JSON.`;
   }
 
+  throw new Error('HOME_JURISDICTION_REQUIRED');
+
   return `You are SheriaBot, a senior regulatory compliance advisor specializing in Kenya's fintech sector with 15+ years of experience advising CBK-licensed institutions, digital lenders, payment service providers, and insurtech companies. You have deep expertise in:
 
 KENYAN LEGISLATION:
@@ -491,7 +493,7 @@ function buildRagContextString(passages: RagPassage[]): string {
   return passages
     .map(
       (r, i) =>
-        `[REGULATORY CONTEXT ${i + 1}  -  ${r.documentTitle || 'Kenyan Regulation'}]\n${r.chunkText}`
+        `[REGULATORY CONTEXT ${i + 1}  -  ${r.documentTitle || 'Regulatory source'}]\n${r.chunkText}`
     )
     .join('\n\n---\n\n');
 }

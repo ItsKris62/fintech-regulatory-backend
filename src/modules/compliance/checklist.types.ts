@@ -130,6 +130,9 @@ export interface ChecklistSummary {
   status:             ChecklistStatus;
   /** Persisted error reason for FAILED checklists. */
   metadata:           unknown;
+  jurisdictionCode:  string | null;
+  citations:          unknown;
+  evidenceProvenance: unknown;
   generatedAt:        Date | null;
   createdAt:          Date;
   updatedAt:          Date;
@@ -179,6 +182,9 @@ export interface ChecklistDetail {
   status:             ChecklistStatus;
   summary:            unknown;
   metadata:           unknown;
+  jurisdictionCode:  string | null;
+  citations:          unknown;
+  evidenceProvenance: unknown;
   generatedAt:        Date | null;
   createdAt:          Date;
   updatedAt:          Date;

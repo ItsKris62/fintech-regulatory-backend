@@ -118,6 +118,10 @@ export const GapAnalysisResultSchema = z.object({
       outputTokens: z.number().int().min(0),
       estimatedCostUsd: z.number().min(0),
     }).optional(),
+    jurisdictionCode: z.enum(['KE', 'RW', 'MW', 'NG']).nullable().optional(),
+    verifierStatus: z.enum(['PASS', 'PARTIAL', 'FAIL']).optional(),
+    unsupportedClaims: z.array(z.string()).optional(),
+    retrievalVersion: z.string().optional(),
   }),
 });
 
@@ -377,6 +381,8 @@ MANDATORY RULES:
 6. Return only valid JSON that matches the requested schema.`;
   }
 
+  throw new Error('HOME_JURISDICTION_REQUIRED');
+
   return `You are a senior Kenyan financial regulatory compliance auditor with 15+ years of experience. You specialise in reviewing internal compliance policies and procedures against Kenyan regulatory requirements.
 
 Your expertise covers:
@@ -531,6 +537,7 @@ Analyse EVERY specified framework  -  include frameworks with no gaps (score the
  * User prompt for gap analysis  -  used for single-pass (document <= CHUNK_SIZE).
  */
 export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string {
+  if (!params.jurisdictionContext) throw new Error('HOME_JURISDICTION_REQUIRED');
   const jurisdictionName = params.jurisdictionContext
     ? (params.jurisdictionContext.mode === 'SINGLE'
       ? jurisdictionLabel(params.jurisdictionContext.primaryJurisdiction)

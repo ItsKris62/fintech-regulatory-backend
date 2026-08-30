@@ -198,7 +198,9 @@ function loadManifestRegistryEntries(country: ManifestCountry): RegistryEntry[] 
   }
 
   return result.validEntries
-    .filter((entry) => entry.reviewStatus !== 'REJECTED' && entry.reviewStatus !== 'PLACEHOLDER')
+    // Corpus governance is fail-closed: discovery/review candidates must never
+    // become production evidence before document-specific approval.
+    .filter((entry) => entry.reviewStatus === 'APPROVED')
     .map(registryEntryFromManifest);
 }
 

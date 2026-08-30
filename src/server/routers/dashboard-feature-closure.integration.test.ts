@@ -5,6 +5,7 @@ import type { EffectivePlan } from '@/types/plan.types';
 
 const mocks = vi.hoisted(() => ({
   prisma: {
+    organization: { findUnique: vi.fn() },
     organizationMember: { findUnique: vi.fn() },
     auditLog: { create: vi.fn() },
     customFramework: {
@@ -92,6 +93,7 @@ const deniedCustomFrameworkPlans: PlanUnderTest[] = ['REGULATOR', 'STARTUP', 'BU
 const jurisdictions: JurisdictionCode[] = ['KE', 'RW', 'MW'];
 
 let currentPlan: PlanUnderTest = 'ENTERPRISE';
+let currentJurisdiction: JurisdictionCode = 'KE';
 
 function baseCtx(organizationId = 'org-a', role = 'STARTUP') {
   return {
@@ -120,6 +122,11 @@ function configureCommonMocks() {
   mocks.rateLimiter.check.mockResolvedValue({ allowed: true });
   mocks.rateLimiter.checkOrThrow.mockResolvedValue(undefined);
   mocks.prisma.auditLog.create.mockResolvedValue({});
+  currentJurisdiction = 'KE';
+  mocks.prisma.organization.findUnique.mockImplementation(async ({ where }: any) => ({
+    id: where.id,
+    homeJurisdictionCode: currentJurisdiction,
+  }));
   mocks.prisma.organizationMember.findUnique.mockImplementation(async ({ where }: any) => ({
     userId: where.userId_organizationId.userId,
     organizationId: where.userId_organizationId.organizationId,
@@ -274,7 +281,8 @@ describe('dashboard feature closure - custom framework entitlements', () => {
 
     await expect(caller.list()).resolves.toHaveLength(1);
     await expect(caller.get({ id: 'fw-a' })).resolves.toMatchObject({ id: 'fw-a' });
-    await expect(caller.create({ name: 'Enterprise Framework', jurisdiction: 'RW' })).resolves.toMatchObject({ jurisdiction: 'RW' });
+    await expect(caller.create({ name: 'Enterprise Framework', jurisdiction: 'KE' })).resolves.toMatchObject({ jurisdiction: 'KE' });
+    await expectCode(caller.create({ name: 'Cross-border Framework', jurisdiction: 'RW' }), 'FORBIDDEN');
     await expect(caller.updateMetadata({ id: 'fw-a', name: 'Updated Framework' })).resolves.toMatchObject({ name: 'Updated Framework' });
     await expect(caller.publish({ id: 'fw-a' })).resolves.toMatchObject({ status: 'PUBLISHED' });
     await expect(caller.archive({ id: 'fw-a' })).resolves.toMatchObject({ status: 'ARCHIVED' });
@@ -365,18 +373,27 @@ describe('dashboard feature closure - KE/RW/MW journeys', () => {
 
   it.each(jurisdictions)('accepts %s custom framework jurisdiction', async (jurisdiction) => {
     currentPlan = 'ENTERPRISE';
+    currentJurisdiction = jurisdiction;
     configureCustomFrameworkSuccessMocks();
     const caller = customFrameworkRouter.createCaller(baseCtx());
 
     await expect(caller.create({ name: `${jurisdiction} Framework`, jurisdiction })).resolves.toMatchObject({ jurisdiction });
   });
 
-  it.each(['NG', 'US'])('rejects unsupported custom framework jurisdiction %s', async (jurisdiction) => {
+  it('rejects a foreign NG custom framework for a KE home organization', async () => {
     currentPlan = 'ENTERPRISE';
     configureCustomFrameworkSuccessMocks();
     const caller = customFrameworkRouter.createCaller(baseCtx());
 
-    await expectCode(caller.create({ name: 'Unsupported Framework', jurisdiction } as any), 'BAD_REQUEST');
+    await expectCode(caller.create({ name: 'Foreign Framework', jurisdiction: 'NG' }), 'FORBIDDEN');
+  });
+
+  it('rejects an unknown custom framework jurisdiction', async () => {
+    currentPlan = 'ENTERPRISE';
+    configureCustomFrameworkSuccessMocks();
+    const caller = customFrameworkRouter.createCaller(baseCtx());
+
+    await expectCode(caller.create({ name: 'Unsupported Framework', jurisdiction: 'US' } as any), 'BAD_REQUEST');
   });
 
   it.each(jurisdictions)('preserves and filters %s regulatory alerts through tRPC', async (jurisdictionCode) => {
