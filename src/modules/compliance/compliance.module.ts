@@ -368,10 +368,10 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
           ? { documentId: pineconeInFilter(benchmarkDocumentIds) }
           : {}),
       };
-      const relaxedFilter = frameworkSlug ? { frameworkSlug } : undefined;
-
-      return regulatoryIntelligenceService
-        .retrieveAndGrade({
+      const benchmarkOnlyFilter = benchmarkDocumentIds.length > 0
+        ? { documentId: pineconeInFilter(benchmarkDocumentIds) }
+        : undefined;
+      const request = (filter: Record<string, unknown> | undefined) => regulatoryIntelligenceService.retrieveAndGrade({
           question: `${framework} regulatory compliance obligations ${jurisdictionNames}${keywordSuffix}`,
           feature: 'GAP_ANALYSIS',
           jurisdictionContext,
@@ -379,10 +379,24 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
           retrievalProfile: {
             topK: 8,
             minScore: 0.6,
-            filter: Object.keys(strictFilter).length > 0 ? strictFilter : relaxedFilter,
+            filter,
           },
+        });
+
+      return request(Object.keys(strictFilter).length > 0 ? strictFilter : benchmarkOnlyFilter)
+        .then(async (result) => {
+          if (result.evidence.length > 0 || !frameworkSlug) return result.evidence;
+          logger.info({
+            type: 'gap_analysis_framework_slug_fallback',
+            userId,
+            analysisId,
+            frameworkSlug,
+            jurisdictionCodes: jurisdictionContext.jurisdictions,
+            benchmarkRestricted: benchmarkDocumentIds.length > 0,
+          });
+          const fallback = await request(benchmarkOnlyFilter);
+          return fallback.evidence;
         })
-        .then((result) => result.evidence)
         .catch((err: unknown) => {
           logger.warn({ type: 'gap_analysis_rag_framework_failed', userId, analysisId, framework, error: (err as Error).message });
           return [] as SearchResult[];

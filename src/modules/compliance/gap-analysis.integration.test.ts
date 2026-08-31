@@ -217,6 +217,42 @@ describe('Gap Analysis Pipeline Integration', () => {
     expect(ragService.search).not.toHaveBeenCalled();
   });
 
+  it('falls back from a legacy framework slug to jurisdiction-scoped approved evidence', async () => {
+    vi.mocked(extractPdfText).mockResolvedValueOnce(
+      'Valid substantive text that safely surpasses the readable text guard threshold. '.repeat(10)
+    );
+    const { regulatoryIntelligenceService } = await import('@/modules/regulatory-intelligence/regulatory-intelligence.service');
+    vi.mocked(regulatoryIntelligenceService.retrieveAndGrade)
+      .mockResolvedValueOnce({ evidence: [] } as never)
+      .mockResolvedValueOnce({
+        evidence: [{
+          vectorId: 'ng-doc:chunk-1', chunkId: 'chunk-1', documentId: 'ng-doc',
+          documentTitle: 'Nigeria Regulation', chunkText: 'Substantive Nigerian regulatory obligation.',
+          frameworkSlug: null, jurisdictionCode: 'NG', score: 0.91, rank: 1,
+        }],
+      } as never);
+
+    await executeGapAnalysisPipeline({
+      ...basePipelineParams,
+      analysisId: 'gap-slug-fallback-test',
+      regulatoryFrameworks: ['Legacy Framework Label'],
+      regulatoryFrameworkSlugs: ['legacy-framework'],
+      jurisdictionContext: {
+        mode: 'SINGLE', jurisdictions: ['NG'], primaryJurisdiction: 'NG', jurisdictionSource: 'ORGANIZATION_HOME',
+      },
+    });
+
+    expect(regulatoryIntelligenceService.retrieveAndGrade).toHaveBeenNthCalledWith(1,
+      expect.objectContaining({ retrievalProfile: expect.objectContaining({ filter: { frameworkSlug: 'legacy-framework' } }) })
+    );
+    expect(regulatoryIntelligenceService.retrieveAndGrade).toHaveBeenNthCalledWith(2,
+      expect.objectContaining({
+        jurisdictionContext: expect.objectContaining({ primaryJurisdiction: 'NG' }),
+        retrievalProfile: expect.objectContaining({ filter: undefined }),
+      })
+    );
+  });
+
   it('passes selected benchmark document metadata into the completed result', async () => {
     vi.mocked(extractPdfText).mockResolvedValueOnce(
       'Valid substantive text that safely surpasses the readable text guard threshold. '.repeat(10)
