@@ -65,8 +65,14 @@ export async function generateCustomFramework(input: {
   let completion;
   try {
     completion = await complete({
-      systemPrompt: `Generate a regulatory control framework using only the supplied same-country evidence. Every control must cite one SOURCE by its numeric sourceIndex. Do not invent legal duties. Return JSON only.`,
-      prompt: `Intent: ${input.intent}\n\nEvidence:\n${evidenceText}\n\nReturn {"name":"...","description":"...","sections":[{"title":"...","description":"...","controls":[{"code":"...","title":"...","requirement":"...","guidance":"...","evidenceRequired":["..."],"severity":"HIGH","frequency":"...","sourceIndex":1}]}]}`,
+      systemPrompt: `Generate a regulatory control framework using only the supplied same-country evidence.
+Each control must be directly and fully entailed by one substantive SOURCE chunk and cite it by numeric sourceIndex.
+Treat the intent as desired scope, not evidence: omit requested topics for which no source contains an operative requirement.
+Never create a control from a table of contents, heading, policy objective, background statement, or general description.
+Do not combine multiple sources, extrapolate implementation measures, broaden a claim, or invent legal duties.
+Keep each requirement evidence-close. Omit guidance, frequency, severity, and evidenceRequired unless that same source explicitly supports them.
+Return JSON only.`,
+      prompt: `Intent: ${input.intent}\n\nEvidence:\n${evidenceText}\n\nReturn {"name":"...","description":"...","sections":[{"title":"...","description":"...","controls":[{"code":"...","title":"...","requirement":"one narrow obligation directly stated in the mapped source","sourceIndex":1}]}]}`,
       maxTokens: 8192,
       temperature: 0,
     }, 'policy');

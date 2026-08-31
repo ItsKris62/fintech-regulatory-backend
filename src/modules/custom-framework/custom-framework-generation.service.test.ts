@@ -63,5 +63,7 @@ describe('custom framework control-level verification', () => {
     expect(verifierMock.mock.calls[0][1]).toEqual([expect.objectContaining({ chunkId: 'c1' })]);
     expect(verifierMock.mock.calls[1][1]).toEqual([expect.objectContaining({ chunkId: 'c2' })]);
     expect(result.metadata).toMatchObject({ controlsVerified: 2, controlsRejected: 0 });
+    expect(completeMock.mock.calls[0][0].systemPrompt).toContain('omit requested topics');
+    expect(completeMock.mock.calls[0][0].systemPrompt).toContain('Never create a control from a table of contents');
   });
 });
