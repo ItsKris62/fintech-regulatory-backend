@@ -7,6 +7,7 @@ import { BadRequestError, OrganizationNotFoundError } from '@/utils/error';
 import { isPrismaForeignKeyError, sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { logger } from '@/utils/logger';
 import { assertCanCreateOrJoinOrganization } from './organization-plan-limit.service';
+import { AUDITED_JURISDICTIONS, type AuditedJurisdiction } from '@/config/jurisdictions.config';
 
 const PILOT_DURATION_DAYS = 14;
 const DEFAULT_PILOT_COHORT = 'PILOT_COHORT_ADMIN';
@@ -39,6 +40,7 @@ export const createUserWithOrganizationInputSchema = z.object({
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.string().trim().min(2).max(120).optional(),
   ),
+  homeJurisdictionCode: z.enum(AUDITED_JURISDICTIONS).optional(),
   orgRole: z.nativeEnum(MemberRole).optional().default('MEMBER'),
   supabaseAuthId: z.string().trim().min(1),
   adminId: z.string().trim().min(1),
@@ -48,6 +50,14 @@ export const createUserWithOrganizationInputSchema = z.object({
   temporaryPasswordExpiresAt: z.date().optional(),
   temporaryPasswordIssuedAt: z.date().optional(),
   temporaryPasswordDeliveryStatus: z.string().trim().min(1).optional(),
+}).superRefine((value, ctx) => {
+  if (value.isPilot && !value.organizationId && !value.homeJurisdictionCode) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['homeJurisdictionCode'],
+      message: 'A home jurisdiction is required when creating a pilot organization.',
+    });
+  }
 });
 
 export interface CreateUserWithOrganizationInput {
@@ -58,6 +68,7 @@ export interface CreateUserWithOrganizationInput {
   isPilot?: boolean;
   organizationId?: string;
   organizationName?: string;
+  homeJurisdictionCode?: AuditedJurisdiction;
   orgRole?: 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
   supabaseAuthId: string;
   adminId: string;
@@ -147,6 +158,7 @@ async function resolveOrganization(
       plan: SubscriptionPlan.REGULATOR,
       verificationStatus: 'verified',
       verifiedAt: new Date(),
+      homeJurisdictionCode: input.homeJurisdictionCode,
     },
     select: { id: true, name: true, subscriptionTier: true, plan: true },
   });

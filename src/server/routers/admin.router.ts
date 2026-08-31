@@ -13,6 +13,7 @@ import { getStats as getChecklistStats } from '@/lib/metrics/checklist-metrics';
 import { BadRequestError, OrganizationNotFoundError } from '@/utils/error';
 import { isPrismaForeignKeyError, sanitizeErrorMessage } from '@/utils/error-sanitizer';
 import { optionalOrganizationIdSchema } from '@/server/services/userProvisioning.service';
+import { AUDITED_JURISDICTIONS } from '@/config/jurisdictions.config';
 import {
   findPendingOrganizationInvite,
 } from '../services/organization-seat.service';
@@ -65,6 +66,7 @@ const createAdminUserSchema = z.object({
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.string().trim().min(2).max(120).optional(),
   ),
+  homeJurisdictionCode: z.enum(AUDITED_JURISDICTIONS).optional(),
   orgRole: z.nativeEnum(MemberRole).optional().default('MEMBER'),
   isPilot: z.boolean().default(false),
   sendWelcomeEmail: z.boolean().default(false),
@@ -74,6 +76,13 @@ const createAdminUserSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['organizationName'],
       message: 'Pilot users require an organization name or an existing organization.',
+    });
+  }
+  if (value.isPilot && !value.organizationId && !value.homeJurisdictionCode) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['homeJurisdictionCode'],
+      message: 'A home jurisdiction is required when creating a pilot organization.',
     });
   }
 });

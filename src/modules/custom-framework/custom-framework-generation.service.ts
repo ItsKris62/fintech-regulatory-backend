@@ -5,6 +5,7 @@ import { regulatoryIntelligenceService } from '@/modules/regulatory-intelligence
 import { runVerifierAgent } from '@/modules/compliance/orchestrator/verifier.agent';
 import { extractJson } from '@/modules/compliance/orchestrator/utils';
 import type { JurisdictionContext } from '@/types/jurisdiction';
+import { logger } from '@/utils/logger';
 
 const generatedFrameworkSchema = z.object({
   name: z.string().min(2).max(160),
@@ -83,8 +84,39 @@ export async function generateCustomFramework(input: {
     throw new CustomFrameworkGenerationError('VERIFICATION_FAILURE');
   }
 
-  const verifier = await runVerifierAgent(JSON.stringify(framework), intelligence.evidence, input.jurisdictionContext);
-  if (verifier.verdict !== 'PASS' || verifier.parseFailed || verifier.unsupportedClaims.length > 0) {
+  const controls = framework.sections.flatMap((section) => section.controls);
+  const verificationResults = [];
+  for (const control of controls) {
+    const source = intelligence.evidence[control.sourceIndex - 1];
+    const answer = [control.title, control.requirement, control.guidance].filter(Boolean).join('\n');
+    const verifier = await runVerifierAgent(answer, [source], input.jurisdictionContext);
+    verificationResults.push({ control, source, verifier });
+  }
+
+  const rejectedControls = verificationResults.filter(({ verifier }) =>
+    verifier.verdict !== 'PASS' || verifier.parseFailed || verifier.unsupportedClaims.length > 0
+  );
+
+  logger.info({
+    type: 'custom_framework_control_verification',
+    retrievedChunks: intelligence.retrievedCount,
+    approvedEligible: intelligence.evidence.length,
+    graderAccepted: intelligence.acceptedCount,
+    generatedControls: controls.length,
+    controlsVerified: controls.length - rejectedControls.length,
+    controlsRejected: rejectedControls.length,
+    rejected: rejectedControls.map(({ control, source, verifier }) => ({
+      controlIdentifier: control.code ?? control.title.slice(0, 80),
+      reason: verifier.parseFailed
+        ? 'VERIFIER_PARSE_FAILED'
+        : verifier.unsupportedClaims[0]?.slice(0, 160) ?? verifier.verdict,
+      documentId: source.documentId,
+      chunkId: source.chunkId,
+      vectorId: source.vectorId,
+    })),
+  });
+
+  if (rejectedControls.length > 0) {
     throw new CustomFrameworkGenerationError('VERIFICATION_FAILURE');
   }
 
@@ -98,8 +130,11 @@ export async function generateCustomFramework(input: {
       retrievedChunks: intelligence.retrievedCount,
       acceptedChunks: intelligence.acceptedCount,
       rejectedChunks: intelligence.rejectedCount,
-      verifierStatus: verifier.verdict,
-      unsupportedClaims: verifier.unsupportedClaims,
+      verifierStatus: 'PASS',
+      generatedControls: controls.length,
+      controlsVerified: controls.length,
+      controlsRejected: 0,
+      unsupportedClaims: [],
       corpusVersionSnapshot: intelligence.corpusVersionSnapshot,
       retrievalVersion: intelligence.retrievalVersion,
       inputTokens: completion.inputTokens,

@@ -22,6 +22,7 @@ import { hashPassword } from '@/utils/helpers';
 import { supabaseAdmin } from '@/lib/supabase';
 import { createUserWithOrganization, optionalOrganizationIdSchema } from '@/server/services/userProvisioning.service';
 import { planCtxCacheKey } from '@/modules/trial';
+import { AUDITED_JURISDICTIONS } from '@/config/jurisdictions.config';
 
 const MS_PER_DAY    = 1000 * 60 * 60 * 24;
 const MAX_ACTIONS   = 10; // total distinct PilotAction values
@@ -36,6 +37,7 @@ const createPilotTesterSchema = z.object({
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.string().trim().min(2).max(120).optional(),
   ),
+  homeJurisdictionCode: z.enum(AUDITED_JURISDICTIONS).optional(),
   role: z.enum(['STARTUP', 'ENTERPRISE']).default('STARTUP'),
   phone: z.string().trim().max(40).optional(),
   temporaryPassword: z.string().min(10).max(128).optional(),
@@ -46,6 +48,13 @@ const createPilotTesterSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['organizationName'],
       message: 'Pilot users require an organization name or an existing organization.',
+    });
+  }
+  if (!value.organizationId && !value.homeJurisdictionCode) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['homeJurisdictionCode'],
+      message: 'A home jurisdiction is required when creating a pilot organization.',
     });
   }
 });
@@ -154,6 +163,7 @@ export const pilotRouter = router({
           isPilot: true,
           organizationId: input.organizationId,
           organizationName: input.organizationName,
+          homeJurisdictionCode: input.homeJurisdictionCode,
           supabaseAuthId: authData.user.id,
           adminId: ctx.user!.id,
           requestId: `pilot-${Date.now()}`,

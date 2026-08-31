@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { emailSchema, passwordSchema, phoneSchema } from '@/utils/validation';
+import { AUDITED_JURISDICTIONS } from '@/config/jurisdictions.config';
 
 /**
  * Auth Schemas
@@ -28,9 +29,18 @@ export const registerSchema = z.object({
     error: 'Role must be REGULATOR, STARTUP, or ENTERPRISE',
   }),
   companyName: z.string().min(2, 'Organization name must be at least 2 characters').max(200).optional(),
+  homeJurisdictionCode: z.enum(AUDITED_JURISDICTIONS).optional(),
   invitationToken: z.string().min(16, 'Invitation token is invalid').max(256).optional(),
   phone: phoneSchema.optional(),
-}).strict();
+}).strict().superRefine((input, ctx) => {
+  if (input.companyName && !input.invitationToken && !input.homeJurisdictionCode) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['homeJurisdictionCode'],
+      message: 'Home jurisdiction is required when creating an organization.',
+    });
+  }
+});
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 

@@ -1079,7 +1079,7 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
     let accumulatedContent = '';
     let categoriesDetected = 0;
 
-    const result = await stream(
+    let result = await stream(
       {
         prompt:            params.userPrompt,
         systemPrompt:      params.systemPrompt,
@@ -1105,6 +1105,27 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
       },
       'checklist'
     );
+
+    // Some Anthropic model/runtime combinations can complete a streaming
+    // request without emitting any text_delta events (the production failure
+    // shape was empty content with zero output tokens). A normal completion
+    // uses the same prompt and provider but returns the final text atomically,
+    // after which the caller still performs strict JSON extraction and Zod
+    // validation. This is deliberately limited to the exact empty-stream case.
+    if (!result.content.trim() && result.outputTokens === 0) {
+      logger.warn({
+        type: 'checklist_empty_stream_fallback',
+        failureClassification: 'EMPTY_STREAM_ZERO_OUTPUT',
+        model: result.model,
+      });
+      result = await complete({
+        prompt: params.userPrompt,
+        systemPrompt: params.systemPrompt,
+        maxTokens: params.maxTokens,
+        temperature: params.temperature ?? 0.2,
+        overrideTimeoutMs: params.overrideTimeoutMs,
+      }, 'checklist');
+    }
 
     onProgress({ type: 'parsing', message: 'Validating checklist structure...' });
 

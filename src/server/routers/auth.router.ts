@@ -420,8 +420,9 @@ export const authRouter = router({
                 type: resolvedRole,
                 subscriptionTier: defaultSubscriptionTier,
                 plan: subscriptionTierToPlanOrFree(defaultSubscriptionTier),
+                homeJurisdictionCode: input.homeJurisdictionCode,
                 users: { connect: { id: user.id } },
-              } as any,
+              },
               select: { id: true },
             });
             user.organizationId = org.id;

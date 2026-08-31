@@ -1672,6 +1672,7 @@ class AdminModule {
       isPilot: input.isPilot ?? false,
       organizationId: input.organizationId,
       organizationName: input.organizationName,
+      homeJurisdictionCode: input.homeJurisdictionCode,
       supabaseAuthId,
       adminId,
       requestId,
