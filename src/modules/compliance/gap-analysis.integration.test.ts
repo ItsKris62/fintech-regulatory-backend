@@ -247,6 +247,7 @@ describe('Gap Analysis Pipeline Integration', () => {
     );
     expect(regulatoryIntelligenceService.retrieveAndGrade).toHaveBeenNthCalledWith(2,
       expect.objectContaining({
+        question: expect.not.stringContaining('Legacy Framework Label'),
         jurisdictionContext: expect.objectContaining({ primaryJurisdiction: 'NG' }),
         retrievalProfile: expect.objectContaining({ filter: undefined }),
       })
