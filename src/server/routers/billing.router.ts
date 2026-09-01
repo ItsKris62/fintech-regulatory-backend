@@ -108,7 +108,18 @@ export const billingRouter = router({
           readUsageCount(scopeId, BillingMetric.COMPLIANCE_QUERIES),
           readUsageCount(scopeId, BillingMetric.CHECKLIST_GENERATIONS),
           readUsageCount(scopeId, BillingMetric.API_CALLS),
-          readUsageCount(scopeId, BillingMetric.DOCUMENT_STORAGE_MB),
+          (async () => {
+            try {
+              const agg = await ctx.prisma.vaultDocument.aggregate({
+                where: { organizationId: scopeId, isArchived: false, deletedAt: null },
+                _sum: { fileSize: true },
+              });
+              const bytes = agg._sum.fileSize ?? 0;
+              return Math.round((bytes / (1024 * 1024)) * 100) / 100;
+            } catch {
+              return readUsageCount(scopeId, BillingMetric.DOCUMENT_STORAGE_MB);
+            }
+          })(),
         ]);
 
         // -- Trial status (user-scoped, fetched for FREE_TRIAL and REGULATOR so

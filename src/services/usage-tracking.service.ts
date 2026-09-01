@@ -317,6 +317,19 @@ class UsageTrackingService {
       }
     };
 
+    const readAuthoritativeStorage = async (): Promise<number> => {
+      try {
+        const agg = await prisma.vaultDocument.aggregate({
+          where: { organizationId: orgId, isArchived: false, deletedAt: null },
+          _sum: { fileSize: true },
+        });
+        const bytes = agg._sum.fileSize ?? 0;
+        return Math.round((bytes / (1024 * 1024)) * 100) / 100;
+      } catch {
+        return readOne(BillingMetric.DOCUMENT_STORAGE_MB);
+      }
+    };
+
     const [
       complianceQueries,
       checklistGenerations,
@@ -328,7 +341,7 @@ class UsageTrackingService {
       readOne(BillingMetric.COMPLIANCE_QUERIES),
       readOne(BillingMetric.CHECKLIST_GENERATIONS),
       readOne(BillingMetric.API_CALLS),
-      readOne(BillingMetric.DOCUMENT_STORAGE_MB),
+      readAuthoritativeStorage(),
       readOne(BillingMetric.GAP_ANALYSES),
       readOne(BillingMetric.POLICY_GENERATIONS),
     ]);

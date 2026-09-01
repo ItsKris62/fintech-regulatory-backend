@@ -458,6 +458,26 @@ function assertTierUploadLimits(plan: EffectivePlan, fileType: string, fileSize:
   }
 }
 
+// --- Helper: release reserved storage bytes on completion or abort ----------
+
+async function releaseVaultStorageReservation(orgId: string, bytes: number): Promise<void> {
+  if (!orgId || !bytes || bytes <= 0) return;
+  const reservedBytesKey = `sheriabot:vault:reserved_bytes:${orgId}`;
+  try {
+    const remaining = await redis.decrby(reservedBytesKey, bytes);
+    if (remaining <= 0) {
+      await redis.del(reservedBytesKey);
+    }
+  } catch (err: unknown) {
+    logger.warn({
+      type: 'vault_storage_release_reservation_failed',
+      orgId,
+      bytes,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 // --- Helper: enforce per-org total storage quota ------------------------------
 
 async function checkVaultStorageQuota(
@@ -479,20 +499,46 @@ async function checkVaultStorageQuota(
   }
 
   // Sum active (non-archived) vault documents for this org  -  this is the
-  // authoritative source of total storage used (Redis counter is for billing
-  // dashboards only and resets monthly).
+  // authoritative source of total storage used (persistent capacity).
   const agg = await prisma.vaultDocument.aggregate({
     where: { organizationId: orgId, isArchived: false, deletedAt: null },
     _sum: { fileSize: true },
   });
   const currentUsedBytes = agg._sum.fileSize ?? 0;
 
-  if (currentUsedBytes + incomingFileSizeBytes > limits.vaultTotalQuotaBytes) {
-    const usedMB = Math.round(currentUsedBytes / (1024 * 1024));
+  // Check active upload reservations in Redis to prevent parallel upload over-allocation races
+  const reservedBytesKey = `sheriabot:vault:reserved_bytes:${orgId}`;
+  let reservedBytes = 0;
+  try {
+    const rawReserved = await redis.get<number>(reservedBytesKey);
+    if (typeof rawReserved === 'number') reservedBytes = rawReserved;
+    else if (typeof rawReserved === 'string') {
+      const parsed = parseInt(rawReserved, 10);
+      if (!isNaN(parsed)) reservedBytes = parsed;
+    }
+  } catch {
+    reservedBytes = 0;
+  }
+
+  if (currentUsedBytes + reservedBytes + incomingFileSizeBytes > limits.vaultTotalQuotaBytes) {
+    const usedMB = Math.round((currentUsedBytes + reservedBytes) / (1024 * 1024));
     const limitMB = Math.floor(limits.vaultTotalQuotaBytes / (1024 * 1024));
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: `Storage quota exceeded. Your plan allows ${limitMB} MB total. Currently using ${usedMB} MB. Upgrade your plan for more storage.`,
+      message: `Storage quota exceeded. Your plan allows ${limitMB} MB total. Currently using ${usedMB} MB (including pending reservations). Upgrade your plan for more storage.`,
+    });
+  }
+
+  // Atomically reserve bytes for the 600s presigned window
+  try {
+    await redis.incrby(reservedBytesKey, incomingFileSizeBytes);
+    await redis.expire(reservedBytesKey, 600);
+  } catch (err: unknown) {
+    logger.warn({
+      type: 'vault_storage_reservation_failed',
+      orgId,
+      incomingFileSizeBytes,
+      error: err instanceof Error ? err.message : String(err),
     });
   }
 }
@@ -708,6 +754,7 @@ class VaultModule {
 
     if (scanResult.status === 'infected') {
       await deletePendingUpload(pendingUpload.documentId);
+      await releaseVaultStorageReservation(pendingUpload.organizationId, pendingUpload.declaredSize);
       await deleteRejectedVaultObject({
         key: pendingUpload.storageKey,
         bucket: pendingUpload.bucket,
@@ -753,6 +800,7 @@ class VaultModule {
     });
 
     await deletePendingUpload(pendingUpload.documentId);
+    await releaseVaultStorageReservation(pendingUpload.organizationId, pendingUpload.declaredSize);
     await writeVaultAuditLog({
       userId: pendingUpload.uploaderId,
       action: 'vault_upload_confirmed',

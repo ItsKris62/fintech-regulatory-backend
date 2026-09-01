@@ -18,12 +18,24 @@ export interface OrchestratorInput {
   retrievalVersion?: string;
   agenticComplexityLevel: 'simple' | 'complex';
   shadow: boolean;
+  synthesisTokens?: {
+    input: number;
+    output: number;
+    model?: string;
+    provider?: string;
+  };
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
   const t0 = Date.now();
   const budget = TOKEN_BUDGETS[input.agenticComplexityLevel];
   const controlTokens: ControlTokens = {};
+  if (input.synthesisTokens) {
+    controlTokens.synthesis = {
+      input: input.synthesisTokens.input,
+      output: input.synthesisTokens.output,
+    };
+  }
   const jurisdictionContext = input.jurisdictionContext
     ?? resolveJurisdictionContext({}, { allowLegacyDefault: true });
   const corpusVersionSnapshot = input.corpusVersionSnapshot ?? {};
@@ -125,10 +137,12 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
     const inputTokens =
       (controlTokens.router?.input   ?? 0) +
       (controlTokens.grader?.input   ?? 0) +
+      (controlTokens.synthesis?.input ?? 0) +
       (controlTokens.verifier?.input ?? 0);
     const outputTokens =
       (controlTokens.router?.output   ?? 0) +
       (controlTokens.grader?.output   ?? 0) +
+      (controlTokens.synthesis?.output ?? 0) +
       (controlTokens.verifier?.output ?? 0);
 
     const tokenBudgetExceeded = (inputTokens + outputTokens) > budget.maxTotalTokens;
@@ -225,6 +239,45 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       },
     });
 
+    if (input.complianceQueryId) {
+      try {
+        const existingQuery = await prisma.complianceQuery.findUnique({
+          where: { id: input.complianceQueryId },
+          select: { metadata: true },
+        });
+        if (existingQuery) {
+          const existingMeta = (typeof existingQuery.metadata === 'object' && existingQuery.metadata !== null)
+            ? existingQuery.metadata as Record<string, unknown>
+            : {};
+          await prisma.complianceQuery.update({
+            where: { id: input.complianceQueryId },
+            data: {
+              metadata: {
+                ...existingMeta,
+                tokensUsed: inputTokens + outputTokens,
+                tokenBreakdown: {
+                  router: controlTokens.router,
+                  grader: controlTokens.grader,
+                  synthesis: controlTokens.synthesis,
+                  verifier: controlTokens.verifier,
+                  totalInputTokens: inputTokens,
+                  totalOutputTokens: outputTokens,
+                  totalTokens: inputTokens + outputTokens,
+                  estimated: false,
+                },
+              },
+            },
+          });
+        }
+      } catch (metaErr: unknown) {
+        logger.warn({
+          type: 'compliance_query_token_metadata_update_error',
+          complianceQueryId: input.complianceQueryId,
+          error: metaErr instanceof Error ? metaErr.message : String(metaErr),
+        });
+      }
+    }
+
     logger.info({
       type:               'orchestrator_run_complete',
       complianceQueryId:  input.complianceQueryId,
@@ -236,6 +289,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       verifierVerdict:    trace.verifierVerdict,
       unsupportedClaims:  trace.unsupportedClaims.length,
       tokenBudgetExceeded,
+      totalTokens:        inputTokens + outputTokens,
       wallMs,
     });
   } catch (err: any) {

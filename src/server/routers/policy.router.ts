@@ -872,9 +872,42 @@ export const policyRouter = router({
    */
   refine: orgMemberProcedure
     .use(rateLimited('policyRefinement'))
+    .use(withPlanContext)
+    .use(requirePlanFeature('policyGeneration'))
     .input(refinePolicySchema)
     .mutation(async ({ input, ctx }) => {
       try {
+        if (ctx.user?.id) {
+          const { section34RestrictionService } = await import('@/modules/user/restriction.service');
+          const check = await section34RestrictionService.isProcessingPermitted(ctx.user.id, 'POLICY_GENERATION');
+          if (!check.permitted) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: check.reason ?? 'Policy generation restricted pursuant to DPA Section 34',
+            });
+          }
+        }
+
+        try {
+          await resolveJurisdictionEntitlement({
+            prisma: ctx.prisma as any,
+            organizationId: ctx.orgMembership!.organizationId,
+            effectivePlan: ctx.plan ?? 'REGULATOR',
+            requestedJurisdictions: undefined,
+            source: 'ORGANIZATION_HOME',
+            audit: {
+              userId: ctx.user!.id,
+              route: 'trpc.policy.refine',
+            },
+          });
+        } catch (error) {
+          if (error instanceof JurisdictionContractError) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: error.message, cause: error });
+          }
+          if (error instanceof JurisdictionAuthorizationError) throw toTrpcJurisdictionAuthorizationError(error);
+          throw error;
+        }
+
         const policy = await ctx.prisma.policy.findUnique({
           where: { id: input.id },
           include: { citations: true },
@@ -909,10 +942,15 @@ export const policyRouter = router({
           });
         }
 
+        const usagePatch = await resolveUsageLimit(ctx, BillingMetric.POLICY_GENERATIONS, { deferIncrement: true });
+
         const result = await ctx.aiService.refinePolicy(
           currentContent,
           input.refinementInstructions,
         );
+
+        // Commit usage counter now that AI synthesis succeeded
+        await usagePatch.incrementUsage?.();
 
         const refinedPolicy = await (ctx.prisma.$transaction as any)(async (tx: any) => {
           await tx.policy.updateMany({

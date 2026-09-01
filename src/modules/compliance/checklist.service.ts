@@ -295,12 +295,13 @@ class ChecklistService {
     // -- Tier 1: Full generation ----------------------------------------------
     const t1Start = Date.now();
     try {
-      const checklist = await this.runTier(1, checklistId, input, ragPassages);
+      const { checklist, inputTokens, outputTokens } = await this.runTier(1, checklistId, input, ragPassages);
       recordSuccess('full'); // fire-and-forget metric counter
       await this.saveGenerationResult(
         checklistId, input, checklist,
         { generationTier: 'full' },
-        ragPassages, trialUserId, startTime
+        ragPassages, trialUserId, startTime,
+        { inputTokens, outputTokens }
       );
       logger.info({
         type:          'checklist_generate_success',
@@ -309,6 +310,8 @@ class ChecklistService {
         tier:          1,
         totalItems:    checklist.metadata.totalItems,
         ragPassagesUsed: ragPassages.length,
+        inputTokens,
+        outputTokens,
         durationMs:    Date.now() - startTime,
         partial:       false,
       });
@@ -323,12 +326,13 @@ class ChecklistService {
     const t2Start = Date.now();
     const tier2Passages = ragPassages.slice(0, 6);
     try {
-      const checklist = await this.runTier(2, checklistId, input, tier2Passages);
+      const { checklist, inputTokens, outputTokens } = await this.runTier(2, checklistId, input, tier2Passages);
       recordSuccess('simplified'); // fire-and-forget metric counter
       await this.saveGenerationResult(
         checklistId, input, checklist,
         { generationTier: 'simplified', originalError: errors[0]?.error },
-        tier2Passages, trialUserId, startTime
+        tier2Passages, trialUserId, startTime,
+        { inputTokens, outputTokens }
       );
       logger.info({
         type:          'checklist_generate_success',
@@ -337,6 +341,8 @@ class ChecklistService {
         tier:          2,
         totalItems:    checklist.metadata.totalItems,
         ragPassagesUsed: tier2Passages.length,
+        inputTokens,
+        outputTokens,
         durationMs:    Date.now() - startTime,
         partial:       false,
       });
@@ -393,7 +399,7 @@ class ChecklistService {
     checklistId: string,
     input:       GenerateChecklistAsyncInput & { jurisdictionContext?: JurisdictionContext },
     passages:    SearchResult[]
-  ): Promise<GeneratedChecklist> {
+  ): Promise<{ checklist: GeneratedChecklist; inputTokens: number; outputTokens: number }> {
     const tierStart = Date.now();
 
     const { system, user } =
@@ -454,7 +460,11 @@ class ChecklistService {
       durationMs:  Date.now() - tierStart,
     });
 
-    return checklist;
+    return {
+      checklist,
+      inputTokens,
+      outputTokens,
+    };
   }
 
   /**
@@ -474,7 +484,8 @@ class ChecklistService {
     },
     ragPassages:    SearchResult[],
     trialUserId:    string | undefined,
-    startTime:      number
+    startTime:      number,
+    tokens?:        { inputTokens: number; outputTokens: number }
   ): Promise<void> {
     const jurisdictionContext = (input as GenerateChecklistAsyncInput & { jurisdictionContext?: JurisdictionContext }).jurisdictionContext;
     if (!jurisdictionContext || ragPassages.length === 0) throw new Error('NO_ACCEPTED_EVIDENCE');
@@ -527,6 +538,11 @@ class ChecklistService {
       },
     };
 
+    const measuredInputTokens = tokens?.inputTokens ?? 0;
+    const measuredOutputTokens = tokens?.outputTokens ?? 0;
+    const measuredTotalTokens = measuredInputTokens + measuredOutputTokens;
+    const hasMeasuredTokens = measuredTotalTokens > 0;
+
     const generationMetadata = {
       ragSourcesUsed,
       estimatedCompletionDays: generatedChecklist.metadata.estimatedCompletionDays,
@@ -538,6 +554,10 @@ class ChecklistService {
       verifierStatus:          verifier.verdict,
       unsupportedClaims:       verifier.unsupportedClaims,
       jurisdictionCode:        jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null,
+      inputTokens:             measuredInputTokens,
+      outputTokens:            measuredOutputTokens,
+      tokensUsed:              measuredTotalTokens,
+      estimatedTokens:         !hasMeasuredTokens,
       ...(tierMeta.originalError ? { originalError: tierMeta.originalError } : {}),
       ...(tierMeta.note          ? { note: tierMeta.note }                   : {}),
     };
@@ -573,17 +593,18 @@ class ChecklistService {
     });
 
     // -- Trial token tracking (fire-and-forget, non-fatal) -------------------
-    // Token counts are not available here since executeChecklistStream returns
-    // them to runTier which only returns the checklist.  We approximate using
-    // character length / 4 (the same heuristic used elsewhere in the codebase).
+    // Use actual provider-measured tokens whenever available. Fallback to character
+    // count / 4 only when provider metrics are unavailable.
     if (trialUserId) {
-      const estimatedTokens = Math.ceil(
-        (generatedChecklist.categories.reduce(
-          (sum, c) => sum + c.items.reduce((s, i) => s + i.description.length + i.title.length, 0),
-          0
-        )) / 4
-      );
-      incrementTrialUsage(trialUserId, 'totalTokensUsed', estimatedTokens).catch(() => {});
+      const tokenCount = hasMeasuredTokens
+        ? measuredTotalTokens
+        : Math.ceil(
+            (generatedChecklist.categories.reduce(
+              (sum, c) => sum + c.items.reduce((s, i) => s + i.description.length + i.title.length, 0),
+              0
+            )) / 4
+          );
+      incrementTrialUsage(trialUserId, 'totalTokensUsed', tokenCount).catch(() => {});
     }
   }
 
