@@ -58,7 +58,7 @@ describe('benchmark document enforcement and alignment map', () => {
     expect(complianceModule).toContain('documentId: pineconeInFilter(benchmarkDocumentIds)');
     expect(complianceModule).toContain('regulatoryIntelligenceService');
     expect(complianceModule).toContain("feature: 'GAP_ANALYSIS'");
-    expect(complianceModule).toContain('const relaxedFilter = frameworkSlug ? { frameworkSlug } : undefined');
+    expect(complianceModule).toContain('const benchmarkOnlyFilter = benchmarkDocumentIds.length > 0');
   });
 
   it('aligns the frontend selector with the benchmark document endpoint and corpus wording', () => {

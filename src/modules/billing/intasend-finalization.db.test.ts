@@ -6,13 +6,11 @@ import {
   PaymentProvider,
   PaymentPurpose,
   PaymentStatus,
-  PrismaClient,
   SubscriptionPlan,
   SubscriptionStatus,
   UserRole,
   UserStatus,
 } from '@prisma/client';
-import { PrismaPg } from '@prisma/adapter-pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { intaSendFinalizationService } from './intasend-finalization.service';
 import { prisma as appPrisma } from '@/lib/prisma/client';
@@ -38,9 +36,7 @@ const canRunDatabaseTests = safeDatabaseEnvironments.has(databaseEnvironment) &&
 
 const describeIfSafeDb = canRunDatabaseTests ? describe : describe.skip;
 
-const prisma = canRunDatabaseTests
-  ? new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL as string }) })
-  : null;
+const prisma = canRunDatabaseTests ? appPrisma : null;
 
 type TestFixture = {
   marker: string;

@@ -942,4 +942,18 @@ export const billingRouter = router({
         updatedAt: (latestPayment?.updatedAt ?? payment.updatedAt).toISOString(),
       };
     }),
+
+  /**
+   * Authoritatively claims purchase telemetry for a COMPLETED payment.
+   * Atomic backend boundary ensures exactly one caller emits GA4/PostHog purchase.
+   */
+  claimPurchaseTelemetry: orgMemberProcedure
+    .input(z.object({ paymentId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const orgId = ctx.orgMembership!.organizationId;
+      return paymentService.claimPurchaseTelemetry({
+        paymentId: input.paymentId,
+        orgId,
+      });
+    }),
 });

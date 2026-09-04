@@ -58,7 +58,13 @@ describe('jurisdiction foundation', () => {
       jurisdictionSource: 'REQUEST',
     });
 
-    expect(() => resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['NG'] }))
+    expect(resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['NG'] })).toMatchObject({
+      mode: 'SINGLE',
+      primaryJurisdiction: 'NG',
+      jurisdictionSource: 'REQUEST',
+    });
+
+    expect(() => resolveJurisdictionContext({ mode: 'SINGLE', jurisdictions: ['ZZ'] as any }))
       .toThrow(JurisdictionContractError);
   });
 

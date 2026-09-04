@@ -191,6 +191,105 @@ class PaymentService {
 
     return payment;
   }
+
+  /**
+   * Authoritative backend purchase deduplication claim.
+   *
+   * Invariant:
+   * Uses a single PostgreSQL-level atomic conditional UPDATE with RETURNING.
+   * Under PostgreSQL READ COMMITTED / any isolation level, the row-level exclusive
+   * lock guarantees that among N concurrent callers for the same COMPLETED payment,
+   * exactly 1 caller updates the row and receives `firstPurchaseTelemetry: true`.
+   * All other callers update 0 rows and receive `firstPurchaseTelemetry: false`.
+   */
+  async claimPurchaseTelemetry(
+    inputOrOrgId: { paymentId: string; orgId: string } | string,
+    maybePaymentId?: string
+  ): Promise<{
+    success: boolean;
+    firstPurchaseTelemetry: boolean;
+    recordedAt?: string;
+    reason?: 'ALREADY_CLAIMED' | 'PAYMENT_NOT_COMPLETED' | 'PAYMENT_NOT_FOUND';
+  }> {
+    const orgId = typeof inputOrOrgId === 'string' ? inputOrOrgId : inputOrOrgId.orgId;
+    const paymentId = typeof inputOrOrgId === 'string' ? (maybePaymentId as string) : inputOrOrgId.paymentId;
+    const now = new Date().toISOString();
+
+    try {
+      // Database-enforced atomic conditional UPDATE
+      // Only updates the row if status is COMPLETED and analyticsPurchaseRecordedAt is not yet set.
+      const updatedRows = await prisma.$queryRaw<Array<{ id: string; metadata: any }>>`
+        UPDATE "Payment"
+        SET metadata = jsonb_set(
+          COALESCE(metadata::jsonb, '{}'::jsonb),
+          '{analyticsPurchaseRecordedAt}',
+          to_jsonb(${now}::text),
+          true
+        ),
+        "updatedAt" = NOW()
+        WHERE id = ${paymentId}
+          AND "orgId" = ${orgId}
+          AND status = 'COMPLETED'::"PaymentStatus"
+          AND (metadata IS NULL OR (metadata->>'analyticsPurchaseRecordedAt') IS NULL)
+        RETURNING id, metadata;
+      `;
+
+      if (updatedRows && updatedRows.length > 0) {
+        logger.info({
+          type: 'purchase_telemetry_claimed',
+          paymentId,
+          recordedAt: now,
+        });
+
+        return {
+          success: true,
+          firstPurchaseTelemetry: true,
+          recordedAt: now,
+        };
+      }
+
+      // If 0 rows updated, inspect reason (already claimed vs non-completed vs not found)
+      const existing = await prisma.payment.findFirst({
+        where: { id: paymentId, orgId },
+        select: { status: true, metadata: true },
+      });
+
+      if (!existing) {
+        return {
+          success: false,
+          firstPurchaseTelemetry: false,
+          reason: 'PAYMENT_NOT_FOUND',
+        };
+      }
+
+      if (existing.status !== PaymentStatus.COMPLETED) {
+        return {
+          success: false,
+          firstPurchaseTelemetry: false,
+          reason: 'PAYMENT_NOT_COMPLETED',
+        };
+      }
+
+      const meta = (existing.metadata as Record<string, unknown> | null) ?? {};
+      return {
+        success: true,
+        firstPurchaseTelemetry: false,
+        recordedAt: (meta.analyticsPurchaseRecordedAt as string) || undefined,
+        reason: 'ALREADY_CLAIMED',
+      };
+    } catch (error: unknown) {
+      logger.error({
+        type: 'claim_purchase_telemetry_error',
+        paymentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return {
+        success: false,
+        firstPurchaseTelemetry: false,
+      };
+    }
+  }
 }
 
 export const paymentService = new PaymentService();

@@ -13,6 +13,7 @@ import {
   updateAllNotificationPreferencesSchema,
   getAvatarUploadUrlSchema,
   confirmAvatarUploadSchema,
+  recordActivationSchema,
 } from '../schemas/user.schema';
 import { avatarService } from '@/modules/user/avatar.service';
 import { changePasswordSchema } from '../schemas/auth.schema';
@@ -352,6 +353,86 @@ export const userRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to update preferences',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Record atomic account activation for core product workflows
+   *
+   * Database-enforced atomic conditional UPDATE compare-and-set:
+   * Only updates if preferences->>'accountActivatedAt' is NULL.
+   * Exactly one caller succeeds and receives firstActivation = true.
+   */
+  recordActivation: protectedProcedure
+    .input(recordActivationSchema)
+    .mutation(async ({ input, ctx }) => {
+      const now = new Date().toISOString();
+      try {
+        const updatedUsers = await ctx.prisma.$queryRaw<Array<{ id: string; preferences: any }>>`
+          UPDATE "User"
+          SET preferences = jsonb_set(
+            jsonb_set(
+              COALESCE(preferences::jsonb, '{}'::jsonb),
+              '{accountActivatedAt}',
+              to_jsonb(${now}::text),
+              true
+            ),
+            '{firstActivatedFeature}',
+            to_jsonb(${input.featureName}::text),
+            true
+          ),
+          "updatedAt" = NOW()
+          WHERE id = ${ctx.user.id}
+            AND (preferences IS NULL OR (preferences->>'accountActivatedAt') IS NULL)
+          RETURNING id, preferences;
+        `;
+
+        if (updatedUsers && updatedUsers.length > 0) {
+          await userCache.delete(ctx.user.id);
+
+          logger.info({
+            type: 'account_first_activation',
+            userId: ctx.user.id,
+            featureName: input.featureName,
+            jurisdictionCode: input.jurisdictionCode,
+            activatedAt: now,
+          });
+
+          return {
+            firstActivation: true,
+            activatedAt: now,
+          };
+        }
+
+        // If 0 rows updated, fetch existing activation timestamp
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: ctx.user.id },
+          select: { preferences: true },
+        });
+
+        if (!user) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
+        }
+
+        const prefs = (user.preferences as Record<string, any>) || {};
+        return {
+          firstActivation: false,
+          activatedAt: (prefs.accountActivatedAt as string) || undefined,
+        };
+      } catch (error: any) {
+        logger.error({
+          type: 'user_record_activation_error',
+          userId: ctx.user.id,
+          error: error.message,
+        });
+
+        if (error instanceof TRPCError) throw error;
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to record account activation',
           cause: error,
         });
       }
