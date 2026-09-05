@@ -468,7 +468,21 @@ export const blogAutomationRouter = router({
   adminListSuggestions: adminProcedure
     .input(adminListSuggestionsSchema)
     .query(async ({ input, ctx }): Promise<any> => {
-      const { status, priority, jurisdiction, category, articleType, search, page, limit } = input;
+      const {
+        status,
+        priority,
+        jurisdiction,
+        authorityType,
+        category,
+        articleType,
+        search,
+        sortBy = 'score',
+        sortOrder = 'desc',
+        minScore,
+        maxScore,
+        page,
+        limit,
+      } = input;
       const skip = (page - 1) * limit;
 
       const where: any = { deletedAt: null };
@@ -479,10 +493,46 @@ export const blogAutomationRouter = router({
       if (category) where.category = category;
       if (articleType) where.articleType = articleType;
 
+      if (authorityType) {
+        where.sources = {
+          some: {
+            sourceItem: {
+              authorityType,
+            },
+          },
+        };
+      }
+
+      if (minScore !== undefined || maxScore !== undefined) {
+        where.relevanceScore = {};
+        if (minScore !== undefined) where.relevanceScore.gte = minScore;
+        if (maxScore !== undefined) where.relevanceScore.lte = maxScore;
+      }
+
       if (search) {
         where.OR = [
           { title: { contains: search, mode: 'insensitive' } },
           { summary: { contains: search, mode: 'insensitive' } },
+        ];
+      }
+
+      let orderBy: any[];
+      if (sortBy === 'relevanceScore' || sortBy === 'score') {
+        orderBy = [
+          { relevanceScore: sortOrder },
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ];
+      } else if (sortBy === 'createdAt') {
+        orderBy = [
+          { createdAt: sortOrder },
+          { id: 'desc' },
+        ];
+      } else {
+        orderBy = [
+          { relevanceScore: 'desc' },
+          { createdAt: 'desc' },
+          { id: 'desc' },
         ];
       }
 
@@ -491,15 +541,15 @@ export const blogAutomationRouter = router({
           where,
           skip,
           take: limit,
-          orderBy: { createdAt: 'desc' },
+          orderBy,
           include: {
             sources: {
               include: {
                 sourceItem: {
-                  include: { monitor: { select: { id: true, name: true } } }
-                }
-              }
-            }
+                  include: { monitor: { select: { id: true, name: true, authorityType: true, baseUrl: true } } },
+                },
+              },
+            },
           },
         }),
         ctx.prisma.blogArticleSuggestion.count({ where }),

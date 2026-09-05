@@ -18,7 +18,6 @@ import {
 export const blogVerificationStatusSchema = z.nativeEnum(BlogVerificationStatus);
 export const blogVerificationRunTypeSchema = z.nativeEnum(BlogVerificationRunType);
 
-
 export const blogJurisdictionSchema = z.nativeEnum(BlogJurisdiction);
 export const blogAuthorityTypeSchema = z.nativeEnum(BlogAuthorityType);
 export const blogMonitoringMethodSchema = z.nativeEnum(BlogMonitoringMethod);
@@ -175,16 +174,34 @@ export const adminScoreEligibleSourceItemsSchema = z.object({
   monitorId: z.string().optional(),
 });
 
-export const adminListSuggestionsSchema = z.object({
-  status: blogSuggestionStatusSchema.optional(),
-  priority: blogSuggestionPrioritySchema.optional(),
-  jurisdiction: blogJurisdictionSchema.optional(),
-  category: z.string().optional(),
-  articleType: blogArticleTypeSchema.optional(),
-  search: z.string().optional(),
-  page: z.number().min(1).default(1),
-  limit: z.number().min(1).max(100).default(20),
-});
+export const adminListSuggestionsSchema = z
+  .object({
+    status: blogSuggestionStatusSchema.optional(),
+    priority: blogSuggestionPrioritySchema.optional(),
+    jurisdiction: blogJurisdictionSchema.optional(),
+    authorityType: blogAuthorityTypeSchema.optional(),
+    category: z.string().optional(),
+    articleType: blogArticleTypeSchema.optional(),
+    search: z.string().optional(),
+    sortBy: z.enum(['relevanceScore', 'score', 'createdAt']).optional().default('score'),
+    sortOrder: z.enum(['asc', 'desc']).optional().default('desc'),
+    minScore: z.number().min(0).max(100).optional(),
+    maxScore: z.number().min(0).max(100).optional(),
+    page: z.number().min(1).default(1),
+    limit: z.number().min(1).max(100).default(20),
+  })
+  .refine(
+    (data) => {
+      if (data.minScore !== undefined && data.maxScore !== undefined) {
+        return data.minScore <= data.maxScore;
+      }
+      return true;
+    },
+    {
+      message: 'minScore must be less than or equal to maxScore',
+      path: ['minScore'],
+    }
+  );
 
 export const adminGetSuggestionSchema = z.object({
   id: z.string().min(1),
