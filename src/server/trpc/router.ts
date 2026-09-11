@@ -35,6 +35,7 @@ import { corpusGapReportRouter } from '../routers/corpusGapReport.router';
 import { blogRouter } from '../routers/blog.router';
 import { blogAutomationRouter } from '../routers/blog-automation.router';
 import { agentsRouter } from '../routers/agents.router';
+import { regulatorySourceRouter } from '../routers/regulatory-source.router';
 
 /**
  * Root Application Router
@@ -104,6 +105,7 @@ export const appRouter = router({
   blog: blogRouter,
   blogAutomation: blogAutomationRouter,
   agents: agentsRouter,
+  regulatorySource: regulatorySourceRouter,
 });
 
 /**

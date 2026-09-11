@@ -62,6 +62,22 @@ export const AGENT_CAPABILITIES = [
   'agents.automation.editorial.freshness.list',
   'agents.automation.editorial.freshness.run',
   'agents.automation.editorial.revision.create',
+  // Phase 5: Dedicated Editorial Discovery and Bounded Drafting capabilities for W-BLOG automation
+  'agents.automation.editorial.monitors.read',
+  'agents.automation.editorial.discovery.run',
+  'agents.automation.editorial.suggestions.read',
+  'agents.automation.editorial.suggestions.create',
+  'agents.automation.editorial.draft.create',
+  // Phase 1, 2 & 3: Dedicated Regulatory Intelligence capabilities for W-REG automation
+  'agents.automation.regulatory.sources.read',
+  'agents.automation.regulatory.sources.fetch',
+  'agents.automation.regulatory.snapshots.create',
+  'agents.automation.regulatory.snapshots.read',
+  'agents.automation.regulatory.items.create',
+  'agents.automation.regulatory.items.read',
+  'agents.automation.regulatory.alertDraft.create',
+  'agents.automation.regulatory.enrichment.process',
+  'agents.automation.regulatory.enrichment.listPending',
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
@@ -71,7 +87,7 @@ const AGENT_CAPABILITY_SET: ReadonlySet<string> = new Set<string>(AGENT_CAPABILI
 // Capabilities granted to the n8n automation surface only. Deliberately
 // excluded from the general orchestrator principal below so a leaked
 // automation secret can never call the broader agent-run/marketing/sales API.
-const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
+export const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
   'agents.automation.log.create',
   'agents.automation.generate',
   'agents.automation.metrics.read',
@@ -101,6 +117,67 @@ const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
   'agents.automation.editorial.freshness.list',
   'agents.automation.editorial.freshness.run',
   'agents.automation.editorial.revision.create',
+  'agents.automation.editorial.monitors.read',
+  'agents.automation.editorial.discovery.run',
+  'agents.automation.editorial.suggestions.read',
+  'agents.automation.editorial.suggestions.create',
+  'agents.automation.editorial.draft.create',
+  'agents.automation.regulatory.sources.read',
+  'agents.automation.regulatory.sources.fetch',
+  'agents.automation.regulatory.snapshots.create',
+  'agents.automation.regulatory.snapshots.read',
+  'agents.automation.regulatory.items.create',
+  'agents.automation.regulatory.items.read',
+  'agents.automation.regulatory.alertDraft.create',
+  'agents.automation.regulatory.enrichment.process',
+  'agents.automation.regulatory.enrichment.listPending',
+];
+
+export const REGULATORY_AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
+  'agents.automation.log.create',
+  'agents.automation.metrics.read',
+  'agents.automation.incident.create',
+  'agents.automation.regulatory.sources.read',
+  'agents.automation.regulatory.sources.fetch',
+  'agents.automation.regulatory.snapshots.create',
+  'agents.automation.regulatory.snapshots.read',
+  'agents.automation.regulatory.items.create',
+  'agents.automation.regulatory.items.read',
+  'agents.automation.regulatory.alertDraft.create',
+  'agents.automation.regulatory.enrichment.process',
+  'agents.automation.regulatory.enrichment.listPending',
+];
+
+export const EDITORIAL_AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
+  'agents.automation.log.create',
+  'agents.automation.metrics.read',
+  'agents.automation.approval.create',
+  'agents.automation.approval.read',
+  'agents.automation.content.publish',
+  'agents.automation.content.queueCandidate',
+  'agents.automation.content.createDraft',
+  'agents.automation.content.generateDraft',
+  'agents.automation.approvedContent.read',
+  'agents.automation.newsletter.send',
+  'agents.automation.sources.read',
+  'agents.automation.sources.fetch',
+  'agents.automation.sources.dedupe',
+  'agents.automation.notify.shouldNotify',
+  'agents.automation.incident.create',
+  'agents.automation.editorial.triage.create',
+  'agents.automation.editorial.triage.read',
+  'agents.automation.editorial.research.create',
+  'agents.automation.editorial.research.read',
+  'agents.automation.editorial.verify.create',
+  'agents.automation.editorial.verify.read',
+  'agents.automation.editorial.freshness.list',
+  'agents.automation.editorial.freshness.run',
+  'agents.automation.editorial.revision.create',
+  'agents.automation.editorial.monitors.read',
+  'agents.automation.editorial.discovery.run',
+  'agents.automation.editorial.suggestions.read',
+  'agents.automation.editorial.suggestions.create',
+  'agents.automation.editorial.draft.create',
 ];
 
 // Capabilities granted to the n8n scheduler surface only  -  exactly one per
@@ -120,7 +197,9 @@ const TRIGGER_CAPABILITIES: readonly AgentCapability[] = [
 export type AgentPrincipalId =
   | 'sys-agent-orchestrator'
   | 'sys-automation-orchestrator'
-  | 'sys-scheduler-orchestrator';
+  | 'sys-scheduler-orchestrator'
+  | 'sys-regulatory-orchestrator'
+  | 'sys-editorial-orchestrator';
 
 interface AgentPrincipalDefinition {
   principalId: AgentPrincipalId;
@@ -151,14 +230,28 @@ export const AGENT_PRINCIPALS: Record<AgentPrincipalId, AgentPrincipalDefinition
   'sys-automation-orchestrator': {
     principalId: 'sys-automation-orchestrator',
     email: 'sys-automation-orchestrator@sheriabot.internal',
-    fullName: 'SheriaBot Automation Orchestrator (n8n)',
+    fullName: 'SheriaBot Automation Orchestrator (n8n Unified)',
     configKey: 'agent.automationOrchestrator.activeCredential',
     capabilities: AUTOMATION_CAPABILITIES,
+  },
+  'sys-regulatory-orchestrator': {
+    principalId: 'sys-regulatory-orchestrator',
+    email: 'sys-regulatory-orchestrator@sheriabot.internal',
+    fullName: 'SheriaBot Regulatory Orchestrator (n8n W-REG)',
+    configKey: 'agent.regulatoryOrchestrator.activeCredential',
+    capabilities: REGULATORY_AUTOMATION_CAPABILITIES,
+  },
+  'sys-editorial-orchestrator': {
+    principalId: 'sys-editorial-orchestrator',
+    email: 'sys-editorial-orchestrator@sheriabot.internal',
+    fullName: 'SheriaBot Editorial Orchestrator (n8n W-BLOG)',
+    configKey: 'agent.editorialOrchestrator.activeCredential',
+    capabilities: EDITORIAL_AUTOMATION_CAPABILITIES,
   },
   'sys-scheduler-orchestrator': {
     principalId: 'sys-scheduler-orchestrator',
     email: 'sys-scheduler-orchestrator@sheriabot.internal',
-    fullName: 'SheriaBot Scheduler Orchestrator (n8n)',
+    fullName: 'SheriaBot Scheduler Orchestrator (n8n Scheduler)',
     configKey: 'agent.schedulerOrchestrator.activeCredential',
     capabilities: TRIGGER_CAPABILITIES,
   },

@@ -25,7 +25,26 @@ const BASELINE_WINDOW_DAYS = 7;
 const USAGE_INTENSITY_SATURATION_EVENTS = 50;
 const MAX_SALES_ORGS = 50;
 
-type MetricsPrisma = Pick<typeof defaultPrisma, 'complianceQuery' | 'agentRun' | 'organization'>;
+import type {
+  BlogMetrics,
+  RegulatoryMetrics,
+} from './metrics-types';
+
+type MetricsPrisma = Pick<
+  typeof defaultPrisma,
+  | 'complianceQuery'
+  | 'agentRun'
+  | 'organization'
+  | 'blogSourceMonitor'
+  | 'blogSourceItem'
+  | 'blogArticleSuggestion'
+  | 'blogPost'
+  | 'blogVerificationRun'
+  | 'regulatorySource'
+  | 'regulatorySourceSnapshot'
+  | 'regulatorySourceItem'
+  | 'regulatoryAlert'
+>;
 
 export interface AutomationMetricsServiceDependencies {
   prisma?: MetricsPrisma;
@@ -65,7 +84,93 @@ export class AutomationMetricsService {
         return this.getSalesMetrics(windowDays, input.detail, input.jurisdictions);
       case 'security':
         return this.getSecurityMetrics(windowDays);
+      case 'blog':
+        return this.getBlogMetrics(windowDays);
+      case 'regulatory':
+        return this.getRegulatoryMetrics(windowDays);
     }
+  }
+
+  private async getBlogMetrics(windowDays: number): Promise<BlogMetrics> {
+    const periodEnd = this.now();
+    const periodStart = new Date(periodEnd.getTime() - windowDays * 24 * 60 * 60 * 1000);
+
+    const [
+      sourcesChecked,
+      itemsDiscovered,
+      suggestionsCreated,
+      suggestionsApproved,
+      draftsGenerated,
+      postsPublished,
+      verificationFailures,
+    ] = await Promise.all([
+      this.prisma.blogSourceMonitor.count({ where: { lastCheckedAt: { gte: periodStart } } }),
+      this.prisma.blogSourceItem.count({ where: { discoveredAt: { gte: periodStart } } }),
+      this.prisma.blogArticleSuggestion.count({ where: { createdAt: { gte: periodStart } } }),
+      this.prisma.blogArticleSuggestion.count({ where: { approvedAt: { gte: periodStart } } }),
+      this.prisma.blogPost.count({ where: { createdAt: { gte: periodStart } } }),
+      this.prisma.blogPost.count({ where: { status: 'PUBLISHED', publishedAt: { gte: periodStart } } }),
+      this.prisma.blogVerificationRun.count({ where: { status: { in: ['BLOCKED', 'FAILED'] }, createdAt: { gte: periodStart } } }),
+    ]);
+
+    logger.info({
+      type: 'automation_metrics_blog',
+      windowDays,
+      sourcesChecked,
+      itemsDiscovered,
+      suggestionsCreated,
+      suggestionsApproved,
+      draftsGenerated,
+      postsPublished,
+      verificationFailures,
+    });
+
+    return {
+      sourcesChecked,
+      itemsDiscovered,
+      suggestionsCreated,
+      suggestionsApproved,
+      draftsGenerated,
+      postsPublished,
+      verificationFailures,
+    };
+  }
+
+  private async getRegulatoryMetrics(windowDays: number): Promise<RegulatoryMetrics> {
+    const periodEnd = this.now();
+    const periodStart = new Date(periodEnd.getTime() - windowDays * 24 * 60 * 60 * 1000);
+
+    const [
+      sourcesChecked,
+      snapshotsIngested,
+      itemsEnriched,
+      alertsCreated,
+      alertsPublished,
+    ] = await Promise.all([
+      this.prisma.regulatorySource.count({ where: { lastCheckedAt: { gte: periodStart } } }),
+      this.prisma.regulatorySourceSnapshot.count({ where: { retrievedAt: { gte: periodStart } } }),
+      this.prisma.regulatorySourceItem.count({ where: { createdAt: { gte: periodStart } } }),
+      this.prisma.regulatoryAlert.count({ where: { createdAt: { gte: periodStart } } }),
+      this.prisma.regulatoryAlert.count({ where: { isActive: true, publishedAt: { gte: periodStart } } }),
+    ]);
+
+    logger.info({
+      type: 'automation_metrics_regulatory',
+      windowDays,
+      sourcesChecked,
+      snapshotsIngested,
+      itemsEnriched,
+      alertsCreated,
+      alertsPublished,
+    });
+
+    return {
+      sourcesChecked,
+      snapshotsIngested,
+      itemsEnriched,
+      alertsCreated,
+      alertsPublished,
+    };
   }
 
   private async getProductMetrics(windowDays: number): Promise<ProductMetrics> {

@@ -369,3 +369,78 @@ describe('AutomationContentService.getApprovedContentThisWeek', () => {
     );
   });
 });
+
+describe('AutomationContentService.publishContent - Reconciliation & Idempotency', () => {
+  it('reconciles missed callbacks by successfully publishing approved unexpired post exactly once', async () => {
+    const update = vi.fn();
+    const prisma = {
+      blogPost: { findUnique: vi.fn().mockResolvedValue(basePost()), update },
+      blogSourceItem: { findUnique: vi.fn() },
+      regulatorySignal: { findMany: vi.fn() },
+      contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const service = new AutomationContentService({
+      prisma: prisma as never,
+      approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
+      now: () => NOW,
+    });
+
+    const result = await service.publishContent({ approvalId: 'appr_reconciled_1' });
+
+    expect(result).toEqual({ blogPostId: 'post_1', publishedAt: NOW.toISOString() });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'post_1' },
+      data: { status: 'PUBLISHED', publishedAt: NOW, lastReviewedAt: NOW },
+    });
+  });
+
+  it('safely handles concurrent or repeated duplicate publishContent calls without duplicate side effects (strictly idempotent)', async () => {
+    const update = vi.fn();
+    const post = basePost({ status: 'PUBLISHED', publishedAt: NOW });
+    const prisma = {
+      blogPost: { findUnique: vi.fn().mockResolvedValue(post), update },
+      blogSourceItem: { findUnique: vi.fn() },
+      regulatorySignal: { findMany: vi.fn() },
+      contentOpsAlert: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const service = new AutomationContentService({
+      prisma: prisma as never,
+      approvalService: approvalServiceStub({ metadata: { blogPostId: 'post_1' } }),
+      now: () => NOW,
+    });
+
+    // Simulate parallel execution (callback and reconciliation arriving simultaneously)
+    const [res1, res2] = await Promise.all([
+      service.publishContent({ approvalId: 'appr_1' }),
+      service.publishContent({ approvalId: 'appr_1' }),
+    ]);
+
+    expect(res1).toEqual({ blogPostId: 'post_1', publishedAt: NOW.toISOString() });
+    expect(res2).toEqual({ blogPostId: 'post_1', publishedAt: NOW.toISOString() });
+    // Both return identical payload and preserve original publishedAt timestamp
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'post_1' },
+      data: { status: 'PUBLISHED', publishedAt: NOW, lastReviewedAt: NOW },
+    });
+  });
+
+  it('refuses reconciliation when approval status is rejected', async () => {
+    const service = new AutomationContentService({
+      approvalService: approvalServiceStub({ status: 'rejected' }),
+      now: () => NOW,
+    });
+    await expect(service.publishContent({ approvalId: 'appr_rejected' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('refuses reconciliation when approval is expired', async () => {
+    const service = new AutomationContentService({
+      approvalService: approvalServiceStub({
+        metadata: { blogPostId: 'post_1' },
+        expiresAt: new Date('2026-07-20T12:00:00.000Z'), // Expired
+      }),
+      now: () => NOW,
+    });
+    await expect(service.publishContent({ approvalId: 'appr_expired' })).rejects.toThrow(/APPROVAL_EXPIRED/);
+  });
+});

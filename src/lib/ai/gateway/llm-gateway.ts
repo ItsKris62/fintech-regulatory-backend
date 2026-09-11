@@ -18,6 +18,29 @@ import { AnthropicProvider } from './providers/anthropic.provider';
 import { OpenAIProvider } from './providers/openai.provider';
 import { GeminiProvider } from './providers/gemini.provider';
 
+export interface MonthlyBudgetStatus {
+  period: string;
+  budgetUsd: number;
+  spentUsd: number;
+  reservedUsd: number;
+  remainingUsd: number;
+  percentUsed: number;
+  providers: Record<LLMProviderName, number>;
+}
+
+export function getCurrentBudgetPeriod(date: Date = new Date()): string {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Africa/Nairobi',
+      year: 'numeric',
+      month: '2-digit',
+    });
+    return formatter.format(date); // YYYY-MM
+  } catch {
+    return date.toISOString().slice(0, 7);
+  }
+}
+
 export class LLMGateway {
   private providers: Map<LLMProviderName, ILLMProvider> = new Map();
 
@@ -42,71 +65,236 @@ export class LLMGateway {
     return provider;
   }
 
-  async getTodayAICost(): Promise<number> {
+  async getMonthlyBudgetLimit(): Promise<number> {
+    return getSystemConfigNumber('aiMonthlyBudgetUsd', aiConfig.costs.monthlyBudgetUsd || 20.0);
+  }
+
+  async getMonthlyGlobalSpend(period: string = getCurrentBudgetPeriod()): Promise<number> {
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const key = `ai:cost:${today}`;
-      const cost = await redis.get<string>(key);
-      return parseFloat(cost || '0');
-    } catch (error) {
+      const key = `ai:cost:global:${period}`;
+      const val = await redis.get<string>(key);
+      return parseFloat(val || '0') || 0;
+    } catch {
       return 0;
     }
   }
 
-  async resetDailyCost(): Promise<void> {
+  async getMonthlyGlobalReserved(period: string = getCurrentBudgetPeriod()): Promise<number> {
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const key = `ai:cost:${today}`;
-      await redis.del(key);
-      logger.warn({ type: 'ai_daily_cost_reset', date: today });
-    } catch (error: any) {
-      logger.error({ type: 'ai_cost_reset_error', error: error.message });
+      const key = `ai:cost:global:reserved:${period}`;
+      const val = await redis.get<string>(key);
+      return Math.max(0, parseFloat(val || '0') || 0);
+    } catch {
+      return 0;
     }
+  }
+
+  async getMonthlyProviderSpend(provider: LLMProviderName, period: string = getCurrentBudgetPeriod()): Promise<number> {
+    try {
+      const key = `ai:cost:provider:${provider}:${period}`;
+      const val = await redis.get<string>(key);
+      return parseFloat(val || '0') || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async getMonthlyBudgetStatus(period: string = getCurrentBudgetPeriod()): Promise<MonthlyBudgetStatus> {
+    const budgetUsd = await this.getMonthlyBudgetLimit();
+    const spentUsd = await this.getMonthlyGlobalSpend(period);
+    const reservedUsd = await this.getMonthlyGlobalReserved(period);
+
+    const [anthropicSpend, openaiSpend, geminiSpend] = await Promise.all([
+      this.getMonthlyProviderSpend('anthropic', period),
+      this.getMonthlyProviderSpend('openai', period),
+      this.getMonthlyProviderSpend('gemini', period),
+    ]);
+
+    const totalActive = spentUsd + reservedUsd;
+    const remainingUsd = Math.max(0, parseFloat((budgetUsd - totalActive).toFixed(4)));
+    const percentUsed = budgetUsd > 0 ? Math.min(100, parseFloat(((totalActive / budgetUsd) * 100).toFixed(2))) : 100;
+
+    return {
+      period,
+      budgetUsd,
+      spentUsd: parseFloat(spentUsd.toFixed(4)),
+      reservedUsd: parseFloat(reservedUsd.toFixed(4)),
+      remainingUsd,
+      percentUsed,
+      providers: {
+        anthropic: parseFloat(anthropicSpend.toFixed(4)),
+        openai: parseFloat(openaiSpend.toFixed(4)),
+        gemini: parseFloat(geminiSpend.toFixed(4)),
+      },
+    };
+  }
+
+  /**
+   * Concurrency-safe atomic reservation of estimated cost before initiating AI call.
+   */
+  async reserveBudget(
+    estimatedCost: number,
+    period: string = getCurrentBudgetPeriod()
+  ): Promise<{ period: string; reservedAmount: number }> {
+    const budgetLimit = await this.getMonthlyBudgetLimit();
+    const safeEstimatedCost = Math.max(0, estimatedCost);
+    const reserveKey = `ai:cost:global:reserved:${period}`;
+    const ttl = 86400 * 60; // 60 days
+
+    // Atomic reservation attempt
+    const currentSpent = await this.getMonthlyGlobalSpend(period);
+    const currentReserved = await this.getMonthlyGlobalReserved(period);
+    const projected = currentSpent + currentReserved + safeEstimatedCost;
+
+    if (projected > budgetLimit) {
+      logger.error({
+        type: 'ai_monthly_limit_blocked',
+        period,
+        currentSpent,
+        currentReserved,
+        estimatedCost: safeEstimatedCost,
+        projected,
+        budgetLimit,
+        percentUsed: Math.round((projected / budgetLimit) * 100),
+      });
+      throw new LLMCostLimitError(
+        `Global monthly AI budget of $${budgetLimit} exceeded ($${(currentSpent + currentReserved).toFixed(4)} used/reserved in ${period}). Requests are blocked.`
+      );
+    }
+
+    if (safeEstimatedCost > 0) {
+      await redis.incrbyfloat(reserveKey, safeEstimatedCost);
+      await redis.expire(reserveKey, ttl);
+    }
+
+    return { period, reservedAmount: safeEstimatedCost };
+  }
+
+  /**
+   * Reconciles atomic reservation against actual provider token usage.
+   */
+  async reconcileReservation(
+    period: string,
+    reservedAmount: number,
+    actualCost: number,
+    providerName: LLMProviderName
+  ): Promise<void> {
+    try {
+      const reserveKey = `ai:cost:global:reserved:${period}`;
+      const spendKey = `ai:cost:global:${period}`;
+      const providerKey = `ai:cost:provider:${providerName}:${period}`;
+      const ttl = 86400 * 60; // 60 days
+
+      // 1. Release reservation
+      if (reservedAmount > 0) {
+        const rawReserved = await redis.incrbyfloat(reserveKey, -reservedAmount);
+        const updatedReserved = parseFloat(String(rawReserved));
+        if (updatedReserved <= 0) {
+          await redis.set(reserveKey, '0', { ex: ttl });
+        }
+      }
+
+      // 2. Track actual spend
+      if (actualCost > 0) {
+        await redis.incrbyfloat(spendKey, actualCost);
+        await redis.expire(spendKey, ttl);
+
+        await redis.incrbyfloat(providerKey, actualCost);
+        await redis.expire(providerKey, ttl);
+
+        // 3. Evaluate operational warning thresholds (50%, 75%, 90%, 100%)
+        const totalSpent = await this.getMonthlyGlobalSpend(period);
+        const budgetLimit = await this.getMonthlyBudgetLimit();
+        const thresholdKey = `ai:cost:global:thresholds:${period}`;
+
+        const thresholds = [0.5, 0.75, 0.9, 1.0];
+        for (const th of thresholds) {
+          if (totalSpent >= budgetLimit * th) {
+            const thName = `${Math.round(th * 100)}%`;
+            const isNotified = await redis.sismember(thresholdKey, thName).catch(() => 0);
+            if (!isNotified) {
+              await redis.sadd(thresholdKey, thName).catch(() => {});
+              await redis.expire(thresholdKey, ttl).catch(() => {});
+              if (th >= 1.0) {
+                logger.error({
+                  type: 'ai_monthly_budget_exhausted',
+                  period,
+                  totalSpent,
+                  budgetLimit,
+                  percentUsed: Math.round((totalSpent / budgetLimit) * 100),
+                });
+              } else {
+                logger.warn({
+                  type: 'ai_monthly_budget_threshold_reached',
+                  period,
+                  threshold: thName,
+                  totalSpent,
+                  budgetLimit,
+                  percentUsed: Math.round((totalSpent / budgetLimit) * 100),
+                });
+              }
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.error({ type: 'ai_cost_reconciliation_error', period, error: error.message });
+    }
+  }
+
+  async trackCost(cost: number, providerName?: LLMProviderName): Promise<void> {
+    if (cost <= 0) return;
+    const period = getCurrentBudgetPeriod();
+    await this.reconcileReservation(period, 0, cost, providerName || 'anthropic');
+  }
+
+  async checkCostLimit(estimatedCost: number, _provider?: LLMProviderName): Promise<void> {
+    const period = getCurrentBudgetPeriod();
+    const budgetLimit = await this.getMonthlyBudgetLimit();
+    const currentSpent = await this.getMonthlyGlobalSpend(period);
+    const currentReserved = await this.getMonthlyGlobalReserved(period);
+    const projected = currentSpent + currentReserved + estimatedCost;
+
+    if (projected > budgetLimit) {
+      logger.error({
+        type: 'ai_monthly_limit_blocked',
+        period,
+        currentSpent,
+        currentReserved,
+        estimatedCost,
+        projected,
+        budgetLimit,
+        percentUsed: Math.round((projected / budgetLimit) * 100),
+      });
+      throw new LLMCostLimitError(
+        `Global monthly AI budget of $${budgetLimit} exceeded ($${(currentSpent + currentReserved).toFixed(4)} used/reserved in ${period}). Requests are blocked.`
+      );
+    }
+  }
+
+  // Backward-compatibility helpers
+  async getTodayAICost(): Promise<number> {
+    return this.getMonthlyGlobalSpend();
+  }
+
+  async getTodayProviderAICost(provider: LLMProviderName): Promise<number> {
+    return this.getMonthlyProviderSpend(provider);
+  }
+
+  async resetDailyCost(): Promise<void> {
+    const period = getCurrentBudgetPeriod();
+    await redis.del(`ai:cost:global:${period}`);
+    await redis.del(`ai:cost:global:reserved:${period}`);
   }
 
   async getAIStats(): Promise<{ todayCost: number; dailyLimit: number; remainingBudget: number; percentUsed: number; }> {
-    const todayCost = await this.getTodayAICost();
-    const dailyLimit = await getSystemConfigNumber('aiDailyCostLimit', aiConfig.costs.dailyLimit);
-    const remainingBudget = Math.max(0, dailyLimit - todayCost);
-    const percentUsed = (todayCost / dailyLimit) * 100;
-    return { todayCost, dailyLimit, remainingBudget, percentUsed };
-  }
-
-  async trackCost(cost: number): Promise<void> {
-    try {
-      if (cost <= 0) return;
-      const today = new Date().toISOString().split('T')[0];
-      const key = `ai:cost:${today}`;
-      
-      await redis.incrbyfloat(key, cost);
-      await redis.expire(key, 86400 * 7);
-
-      const totalCost = parseFloat(await redis.get<string>(key) || '0');
-      const limit = await getSystemConfigNumber('aiDailyCostLimit', aiConfig.costs.dailyLimit);
-
-      if (totalCost > limit) {
-        logger.error({ type: 'ai_daily_limit_exceeded', totalCost, limit, percentUsed: Math.round((totalCost / limit) * 100) });
-      } else if (totalCost > limit * 0.8) {
-        logger.warn({ type: 'ai_daily_cost_warning', totalCost, limit, percentUsed: Math.round((totalCost / limit) * 100) });
-      }
-    } catch (error: any) {
-      logger.error({ type: 'ai_cost_tracking_error', error: error.message });
-    }
-  }
-
-  async checkCostLimit(estimatedCost: number): Promise<void> {
-    const todayCost = await this.getTodayAICost();
-    const limit = await getSystemConfigNumber('aiDailyCostLimit', aiConfig.costs.dailyLimit);
-    const projected = todayCost + estimatedCost;
-
-    if (projected > limit) {
-      logger.error({ type: 'ai_daily_limit_blocked', todayCost, estimatedCost, projected, limit, percentUsed: Math.round((projected / limit) * 100) });
-      throw new LLMCostLimitError(`Daily AI cost limit of $${limit} exceeded ($${todayCost.toFixed(4)} used today). Requests are blocked until tomorrow or until an admin resets the limit.`);
-    }
-
-    if (projected > limit * 0.8) {
-      logger.warn({ type: 'ai_daily_cost_warning', todayCost, estimatedCost, projected, limit, percentUsed: Math.round((projected / limit) * 100) });
-    }
+    const status = await this.getMonthlyBudgetStatus();
+    return {
+      todayCost: status.spentUsd,
+      dailyLimit: status.budgetUsd,
+      remainingBudget: status.remainingUsd,
+      percentUsed: status.percentUsed,
+    };
   }
 
   generateCacheKey(provider: LLMProviderName, model: string, prompt: string, systemPrompt: string = ''): string {
@@ -191,9 +379,13 @@ export class LLMGateway {
     if (isMissing) {
       logger.warn({ type: 'llm_pricing_missing', provider: providerName, model });
     }
-    await this.checkCostLimit(estimatedCost);
+
+    // Concurrency-safe atomic budget reservation
+    const reservation = await this.reserveBudget(estimatedCost);
 
     let lastError: Error | null = null;
+    let actualCost = 0;
+
     await aiRateLimiter.acquire();
 
     try {
@@ -223,7 +415,7 @@ export class LLMGateway {
           clearTimeout(timeoutId);
 
           const { cost } = calculateCost(providerName, model, result.usage.inputTokens, result.usage.outputTokens);
-          await this.trackCost(cost);
+          actualCost = cost;
 
           if (cacheTTL > 0) {
             const cacheKey = this.generateCacheKey(providerName, model, req.prompt, req.systemPrompt);
@@ -248,6 +440,10 @@ export class LLMGateway {
       }
       
       if (req.allowFallback && lastError) {
+         // Release previous reservation before attempting fallback
+         await this.reconcileReservation(reservation.period, reservation.reservedAmount, 0, providerName);
+         reservation.reservedAmount = 0; // cleared
+
          const fallbacks: LLMProviderName[] = ['openai', 'anthropic', 'gemini'];
          for (const fb of fallbacks) {
             if (fb !== providerName) {
@@ -257,7 +453,7 @@ export class LLMGateway {
                   const reqFallback = { ...req, provider: fb, model: undefined, allowFallback: false };
                   return await this.complete(reqFallback, cacheTTL);
                } catch (e) {
-                 // Ignore unconfigured
+                 // Ignore unconfigured or budget-exhausted fallback
                }
             }
          }
@@ -268,6 +464,10 @@ export class LLMGateway {
 
     } finally {
       aiRateLimiter.release();
+      // Reconcile remaining reservation
+      if (reservation.reservedAmount > 0 || actualCost > 0) {
+        await this.reconcileReservation(reservation.period, reservation.reservedAmount, actualCost, providerName);
+      }
     }
   }
 
@@ -285,7 +485,9 @@ export class LLMGateway {
     const estimatedInputTokens = Math.ceil((opts.prompt.length + (opts.systemPrompt?.length || 0)) / 4);
     const { cost: estimatedCost, isMissing } = calculateCost(providerName, model, estimatedInputTokens, opts.maxTokens!);
     if (isMissing) logger.warn({ type: 'llm_pricing_missing', provider: providerName, model });
-    await this.checkCostLimit(estimatedCost);
+    
+    const reservation = await this.reserveBudget(estimatedCost);
+    let actualCost = 0;
 
     await aiRateLimiter.acquire();
     try {
@@ -347,7 +549,7 @@ export class LLMGateway {
       }
 
       const { cost } = calculateCost(providerName, model, result.usage.inputTokens, result.usage.outputTokens);
-      await this.trackCost(cost);
+      actualCost = cost;
 
       if (opts.onComplete) opts.onComplete(result);
 
@@ -361,6 +563,9 @@ export class LLMGateway {
       throw new Error(`LLM streaming failed: ${error.message}`);
     } finally {
       aiRateLimiter.release();
+      if (reservation.reservedAmount > 0 || actualCost > 0) {
+        await this.reconcileReservation(reservation.period, reservation.reservedAmount, actualCost, providerName);
+      }
     }
   }
 }

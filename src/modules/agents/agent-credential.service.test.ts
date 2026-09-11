@@ -15,6 +15,8 @@ function hash(value: string): string {
 const ORCHESTRATOR_KEY = AGENT_PRINCIPALS['sys-agent-orchestrator'].configKey;
 const AUTOMATION_KEY = AGENT_PRINCIPALS['sys-automation-orchestrator'].configKey;
 const SCHEDULER_KEY = AGENT_PRINCIPALS['sys-scheduler-orchestrator'].configKey;
+const REGULATORY_KEY = AGENT_PRINCIPALS['sys-regulatory-orchestrator'].configKey;
+const EDITORIAL_KEY = AGENT_PRINCIPALS['sys-editorial-orchestrator'].configKey;
 
 /**
  * @param stored - map of SystemConfig key -> secret whose hash should be considered active for that key
@@ -116,7 +118,31 @@ describe('AgentCredentialService', () => {
           'agents.automation.sources.dedupe',
           'agents.automation.pilotCohort.read',
           'agents.automation.dpaVendor.read',
-          'agents.automation.notify.shouldNotify', 'agents.automation.incident.create', 'agents.automation.editorial.triage.create', 'agents.automation.editorial.triage.read', 'agents.automation.editorial.research.create', 'agents.automation.editorial.research.read', 'agents.automation.editorial.verify.create', 'agents.automation.editorial.verify.read', 'agents.automation.editorial.freshness.list', 'agents.automation.editorial.freshness.run', 'agents.automation.editorial.revision.create',
+          'agents.automation.notify.shouldNotify',
+          'agents.automation.incident.create',
+          'agents.automation.editorial.triage.create',
+          'agents.automation.editorial.triage.read',
+          'agents.automation.editorial.research.create',
+          'agents.automation.editorial.research.read',
+          'agents.automation.editorial.verify.create',
+          'agents.automation.editorial.verify.read',
+          'agents.automation.editorial.freshness.list',
+          'agents.automation.editorial.freshness.run',
+          'agents.automation.editorial.revision.create',
+          'agents.automation.editorial.monitors.read',
+          'agents.automation.editorial.discovery.run',
+          'agents.automation.editorial.suggestions.read',
+          'agents.automation.editorial.suggestions.create',
+          'agents.automation.editorial.draft.create',
+          'agents.automation.regulatory.sources.read',
+          'agents.automation.regulatory.sources.fetch',
+          'agents.automation.regulatory.snapshots.create',
+          'agents.automation.regulatory.snapshots.read',
+          'agents.automation.regulatory.items.create',
+          'agents.automation.regulatory.items.read',
+          'agents.automation.regulatory.alertDraft.create',
+          'agents.automation.regulatory.enrichment.process',
+          'agents.automation.regulatory.enrichment.listPending',
         ].sort(),
       );
     });
@@ -228,6 +254,61 @@ describe('AgentCredentialService', () => {
       await expectCredentialReason(service.verifyCredential(schedulerSecret), 'revoked');
       const orchestratorIdentity = await service.verifyCredential(orchestratorSecret);
       expect(orchestratorIdentity.userId).toBe('sys-agent-orchestrator');
+    });
+  });
+
+  describe('domain-scoped principals (sys-regulatory-orchestrator vs sys-editorial-orchestrator)', () => {
+    const regulatorySecret = 'sb_agent_regulatory_secret_with_sufficient_entropy_001';
+    const editorialSecret = 'sb_agent_editorial_secret_with_sufficient_entropy_002';
+
+    function domainPrincipalsService(): AgentCredentialService {
+      return serviceFor({
+        stored: {
+          [REGULATORY_KEY]: regulatorySecret,
+          [EDITORIAL_KEY]: editorialSecret,
+        },
+      });
+    }
+
+    it('grants sys-regulatory-orchestrator only regulatory automation capabilities', async () => {
+      const identity = await domainPrincipalsService().verifyCredential(regulatorySecret);
+
+      expect(identity.userId).toBe('sys-regulatory-orchestrator');
+      expect(identity.capabilities).toContain('agents.automation.regulatory.sources.fetch');
+      expect(identity.capabilities).toContain('agents.automation.regulatory.enrichment.process');
+      expect(identity.capabilities).toContain('agents.automation.regulatory.alertDraft.create');
+
+      // Negative assertion: zero editorial capabilities
+      expect(identity.capabilities).not.toContain('agents.automation.editorial.draft.create');
+      expect(identity.capabilities).not.toContain('agents.automation.editorial.discovery.run');
+      expect(identity.capabilities).not.toContain('agents.automation.editorial.triage.create');
+      expect(identity.capabilities).not.toContain('agents.automation.content.publish');
+    });
+
+    it('grants sys-editorial-orchestrator only editorial automation capabilities', async () => {
+      const identity = await domainPrincipalsService().verifyCredential(editorialSecret);
+
+      expect(identity.userId).toBe('sys-editorial-orchestrator');
+      expect(identity.capabilities).toContain('agents.automation.editorial.draft.create');
+      expect(identity.capabilities).toContain('agents.automation.editorial.discovery.run');
+      expect(identity.capabilities).toContain('agents.automation.editorial.suggestions.create');
+
+      // Negative assertion: zero regulatory capabilities
+      expect(identity.capabilities).not.toContain('agents.automation.regulatory.sources.fetch');
+      expect(identity.capabilities).not.toContain('agents.automation.regulatory.enrichment.process');
+      expect(identity.capabilities).not.toContain('agents.automation.regulatory.alertDraft.create');
+      expect(identity.capabilities).not.toContain('agents.automation.regulatory.snapshots.create');
+    });
+
+    it('proves neither machine principal possesses alert publishing or unrestricted admin privileges', async () => {
+      const regIdentity = await domainPrincipalsService().verifyCredential(regulatorySecret);
+      const editIdentity = await domainPrincipalsService().verifyCredential(editorialSecret);
+
+      for (const identity of [regIdentity, editIdentity]) {
+        expect(identity.capabilities).not.toContain('agents.automation.regulatory.alerts.publish');
+        expect(identity.capabilities).not.toContain('admin.full_access');
+        expect(identity.capabilities).not.toContain('admin.settings.manage');
+      }
     });
   });
 });

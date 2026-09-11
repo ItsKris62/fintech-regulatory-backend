@@ -146,10 +146,13 @@ export const aiConfig = {
     // Pricing has been moved to src/lib/ai/gateway/pricing.ts
 
     // Warning threshold (USD)
-    warningThreshold: 100,
+    warningThreshold: 15,
 
-    // Maximum cost per day (USD)
-    dailyLimit: 500,
+    // Global monthly AI budget (USD) - Shared across all paid providers
+    monthlyBudgetUsd: appConfig.ai.monthlyBudgetUsd || 20,
+
+    // Backward-compatible daily alias
+    dailyLimit: 20,
   },
 
   /**

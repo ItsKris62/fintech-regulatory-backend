@@ -38,6 +38,19 @@ export interface GenerateDraftContentResult {
   uncertaintyFlags: string[];
 }
 
+export interface GenerateDraftFromSuggestionInput {
+  suggestionId: string;
+  idempotencyKey: string;
+}
+
+export interface GenerateDraftFromSuggestionResult {
+  blogPostId: string;
+  generationRunId: string;
+  reviewerNotes: string;
+  uncertaintyFlags: string[];
+  status: 'created' | 'already_drafted';
+}
+
 interface CompletedDraftGenerationRunMetadata {
   blogPostId: string;
   generationRunId: string;
@@ -322,6 +335,166 @@ export class AutomationBlogDraftService {
   }
 
   /**
+   * Phase 5 Canonical Drafting entry point: generates a bounded blog draft from
+   * an APPROVED_FOR_DRAFT BlogArticleSuggestion.
+   *
+   * Authoritatively verifies persisted approval state on the suggestion before
+   * proceeding. Idempotently replays duplicate runs, blocks gracefully when the
+   * global AI monthly budget ($20) is reached without stranding or breaking the
+   * suggestion, and completes in a single bounded execution without long-lived
+   * wait nodes or polling.
+   */
+  async generateDraftFromSuggestion(
+    input: GenerateDraftFromSuggestionInput,
+    agentUserId: string,
+  ): Promise<GenerateDraftFromSuggestionResult> {
+    const suggestion = await this.prisma.blogArticleSuggestion.findUnique({
+      where: { id: input.suggestionId },
+      include: { blogPost: true },
+    });
+
+    if (!suggestion || suggestion.deletedAt) {
+      throw new TRPCError({
+        code: 'NOT_FOUND',
+        message: `Blog suggestion "${input.suggestionId}" not found.`,
+      });
+    }
+
+    if (suggestion.status !== 'APPROVED_FOR_DRAFT' && suggestion.status !== 'DRAFT_CREATED') {
+      logger.warn({
+        type: 'automation_blog_generate_draft_unapproved_suggestion',
+        suggestionId: suggestion.id,
+        status: suggestion.status,
+      });
+      throw new TRPCError({
+        code: 'PRECONDITION_FAILED',
+        message: `Suggestion "${input.suggestionId}" is in status "${suggestion.status}" (must be APPROVED_FOR_DRAFT to generate draft).`,
+      });
+    }
+
+    const begin = await this.agentRuns.beginRun({
+      agentType: AUTOMATION_AGENT_TYPE,
+      idempotencyKey: input.idempotencyKey,
+      metadata: toJsonValue({ suggestionId: input.suggestionId }),
+      estimatedCostUsd: 0,
+      retryFailed: true,
+    });
+
+    if (!begin.started) {
+      logger.info({
+        type: 'automation_blog_generate_draft_suggestion_rejected',
+        reason: begin.reason,
+        suggestionId: input.suggestionId,
+      });
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Automation blog draft generation is currently unavailable.',
+      });
+    }
+
+    if (begin.duplicate) {
+      const duplicateRes = this.resolveDuplicateDraftGenerationForSuggestion(begin.run, input.suggestionId);
+      return {
+        ...duplicateRes,
+        status: 'already_drafted',
+      };
+    }
+
+    if (begin.run.status === 'HALTED_BUDGET') {
+      logger.warn({
+        type: 'automation_blog_generate_draft_suggestion_halted_budget',
+        agentRunId: begin.run.id,
+        suggestionId: input.suggestionId,
+      });
+      throw new TRPCError({
+        code: 'TOO_MANY_REQUESTS',
+        message: 'BUDGET_BLOCKED: Global monthly AI budget exceeded. Draft generation postponed.',
+      });
+    }
+
+    const agentRunId = begin.run.id;
+    let targetBlogPostId = suggestion.blogPostId;
+
+    if (!targetBlogPostId) {
+      const draft = await this.createDraft({
+        prisma: this.prisma,
+        suggestionId: suggestion.id,
+        createdById: agentUserId,
+      });
+      targetBlogPostId = draft.blogPostId;
+    }
+
+    let result: Awaited<ReturnType<typeof generateAiDraftForBlogPost>>;
+    try {
+      result = await this.generateDraft(targetBlogPostId, agentUserId);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.agentRuns.failRun({
+        runId: agentRunId,
+        error: message,
+        metadata: toJsonValue({ suggestionId: input.suggestionId, blogPostId: targetBlogPostId }),
+      });
+      logger.error({
+        type: 'automation_blog_generate_draft_suggestion_failed',
+        agentRunId,
+        suggestionId: input.suggestionId,
+        blogPostId: targetBlogPostId,
+        error: message,
+      });
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Automation blog draft generation failed.',
+      });
+    }
+
+    await this.prisma.blogArticleSuggestion.update({
+      where: { id: suggestion.id },
+      data: { status: 'DRAFT_CREATED' },
+    });
+
+    await this.agentRuns.completeRun({
+      runId: agentRunId,
+      metadata: toJsonValue({
+        suggestionId: suggestion.id,
+        blogPostId: result.post.id,
+        generationRunId: result.runId,
+        reviewerNotes: result.reviewerNotes,
+        uncertaintyFlags: result.uncertaintyFlags,
+      }),
+    });
+
+    logger.info({
+      type: 'automation_blog_generate_draft_suggestion_completed',
+      agentRunId,
+      suggestionId: suggestion.id,
+      blogPostId: result.post.id,
+      generationRunId: result.runId,
+    });
+
+    await this.contentOpsAlert.createOrIncrementAlert({
+      type: 'draft_ready_for_verification',
+      severity: 'HIGH',
+      entityType: 'BlogPost',
+      entityId: result.post.id,
+      title: 'Blog Draft Ready for Verification',
+      summary: `An AI-generated draft for "${result.post.title}" is ready for compliance verification.`,
+      metadata: {
+        suggestionId: suggestion.id,
+        generationRunId: result.runId,
+        uncertaintyFlagCount: result.uncertaintyFlags.length,
+      },
+    });
+
+    return {
+      blogPostId: result.post.id,
+      generationRunId: result.runId,
+      reviewerNotes: result.reviewerNotes,
+      uncertaintyFlags: result.uncertaintyFlags,
+      status: 'created',
+    };
+  }
+
+  /**
    * A duplicate beginRun() result means an identical (blogPostId,
    * idempotencyKey) request already exists. Mirrors
    * AutomationService.resolveDuplicate's shape exactly: replay a completed
@@ -356,6 +529,43 @@ export class AutomationBlogDraftService {
     }
 
     logger.info({ type: 'automation_blog_generate_draft_duplicate_replay', agentRunId: run.id });
+    return {
+      blogPostId: run.metadata.blogPostId,
+      generationRunId: run.metadata.generationRunId,
+      reviewerNotes: run.metadata.reviewerNotes,
+      uncertaintyFlags: run.metadata.uncertaintyFlags,
+    };
+  }
+
+  private resolveDuplicateDraftGenerationForSuggestion(run: AgentRun, requestedSuggestionId: string): GenerateDraftContentResult {
+    if (run.status !== 'COMPLETED') {
+      logger.warn({ type: 'automation_blog_generate_draft_suggestion_duplicate_not_completed', agentRunId: run.id, status: run.status });
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'A matching blog draft generation request is already in progress or did not complete. Retry later.',
+      });
+    }
+
+    if (!isCompletedDraftGenerationRunMetadata(run.metadata)) {
+      logger.error({ type: 'automation_blog_generate_draft_suggestion_duplicate_missing_result', agentRunId: run.id });
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Blog draft generation result unavailable for replay.' });
+    }
+
+    const storedSuggestionId = (run.metadata as any).suggestionId;
+    if (storedSuggestionId && storedSuggestionId !== requestedSuggestionId) {
+      logger.error({
+        type: 'automation_blog_generate_draft_suggestion_duplicate_mismatch',
+        agentRunId: run.id,
+        requestedSuggestionId,
+        storedSuggestionId,
+      });
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'Idempotency key was already used for a different suggestion.',
+      });
+    }
+
+    logger.info({ type: 'automation_blog_generate_draft_suggestion_duplicate_replay', agentRunId: run.id });
     return {
       blogPostId: run.metadata.blogPostId,
       generationRunId: run.metadata.generationRunId,

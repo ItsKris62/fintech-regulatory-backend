@@ -56,3 +56,7 @@ documents/**/*.txt
 
 # API documentation (auto-generated)
 API_DOCUMENTATION.md
+
+# Test artifacts
+.edge-uat-profile/
+.uat-ng-policy.pdf

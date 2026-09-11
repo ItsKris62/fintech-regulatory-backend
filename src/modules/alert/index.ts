@@ -1,6 +1,8 @@
 export { AlertService, alertService } from './alert.service';
 export {
   createAlertSchema,
+  updateAlertSchema,
+  rejectAlertSchema,
   getAlertsSchema,
   upsertSubscriptionSchema,
   markAsReadSchema,
@@ -18,6 +20,8 @@ export type {
 } from './alert.types';
 export type {
   CreateAlertInput,
+  UpdateAlertInput,
+  RejectAlertInput,
   GetAlertsInput,
   UpsertSubscriptionInput,
   MarkAsReadInput,

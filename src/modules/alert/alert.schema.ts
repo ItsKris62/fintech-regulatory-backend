@@ -59,11 +59,30 @@ export const upsertSubscriptionSchema = z.object({
   emailFrequency: z.enum(EMAIL_FREQUENCIES),
 });
 
+export const updateAlertSchema = z.object({
+  alertId: z.string().min(1),
+  title: z.string().min(5).max(200).optional(),
+  summary: z.string().min(10).max(500).optional(),
+  body: z.string().min(20).optional(),
+  sourceUrl: z.string().url().optional().or(z.literal('')),
+  category: z.enum(ALERT_CATEGORIES).optional(),
+  severity: z.enum(ALERT_SEVERITIES).optional(),
+  effectiveDate: z.string().optional(),
+  expiresAt: z.string().optional(),
+});
+
+export const rejectAlertSchema = z.object({
+  alertId: z.string().min(1),
+  reason: z.string().max(500).optional(),
+});
+
 export const markAsReadSchema = z.object({
   notificationId: z.string().min(1),
 });
 
 export type CreateAlertInput = z.infer<typeof createAlertSchema>;
+export type UpdateAlertInput = z.infer<typeof updateAlertSchema>;
+export type RejectAlertInput = z.infer<typeof rejectAlertSchema>;
 export type GetAlertsInput = z.infer<typeof getAlertsSchema>;
 export type UpsertSubscriptionInput = z.infer<typeof upsertSubscriptionSchema>;
 export type MarkAsReadInput = z.infer<typeof markAsReadSchema>;

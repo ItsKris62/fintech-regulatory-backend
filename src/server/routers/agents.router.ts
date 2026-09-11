@@ -26,6 +26,19 @@ import { researchPackService } from '@/modules/blog-automation/research-pack.ser
 import { semanticVerificationService } from '@/modules/blog-automation/semantic-verification.service';
 import { freshnessReviewService } from '@/modules/blog-automation/freshness-review.service';
 import { revisionRequestService } from '@/modules/blog-automation/revision-request.service';
+import { runSourceDiscoveryForMonitor } from '@/modules/blog-automation/source-discovery.service';
+import { createSuggestionFromSourceItem } from '@/modules/blog-automation/suggestion-builder';
+import { regulatoryAutomationService } from '@/modules/agents/automation/regulatory-automation.service';
+import {
+  fetchRegulatorySourceSchema,
+  ingestRegulatorySnapshotSchema,
+  createRegulatorySourceItemSchema,
+  listRegulatorySourceItemsSchema,
+  createRegulatoryAlertDraftSchema,
+  getRegulatorySnapshotMachineSchema,
+  processRegulatorySnapshotMachineSchema,
+  listPendingRegulatorySnapshotsMachineSchema,
+} from '@/modules/regulatory-intelligence/domain/types';
 
 type JsonInputValue = string | number | boolean | JsonInputValue[] | { [key: string]: JsonInputValue };
 
@@ -319,6 +332,21 @@ export const agentsRouter = router({
       }))
       .query(async ({ input }) => automationApprovalService.listApprovals(input)),
 
+    // Dedicated n8n-facing approval list procedure for scheduled reconciliation
+    // (W-CONTENT-02 Branch C). Scoped to agents.automation.approval.read capability
+    // and exposed as a POST mutation to match n8n calling convention.
+    listApprovalsForAutomation: agentProcedure('agents.automation.approval.read')
+      .use(rateLimited('automation-approval-read', appConfig.agents.automation.approvalReadRateLimitMax, {
+        window: appConfig.agents.automation.approvalReadRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        department: z.string().min(1).max(100).optional(),
+        workflow: z.string().min(1).max(100).optional(),
+        status: z.enum(['pending', 'approved', 'rejected']).optional(),
+        limit: z.number().int().positive().max(100).default(20),
+      }))
+      .mutation(async ({ input }) => automationApprovalService.listApprovals({ ...input, page: 1 })),
+
     // Phase 3 - single-workflow procedures, no shared dependencies between
     // them. All share one rate-limit bucket (appConfig.agents.automation.
     // workflow*) - same precedent as appConfig.agents.trigger (B9): these are
@@ -551,7 +579,7 @@ export const agentsRouter = router({
       }))
       .mutation(async ({ input }) => freshnessReviewService.runFreshnessReview(input)),
 
-    createRevisionRequest: agentProcedure('agents.automation.editorial.revision.create')
+      createRevisionRequest: agentProcedure('agents.automation.editorial.revision.create')
       .use(rateLimited('automation-editorial-revision-create', appConfig.agents.automation.workflowRateLimitMax, {
         window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
       }))
@@ -565,6 +593,203 @@ export const agentsRouter = router({
         idempotencyKey: z.string().min(8).max(200),
       }))
       .mutation(async ({ input }) => revisionRequestService.createRevisionRequest(input)),
+
+    // Phase 5: Dedicated Editorial Discovery and Bounded Drafting procedures for W-BLOG automation
+    listEditorialMonitors: agentProcedure('agents.automation.editorial.monitors.read')
+      .use(rateLimited('automation-list-editorial-monitors', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        jurisdictions: z.string().max(500).optional(),
+        limit: z.number().int().positive().max(100).default(50).optional(),
+      }).optional())
+      .mutation(async ({ input, ctx }) => {
+        const where: any = {
+          isActive: true,
+          status: 'ACTIVE',
+          verificationStatus: 'VERIFIED',
+          deletedAt: null,
+        };
+        if (input?.jurisdictions) {
+          const requested = input.jurisdictions.split(',').map(s => s.trim().toUpperCase());
+          where.jurisdiction = { in: requested };
+        }
+        const monitors = await ctx.prisma.blogSourceMonitor.findMany({
+          where,
+          take: input?.limit ?? 50,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            name: true,
+            baseUrl: true,
+            feedUrl: true,
+            jurisdiction: true,
+            authorityType: true,
+            sourceType: true,
+            monitoringMethod: true,
+            lastCheckedAt: true,
+          },
+        });
+        return { monitors };
+      }),
+
+    runEditorialDiscovery: agentProcedure('agents.automation.editorial.discovery.run')
+      .use(rateLimited('automation-run-editorial-discovery', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        monitorId: z.string().min(1),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        return runSourceDiscoveryForMonitor({
+          prisma: ctx.prisma,
+          monitorId: input.monitorId,
+          triggeredBy: 'SYSTEM',
+        });
+      }),
+
+    createBlogSuggestion: agentProcedure('agents.automation.editorial.suggestions.create')
+      .use(rateLimited('automation-create-blog-suggestion', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        sourceItemId: z.string().min(1),
+        minScore: z.number().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        return createSuggestionFromSourceItem({
+          prisma: ctx.prisma,
+          sourceItemId: input.sourceItemId,
+          minScore: input.minScore,
+          createdByUserId: ctx.agent.userId,
+        });
+      }),
+
+    listBlogSuggestions: agentProcedure('agents.automation.editorial.suggestions.read')
+      .use(rateLimited('automation-list-blog-suggestions', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        status: z.enum(['PENDING_REVIEW', 'APPROVED_FOR_DRAFT', 'DRAFT_CREATED', 'DISMISSED', 'DUPLICATE', 'NEEDS_MORE_SOURCES']).optional(),
+        jurisdictions: z.string().max(500).optional(),
+        limit: z.number().int().positive().max(100).default(50).optional(),
+      }).optional())
+      .mutation(async ({ input, ctx }) => {
+        const where: any = { deletedAt: null };
+        if (input?.status) where.status = input.status;
+        if (input?.jurisdictions) {
+          const requested = input.jurisdictions.split(',').map(s => s.trim().toUpperCase());
+          where.jurisdiction = { in: requested };
+        }
+        const suggestions = await ctx.prisma.blogArticleSuggestion.findMany({
+          where,
+          take: input?.limit ?? 50,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            title: true,
+            suggestedSlug: true,
+            jurisdiction: true,
+            category: true,
+            articleType: true,
+            priority: true,
+            status: true,
+            relevanceScore: true,
+            sourceQuality: true,
+            requiresHumanReview: true,
+            blogPostId: true,
+            createdAt: true,
+          },
+        });
+        return { suggestions };
+      }),
+
+    generateEditorialDraft: agentProcedure('agents.automation.editorial.draft.create')
+      .use(rateLimited('automation-generate-editorial-draft', appConfig.agents.automation.editorialRateLimitMax, {
+        window: appConfig.agents.automation.editorialRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        suggestionId: z.string().min(1),
+        idempotencyKey: z.string().min(8).max(200),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        return automationBlogDraftService.generateDraftFromSuggestion(input, ctx.agent.userId);
+      }),
+
+    // Phase 1: Dedicated Regulatory Intelligence procedures for W-REG automation
+    listRegulatorySources: agentProcedure('agents.automation.regulatory.sources.read')
+      .use(rateLimited('automation-list-regulatory-sources', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({
+        jurisdictions: z.string().max(500).optional(),
+        limit: z.number().int().positive().max(100).default(50).optional(),
+      }).optional())
+      .mutation(async ({ input }) => regulatoryAutomationService.listSources(input ?? {})),
+
+    fetchRegulatorySource: agentProcedure('agents.automation.regulatory.sources.fetch')
+      .use(rateLimited('automation-fetch-regulatory-source', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(fetchRegulatorySourceSchema)
+      .mutation(async ({ input }) => regulatoryAutomationService.fetchSource(input)),
+
+    ingestRegulatorySnapshot: agentProcedure('agents.automation.regulatory.snapshots.create')
+      .use(rateLimited('automation-ingest-regulatory-snapshot', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(ingestRegulatorySnapshotSchema)
+      .mutation(async ({ input }) => regulatoryAutomationService.ingestSnapshot(input)),
+
+    createRegulatorySourceItem: agentProcedure('agents.automation.regulatory.items.create')
+      .use(rateLimited('automation-create-regulatory-item', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(createRegulatorySourceItemSchema)
+      .mutation(async ({ input }) => regulatoryAutomationService.createSourceItem(input)),
+
+    getRegulatorySourceItem: agentProcedure('agents.automation.regulatory.items.read')
+      .use(rateLimited('automation-get-regulatory-item', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(z.object({ itemId: z.string().min(1) }))
+      .mutation(async ({ input }) => regulatoryAutomationService.getSourceItem(input)),
+
+    listRegulatorySourceItems: agentProcedure('agents.automation.regulatory.items.read')
+      .use(rateLimited('automation-list-regulatory-items', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(listRegulatorySourceItemsSchema)
+      .mutation(async ({ input }) => regulatoryAutomationService.listSourceItems(input)),
+
+    createRegulatoryAlertDraft: agentProcedure('agents.automation.regulatory.alertDraft.create')
+      .use(rateLimited('automation-create-regulatory-alert-draft', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(createRegulatoryAlertDraftSchema)
+      .mutation(async ({ input, ctx }) => regulatoryAutomationService.createAlertDraft(input, ctx.agent.userId)),
+
+    // Phase 3: Dedicated Regulatory Intelligence enrichment & verification procedures
+    getRegulatorySnapshot: agentProcedure('agents.automation.regulatory.snapshots.read')
+      .use(rateLimited('automation-get-regulatory-snapshot', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(getRegulatorySnapshotMachineSchema)
+      .mutation(async ({ input }) => regulatoryAutomationService.getSnapshot(input)),
+
+    processRegulatorySnapshot: agentProcedure('agents.automation.regulatory.enrichment.process')
+      .use(rateLimited('automation-process-regulatory-snapshot', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(processRegulatorySnapshotMachineSchema)
+      .mutation(async ({ input }) => regulatoryAutomationService.processSnapshot(input)),
+
+    listPendingRegulatorySnapshots: agentProcedure('agents.automation.regulatory.enrichment.listPending')
+      .use(rateLimited('automation-list-pending-regulatory-snapshots', appConfig.agents.automation.workflowRateLimitMax, {
+        window: appConfig.agents.automation.workflowRateLimitWindowSeconds,
+      }))
+      .input(listPendingRegulatorySnapshotsMachineSchema.optional())
+      .mutation(async ({ input }) => regulatoryAutomationService.listPendingSnapshots(input ?? {})),
   }),
   productBi: router({
     // Read-only synthesis across ALL organizations, not one tenant - deliberately

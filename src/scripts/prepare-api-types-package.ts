@@ -11,8 +11,9 @@ import { dirname, extname, join, relative } from 'node:path';
 const backendRoot = process.cwd();
 const distRoot = join(backendRoot, 'dist');
 const apiTypesDistRoot = join(backendRoot, 'api-types', 'dist');
+const platformApiTypesDistRoot = join(backendRoot, '..', 'fintech-regulatory-platform', 'api-types', 'dist');
 
-async function copyDeclarations(sourceDir: string): Promise<number> {
+async function copyDeclarationsToTarget(sourceDir: string, targetDistRoot: string): Promise<number> {
   let copied = 0;
   const entries = await readdir(sourceDir, { withFileTypes: true });
 
@@ -20,7 +21,7 @@ async function copyDeclarations(sourceDir: string): Promise<number> {
     const sourcePath = join(sourceDir, entry.name);
 
     if (entry.isDirectory()) {
-      copied += await copyDeclarations(sourcePath);
+      copied += await copyDeclarationsToTarget(sourcePath, targetDistRoot);
       continue;
     }
 
@@ -28,7 +29,7 @@ async function copyDeclarations(sourceDir: string): Promise<number> {
       continue;
     }
 
-    const targetPath = join(apiTypesDistRoot, relative(distRoot, sourcePath));
+    const targetPath = join(targetDistRoot, relative(distRoot, sourcePath));
     await mkdir(dirname(targetPath), { recursive: true });
     await copyFile(sourcePath, targetPath);
     copied++;
@@ -39,8 +40,10 @@ async function copyDeclarations(sourceDir: string): Promise<number> {
 
 async function main(): Promise<void> {
   await rm(apiTypesDistRoot, { recursive: true, force: true });
-  const copied = await copyDeclarations(distRoot);
-  console.log(`Prepared @sheriabot/api-types with ${copied} declaration files.`);
+  await rm(platformApiTypesDistRoot, { recursive: true, force: true });
+  const copiedBackend = await copyDeclarationsToTarget(distRoot, apiTypesDistRoot);
+  const copiedPlatform = await copyDeclarationsToTarget(distRoot, platformApiTypesDistRoot);
+  console.log(`Prepared @sheriabot/api-types with ${copiedBackend} backend declarations and ${copiedPlatform} platform declarations.`);
 }
 
 main().catch((error) => {

@@ -2171,32 +2171,230 @@ model PilotEvent {
 // ============================================================================
 // Regulatory Alerts System
 // ============================================================================
-
 model RegulatoryAlert {
-  id             String    @id @default(cuid())
-  title          String
-  summary        String
-  body           String
-  sourceUrl      String?
+  id               String    @id @default(cuid())
+  title            String
+  summary          String
+  body             String
+  sourceUrl        String?
   jurisdictionCode String  @default("KE")
-  regulatoryBody String
-  category       String
-  severity       String    @default("MEDIUM")
-  effectiveDate  DateTime?
-  publishedAt    DateTime  @default(now())
-  expiresAt      DateTime?
-  isActive       Boolean   @default(true)
-  publishedById  String
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  regulatoryBody   String
+  category         String
+  severity         String    @default("MEDIUM")
+  effectiveDate    DateTime?
+  publishedAt      DateTime  @default(now())
+  expiresAt        DateTime?
+  isActive         Boolean   @default(true)
+  publishedById    String
+  primaryRegulatorySourceItemId String?
+  automationDraftKey           String?               @unique
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  publishedBy   User                @relation(fields: [publishedById], references: [id])
-  notifications AlertNotification[]
+  publishedBy                 User                  @relation(fields: [publishedById], references: [id])
+  primaryRegulatorySourceItem RegulatorySourceItem? @relation(fields: [primaryRegulatorySourceItemId], references: [id], onDelete: SetNull)
+  notifications               AlertNotification[]
 
   @@index([regulatoryBody])
   @@index([jurisdictionCode])
   @@index([severity])
   @@index([isActive, publishedAt(sort: Desc)])
+  @@index([primaryRegulatorySourceItemId])
+}
+
+// ============================================================================
+// Dedicated Regulatory Intelligence Domain (Phase 1)
+// ============================================================================
+
+enum RegulatoryAuthorityType {
+  PRIMARY_OFFICIAL
+  AUTHORITATIVE
+  SECONDARY_VERIFIED
+}
+
+enum RegulatorySourceType {
+  WEBSITE
+  FEED_RSS
+  GAZETTE_FEED
+  API
+  PORTAL
+}
+
+enum RegulatoryInformationType {
+  DRAFT_REGULATION
+  CIRCULAR
+  CONSULTATION
+  NOTICE
+  GAZETTE_NOTICE
+  GUIDANCE
+  DIRECTIVE
+  LEGISLATIVE_UPDATE
+  POLICY_UPDATE
+  ENFORCEMENT
+  LICENSING_UPDATE
+  OFFICIAL_ANNOUNCEMENT
+  MARKET_DEVELOPMENT
+  OTHER
+}
+
+enum RegulatoryStage {
+  DRAFT
+  PROPOSED
+  CONSULTATION
+  ANNOUNCED
+  ISSUED
+  GAZETTED
+  EFFECTIVE
+  DEVELOPING
+  SUPERSEDED
+  WITHDRAWN
+}
+
+enum RegulatoryVerificationState {
+  UNVERIFIED
+  SOURCE_VERIFIED
+  FACT_VERIFIED
+  REQUIRES_REVIEW
+  DISPUTED
+}
+
+enum RegulatoryMateriality {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum RegulatoryEvidenceRole {
+  PRIMARY
+  SUPPORTING
+  UPDATE
+  SUPERSEDING
+}
+
+model RegulatorySource {
+  id                    String                  @id @default(cuid())
+  sourceKey             String                  @unique
+  name                  String
+  jurisdictionCode      String                  @default("KE")
+  regulatoryBody        String
+  authorityType         RegulatoryAuthorityType @default(PRIMARY_OFFICIAL)
+  sourceType            RegulatorySourceType    @default(WEBSITE)
+  baseUrl               String
+  fetchUrl              String?
+  isActive              Boolean                 @default(true)
+  lastCheckedAt         DateTime?
+  lastSuccessfulFetchAt DateTime?
+  lastFailureAt         DateTime?
+  failureCount          Int                     @default(0)
+  lastFailureReason     String?                 @db.Text
+  metadata              Json?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+
+  snapshots             RegulatorySourceSnapshot[]
+  items                 RegulatorySourceItem[]
+
+  @@index([jurisdictionCode])
+  @@index([regulatoryBody])
+  @@index([authorityType])
+  @@index([isActive])
+}
+
+model RegulatorySourceSnapshot {
+  id                    String                  @id @default(cuid())
+  sourceId              String
+  sourceUrl             String
+  canonicalUrl          String
+  contentHash           String
+  hashVersion           Int                     @default(1)
+  normalizationVersion  Int                     @default(1)
+  contentLength         Int                     @default(0)
+  httpStatus            Int?
+  contentType           String?
+  etag                  String?
+  lastModified          String?
+  rawText               String?                 @db.Text
+  rawPayload            String?                 @db.Text
+  rawStorageKey         String?
+  title                 String?
+  metadata              Json?
+  retrievedAt           DateTime                @default(now())
+  createdAt             DateTime                @default(now())
+
+  source                RegulatorySource        @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  primaryItems          RegulatorySourceItem[]  @relation("RegulatorySourceItemPrimarySnapshot")
+  evidenceLinks         RegulatorySourceItemEvidence[]
+
+  @@unique([sourceId, canonicalUrl, contentHash])
+  @@index([sourceId])
+  @@index([canonicalUrl])
+  @@index([contentHash])
+  @@index([retrievedAt])
+}
+
+model RegulatorySourceItem {
+  id                    String                      @id @default(cuid())
+  dedupeKey             String                      @unique
+  sourceId              String
+  primarySnapshotId     String?
+  jurisdictionCode      String                      @default("KE")
+  regulator             String
+  title                 String
+  officialTitle         String?
+  summary               String                      @db.Text
+  informationType       RegulatoryInformationType   @default(NOTICE)
+  regulatoryStage       RegulatoryStage             @default(ISSUED)
+  verificationState     RegulatoryVerificationState @default(UNVERIFIED)
+  materiality           RegulatoryMateriality       @default(MEDIUM)
+  relevanceScore        Float?
+  publicationDate       DateTime?
+  effectiveDate         DateTime?
+  consultationDeadline  DateTime?
+  complianceDeadline    DateTime?
+  affectedSectors       Json                        @default("[]")
+  affectedEntityTypes   Json                        @default("[]")
+  topics                Json                        @default("[]")
+  firstDetectedAt       DateTime                    @default(now())
+  lastObservedAt        DateTime                    @default(now())
+  supersededById        String?
+  metadata              Json?
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
+
+  source                RegulatorySource            @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  primarySnapshot       RegulatorySourceSnapshot?   @relation("RegulatorySourceItemPrimarySnapshot", fields: [primarySnapshotId], references: [id], onDelete: SetNull)
+  evidenceLinks         RegulatorySourceItemEvidence[]
+  alerts                RegulatoryAlert[]
+  supersededBy          RegulatorySourceItem?       @relation("RegulatoryItemSupersession", fields: [supersededById], references: [id], onDelete: SetNull)
+  supersedes            RegulatorySourceItem[]      @relation("RegulatoryItemSupersession")
+
+  @@index([jurisdictionCode])
+  @@index([regulator])
+  @@index([informationType])
+  @@index([regulatoryStage])
+  @@index([verificationState])
+  @@index([materiality])
+  @@index([publicationDate])
+  @@index([effectiveDate])
+  @@index([createdAt])
+}
+
+model RegulatorySourceItemEvidence {
+  id            String                  @id @default(cuid())
+  sourceItemId  String
+  snapshotId    String
+  role          RegulatoryEvidenceRole  @default(SUPPORTING)
+  isPrimary     Boolean                 @default(false)
+  notes         String?                 @db.Text
+  createdAt     DateTime                @default(now())
+
+  sourceItem    RegulatorySourceItem    @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+  snapshot      RegulatorySourceSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceItemId, snapshotId])
+  @@index([sourceItemId])
+  @@index([snapshotId])
 }
 
 model AlertSubscription {

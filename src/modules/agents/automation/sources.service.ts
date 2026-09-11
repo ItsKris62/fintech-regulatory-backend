@@ -4,6 +4,7 @@ import { BlogJurisdiction } from '@prisma/client';
 import { prisma as defaultPrisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
 import { stripHtml } from '@/utils/helpers';
+import { validateSafeUrl, safeFetch, SSRFValidationError } from '@/utils/safe-fetch';
 import { parseJurisdictionFilter } from './duration';
 
 const GET_SOURCES_MAX_ITEMS = 50;
@@ -118,25 +119,41 @@ export class AutomationSourcesService {
   }> {
     requireBlogJurisdiction(input.jurisdiction);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
     let rawContent: string;
     try {
-      const response = await this.fetchImpl(input.url, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'SheriaBot-Automation/1.0' },
-      });
-      if (!response.ok) {
-        throw new TRPCError({ code: 'BAD_GATEWAY', message: `Fetching ${input.url} failed with HTTP ${response.status}.` });
+      await validateSafeUrl(input.url);
+      if (this.fetchImpl === fetch) {
+        const response = await safeFetch(input.url, {
+          timeoutMs: FETCH_TIMEOUT_MS,
+          maxResponseBytes: FETCH_MAX_CONTENT_CHARS * 4,
+        });
+        if (!response.ok) {
+          throw new TRPCError({ code: 'BAD_GATEWAY', message: `Fetching ${input.url} failed with HTTP ${response.status}.` });
+        }
+        rawContent = await response.text();
+      } else {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+        try {
+          const response = await this.fetchImpl(input.url, {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'SheriaBot-Automation/1.0' },
+          });
+          if (!response.ok) {
+            throw new TRPCError({ code: 'BAD_GATEWAY', message: `Fetching ${input.url} failed with HTTP ${response.status}.` });
+          }
+          rawContent = await response.text();
+        } finally {
+          clearTimeout(timeout);
+        }
       }
-      rawContent = await response.text();
     } catch (error: unknown) {
       if (error instanceof TRPCError) throw error;
+      if (error instanceof SSRFValidationError) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: `SSRF validation failed: ${error.message}` });
+      }
       logger.warn({ type: 'automation_fetch_source_failed', sourceId: input.sourceId, url: input.url, error: error instanceof Error ? error.message : String(error) });
       throw new TRPCError({ code: 'BAD_GATEWAY', message: `Failed to fetch ${input.url}: ${error instanceof Error ? error.message : String(error)}` });
-    } finally {
-      clearTimeout(timeout);
     }
 
     const normalizedContent = stripHtml(rawContent).replace(/\s+/g, ' ').trim().slice(0, FETCH_MAX_CONTENT_CHARS);

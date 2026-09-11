@@ -125,6 +125,7 @@ const envSchema = z.object({
   BLOG_PUBLISH_READINESS_MODE: z
     .enum(['off', 'shadow', 'enforce'])
     .default('shadow'),
+  AI_GLOBAL_MONTHLY_BUDGET_USD: z.coerce.number().positive().default(20),
   AGENT_MAX_COST_PER_RUN_USD: z.coerce.number().positive().default(2),
   AGENT_MAX_COST_PER_DAY_USD: z.coerce.number().positive().default(20),
   AGENT_MAX_ITERATIONS_PER_RUN: z.coerce.number().int().positive().default(25),
@@ -438,6 +439,7 @@ export const appConfig = {
   ai: {
     apiKey: env.ANTHROPIC_API_KEY,
     model: env.ANTHROPIC_MODEL,
+    monthlyBudgetUsd: env.AI_GLOBAL_MONTHLY_BUDGET_USD,
   },
   openai: {
     apiKey: env.OPENAI_API_KEY,

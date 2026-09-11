@@ -47,6 +47,21 @@ describe('AutomationSourcesService.fetchSource', () => {
     expect(result.fetchedAt).toBe(NOW.toISOString());
   });
 
+  it('rejects SSRF attempts targeting localhost or cloud metadata', async () => {
+    const fetchImpl = vi.fn();
+    const service = new AutomationSourcesService({ fetchImpl, now: () => NOW });
+
+    await expect(
+      service.fetchSource({ url: 'http://localhost:8080/secret', sourceId: 's1', jurisdiction: 'KE' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    await expect(
+      service.fetchSource({ url: 'http://169.254.169.254/latest/meta-data', sourceId: 's1', jurisdiction: 'KE' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('throws BAD_GATEWAY on a non-2xx response rather than returning empty content', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 404 });
     const service = new AutomationSourcesService({ fetchImpl, now: () => NOW });

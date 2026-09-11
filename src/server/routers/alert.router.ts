@@ -4,8 +4,11 @@ import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
 import { createAlertStreamToken } from '@/lib/alerts/stream-token';
 import { alertService } from '@/modules/alert';
+import { llmGateway } from '@/lib/ai/gateway/llm-gateway';
 import {
   createAlertSchema,
+  updateAlertSchema,
+  rejectAlertSchema,
   getAlertsSchema,
   upsertSubscriptionSchema,
   markAsReadSchema,
@@ -130,6 +133,32 @@ export const alertRouter = router({
     }),
 
   // ---------------------------------------------------------------------------
+  // updateDraft -- edit draft alert fields before publication; ADMIN only
+  // ---------------------------------------------------------------------------
+
+  updateDraft: protectedProcedure
+    .input(updateAlertSchema)
+    .mutation(async ({ input, ctx }) => {
+      if (!['ADMIN', 'REGULATOR'].includes(ctx.user!.role)) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      return alertService.updateDraft(input, ctx.user!.id);
+    }),
+
+  // ---------------------------------------------------------------------------
+  // rejectDraft -- reject an inactive machine/manual draft; ADMIN only
+  // ---------------------------------------------------------------------------
+
+  rejectDraft: protectedProcedure
+    .input(rejectAlertSchema)
+    .mutation(async ({ input, ctx }) => {
+      if (!['ADMIN', 'REGULATOR'].includes(ctx.user!.role)) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      return alertService.rejectDraft(input, ctx.user!.id);
+    }),
+
+  // ---------------------------------------------------------------------------
   // getAdminAlerts -- all alerts including drafts; ADMIN only
   // ---------------------------------------------------------------------------
 
@@ -145,5 +174,17 @@ export const alertRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN' });
       }
       return alertService.getAdminAlerts(input);
+    }),
+
+  // ---------------------------------------------------------------------------
+  // getAIBudgetStatus -- global monthly $20 AI budget and telemetry; ADMIN only
+  // ---------------------------------------------------------------------------
+
+  getAIBudgetStatus: protectedProcedure
+    .query(async ({ ctx }) => {
+      if (ctx.user!.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      return llmGateway.getMonthlyBudgetStatus();
     }),
 });

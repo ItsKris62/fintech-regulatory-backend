@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { prisma } from '@/lib/prisma/client';
+import { prisma as defaultPrisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
@@ -8,7 +8,13 @@ import { reactMailer } from '@/lib/email/react-mailer.service';
 import type { EffectivePlan } from '@/types/plan.types';
 import type { RegulatoryAlert, AlertSubscription } from '@prisma/client';
 import type { AlertWithReadStatus, GetAlertsResult } from './alert.types';
-import type { CreateAlertInput, GetAlertsInput, UpsertSubscriptionInput } from './alert.schema';
+import type { 
+  CreateAlertInput, 
+  UpdateAlertInput, 
+  RejectAlertInput, 
+  GetAlertsInput, 
+  UpsertSubscriptionInput 
+} from './alert.schema';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -49,6 +55,12 @@ type NotificationRow = {
 // ---------------------------------------------------------------------------
 
 class AlertService {
+  private readonly prisma: typeof defaultPrisma;
+
+  constructor(deps: { prisma?: typeof defaultPrisma } = {}) {
+    this.prisma = deps.prisma ?? defaultPrisma;
+  }
+
   // -------------------------------------------------------------------------
   // createAlert -- creates a draft (isActive: false)
   // -------------------------------------------------------------------------
@@ -57,7 +69,7 @@ class AlertService {
     input: CreateAlertInput,
     publishedById: string
   ): Promise<RegulatoryAlert> {
-    const alert = await prisma.regulatoryAlert.create({
+    const alert = await this.prisma.regulatoryAlert.create({
       data: {
         title: input.title,
         summary: input.summary,
@@ -83,20 +95,21 @@ class AlertService {
   // -------------------------------------------------------------------------
 
   async publishAlert(alertId: string, publishedById: string): Promise<void> {
-    const alert = await prisma.regulatoryAlert.findUnique({ where: { id: alertId } });
+    const alert = await this.prisma.regulatoryAlert.findUnique({ where: { id: alertId } });
     if (!alert) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Alert not found.' });
     }
     if (alert.isActive) {
-      throw new TRPCError({ code: 'CONFLICT', message: 'Alert is already published.' });
+      logger.info({ type: 'alert_already_published_noop', alertId, publishedById });
+      return;
     }
 
-    const publishedAlert = await prisma.regulatoryAlert.update({
+    const publishedAlert = await this.prisma.regulatoryAlert.update({
       where: { id: alertId },
-      data: { isActive: true, publishedAt: new Date(), updatedAt: new Date() },
+      data: { isActive: true, publishedById, publishedAt: new Date(), updatedAt: new Date() },
     });
 
-    const subscriptions = await prisma.alertSubscription.findMany({
+    const subscriptions = await this.prisma.alertSubscription.findMany({
       where: {
         jurisdictions: { has: publishedAlert.jurisdictionCode },
         regulatoryBodies: { has: publishedAlert.regulatoryBody },
@@ -118,7 +131,7 @@ class AlertService {
       const thresholdRank = SEVERITY_RANK[subscription.severityThreshold] ?? 1;
       if (alertRank < thresholdRank) continue;
 
-      const orgUsers = await prisma.user.findMany({
+      const orgUsers = await this.prisma.user.findMany({
         where: { organizationId: subscription.organizationId, deletedAt: null },
         select: { id: true, email: true, fullName: true },
       });
@@ -155,7 +168,7 @@ class AlertService {
 
     const allRows = [...inAppRows, ...emailRows];
     if (allRows.length > 0) {
-      await prisma.alertNotification.createMany({ data: allRows, skipDuplicates: true });
+      await this.prisma.alertNotification.createMany({ data: allRows, skipDuplicates: true });
     }
 
     // Fan out SSE events - deduplicate by userId
@@ -234,7 +247,7 @@ class AlertService {
     const whereClause = { ...baseWhere, ...unreadFilter };
 
     const [rawAlerts, total] = await Promise.all([
-      prisma.regulatoryAlert.findMany({
+      this.prisma.regulatoryAlert.findMany({
         where: whereClause,
         include: {
           notifications: {
@@ -247,7 +260,7 @@ class AlertService {
         skip: (page - 1) * limit,
         take: limit,
       }),
-      prisma.regulatoryAlert.count({ where: whereClause }),
+      this.prisma.regulatoryAlert.count({ where: whereClause }),
     ]);
 
     const alerts: AlertWithReadStatus[] = rawAlerts.map(({ notifications, ...alertData }) => {
@@ -279,7 +292,7 @@ class AlertService {
     const cached = await redis.get<string>(cacheKey);
     if (cached !== null) return parseInt(cached, 10);
 
-    const count = await prisma.alertNotification.count({
+    const count = await this.prisma.alertNotification.count({
       where: {
         userId,
         channel: 'IN_APP',
@@ -296,7 +309,7 @@ class AlertService {
   // -------------------------------------------------------------------------
 
   async markAsRead(notificationId: string, userId: string): Promise<void> {
-    const notification = await prisma.alertNotification.findFirst({
+    const notification = await this.prisma.alertNotification.findFirst({
       where: { id: notificationId, userId },
       select: { id: true, status: true },
     });
@@ -305,7 +318,7 @@ class AlertService {
     }
     if (notification.status === 'READ') return;
 
-    await prisma.alertNotification.update({
+    await this.prisma.alertNotification.update({
       where: { id: notificationId },
       data: { status: 'READ', readAt: new Date() },
     });
@@ -321,7 +334,7 @@ class AlertService {
     userId: string,
     _organizationId: string | undefined
   ): Promise<void> {
-    await prisma.alertNotification.updateMany({
+    await this.prisma.alertNotification.updateMany({
       where: {
         userId,
         channel: 'IN_APP',
@@ -338,7 +351,7 @@ class AlertService {
   // -------------------------------------------------------------------------
 
   async getAlertById(alertId: string, userId: string): Promise<AlertWithReadStatus> {
-    const alert = await prisma.regulatoryAlert.findFirst({
+    const alert = await this.prisma.regulatoryAlert.findFirst({
       where: { id: alertId, isActive: true },
       include: {
         notifications: {
@@ -385,7 +398,7 @@ class AlertService {
       });
     }
 
-    return prisma.alertSubscription.upsert({
+    return this.prisma.alertSubscription.upsert({
       where: { organizationId },
       create: { organizationId, ...input },
       update: { ...input, updatedAt: new Date() },
@@ -401,7 +414,7 @@ class AlertService {
   ): Promise<AlertSubscription | null> {
     if (!organizationId) return null;
 
-    return prisma.alertSubscription.findUnique({ where: { organizationId } });
+    return this.prisma.alertSubscription.findUnique({ where: { organizationId } });
   }
 
   // -------------------------------------------------------------------------
@@ -416,12 +429,40 @@ class AlertService {
     const skip = (page - 1) * limit;
 
     const [alerts, total] = await Promise.all([
-      prisma.regulatoryAlert.findMany({
+      this.prisma.regulatoryAlert.findMany({
+        include: {
+          primaryRegulatorySourceItem: {
+            include: {
+              source: {
+                select: {
+                  sourceKey: true,
+                  name: true,
+                  authorityType: true,
+                  sourceType: true,
+                  baseUrl: true,
+                },
+              },
+              evidenceLinks: {
+                include: {
+                  snapshot: {
+                    select: {
+                      id: true,
+                      canonicalUrl: true,
+                      retrievedAt: true,
+                      contentHash: true,
+                      httpStatus: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
       }),
-      prisma.regulatoryAlert.count(),
+      this.prisma.regulatoryAlert.count(),
     ]);
 
     return { alerts, total };
@@ -459,7 +500,7 @@ class AlertService {
         unsubscribeUrl: `${frontendUrl}/settings/notifications`,
       });
 
-      await prisma.alertNotification.updateMany({
+      await this.prisma.alertNotification.updateMany({
         where: { alertId: alert.id, userId: target.userId, channel: 'EMAIL' },
         data: { status: 'SENT', sentAt: new Date() },
       });
@@ -473,6 +514,97 @@ class AlertService {
       });
       // Never throw -- email failure must not block the publish flow
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // updateDraft -- updates editable customer copy on a draft alert
+  // -------------------------------------------------------------------------
+
+  async updateDraft(input: UpdateAlertInput, userId: string): Promise<RegulatoryAlert> {
+    const alert = await this.prisma.regulatoryAlert.findUnique({ where: { id: input.alertId } });
+    if (!alert) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Alert not found.' });
+    }
+    if (alert.isActive) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot edit an already published alert directly.' });
+    }
+
+    const updated = await this.prisma.regulatoryAlert.update({
+      where: { id: input.alertId },
+      data: {
+        title: input.title ?? alert.title,
+        summary: input.summary ?? alert.summary,
+        body: input.body ?? alert.body,
+        category: input.category ?? alert.category,
+        severity: input.severity ?? alert.severity,
+        sourceUrl: input.sourceUrl !== undefined ? (input.sourceUrl || null) : alert.sourceUrl,
+        effectiveDate: input.effectiveDate ? new Date(input.effectiveDate) : alert.effectiveDate,
+        expiresAt: input.expiresAt ? new Date(input.expiresAt) : alert.expiresAt,
+        updatedAt: new Date(),
+      },
+    });
+
+    logger.info({ type: 'alert_draft_updated', alertId: alert.id, updatedBy: userId });
+    return updated;
+  }
+
+  // -------------------------------------------------------------------------
+  // rejectDraft -- rejects an unpublished draft and marks provenance
+  // -------------------------------------------------------------------------
+
+  async rejectDraft(
+    input: RejectAlertInput,
+    reviewerId: string
+  ): Promise<{ success: boolean; alertId: string }> {
+    const alert = await this.prisma.regulatoryAlert.findUnique({
+      where: { id: input.alertId },
+      include: { primaryRegulatorySourceItem: true },
+    });
+    if (!alert) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Alert not found.' });
+    }
+    if (alert.isActive) {
+      throw new TRPCError({ code: 'CONFLICT', message: 'Cannot reject an already published alert.' });
+    }
+
+    // Mark source item verificationState as REJECTED if linked
+    if (alert.primaryRegulatorySourceItemId) {
+      await this.prisma.regulatorySourceItem.update({
+        where: { id: alert.primaryRegulatorySourceItemId },
+        data: {
+          verificationState: 'REJECTED' as any,
+          updatedAt: new Date(),
+        },
+      });
+    }
+
+    // Mark AgentRun as rejected if automation key exists
+    if (alert.automationDraftKey) {
+      await this.prisma.agentRun.updateMany({
+        where: { idempotencyKey: alert.automationDraftKey },
+        data: {
+          metadata: {
+            rejected: true,
+            rejectedById: reviewerId,
+            rejectionReason: input.reason || 'Rejected by administrator',
+            rejectedAt: new Date().toISOString(),
+          },
+        },
+      });
+    }
+
+    // Remove the draft alert
+    await this.prisma.regulatoryAlert.delete({ where: { id: input.alertId } });
+
+    logger.info({
+      type: 'alert_draft_rejected',
+      alertId: input.alertId,
+      reviewerId,
+      reason: input.reason,
+      primaryRegulatorySourceItemId: alert.primaryRegulatorySourceItemId,
+    });
+
+    return { success: true, alertId: input.alertId };
   }
 }
 

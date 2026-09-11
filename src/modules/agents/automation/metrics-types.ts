@@ -3,7 +3,7 @@
 // integration brief never defined their output shapes - rather than fabricate
 // one, getMetrics() rejects any department outside this list with a clear
 // error (see metrics.service.ts), and this list is the source of truth.
-export const SUPPORTED_METRICS_DEPARTMENTS = ['product', 'sales', 'security'] as const;
+export const SUPPORTED_METRICS_DEPARTMENTS = ['product', 'sales', 'security', 'blog', 'regulatory'] as const;
 export type SupportedMetricsDepartment = (typeof SUPPORTED_METRICS_DEPARTMENTS)[number];
 
 export function isSupportedMetricsDepartment(value: string): value is SupportedMetricsDepartment {
@@ -20,6 +20,24 @@ export interface GetMetricsInput {
 export interface ProductMetrics {
   queries: number;
   baselineQueries: number;
+}
+
+export interface BlogMetrics {
+  sourcesChecked: number;
+  itemsDiscovered: number;
+  suggestionsCreated: number;
+  suggestionsApproved: number;
+  draftsGenerated: number;
+  postsPublished: number;
+  verificationFailures: number;
+}
+
+export interface RegulatoryMetrics {
+  sourcesChecked: number;
+  snapshotsIngested: number;
+  itemsEnriched: number;
+  alertsCreated: number;
+  alertsPublished: number;
 }
 
 /**
@@ -67,4 +85,4 @@ export interface SecurityMetrics {
   aiSpendVsCeiling: number;
 }
 
-export type GetMetricsResult = ProductMetrics | SalesMetrics | SecurityMetrics;
+export type GetMetricsResult = ProductMetrics | SalesMetrics | SecurityMetrics | BlogMetrics | RegulatoryMetrics;

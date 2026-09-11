@@ -35,6 +35,7 @@ const { CACHE_TTL } = ADMIN_CONSTANTS;
 const SYSTEM_CONFIG_DEFAULTS: Record<string, unknown> = {
   ...DEFAULT_SYSTEM_CONFIG,
   aiApiKey: '',
+  aiMonthlyBudgetUsd: aiConfig.costs.monthlyBudgetUsd,
   aiDailyCostLimit: aiConfig.costs.dailyLimit,
   aiPolicyModel: aiConfig.models.policyGeneration,
   aiQueryModel: aiConfig.models.complianceQuery,
@@ -63,6 +64,7 @@ export const SYSTEM_CONFIG_DEFINITIONS: readonly SystemConfigDefinition[] = [
   { key: 'maxQueriesPerHour', aliases: ['max_queries_per_hour'], type: 'number', category: 'ai', description: 'Maximum compliance queries allowed per user per hour.', defaultValue: SYSTEM_CONFIG_DEFAULTS.maxQueriesPerHour },
   { key: 'maxPoliciesPerHour', aliases: ['max_policies_per_hour'], type: 'number', category: 'ai', description: 'Maximum policy generations allowed per user per hour.', defaultValue: SYSTEM_CONFIG_DEFAULTS.maxPoliciesPerHour },
   { key: 'aiApiKey', aliases: ['ai_api_key'], type: 'string', category: 'ai', description: 'Override Anthropic API key for live AI requests.', defaultValue: SYSTEM_CONFIG_DEFAULTS.aiApiKey },
+  { key: 'aiMonthlyBudgetUsd', aliases: ['ai_monthly_budget_usd', 'ai_global_monthly_budget_usd'], type: 'number', category: 'ai', description: 'Global monthly AI budget across all providers in USD.', defaultValue: SYSTEM_CONFIG_DEFAULTS.aiMonthlyBudgetUsd },
   { key: 'aiDailyCostLimit', aliases: ['ai_daily_cost_limit'], type: 'number', category: 'ai', description: 'Maximum estimated AI spend per day in USD.', defaultValue: SYSTEM_CONFIG_DEFAULTS.aiDailyCostLimit },
   { key: 'aiPolicyModel', aliases: ['ai_policy_model'], type: 'string', category: 'ai', description: 'Default model for policy and checklist generation.', defaultValue: SYSTEM_CONFIG_DEFAULTS.aiPolicyModel },
   { key: 'aiQueryModel', aliases: ['ai_query_model'], type: 'string', category: 'ai', description: 'Default model for compliance query responses.', defaultValue: SYSTEM_CONFIG_DEFAULTS.aiQueryModel },
