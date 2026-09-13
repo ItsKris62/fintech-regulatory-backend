@@ -40,7 +40,38 @@ export interface JurisdictionEntitlementRule {
 }
 
 export const JURISDICTION_ENTITLEMENTS: Record<EffectivePlan, JurisdictionEntitlementRule> = {
+  FREE: {
+    restrictedToHomeJurisdiction: true,
+    comparisonAllowed: false,
+    maxJurisdictions: 1,
+  },
+  STARTER: {
+    restrictedToHomeJurisdiction: true,
+    comparisonAllowed: false,
+    maxJurisdictions: 1,
+  },
+  GROWTH: {
+    restrictedToHomeJurisdiction: true,
+    comparisonAllowed: false,
+    maxJurisdictions: 1,
+  },
+  BUSINESS: {
+    restrictedToHomeJurisdiction: false,
+    comparisonAllowed: true,
+    maxJurisdictions: 2,
+  },
+  ENTERPRISE: {
+    restrictedToHomeJurisdiction: false,
+    comparisonAllowed: true,
+    maxJurisdictions: 4,
+  },
+  // Legacy / compatibility values
   REGULATOR: {
+    restrictedToHomeJurisdiction: true,
+    comparisonAllowed: false,
+    maxJurisdictions: 1,
+  },
+  STARTUP: {
     restrictedToHomeJurisdiction: true,
     comparisonAllowed: false,
     maxJurisdictions: 1,
@@ -49,21 +80,6 @@ export const JURISDICTION_ENTITLEMENTS: Record<EffectivePlan, JurisdictionEntitl
     restrictedToHomeJurisdiction: true,
     comparisonAllowed: false,
     maxJurisdictions: 1,
-  },
-  STARTUP: {
-    restrictedToHomeJurisdiction: false,
-    comparisonAllowed: true,
-    maxJurisdictions: 4,
-  },
-  BUSINESS: {
-    restrictedToHomeJurisdiction: false,
-    comparisonAllowed: true,
-    maxJurisdictions: 4,
-  },
-  ENTERPRISE: {
-    restrictedToHomeJurisdiction: false,
-    comparisonAllowed: true,
-    maxJurisdictions: 4,
   },
 };
 
@@ -80,8 +96,18 @@ interface JurisdictionPrismaReader {
   organization: {
     findUnique(args: {
       where: { id: string };
-      select: { id: true; homeJurisdictionCode: true };
-    }): Promise<{ id: string; homeJurisdictionCode: string | null } | null>;
+      select: {
+        id: true;
+        homeJurisdictionCode: true;
+        enabledJurisdictions?: boolean;
+        needsCountryConfirmation?: boolean;
+      };
+    }): Promise<{
+      id: string;
+      homeJurisdictionCode: string | null;
+      enabledJurisdictions?: string[] | null;
+      needsCountryConfirmation?: boolean | null;
+    } | null>;
   };
 }
 
@@ -123,7 +149,7 @@ export function toTrpcJurisdictionAuthorizationError(error: unknown): TRPCError 
   });
 }
 
-function enabledJurisdictions(): JurisdictionCode[] {
+function enabledPlatformJurisdictions(): JurisdictionCode[] {
   return Object.values(JURISDICTION_CAPABILITIES)
     .filter((capability) => capability.queryEnabled && capability.status === 'ACTIVE')
     .map((capability) => capability.code);
@@ -156,22 +182,58 @@ export async function resolveJurisdictionEntitlement(
 ): Promise<ResolvedJurisdictionEntitlement> {
   const organization = await input.prisma.organization.findUnique({
     where: { id: input.organizationId },
-    select: { id: true, homeJurisdictionCode: true },
+    select: {
+      id: true,
+      homeJurisdictionCode: true,
+      enabledJurisdictions: true,
+      needsCountryConfirmation: true,
+    },
   });
 
-  if (!isJurisdictionCode(organization?.homeJurisdictionCode)) {
+  if (
+    !isJurisdictionCode(organization?.homeJurisdictionCode) ||
+    organization?.needsCountryConfirmation === true
+  ) {
     deny(input, {
       code: 'HOME_JURISDICTION_REQUIRED',
-      message: 'Organization home jurisdiction must be assigned before regulatory intelligence can be used.',
+      message: 'Organization primary compliance country must be confirmed before regulatory intelligence can be used.',
       statusCode: 403,
     });
   }
 
   const homeJurisdiction = organization.homeJurisdictionCode;
-  const rule = JURISDICTION_ENTITLEMENTS[input.effectivePlan] ?? JURISDICTION_ENTITLEMENTS.REGULATOR;
-  const allowedJurisdictions = rule.restrictedToHomeJurisdiction
-    ? [homeJurisdiction]
-    : enabledJurisdictions();
+  const platformSupported = enabledPlatformJurisdictions();
+
+  if (!platformSupported.includes(homeJurisdiction)) {
+    deny(input, {
+      code: 'JURISDICTION_NOT_ENTITLED',
+      message: `Home jurisdiction ${homeJurisdiction} is not currently supported on the platform.`,
+      homeJurisdiction,
+    });
+  }
+
+  const rule = JURISDICTION_ENTITLEMENTS[input.effectivePlan] ?? JURISDICTION_ENTITLEMENTS.FREE;
+
+  // Build allowed jurisdictions list for the organization
+  let allowedJurisdictions: JurisdictionCode[];
+  if (rule.restrictedToHomeJurisdiction) {
+    allowedJurisdictions = [homeJurisdiction];
+  } else {
+    // Multi-country plan (Business / Enterprise)
+    const extraEnabled = Array.isArray(organization.enabledJurisdictions)
+      ? (organization.enabledJurisdictions.filter(isJurisdictionCode) as JurisdictionCode[])
+      : [];
+    
+    // Deduplicate and filter to supported jurisdictions
+    const candidateSet = new Set<JurisdictionCode>([homeJurisdiction, ...extraEnabled]);
+    const validCandidateList = Array.from(candidateSet).filter((code) =>
+      platformSupported.includes(code),
+    );
+
+    // Enforce maxJurisdictions cap on allowed set
+    allowedJurisdictions = validCandidateList.slice(0, rule.maxJurisdictions);
+  }
+
   const useOrganizationHome =
     input.source === 'ORGANIZATION_HOME' && (input.requestedJurisdictions?.length ?? 0) === 0;
 
@@ -200,17 +262,18 @@ export async function resolveJurisdictionEntitlement(
   if (requestedJurisdictions.length > rule.maxJurisdictions) {
     deny(input, {
       code: 'COMPARISON_NOT_ENTITLED',
-      message: 'Your plan does not include this many jurisdictions.',
+      message: `Your plan allows at most ${rule.maxJurisdictions} jurisdictions. Requested ${requestedJurisdictions.length}.`,
       homeJurisdiction,
       requestedJurisdictions,
     });
   }
 
+  // Validate complete requested set: ALL requested jurisdictions must be in allowedJurisdictions
   const unauthorized = requestedJurisdictions.filter((code) => !allowedJurisdictions.includes(code));
   if (unauthorized.length > 0) {
     deny(input, {
       code: 'JURISDICTION_NOT_ENTITLED',
-      message: 'Your plan does not include the requested jurisdiction.',
+      message: `Your organization is not entitled to access the requested jurisdiction(s): ${unauthorized.join(', ')}.`,
       homeJurisdiction,
       requestedJurisdictions,
     });

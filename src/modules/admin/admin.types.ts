@@ -699,12 +699,76 @@ export interface ContentItem {
 }
 
 export interface PaginatedContent {
-  items: ContentItem[];
+  isPilot?: boolean;
+  sendWelcomeEmail?: boolean;
+}
+
+// ============================================================================
+// Login History Types
+// ============================================================================
+
+export interface LoginHistoryFilters {
+  userId?: string;
+  email?: string;
+  success?: boolean;
+  dateFrom?: Date;
+  dateTo?: Date;
+  page?: number;
+  limit?: number;
+}
+
+export interface LoginHistoryEntry {
+  id: string;
+  userId: string | null;
+  email: string;
+  success: boolean;
+  ipAddress: string | null;
+  userAgent: string | null;
+  failureReason: string | null;
+  location: string | null;
+  createdAt: Date;
+}
+
+export interface PaginatedLoginHistory {
+  items: LoginHistoryEntry[];
   total: number;
   page: number;
   limit: number;
 }
 
+// ============================================================================
+// Content Management Types
+// ============================================================================
+
+export interface ContentFilters {
+  contentType: 'BLOG_POST' | 'KNOWLEDGE_BASE_ARTICLE';
+  contentStatus?: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'UNDER_REVIEW';
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface ContentItem {
+  id: string;
+  title: string | null;
+  slug: string | null;
+  excerpt: string | null;
+  contentType: string;
+  contentStatus: string;
+  category: string | null;
+  viewCount: number;
+  publishedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  authorId: string | null;
+}
+
+export interface PaginatedContent {
+  items: ContentItem[];
+  total: number;
+  page: number;
+  limit: number;
+}
 // ============================================================================
 // Organization Update Types
 // ============================================================================
@@ -725,9 +789,16 @@ export interface UpdateOrganizationInput {
 // Subscription Types
 // ============================================================================
 
-export type SubscriptionPlan = 'REGULATOR' | 'STARTUP' | 'BUSINESS' | 'ENTERPRISE';
+export type SubscriptionPlan =
+  | 'FREE'
+  | 'STARTER'
+  | 'GROWTH'
+  | 'BUSINESS'
+  | 'ENTERPRISE'
+  | 'REGULATOR'
+  | 'STARTUP';
 
-export type SelfServeBillingPlan = 'STARTUP' | 'BUSINESS';
+export type SelfServeBillingPlan = 'STARTER' | 'GROWTH' | 'BUSINESS' | 'STARTUP';
 
 export interface BillingPlanCatalogEntry {
   id: SubscriptionPlan;

@@ -24,6 +24,7 @@ import {
   resolvePlanPriceForInterval,
 } from '@/lib/runtime-billing-plans';
 import { assertCanCreateOrJoinOrganization } from '../services/organization-plan-limit.service';
+import { computeSubscriptionCycle } from '@/utils/billing-dates';
 
 /** Redis key for enterprise inquiry rate-limiting (max 3 per org per day) */
 const enterpriseInquiryKey = (orgId: string) => {
@@ -280,7 +281,7 @@ export const billingRouter = router({
     .use(withPlanContext)
     .input(
       z.object({
-        plan: z.enum(['STARTUP', 'BUSINESS']),
+        plan: z.enum(['STARTER', 'GROWTH', 'BUSINESS', 'STARTUP']),
         interval: z.enum(['monthly', 'yearly']).default('monthly'),
       }),
     )
@@ -291,10 +292,7 @@ export const billingRouter = router({
 
       const orgId = ctx.orgMembership!.organizationId;
 
-      // B7.3 (TD-009): Redis dedup lock - prevents double-click from creating two
-      // Stripe checkout sessions. Lock is keyed on orgId+plan+interval so the user
-      // can still switch plans without being blocked. TTL = 30s (well above the
-      // Stripe API round-trip time). nx=true means "only set if not exists".
+      // Redis dedup lock
       const checkoutLockKey = `lock:checkout:${orgId}:${input.plan}:${input.interval}`;
       const lockAcquired = await redis.set(checkoutLockKey, '1', { ex: 30, nx: true });
       if (!lockAcquired) {
@@ -635,6 +633,7 @@ export const billingRouter = router({
     .input(
       z.object({
         plan:             z.nativeEnum(SubscriptionPlan),
+        interval:         z.enum(['monthly', 'yearly']).default('monthly'),
         phoneNumber:      z.string().optional(),
         paymentPurpose:   z.enum([PAYMENT_PURPOSE_INITIAL, PAYMENT_PURPOSE_RENEWAL]).optional().default(PAYMENT_PURPOSE_INITIAL),
       }),
@@ -651,10 +650,14 @@ export const billingRouter = router({
         });
       }
 
-      if (input.plan === SubscriptionPlan.REGULATOR || input.plan === SubscriptionPlan.ENTERPRISE) {
+      if (
+        input.plan === SubscriptionPlan.FREE ||
+        input.plan === SubscriptionPlan.REGULATOR ||
+        input.plan === SubscriptionPlan.ENTERPRISE
+      ) {
         throw new TRPCError({
           code:    'BAD_REQUEST',
-          message: 'M-Pesa payments are available for Startup and Business plans only.',
+          message: 'M-Pesa self-serve payments are available for Starter, Growth, Business, and Startup plans only.',
         });
       }
 
@@ -676,10 +679,15 @@ export const billingRouter = router({
         ? org?.plan
         : input.plan;
 
-      if (!planToCharge || planToCharge === SubscriptionPlan.REGULATOR || planToCharge === SubscriptionPlan.ENTERPRISE) {
+      if (
+        !planToCharge ||
+        planToCharge === SubscriptionPlan.FREE ||
+        planToCharge === SubscriptionPlan.REGULATOR ||
+        planToCharge === SubscriptionPlan.ENTERPRISE
+      ) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'Renewals are available only for current Startup or Business subscriptions.',
+          message: 'Renewals are available only for current Starter, Growth, or Business subscriptions.',
         });
       }
 
@@ -712,24 +720,23 @@ export const billingRouter = router({
       });
 
       const runtimePlan = await getRuntimePlan(planToCharge);
-      const amountKes = resolvePlanPriceForInterval(runtimePlan, 'monthly') ?? 0;
+      const amountKes = resolvePlanPriceForInterval(runtimePlan, input.interval) ?? 0;
 
       if (amountKes <= 0) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: `The ${planToCharge} monthly M-Pesa price is not configured.`,
+          message: `The ${planToCharge} ${input.interval} M-Pesa price is not configured.`,
         });
       }
 
       const amountCents = Math.round(amountKes * 100); // DB stores smallest unit
       const now = new Date();
       const paidThrough = latestDate(org?.subscriptionCycleEnd, org?.mpesaNextPaymentDueDate, org?.planEndDate);
-      const billingPeriodStart = paymentPurpose === PAYMENT_PURPOSE_RENEWAL
-        ? (paidThrough && paidThrough > now ? paidThrough : now)
-        : null;
-      const billingPeriodEnd = billingPeriodStart
-        ? new Date(billingPeriodStart.getTime() + 30 * 24 * 60 * 60 * 1000)
-        : null;
+      const { billingPeriodStart, billingPeriodEnd } = computeSubscriptionCycle({
+        interval: input.interval,
+        paidThrough: paymentPurpose === PAYMENT_PURPOSE_RENEWAL ? paidThrough : null,
+        now,
+      });
 
       // Idempotency guard: return existing PENDING payment if created within last 15 minutes
       // for the same org + plan. Prevents duplicate STK prompts on network-drop retries.
@@ -769,23 +776,25 @@ export const billingRouter = router({
         currency:         'KES',
         status:           PaymentStatus.PENDING,
         paymentPurpose,
-        description:      `${planToCharge} plan ${paymentPurpose === PAYMENT_PURPOSE_RENEWAL ? 'renewal' : 'subscription'} - M-Pesa payment`,
+        description:      `${planToCharge} plan ${paymentPurpose === PAYMENT_PURPOSE_RENEWAL ? 'renewal' : 'subscription'} (${input.interval}) - M-Pesa payment`,
         invoiceNumber,
         subscriptionPlan: planToCharge,
-        billingPeriodStart: billingPeriodStart ?? undefined,
-        billingPeriodEnd: billingPeriodEnd ?? undefined,
+        billingPeriodStart,
+        billingPeriodEnd,
         metadata: {
           phone_number: phoneNumber,
           plan: planToCharge,
+          interval: input.interval,
+          catalogVersion: '2026-09-01',
           amountMinor: amountCents,
           amountKes,
           currency: 'KES',
-          billingPeriod: 'monthly',
+          billingPeriod: input.interval,
           paymentKind: paymentPurpose === PAYMENT_PURPOSE_RENEWAL ? 'renewal' : 'initial_purchase',
           paymentPurpose,
           renewalPaidThrough: paidThrough?.toISOString() ?? null,
-          renewalPeriodStart: billingPeriodStart?.toISOString() ?? null,
-          renewalPeriodEnd: billingPeriodEnd?.toISOString() ?? null,
+          renewalPeriodStart: billingPeriodStart.toISOString(),
+          renewalPeriodEnd: billingPeriodEnd.toISOString(),
         },
       });
 

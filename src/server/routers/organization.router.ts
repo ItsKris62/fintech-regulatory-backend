@@ -12,11 +12,16 @@ import {
   removeMemberSchema,
   getMembersSchema,
   deleteOrganizationSchema,
+  confirmCountrySchema,
+  updateEnabledJurisdictionsSchema,
+  scheduleCountryReplacementSchema,
+  cancelCountryReplacementSchema,
 } from '../schemas/organization.schema';
+import { countryReplacementService } from '@/services/country-replacement.service';
 import { userCache } from '@/lib/redis/cache.service';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
-import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
+import { PLAN_ENTITLEMENTS, getPlanEntitlements } from '@/config/entitlements.config';
 import { lastSeenKey, sessionStartKey } from '@/config/session';
 import { supabaseAdmin } from '@/lib/supabase';
 import { revokeAllUserTokens } from '@/utils/token-revocation';
@@ -1804,5 +1809,256 @@ export const organizationRouter = router({
           cause: error,
         });
       }
+    }),
+
+  /**
+   * Confirm organization country (for legacy accounts or initial setup)
+   *
+   * @protected
+   */
+  confirmCountry: protectedProcedure
+    .input(confirmCountrySchema)
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const organizationId =
+          ctx.user.role === 'ADMIN' && input.organizationId
+            ? input.organizationId
+            : ctx.user.organizationId;
+
+        if (!organizationId) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You are not a member of any organization',
+          });
+        }
+
+        await assertOrganizationManager(ctx, organizationId);
+
+        const org = await ctx.prisma.organization.findUnique({
+          where: { id: organizationId },
+          select: { id: true, plan: true, homeJurisdictionCode: true },
+        });
+
+        if (!org) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization not found' });
+        }
+
+        const entitlements = getPlanEntitlements(org.plan as any);
+        const maxCountries = entitlements.maxEnabledCountries ?? 1;
+
+        const enabledJurisdictions = Array.from(
+          new Set([input.homeJurisdictionCode, ...(input.enabledJurisdictions || [])]),
+        );
+
+        if (enabledJurisdictions.length > maxCountries) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Plan ${org.plan} allows at most ${maxCountries} enabled jurisdiction(s).`,
+          });
+        }
+
+        const updated = await ctx.prisma.organization.update({
+          where: { id: organizationId },
+          data: {
+            homeJurisdictionCode: input.homeJurisdictionCode,
+            enabledJurisdictions,
+            needsCountryConfirmation: false,
+            updatedAt: new Date(),
+          },
+        });
+
+        await userCache.delete(ctx.user.id).catch(() => {});
+        await redis.del(`sheriabot:orgmem:${ctx.user.id}:${organizationId}`).catch(() => {});
+
+        logger.info({
+          type: 'organization_country_confirmed',
+          userId: ctx.user.id,
+          organizationId,
+          homeJurisdictionCode: input.homeJurisdictionCode,
+          enabledJurisdictions,
+        });
+
+        return updated;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        logger.error({
+          type: 'organization_country_confirm_error',
+          userId: ctx.user.id,
+          error: error.message,
+        });
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to confirm country',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Update enabled jurisdictions within plan quota
+   *
+   * @protected
+   */
+  updateEnabledJurisdictions: protectedProcedure
+    .input(updateEnabledJurisdictionsSchema)
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const organizationId =
+          ctx.user.role === 'ADMIN' && input.organizationId
+            ? input.organizationId
+            : ctx.user.organizationId;
+
+        if (!organizationId) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You are not a member of any organization',
+          });
+        }
+
+        await assertOrganizationManager(ctx, organizationId);
+
+        const org = await ctx.prisma.organization.findUnique({
+          where: { id: organizationId },
+          select: { id: true, plan: true, homeJurisdictionCode: true },
+        });
+
+        if (!org) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization not found' });
+        }
+
+        const entitlements = getPlanEntitlements(org.plan as any);
+        const maxCountries = entitlements.maxEnabledCountries ?? 1;
+
+        const baseHome = org.homeJurisdictionCode ? [org.homeJurisdictionCode] : [];
+        const enabledJurisdictions: string[] = Array.from(
+          new Set([...baseHome, ...input.enabledJurisdictions]),
+        );
+
+        if (enabledJurisdictions.length > maxCountries) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Plan ${org.plan} allows at most ${maxCountries} enabled jurisdiction(s).`,
+          });
+        }
+
+        const updated = await ctx.prisma.organization.update({
+          where: { id: organizationId },
+          data: {
+            enabledJurisdictions,
+            updatedAt: new Date(),
+          },
+        });
+
+        await userCache.delete(ctx.user.id).catch(() => {});
+
+        logger.info({
+          type: 'organization_enabled_jurisdictions_updated',
+          userId: ctx.user.id,
+          organizationId,
+          enabledJurisdictions,
+        });
+
+        return updated;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        logger.error({
+          type: 'organization_update_jurisdictions_error',
+          userId: ctx.user.id,
+          error: error.message,
+        });
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update enabled jurisdictions',
+          cause: error,
+        });
+      }
+    }),
+
+  /**
+   * Schedule secondary country replacement for the next monthly entitlement renewal boundary.
+   *
+   * @protected
+   */
+  scheduleCountryReplacement: protectedProcedure
+    .input(scheduleCountryReplacementSchema)
+    .mutation(async ({ input, ctx }) => {
+      const organizationId =
+        ctx.user.role === 'ADMIN' && input.organizationId
+          ? input.organizationId
+          : ctx.user.organizationId;
+
+      if (!organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You are not a member of any organization',
+        });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      return countryReplacementService.scheduleReplacement({
+        organizationId,
+        userId: ctx.user.id,
+        fromJurisdiction: input.fromJurisdiction,
+        toJurisdiction: input.toJurisdiction,
+        ipAddress: ctx.req.ip,
+        userAgent: ctx.req.headers['user-agent'],
+      });
+    }),
+
+  /**
+   * Get any pending scheduled secondary country replacement for the organization.
+   *
+   * @protected
+   */
+  getScheduledCountryReplacement: protectedProcedure
+    .input(z.object({ organizationId: z.string().optional() }))
+    .query(async ({ input, ctx }) => {
+      const organizationId =
+        ctx.user.role === 'ADMIN' && input.organizationId
+          ? input.organizationId
+          : ctx.user.organizationId;
+
+      if (!organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You are not a member of any organization',
+        });
+      }
+
+      await assertActiveOrganizationMember(ctx, organizationId);
+
+      const scheduled = await countryReplacementService.getScheduledReplacement(organizationId);
+      return { scheduled };
+    }),
+
+  /**
+   * Cancel a pending scheduled secondary country replacement.
+   *
+   * @protected
+   */
+  cancelCountryReplacement: protectedProcedure
+    .input(cancelCountryReplacementSchema)
+    .mutation(async ({ input, ctx }) => {
+      const organizationId =
+        ctx.user.role === 'ADMIN' && input.organizationId
+          ? input.organizationId
+          : ctx.user.organizationId;
+
+      if (!organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You are not a member of any organization',
+        });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      const success = await countryReplacementService.cancelScheduledReplacement(
+        organizationId,
+        ctx.user.id,
+      );
+
+      return { success, message: success ? 'Scheduled replacement cancelled' : 'No active scheduled replacement found' };
     }),
 });

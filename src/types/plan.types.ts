@@ -1,11 +1,28 @@
-import { SubscriptionPlan } from '@prisma/client';
+import { SubscriptionPlan as PrismaSubscriptionPlan } from '@prisma/client';
+
+// ============================================================================
+// SubscriptionPlan -- Unified application and database plan identifiers
+// ============================================================================
+
+export const SubscriptionPlan = {
+  FREE: 'FREE',
+  STARTER: 'STARTER',
+  GROWTH: 'GROWTH',
+  BUSINESS: 'BUSINESS',
+  ENTERPRISE: 'ENTERPRISE',
+  REGULATOR: 'REGULATOR',
+  STARTUP: 'STARTUP',
+} as const;
+
+export type SubscriptionPlan = (typeof SubscriptionPlan)[keyof typeof SubscriptionPlan] | PrismaSubscriptionPlan;
+export type CanonicalPlan = 'FREE' | 'STARTER' | 'GROWTH' | 'BUSINESS' | 'ENTERPRISE';
 
 // ============================================================================
 // EffectivePlan -- TypeScript-only union, never persisted to the database.
 // FREE_TRIAL is not a Prisma enum value; it exists only at the application layer.
 // ============================================================================
 
-export type EffectivePlan = SubscriptionPlan | 'FREE_TRIAL';
+export type EffectivePlan = SubscriptionPlan | CanonicalPlan | 'FREE_TRIAL';
 
 export type EffectivePlanSource =
   | 'SUBSCRIPTION'

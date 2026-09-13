@@ -14,7 +14,6 @@ import { appConfig } from '@/config/app.config';
 import { planCtxCacheKey } from '@/modules/trial';
 import type { PaymentStatusResponse } from '@/modules/intasend/intasend.types';
 
-const MPESA_SUBSCRIPTION_DAYS = 30;
 const GRACE_PERIOD_DAYS = 7;
 const KES_MINOR_UNITS = 100;
 const PAYMENT_PURPOSE_INITIAL = 'INITIAL_PURCHASE';
@@ -26,9 +25,13 @@ const PLAN_LABELS: Record<string, string> = {
   ENTERPRISE: 'Enterprise',
 };
 
+import { computeSubscriptionCycle } from '@/utils/billing-dates';
+
 const purchasablePlans = new Set<SubscriptionPlan>([
-  SubscriptionPlan.STARTUP,
+  SubscriptionPlan.STARTER,
+  SubscriptionPlan.GROWTH,
   SubscriptionPlan.BUSINESS,
+  SubscriptionPlan.STARTUP,
 ]);
 
 type FinalizationSource = 'webhook' | 'polling' | 'reconciliation' | 'admin';
@@ -100,10 +103,6 @@ function parseProviderCurrency(status: PaymentStatusResponse): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
-}
-
 function latestDate(...dates: Array<Date | null | undefined>): Date | null {
   const valid = dates.filter((date): date is Date => date instanceof Date);
   if (valid.length === 0) return null;
@@ -134,12 +133,25 @@ function computeBillingPeriod(payment: {
   };
 }, now: Date): { periodStart: Date; periodEnd: Date; paymentPurpose: PaymentPurposeValue | null } {
   const paymentPurpose = resolvePaymentPurpose(payment);
+  const metadata = toRecord(payment.metadata);
+  const interval = (metadata['interval'] === 'yearly' || metadata['billingPeriod'] === 'yearly') ? 'yearly' : 'monthly';
   const paidThrough = latestDate(payment.org.subscriptionCycleEnd, payment.org.planEndDate);
-  const renewalStart = paidThrough && paidThrough > now ? paidThrough : now;
-  const defaultStart = paymentPurpose === PAYMENT_PURPOSE_RENEWAL ? renewalStart : now;
-  const periodStart = payment.billingPeriodStart ?? defaultStart;
-  const periodEnd = payment.billingPeriodEnd ?? addDays(periodStart, MPESA_SUBSCRIPTION_DAYS);
-  return { periodStart, periodEnd, paymentPurpose };
+
+  if (payment.billingPeriodStart && payment.billingPeriodEnd) {
+    return {
+      periodStart: payment.billingPeriodStart,
+      periodEnd: payment.billingPeriodEnd,
+      paymentPurpose,
+    };
+  }
+
+  const { billingPeriodStart, billingPeriodEnd } = computeSubscriptionCycle({
+    interval,
+    paidThrough: paymentPurpose === PAYMENT_PURPOSE_RENEWAL ? paidThrough : null,
+    now,
+  });
+
+  return { periodStart: billingPeriodStart, periodEnd: billingPeriodEnd, paymentPurpose };
 }
 
 function orgHasAppliedPlan(org: {
@@ -650,7 +662,7 @@ class IntaSendFinalizationService {
           data: {
             mpesaFailedRenewalAttempts: { increment: 1 },
             mpesaLastRenewalAttemptAt: now,
-            mpesaNextRenewalRetryAt: addDays(now, 1),
+            mpesaNextRenewalRetryAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
             ...(payment.org.subscriptionStatus === SubscriptionStatus.ACTIVE
               ? { subscriptionStatus: SubscriptionStatus.PAST_DUE }
               : {}),

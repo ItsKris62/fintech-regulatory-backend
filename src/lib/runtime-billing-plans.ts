@@ -10,7 +10,7 @@ import type {
   SubscriptionPlan,
 } from '@/modules/admin/admin.types';
 
-export const SELF_SERVE_BILLING_PLAN_IDS = ['STARTUP', 'BUSINESS'] as const satisfies readonly SelfServeBillingPlan[];
+export const SELF_SERVE_BILLING_PLAN_IDS = ['STARTER', 'GROWTH', 'BUSINESS', 'STARTUP'] as const satisfies readonly SelfServeBillingPlan[];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

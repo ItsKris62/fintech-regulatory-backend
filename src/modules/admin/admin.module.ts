@@ -119,12 +119,15 @@ import {
 const { CACHE_TTL } = ADMIN_CONSTANTS;
 
 const CURRENCY_MINOR_UNIT_SCALE = 100;
-const SUBSCRIPTION_PLANS: SubscriptionPlan[] = ['REGULATOR', 'STARTUP', 'BUSINESS', 'ENTERPRISE'];
+const SUBSCRIPTION_PLANS: SubscriptionPlan[] = ['FREE', 'STARTER', 'GROWTH', 'BUSINESS', 'ENTERPRISE', 'REGULATOR', 'STARTUP'];
 const ORG_TIER_ALIASES: Record<SubscriptionPlan, string[]> = {
-  REGULATOR: ['REGULATOR', 'regulator', 'starter', 'free'],
-  STARTUP: ['STARTUP', 'startup'],
-  BUSINESS: ['BUSINESS', 'business', 'professional', 'growth'],
+  FREE: ['FREE', 'free'],
+  STARTER: ['STARTER', 'starter'],
+  GROWTH: ['GROWTH', 'growth'],
+  BUSINESS: ['BUSINESS', 'business', 'professional'],
   ENTERPRISE: ['ENTERPRISE', 'enterprise', 'custom'],
+  REGULATOR: ['REGULATOR', 'regulator'],
+  STARTUP: ['STARTUP', 'startup'],
 };
 
 const FAILED_QUERY_STATUSES = ['failed', 'error', 'errored', 'FAILED', 'ERROR', 'ERRORED'];

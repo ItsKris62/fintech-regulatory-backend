@@ -20,11 +20,14 @@ export interface GapAnalysisTierLimits {
 }
 
 export const GAP_ANALYSIS_UPLOAD_LIMITS: Record<EffectivePlan, GapAnalysisTierLimits> = {
-  REGULATOR: { maxFileSizeMB: 0 },
-  FREE_TRIAL: { maxFileSizeMB: 10 },
-  STARTUP:    { maxFileSizeMB: 0 },
+  FREE:       { maxFileSizeMB: 0 },
+  STARTER:    { maxFileSizeMB: 10 },
+  GROWTH:     { maxFileSizeMB: 15 },
   BUSINESS:   { maxFileSizeMB: 20 },
   ENTERPRISE: { maxFileSizeMB: 20 },
+  REGULATOR:  { maxFileSizeMB: 0 },
+  STARTUP:    { maxFileSizeMB: 10 },
+  FREE_TRIAL: { maxFileSizeMB: 10 },
 };
 
 // ============================================================================

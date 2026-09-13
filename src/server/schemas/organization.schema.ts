@@ -12,17 +12,6 @@ export const homeJurisdictionCodeSchema = z.enum(AUDITED_JURISDICTIONS);
 
 /**
  * Create organization
- *
- * @example
- * {
- *   name: "FinTech Solutions Ltd",
- *   type: "STARTUP",
- *   registrationNumber: "PVT-123456",
- *   industry: "Financial Technology",
- *   contactEmail: "info@fintech.co.ke",
- *   contactPhone: "+254700123456",
- *   address: "Nairobi, Kenya"
- * }
  */
 export const createOrganizationSchema = z.object({
   name: z.string().min(2).max(200),
@@ -35,6 +24,7 @@ export const createOrganizationSchema = z.object({
   website: z.string().url().optional(),
   description: z.string().max(1000).optional(),
   homeJurisdictionCode: homeJurisdictionCodeSchema,
+  enabledJurisdictions: z.array(homeJurisdictionCodeSchema).optional(),
 });
 
 export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>;
@@ -57,6 +47,8 @@ export const updateOrganizationSchema = z.object({
   description: z.string().max(1000).optional(),
   homeJurisdictionCode: homeJurisdictionCodeSchema.optional(),
   homeJurisdictionReason: z.string().max(500).optional(),
+  enabledJurisdictions: z.array(homeJurisdictionCodeSchema).optional(),
+  needsCountryConfirmation: z.boolean().optional(),
 });
 
 export type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>;
@@ -140,9 +132,39 @@ export const updateOrganizationSettingsSchema = z.object({
   contactPhone: z.union([phoneSchema, z.literal('')]).optional(),
   homeJurisdictionCode: homeJurisdictionCodeSchema.optional(),
   homeJurisdictionReason: z.string().max(500).optional(),
+  enabledJurisdictions: z.array(homeJurisdictionCodeSchema).optional(),
 });
 
 export type UpdateOrganizationSettingsInput = z.infer<typeof updateOrganizationSettingsSchema>;
+
+export const confirmCountrySchema = z.object({
+  organizationId: z.string().optional(),
+  homeJurisdictionCode: homeJurisdictionCodeSchema,
+  enabledJurisdictions: z.array(homeJurisdictionCodeSchema).optional(),
+});
+
+export type ConfirmCountryInput = z.infer<typeof confirmCountrySchema>;
+
+export const updateEnabledJurisdictionsSchema = z.object({
+  organizationId: z.string().optional(),
+  enabledJurisdictions: z.array(homeJurisdictionCodeSchema),
+});
+
+export type UpdateEnabledJurisdictionsInput = z.infer<typeof updateEnabledJurisdictionsSchema>;
+
+export const scheduleCountryReplacementSchema = z.object({
+  organizationId: z.string().optional(),
+  fromJurisdiction: homeJurisdictionCodeSchema,
+  toJurisdiction: homeJurisdictionCodeSchema,
+});
+
+export type ScheduleCountryReplacementInput = z.infer<typeof scheduleCountryReplacementSchema>;
+
+export const cancelCountryReplacementSchema = z.object({
+  organizationId: z.string().optional(),
+});
+
+export type CancelCountryReplacementInput = z.infer<typeof cancelCountryReplacementSchema>;
 
 /**
  * Shared DTO for Organization Members

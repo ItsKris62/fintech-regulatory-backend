@@ -143,6 +143,30 @@ export const gapAnalysisRouter = router({
           });
         }
 
+        // Depth restrictions per tier:
+        // STARTER / REGULATOR: quick only
+        // STARTUP (Growth tier): quick and standard
+        // BUSINESS / ENTERPRISE: quick, standard, and deep
+        const planTier = (ctx.plan ?? 'REGULATOR').toUpperCase();
+        if ((planTier === 'STARTER' || planTier === 'REGULATOR') && input.analysisDepth !== 'quick') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: `The ${input.analysisDepth} analysis depth is not available on the ${planTier} plan. Starter tier permits 'quick' depth. Please upgrade to Growth or Business.`,
+          });
+        }
+        if (planTier === 'STARTUP' && input.analysisDepth === 'deep') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: `The deep analysis depth is not available on the Growth plan. Please upgrade to Business or Enterprise.`,
+          });
+        }
+
+        const analysisUnits = input.analysisDepth === 'deep' ? 5 : input.analysisDepth === 'standard' ? 2 : 1;
+        const usagePatch = await resolveUsageLimit(ctx, BillingMetric.GAP_ANALYSES, {
+          deferIncrement: true,
+          units: analysisUnits,
+        });
+
         // orgId is always session-derived -- never client-supplied (IDOR closed)
         const orgId   = ctx.orgMembership!.organizationId;
         const userId  = ctx.user!.id;
@@ -167,7 +191,7 @@ export const gapAnalysisRouter = router({
           if (error instanceof JurisdictionAuthorizationError) throw toTrpcJurisdictionAuthorizationError(error);
           throw error;
         }
-        const usagePatch = await resolveUsageLimit(ctx, BillingMetric.GAP_ANALYSES, { deferIncrement: true });
+
         const benchmarkDocumentIds = [...new Set(input.benchmarkDocumentIds ?? [])];
 
         // Idempotency: v2 key scoped to submitting user, preventing cross-tenant

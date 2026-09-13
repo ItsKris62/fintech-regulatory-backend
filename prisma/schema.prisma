@@ -181,6 +181,8 @@ model Organization {
   planEndDate             DateTime?
   maxSeats                Int                @default(1)
   homeJurisdictionCode    String?
+  enabledJurisdictions    String[]           @default([])
+  needsCountryConfirmation Boolean           @default(false)
   stripeCustomerId        String?            @unique
   stripeSubId             String?            @unique
   customLimits            Json?
@@ -1537,10 +1539,14 @@ enum SubscriptionStatus {
 }
 
 enum SubscriptionPlan {
-  REGULATOR
-  STARTUP
+  FREE
+  STARTER
+  GROWTH
   BUSINESS
   ENTERPRISE
+  // Legacy / compatibility values
+  REGULATOR
+  STARTUP
 }
 
 enum CustomFrameworkStatus {

@@ -90,14 +90,37 @@ describe('resolveJurisdictionEntitlement', () => {
     }
   });
 
-  it('allows an existing multi-country entitlement to request Nigeria', async () => {
+  it('allows an existing multi-country entitlement to request Nigeria on Business plan with NG enabled', async () => {
+    const prismaWithEnabled = {
+      organization: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'org-1',
+          homeJurisdictionCode: 'KE',
+          enabledJurisdictions: ['KE', 'NG'],
+          needsCountryConfirmation: false,
+        }),
+      },
+    } as any;
+
+    await expect(resolveJurisdictionEntitlement({
+      prisma: prismaWithEnabled,
+      organizationId: 'org-1',
+      effectivePlan: 'BUSINESS',
+      requestedMode: 'SINGLE',
+      requestedJurisdictions: ['NG'],
+    })).resolves.toMatchObject({ requestedJurisdictions: ['NG'] });
+  });
+
+  it('rejects foreign jurisdiction query for STARTUP/STARTER plan', async () => {
     await expect(resolveJurisdictionEntitlement({
       prisma: prismaForHome('KE'),
       organizationId: 'org-1',
       effectivePlan: 'STARTUP',
       requestedMode: 'SINGLE',
       requestedJurisdictions: ['NG'],
-    })).resolves.toMatchObject({ requestedJurisdictions: ['NG'] });
+    })).rejects.toMatchObject({
+      code: JURISDICTION_AUTH_ERROR.JURISDICTION_NOT_ENTITLED,
+    });
   });
 
   it('rejects malformed SINGLE and COMPARE requests before downstream calls', async () => {

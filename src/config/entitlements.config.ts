@@ -1,6 +1,5 @@
-import { SubscriptionPlan } from '@prisma/client';
 import { VAULT_MIME_TYPES } from '@/lib/storage/mime';
-import type { EffectivePlan, PilotEntitlementProfile } from '@/types/plan.types';
+import { SubscriptionPlan, type EffectivePlan, type PilotEntitlementProfile } from '@/types/plan.types';
 
 // ============================================================================
 // Value shape types
@@ -82,7 +81,7 @@ export interface PlanEntitlementConfig {
   regulatoryDashboard: boolean;
   regulatoryAlerts: boolean;
 
-  /** Rich alert entitlements  history window, email frequency, filters */
+  /** Rich alert entitlements -- history window, email frequency, filters */
   alerts?: AlertEntitlement;
 
   /** Compliance Calendar -- create/manage org-scoped deadline events */
@@ -99,6 +98,7 @@ export interface PlanEntitlementConfig {
   /** Plan-specific MIME types permitted for vault uploads */
   vaultAllowedMimeTypes: readonly string[];
   maxSeats: number; // -1 = unlimited
+  maxEnabledCountries: number;
   supportTier: SupportTier;
   analytics: AnalyticsTier;
   knowledgeBaseAccess: KnowledgeBaseAccess;
@@ -126,15 +126,14 @@ export type PilotEntitlementProfiles = Record<PilotEntitlementProfile, PlanEntit
 
 export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   /**
-   * REGULATOR -- Free tier for CBK/CMA/CA officials.
-   * Read-only knowledge base, limited queries, and a tightly capped checklist
-   * allowance for evaluation/audit history.
+   * FREE -- 1 seat, KES 0.
+   * Bounded evaluation access within home country.
    */
-  REGULATOR: {
-    complianceQueries:     { limit: 50,  period: 'month' },
-    checklistGenerations:  { limit: 1,   period: 'month' }, // resets monthly; generated history is retained
+  FREE: {
+    complianceQueries:     { limit: 25,  period: 'month' },
+    checklistGenerations:  { limit: 1,   period: 'month' },
     apiAccess:             false,
-    gapAnalysis:           { limit: 0,  period: 'month' }, // not available on free tier
+    gapAnalysis:           { limit: 0,   period: 'month' },
     benchmarkDocuments:    false,
     policyGeneration:      false,
     customFrameworks:      false,
@@ -142,14 +141,15 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     teamCollaboration:     false,
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
-    alerts:                { historyDays: -1, emailFrequency: 'REALTIME', customFilters: true, aiSummary: true },
+    alerts:                { historyDays: 7, emailFrequency: null, customFilters: false, aiSummary: false },
     complianceCalendar:    false,
     licenseManagement:     false,
-    documentRepository:    { limitMB: 0 }, // no document repo
-    vaultDocumentMaxBytes:  0,
-    vaultTotalQuotaBytes:   0,
-    vaultAllowedMimeTypes:  [],
+    documentRepository:    { limitMB: 100 },
+    vaultDocumentMaxBytes:  5 * 1024 * 1024,
+    vaultTotalQuotaBytes:   100 * 1024 * 1024,
+    vaultAllowedMimeTypes:  VAULT_BASE_MIME_TYPES,
     maxSeats:              1,
+    maxEnabledCountries:   1,
     supportTier:           'community',
     analytics:             'none',
     knowledgeBaseAccess:   'read-only',
@@ -157,15 +157,15 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   },
 
   /**
-   * STARTUP -- KES 4,999/month.
-   * Unlimited queries, 5 checklists/month, 1 GB storage.
-   * Gap analysis / API / custom integrations greyed out (upsell to Business).
+   * STARTER -- 1 seat, KES 7,500/month (KES 76,500/year).
+   * Cited queries, knowledge base, regulatory alerts, calendar, checklists,
+   * licenses, quick gap analysis, single home jurisdiction.
    */
-  STARTUP: {
-    complianceQueries:     { limit: -1, period: 'month' }, // unlimited
-    checklistGenerations:  { limit: 5,  period: 'month' },
+  STARTER: {
+    complianceQueries:     { limit: 100, period: 'month' },
+    checklistGenerations:  { limit: 5,   period: 'month' },
     apiAccess:             false,
-    gapAnalysis:           { limit: 0,  period: 'month' }, // blocked -- upsell to Business tier
+    gapAnalysis:           { limit: 2,   period: 'month' }, // Quick analysis
     benchmarkDocuments:    false,
     policyGeneration:      false,
     customFrameworks:      false,
@@ -174,13 +174,14 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     regulatoryDashboard:   true,
     regulatoryAlerts:      true,
     alerts:                { historyDays: 90, emailFrequency: 'WEEKLY', customFilters: false, aiSummary: false },
-    complianceCalendar:    false,
-    licenseManagement:     false,
+    complianceCalendar:    true,
+    licenseManagement:     true,
     documentRepository:    { limitMB: 1024 }, // 1 GB
     vaultDocumentMaxBytes:  10 * 1024 * 1024,
     vaultTotalQuotaBytes:   1024 * 1024 * 1024,
     vaultAllowedMimeTypes:  VAULT_STARTUP_MIME_TYPES,
     maxSeats:              1,
+    maxEnabledCountries:   1,
     supportTier:           'email-48hr',
     analytics:             'basic',
     knowledgeBaseAccess:   'full',
@@ -188,15 +189,46 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   },
 
   /**
-   * BUSINESS -- KES 44,999/month. "Most Popular".
-   * Unlimited queries + checklists, gap analysis, API (10k calls/month),
-   * 6 seats, 10 GB storage.
+   * GROWTH -- 2 seats, KES 15,000/month (KES 153,000/year).
+   * Quick & Standard gap analysis, two-person collaboration, 3 GB storage, single home jurisdiction.
+   */
+  GROWTH: {
+    complianceQueries:     { limit: 250, period: 'month' },
+    checklistGenerations:  { limit: 15,  period: 'month' },
+    apiAccess:             false,
+    gapAnalysis:           { limit: 8,   period: 'month' }, // Quick + Standard
+    benchmarkDocuments:    false,
+    policyGeneration:      false,
+    customFrameworks:      false,
+    customIntegrations:    false,
+    teamCollaboration:     true,
+    regulatoryDashboard:   true,
+    regulatoryAlerts:      true,
+    alerts:                { historyDays: 180, emailFrequency: 'DAILY', customFilters: true, aiSummary: true },
+    complianceCalendar:    true,
+    licenseManagement:     true,
+    documentRepository:    { limitMB: 3072 }, // 3 GB
+    vaultDocumentMaxBytes:  15 * 1024 * 1024,
+    vaultTotalQuotaBytes:   3072 * 1024 * 1024,
+    vaultAllowedMimeTypes:  VAULT_STARTUP_MIME_TYPES,
+    maxSeats:              2,
+    maxEnabledCountries:   1,
+    supportTier:           'priority-24hr',
+    analytics:             'advanced',
+    knowledgeBaseAccess:   'full',
+    agenticComplexityLevel: 'simple',
+  },
+
+  /**
+   * BUSINESS -- 6 seats, KES 35,000/month (KES 357,000/year).
+   * All analysis depths, multi-country access and comparison within 2 enabled countries,
+   * 10 GB storage, API access (10k calls/month).
    */
   BUSINESS: {
-    complianceQueries:     { limit: -1,    period: 'month' },
+    complianceQueries:     { limit: 600,   period: 'month' },
     checklistGenerations:  { limit: -1,    period: 'month' },
     apiAccess:             { limit: 10000, period: 'month' },
-    gapAnalysis:           { limit: 20,   period: 'month' }, // 20 analyses/month -- full framework access
+    gapAnalysis:           { limit: 25,    period: 'month' }, // All analysis depths
     benchmarkDocuments:    true,
     policyGeneration:      false, // Enterprise only
     customFrameworks:      false, // Enterprise only
@@ -212,6 +244,7 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     vaultTotalQuotaBytes:   10240 * 1024 * 1024,
     vaultAllowedMimeTypes:  VAULT_BUSINESS_MIME_TYPES,
     maxSeats:              6,
+    maxEnabledCountries:   2,
     supportTier:           'priority-24hr',
     analytics:             'advanced',
     knowledgeBaseAccess:   'full',
@@ -219,17 +252,17 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   },
 
   /**
-   * ENTERPRISE -- Custom pricing.
-   * Everything in Business plus AI Policy Generator, unlimited API,
-   * custom integrations, SSO, on-premise option, dedicated support.
+   * ENTERPRISE -- 12 seats, starting from KES 75,000/month (KES 765,000/year).
+   * All analysis depths, policy generation/refinement, custom frameworks, up to 4 enabled countries,
+   * 25 GB storage, dedicated support, custom integrations, SSO.
    */
   ENTERPRISE: {
-    complianceQueries:     { limit: -1, period: 'month' },
-    checklistGenerations:  { limit: -1, period: 'month' },
-    apiAccess:             { limit: -1, period: 'month' }, // unlimited
-    gapAnalysis:           { limit: -1, period: 'month' }, // unlimited
+    complianceQueries:     { limit: 1200, period: 'month' },
+    checklistGenerations:  { limit: -1,   period: 'month' },
+    apiAccess:             { limit: -1,   period: 'month' }, // unlimited
+    gapAnalysis:           { limit: 60,   period: 'month' }, // unlimited/60 baseline
     benchmarkDocuments:    true,
-    policyGeneration:      true,
+    policyGeneration:      true, // 5 baseline policy credits
     customFrameworks:      true,
     customIntegrations:    true,
     teamCollaboration:     true,
@@ -238,11 +271,12 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     alerts:                { historyDays: -1, emailFrequency: 'REALTIME', customFilters: true, aiSummary: true },
     complianceCalendar:    true,
     licenseManagement:     true,
-    documentRepository:    { limitMB: -1 }, // unlimited
+    documentRepository:    { limitMB: 25600 }, // 25 GB baseline
     vaultDocumentMaxBytes:  50 * 1024 * 1024,
-    vaultTotalQuotaBytes:   -1,
+    vaultTotalQuotaBytes:   25600 * 1024 * 1024,
     vaultAllowedMimeTypes:  VAULT_ENTERPRISE_MIME_TYPES,
-    maxSeats:              -1,              // unlimited
+    maxSeats:              12,
+    maxEnabledCountries:   4,
     supportTier:           'dedicated',
     analytics:             'advanced',
     knowledgeBaseAccess:   'full',
@@ -255,18 +289,73 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
   },
 
   /**
-   * FREE_TRIAL -- 7-day one-time trial. TypeScript-only; never stored in the DB.
-   * Mirrors STARTUP entitlements. Per-trial-lifetime usage caps are enforced
-   * separately via the freeTrialUsage JSON column and FREE_TRIAL_LIMITS.
-   * The quota limit values here are set to -1 (unlimited) because the real cap
-   * enforcement happens through FREE_TRIAL_LIMITS in trial.service.ts, not through
-   * the standard Redis monthly quota path.
+   * REGULATOR (Legacy Compatibility) -- Maps to evaluation/free tier.
+   */
+  REGULATOR: {
+    complianceQueries:     { limit: 50,  period: 'month' },
+    checklistGenerations:  { limit: 1,   period: 'month' },
+    apiAccess:             false,
+    gapAnalysis:           { limit: 0,   period: 'month' },
+    benchmarkDocuments:    false,
+    policyGeneration:      false,
+    customFrameworks:      false,
+    customIntegrations:    false,
+    teamCollaboration:     false,
+    regulatoryDashboard:   true,
+    regulatoryAlerts:      true,
+    alerts:                { historyDays: -1, emailFrequency: 'REALTIME', customFilters: true, aiSummary: true },
+    complianceCalendar:    false,
+    licenseManagement:     false,
+    documentRepository:    { limitMB: 0 },
+    vaultDocumentMaxBytes:  0,
+    vaultTotalQuotaBytes:   0,
+    vaultAllowedMimeTypes:  [],
+    maxSeats:              1,
+    maxEnabledCountries:   1,
+    supportTier:           'community',
+    analytics:             'none',
+    knowledgeBaseAccess:   'read-only',
+    agenticComplexityLevel: 'simple',
+  },
+
+  /**
+   * STARTUP (Legacy Compatibility) -- Maps to Starter tier defaults.
+   */
+  STARTUP: {
+    complianceQueries:     { limit: 100, period: 'month' },
+    checklistGenerations:  { limit: 5,   period: 'month' },
+    apiAccess:             false,
+    gapAnalysis:           { limit: 2,   period: 'month' },
+    benchmarkDocuments:    false,
+    policyGeneration:      false,
+    customFrameworks:      false,
+    customIntegrations:    false,
+    teamCollaboration:     false,
+    regulatoryDashboard:   true,
+    regulatoryAlerts:      true,
+    alerts:                { historyDays: 90, emailFrequency: 'WEEKLY', customFilters: false, aiSummary: false },
+    complianceCalendar:    true,
+    licenseManagement:     true,
+    documentRepository:    { limitMB: 1024 },
+    vaultDocumentMaxBytes:  10 * 1024 * 1024,
+    vaultTotalQuotaBytes:   1024 * 1024 * 1024,
+    vaultAllowedMimeTypes:  VAULT_STARTUP_MIME_TYPES,
+    maxSeats:              1,
+    maxEnabledCountries:   1,
+    supportTier:           'email-48hr',
+    analytics:             'basic',
+    knowledgeBaseAccess:   'full',
+    agenticComplexityLevel: 'simple',
+  },
+
+  /**
+   * FREE_TRIAL -- One-time trial (TypeScript-only).
    */
   FREE_TRIAL: {
-    complianceQueries:     { limit: -1, period: 'month' }, // cap enforced via FREE_TRIAL_LIMITS
-    checklistGenerations:  { limit: -1, period: 'month' }, // cap enforced via FREE_TRIAL_LIMITS
+    complianceQueries:     { limit: -1, period: 'month' },
+    checklistGenerations:  { limit: -1, period: 'month' },
     apiAccess:             false,
-    gapAnalysis:           { limit: -1, period: 'month' }, // cap enforced via FREE_TRIAL_LIMITS
+    gapAnalysis:           { limit: -1, period: 'month' },
     benchmarkDocuments:    false,
     policyGeneration:      false,
     customFrameworks:      false,
@@ -277,11 +366,12 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
     alerts:                { historyDays: 7, emailFrequency: null, customFilters: false, aiSummary: false },
     complianceCalendar:    false,
     licenseManagement:     false,
-    documentRepository:    { limitMB: 1024 }, // same as STARTUP -- 1 GB
+    documentRepository:    { limitMB: 100 },
     vaultDocumentMaxBytes:  5 * 1024 * 1024,
     vaultTotalQuotaBytes:   100 * 1024 * 1024,
     vaultAllowedMimeTypes:  VAULT_BASE_MIME_TYPES,
     maxSeats:              1,
+    maxEnabledCountries:   1,
     supportTier:           'email-48hr',
     analytics:             'basic',
     knowledgeBaseAccess:   'full',
@@ -315,6 +405,10 @@ export function resolvePilotEntitlementProfile(
   return value === 'PILOT_FULL_WITH_POLICY_GENERATION'
     ? 'PILOT_FULL_WITH_POLICY_GENERATION'
     : 'PILOT_FULL';
+}
+
+export function getPlanEntitlements(plan: EffectivePlan): PlanEntitlementConfig {
+  return PLAN_ENTITLEMENTS[plan] ?? PLAN_ENTITLEMENTS.FREE;
 }
 
 // Re-export SubscriptionPlan from Prisma so consumers only need one import

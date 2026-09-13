@@ -602,6 +602,7 @@ const AI_METRICS = new Set<BillingMetric>([
  */
 export interface UsageLimitOptions {
   deferIncrement?: boolean;
+  units?: number;
 }
 
 export interface UsageLimitPatch {
@@ -625,6 +626,7 @@ export async function resolveUsageLimit(
   }
   const user = ctx.user;
   const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
+  const units = opts?.units ?? 1;
 
   // -- FREE_TRIAL branch --------------------------------------------------
   // Trial users bypass the Redis monthly quota path entirely.
@@ -669,7 +671,7 @@ export async function resolveUsageLimit(
       // Atomic pre-handler consumption closes the check-then-increment race:
       // if a parallel request wins the final slot, this request is blocked
       // before the procedure handler runs.
-      const featureIncrement = await incrementTrialUsageAtomic(user.id, trialFeature, 1);
+      const featureIncrement = await incrementTrialUsageAtomic(user.id, trialFeature, units);
       if (!featureIncrement.allowed) {
         logger.warn({
           type:    'trial_limit_reached_atomic',
@@ -730,12 +732,13 @@ export async function resolveUsageLimit(
   const currentRaw = await redis.get<number>(usageKey);
   const current    = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw ?? 0);
 
-  if (current >= limit) {
+  if (current + units > limit) {
     logger.warn({
       type:    'usage_limit_reached',
       userId:  user.id,
       orgId:   scopeId,
       metric,
+      units,
       current,
       limit,
       period,
@@ -753,9 +756,13 @@ export async function resolveUsageLimit(
   // Increment logic -- either immediately or deferred.
   // -----------------------------------------------------------------
   const doIncrement = async (): Promise<void> => {
-    const newCount = await redis.incr(usageKey);
+    const newCount = units === 1 ? await redis.incr(usageKey) : await redis.incrby(usageKey, units);
     if (newCount > limit) {
-      await redis.decr(usageKey);
+      if (units === 1) {
+        await redis.decr(usageKey);
+      } else {
+        await redis.decrby(usageKey, units);
+      }
 
       logger.warn({
         type:    'usage_limit_reached_atomic',
@@ -776,13 +783,14 @@ export async function resolveUsageLimit(
     }
 
     // Set TTL only for monthly keys (lifetime keys never expire)
-    if (newCount === 1 && period === 'month') {
+    if (newCount <= units && period === 'month') {
       await redis.expire(usageKey, USAGE_TTL);
     }
     logger.debug({
       type:    'usage_incremented',
       orgId:   scopeId,
       metric,
+      units,
       current: newCount,
       limit,
       period,
@@ -801,7 +809,7 @@ export async function resolveUsageLimit(
   // Default (eager) path: increment now, before the handler runs.
   await doIncrement();
 
-  return { user, usageInfo: { metric, current: current + 1, limit } };
+  return { user, usageInfo: { metric, current: current + units, limit } };
 }
 
 export const checkUsageLimit = (

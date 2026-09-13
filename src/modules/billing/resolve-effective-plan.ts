@@ -527,14 +527,16 @@ export async function resolveEffectivePlan(input: {
     }
   }
 
-  let effectivePlan: EffectivePlan = SubscriptionPlan.REGULATOR;
+  let effectivePlan: EffectivePlan = orgPlan === SubscriptionPlan.REGULATOR ? SubscriptionPlan.REGULATOR : SubscriptionPlan.FREE;
   let trialState: TrialContextState | undefined;
   let pilotState: PilotContextState | null = null;
   let source: EffectivePlanSource = 'FALLBACK';
   let entitlementProfile: PilotEntitlementProfile | null = null;
 
+  const isFreeOrRegulator = orgPlan === SubscriptionPlan.REGULATOR || orgPlan === SubscriptionPlan.FREE;
+
   const hasPaidPlan =
-    orgPlan !== SubscriptionPlan.REGULATOR &&
+    !isFreeOrRegulator &&
     (subscriptionStatus === SubscriptionStatus.ACTIVE ||
      subscriptionStatus === SubscriptionStatus.TRIALING ||
      subscriptionStatus === SubscriptionStatus.PAST_DUE);
@@ -544,14 +546,14 @@ export async function resolveEffectivePlan(input: {
     gracePeriodEndsAt !== null &&
     new Date(gracePeriodEndsAt) > now;
 
-  if (!hasPaidPlan && !graceStillActive && orgPlan !== SubscriptionPlan.REGULATOR) {
+  if (!hasPaidPlan && !graceStillActive && !isFreeOrRegulator) {
     logger.warn({
       type: 'plan_downgrade',
       userId: input.userId,
       orgId: input.organizationId,
       orgPlan,
       subscriptionStatus,
-      effectivePlan: 'REGULATOR',
+      effectivePlan: 'FREE',
     });
   }
 

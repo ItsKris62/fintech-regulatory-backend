@@ -15,17 +15,23 @@ import type { PilotEntitlementProfile } from '@/types/plan.types';
 
 /** Ordered from least to most permissive (the paid upgrade path). */
 const PLAN_ORDER: SubscriptionPlan[] = [
-  SubscriptionPlan.REGULATOR,
-  SubscriptionPlan.STARTUP,
+  SubscriptionPlan.FREE,
+  SubscriptionPlan.STARTER,
+  SubscriptionPlan.GROWTH,
   SubscriptionPlan.BUSINESS,
   SubscriptionPlan.ENTERPRISE,
+  SubscriptionPlan.REGULATOR,
+  SubscriptionPlan.STARTUP,
 ];
 
 const PLAN_DISPLAY_NAMES: Record<EffectivePlan, string> = {
-  REGULATOR:  'Regulator',
-  STARTUP:    'Startup',
+  FREE:       'Free',
+  STARTER:    'Starter',
+  GROWTH:     'Growth',
   BUSINESS:   'Business',
   ENTERPRISE: 'Enterprise',
+  REGULATOR:  'Regulator',
+  STARTUP:    'Startup',
   FREE_TRIAL: 'Free Trial',
 };
 

@@ -942,6 +942,14 @@ export const policyRouter = router({
           });
         }
 
+        const currentVersion = policy.version ?? 1;
+        if (currentVersion >= 3) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Maximum refinement limit reached (up to 2 refinement rounds permitted per policy draft).',
+          });
+        }
+
         const usagePatch = await resolveUsageLimit(ctx, BillingMetric.POLICY_GENERATIONS, { deferIncrement: true });
 
         const result = await ctx.aiService.refinePolicy(
