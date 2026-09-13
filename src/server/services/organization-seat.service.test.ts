@@ -146,8 +146,8 @@ describe('organization seat usage', () => {
       'org_1',
     );
 
-    expect(usage.seatLimit).toBe(-1);
-    expect(usage.availableSeats).toBe(-1);
+    expect(usage.seatLimit).toBe(12);
+    expect(usage.availableSeats).toBe(0);
   });
 
   it('falls back to the paid plan seat limit when no active pilot access exists', async () => {

@@ -26,6 +26,7 @@ const PLAN_LABELS: Record<string, string> = {
 };
 
 import { computeSubscriptionCycle } from '@/utils/billing-dates';
+import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 
 const purchasablePlans = new Set<SubscriptionPlan>([
   SubscriptionPlan.STARTER,
@@ -200,7 +201,7 @@ export async function invalidateOrganizationPlanCaches(orgId: string): Promise<v
         select: { id: true },
       }),
       prisma.organizationMember.findMany({
-        where: { organizationId: orgId, status: 'ACTIVE' },
+        where: { organizationId: orgId },
         select: { userId: true },
       }),
     ]);
@@ -516,6 +517,37 @@ class IntaSendFinalizationService {
         where: { id: payment.id },
       });
 
+      const maxPlanSeats = PLAN_ENTITLEMENTS[purchasedPlan]?.maxSeats ?? 1;
+      const maxPlanCountries = PLAN_ENTITLEMENTS[purchasedPlan]?.maxEnabledCountries ?? 1;
+
+      // Handle retained jurisdiction selection if specified or over capacity
+      const currentOrg = tx.organization?.findUnique
+        ? await tx.organization.findUnique({
+            where: { id: payment.orgId },
+            select: {
+              homeJurisdictionCode: true,
+              enabledJurisdictions: true,
+            },
+          })
+        : null;
+
+      let nextEnabledJurisdictions = currentOrg?.enabledJurisdictions ?? [];
+      const retainedJurisdictionsRaw = metadata['retainedJurisdictionCodes'];
+      if (Array.isArray(retainedJurisdictionsRaw) && retainedJurisdictionsRaw.length > 0) {
+        const home = currentOrg?.homeJurisdictionCode;
+        const normalized = Array.from(new Set([
+          ...(home ? [home] : []),
+          ...retainedJurisdictionsRaw.filter((j): j is string => typeof j === 'string'),
+        ])).slice(0, maxPlanCountries);
+        nextEnabledJurisdictions = normalized;
+      } else if (nextEnabledJurisdictions.length > maxPlanCountries) {
+        const home = currentOrg?.homeJurisdictionCode;
+        nextEnabledJurisdictions = Array.from(new Set([
+          ...(home ? [home] : []),
+          ...nextEnabledJurisdictions,
+        ])).slice(0, maxPlanCountries);
+      }
+
       await tx.organization.update({
         where: { id: payment.orgId },
         data: {
@@ -525,6 +557,8 @@ class IntaSendFinalizationService {
           preferredPaymentMethod: PaymentProvider.MPESA,
           planStartDate: periodStart,
           planEndDate: periodEnd,
+          maxSeats: maxPlanSeats,
+          enabledJurisdictions: nextEnabledJurisdictions,
           mpesaNextPaymentDueDate: periodEnd,
           subscriptionCycleEnd: periodEnd,
           mpesaFailedRenewalAttempts: 0,
@@ -536,6 +570,86 @@ class IntaSendFinalizationService {
           subscriptionEndsAt: null,
         },
       });
+
+      // Handle seat constraints non-destructively (keep owner, suspend excess members)
+      const activeMembers = tx.organizationMember?.findMany
+        ? await tx.organizationMember.findMany({
+            where: { organizationId: payment.orgId, status: 'ACTIVE' },
+            select: { id: true, userId: true, role: true },
+            orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
+          })
+        : [];
+
+      if (maxPlanSeats > 0 && activeMembers.length > maxPlanSeats) {
+        const retainedUserIds = Array.isArray(metadata['retainedMemberUserIds'])
+          ? (metadata['retainedMemberUserIds'] as string[])
+          : [];
+
+        // Owner is always retained
+        const ownerMember = activeMembers.find((m) => m.role === 'OWNER');
+        const candidateUserIds = new Set<string>([
+          ...(ownerMember ? [ownerMember.userId] : []),
+          ...retainedUserIds,
+        ]);
+
+        let keptCount = 0;
+        for (const member of activeMembers) {
+          if (member.role === 'OWNER' || (candidateUserIds.has(member.userId) && keptCount < maxPlanSeats)) {
+            keptCount++;
+          } else if (keptCount < maxPlanSeats) {
+            keptCount++;
+          } else {
+            // Non-destructively set excluded member to REMOVED state so they do not consume seats while preserving contributions & history
+            if (tx.organizationMember?.update) {
+              await tx.organizationMember.update({
+                where: { id: member.id },
+                data: { status: 'REMOVED' },
+              });
+            }
+          }
+        }
+      }
+
+      // Revoke excess pending invitations exceeding available seats
+      const currentActiveCount = tx.organizationMember?.count
+        ? await tx.organizationMember.count({
+            where: { organizationId: payment.orgId, status: { in: ['ACTIVE', 'SUSPENDED'] } },
+          })
+        : 0;
+      const remainingSeats = maxPlanSeats === -1 ? 999 : Math.max(0, maxPlanSeats - currentActiveCount);
+
+      if (remainingSeats === 0 && tx.invitation?.updateMany) {
+        await tx.invitation.updateMany({
+          where: { organizationId: payment.orgId, used: false, revokedAt: null },
+          data: { revokedAt: now, revokedBy: input.actorUserId ?? 'system_conversion' },
+        });
+      }
+
+      // Mark pilot access as converted so it never overrides the paid plan
+      if ((tx as any).pilotAccess?.updateMany) {
+        await (tx as any).pilotAccess.updateMany({
+          where: { organizationId: payment.orgId, status: 'ACTIVE' },
+          data: {
+            status: 'CONVERTED',
+            convertedAt: now,
+            convertedPlan: purchasedPlan,
+            metadata: {
+              source: 'intasend.finalizePayment',
+              paymentId: payment.id,
+            },
+          },
+        }).catch(() => {});
+      }
+
+      if (tx.user?.updateMany) {
+        await tx.user.updateMany({
+          where: { organizationId: payment.orgId, isPilot: true },
+          data: {
+            pilotAccessStatus: 'CONVERTED',
+            pilotConvertedAt: now,
+          } as any,
+        }).catch(() => {});
+      }
 
       await tx.auditLog.create({
         data: {

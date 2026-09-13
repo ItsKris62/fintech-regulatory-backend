@@ -322,21 +322,41 @@ export async function resolveEffectivePlan(input: {
             subscriptionCycleEnd: true,
           },
         }),
-        (input.prisma as any).pilotAccess.findFirst({
-          where: {
-            userId: input.userId,
-            organizationId: input.organizationId,
-            status: 'ACTIVE',
-          },
-          orderBy: { createdAt: 'desc' },
-          select: {
-            id: true,
-            status: true,
-            entitlementProfile: true,
-            expiresAt: true,
-            extensionCount: true,
-          },
-        }).catch(() => null),
+        (async () => {
+          const direct = await (input.prisma as any).pilotAccess.findFirst({
+            where: {
+              userId: input.userId,
+              organizationId: input.organizationId,
+              status: 'ACTIVE',
+            },
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id: true,
+              userId: true,
+              status: true,
+              entitlementProfile: true,
+              expiresAt: true,
+              extensionCount: true,
+            },
+          }).catch(() => null);
+          if (direct) return direct;
+
+          return (input.prisma as any).pilotAccess.findFirst({
+            where: {
+              organizationId: input.organizationId,
+              status: 'ACTIVE',
+            },
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id: true,
+              userId: true,
+              status: true,
+              entitlementProfile: true,
+              expiresAt: true,
+              extensionCount: true,
+            },
+          }).catch(() => null);
+        })(),
       ]);
 
       orgPlan = org?.plan ?? SubscriptionPlan.REGULATOR;

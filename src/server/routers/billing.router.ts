@@ -624,6 +624,167 @@ export const billingRouter = router({
     }),
 
   /**
+   * Compare active pilot/plan access against a target paid plan before checkout.
+   * Shows seats, countries, document vault storage, monthly allowances, feature differences,
+   * annual discount, and any capacity overages requiring member/country selection.
+   */
+  getPlanConversionPreview: billingAdminProcedure
+    .use(withPlanContext)
+    .input(
+      z.object({
+        plan: z.nativeEnum(SubscriptionPlan),
+        interval: z.enum(['monthly', 'yearly']).default('monthly'),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const orgId = ctx.orgMembership!.organizationId;
+      const targetPlan = input.plan;
+
+      const [org, runtimePlan, activeMembers, pendingInvitesCount, docAgg] = await Promise.all([
+        prisma.organization.findUnique({
+          where: { id: orgId },
+          select: {
+            id: true,
+            name: true,
+            plan: true,
+            homeJurisdictionCode: true,
+            enabledJurisdictions: true,
+            maxSeats: true,
+          },
+        }),
+        getRuntimePlan(targetPlan),
+        prisma.organizationMember.findMany({
+          where: { organizationId: orgId, status: 'ACTIVE' },
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                fullName: true,
+              },
+            },
+          },
+          orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
+        }),
+        prisma.invitation.count({
+          where: { organizationId: orgId, used: false, revokedAt: null },
+        }),
+        prisma.vaultDocument.aggregate({
+          where: { organizationId: orgId, isArchived: false, deletedAt: null },
+          _sum: { fileSize: true },
+          _count: { id: true },
+        }),
+      ]);
+
+      if (!org) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization not found.' });
+      }
+
+      const currentEntitlements = ctx.entitlements ?? PLAN_ENTITLEMENTS[ctx.plan ?? org.plan];
+      const targetEntitlements = PLAN_ENTITLEMENTS[targetPlan];
+
+      const currentDocBytes = docAgg._sum.fileSize ?? 0;
+      const currentDocStorageMb = Math.round((currentDocBytes / (1024 * 1024)) * 100) / 100;
+      const currentDocCount = docAgg._count.id ?? 0;
+
+      const currentSeatsUsed = activeMembers.length;
+      const currentSeatsLimit = currentEntitlements.maxSeats;
+      const targetSeatsLimit = targetEntitlements.maxSeats;
+
+      const currentEnabledCountries = org.enabledJurisdictions.length > 0 
+        ? org.enabledJurisdictions 
+        : [org.homeJurisdictionCode || 'KE'];
+      const targetCountriesLimit = targetEntitlements.maxEnabledCountries;
+
+      const targetDocStorageLimitMb = targetEntitlements.documentRepository.limitMB;
+
+      const isOverSeatCapacity = targetSeatsLimit > 0 && currentSeatsUsed > targetSeatsLimit;
+      const excessSeats = isOverSeatCapacity ? currentSeatsUsed - targetSeatsLimit : 0;
+
+      const isOverCountryCapacity = currentEnabledCountries.length > targetCountriesLimit;
+      const excessCountries = isOverCountryCapacity ? currentEnabledCountries.length - targetCountriesLimit : 0;
+
+      const isOverStorageCapacity = currentDocStorageMb > targetDocStorageLimitMb;
+
+      const monthlyPrice = runtimePlan.price.monthly ?? 0;
+      const yearlyPrice = runtimePlan.price.yearly ?? (monthlyPrice * 12 * 0.85);
+      const effectivePrice = resolvePlanPriceForInterval(runtimePlan, input.interval) ?? 0;
+      const annualDiscountPercent = 15;
+
+      return {
+        organization: {
+          id: org.id,
+          name: org.name,
+          homeJurisdictionCode: org.homeJurisdictionCode || 'KE',
+        },
+        current: {
+          plan: ctx.plan ?? org.plan,
+          isPilot: ctx.pilotState ? true : false,
+          pilotProfile: ctx.pilotState?.entitlementProfile ?? null,
+          seatsUsed: currentSeatsUsed,
+          seatsLimit: currentSeatsLimit,
+          enabledCountries: currentEnabledCountries,
+          docStorageMb: currentDocStorageMb,
+          docCount: currentDocCount,
+          pendingInvitesCount,
+          entitlements: {
+            policyGeneration: currentEntitlements.policyGeneration,
+            customFrameworks: currentEntitlements.customFrameworks,
+            complianceQueriesLimit: currentEntitlements.complianceQueries.limit,
+            checklistGenerationsLimit: currentEntitlements.checklistGenerations.limit,
+            teamCollaboration: currentEntitlements.teamCollaboration,
+          },
+        },
+        target: {
+          plan: targetPlan,
+          interval: input.interval,
+          price: {
+            monthly: monthlyPrice,
+            yearly: yearlyPrice,
+            effective: effectivePrice,
+            currency: 'KES' as const,
+            annualDiscountPercent,
+          },
+          seatsLimit: targetSeatsLimit,
+          countriesLimit: targetCountriesLimit,
+          docStorageLimitMb: targetDocStorageLimitMb,
+          entitlements: {
+            policyGeneration: targetEntitlements.policyGeneration,
+            customFrameworks: targetEntitlements.customFrameworks,
+            complianceQueriesLimit: targetEntitlements.complianceQueries.limit,
+            checklistGenerationsLimit: targetEntitlements.checklistGenerations.limit,
+            teamCollaboration: targetEntitlements.teamCollaboration,
+          },
+        },
+        comparison: {
+          isOverSeatCapacity,
+          excessSeats,
+          isOverCountryCapacity,
+          excessCountries,
+          isOverStorageCapacity,
+          featuresRetained: {
+            policyGeneration: targetEntitlements.policyGeneration,
+            customFrameworks: targetEntitlements.customFrameworks,
+            teamCollaboration: targetEntitlements.teamCollaboration,
+          },
+          featuresRestricted: {
+            policyGeneration: !targetEntitlements.policyGeneration && !!currentEntitlements.policyGeneration,
+            customFrameworks: !targetEntitlements.customFrameworks && !!currentEntitlements.customFrameworks,
+            teamCollaboration: !targetEntitlements.teamCollaboration && !!currentEntitlements.teamCollaboration,
+          },
+        },
+        activeMembers: activeMembers.map((m: typeof activeMembers[number]) => ({
+          membershipId: m.id,
+          userId: m.userId,
+          email: m.user.email,
+          fullName: m.user.fullName,
+          role: m.role,
+        })),
+        availableJurisdictions: currentEnabledCountries,
+      };
+    }),
+
+  /**
    * Initiate an M-Pesa STK push for a subscription plan.
    *
    * Creates a PENDING Payment record first (idempotent via providerTransactionId),
@@ -632,10 +793,12 @@ export const billingRouter = router({
   initiateMpesaPayment: billingAdminProcedure
     .input(
       z.object({
-        plan:             z.nativeEnum(SubscriptionPlan),
-        interval:         z.enum(['monthly', 'yearly']).default('monthly'),
-        phoneNumber:      z.string().optional(),
+        plan:                      z.nativeEnum(SubscriptionPlan),
+        interval:                  z.enum(['monthly', 'yearly']).default('monthly'),
+        phoneNumber:               z.string().optional(),
         paymentPurpose:   z.enum([PAYMENT_PURPOSE_INITIAL, PAYMENT_PURPOSE_RENEWAL]).optional().default(PAYMENT_PURPOSE_INITIAL),
+        retainedMemberUserIds:     z.array(z.string()).optional(),
+        retainedJurisdictionCodes: z.array(z.string()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -795,6 +958,8 @@ export const billingRouter = router({
           renewalPaidThrough: paidThrough?.toISOString() ?? null,
           renewalPeriodStart: billingPeriodStart.toISOString(),
           renewalPeriodEnd: billingPeriodEnd.toISOString(),
+          retainedMemberUserIds: input.retainedMemberUserIds,
+          retainedJurisdictionCodes: input.retainedJurisdictionCodes,
         },
       });
 

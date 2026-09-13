@@ -61,15 +61,19 @@ async function resolveSeatLimit(prisma: PrismaLike, organizationId: string, now:
 
   if (pilotAccess) {
     const profile = resolvePilotEntitlementProfile(pilotAccess.entitlementProfile);
-    return PILOT_ENTITLEMENT_PROFILES[profile].maxSeats;
+    const pilotSeats = PILOT_ENTITLEMENT_PROFILES[profile].maxSeats;
+    if (typeof organization.maxSeats === 'number' && organization.maxSeats > pilotSeats) {
+      return organization.maxSeats;
+    }
+    return pilotSeats;
   }
 
   const entitlementLimit = PLAN_ENTITLEMENTS[organization.plan as SubscriptionPlan]?.maxSeats ?? 1;
-  if (entitlementLimit !== -1) return entitlementLimit;
+  if (typeof organization.maxSeats === 'number' && organization.maxSeats > entitlementLimit) {
+    return organization.maxSeats;
+  }
 
-  return typeof organization.maxSeats === 'number' && organization.maxSeats > 0
-    ? organization.maxSeats
-    : entitlementLimit;
+  return entitlementLimit;
 }
 
 export async function getSeatUsageForOrganization(

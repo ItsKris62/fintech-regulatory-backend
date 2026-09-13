@@ -144,19 +144,19 @@ describe('resolveEffectivePlan - pilot metadata and paid precedence', () => {
 
 // -- 12. Pilot entitlement profiles and middleware gates ----------------------
 
-describe('pilot entitlement profiles - policy generation is explicit opt-in', () => {
+describe('pilot entitlement profiles - full customer features enabled', () => {
   const entitlementsSrc = srcFromRoot(
     'fintech-regulatory-backend/src/config/entitlements.config.ts',
   );
   const middlewareSrc = srcFromRoot('fintech-regulatory-backend/src/server/trpc/middleware.ts');
 
-  it('defaults PILOT_FULL policyGeneration to false', () => {
+  it('enables policyGeneration and all customer features on PILOT_FULL', () => {
     const profileIdx = entitlementsSrc.indexOf('const pilotFullBase');
     const profileBody = entitlementsSrc.slice(profileIdx, profileIdx + 1200);
-    expect(profileBody).toContain('policyGeneration: false');
+    expect(profileBody).toContain('policyGeneration: true');
   });
 
-  it('has a separate profile that explicitly enables policyGeneration', () => {
+  it('has PILOT_FULL_WITH_POLICY_GENERATION profile that explicitly enables policyGeneration', () => {
     expect(entitlementsSrc).toContain('PILOT_FULL_WITH_POLICY_GENERATION');
     expect(entitlementsSrc).toContain('policyGeneration: true');
   });

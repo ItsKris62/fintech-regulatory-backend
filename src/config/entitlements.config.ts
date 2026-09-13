@@ -381,14 +381,23 @@ export const PLAN_ENTITLEMENTS: PlanEntitlements = {
 
 const pilotFullBase: PlanEntitlementConfig = {
   ...PLAN_ENTITLEMENTS.ENTERPRISE,
-  policyGeneration: false,
-  customFrameworks: false,
-  customIntegrations: false,
+  policyGeneration: true,
+  customFrameworks: true,
+  customIntegrations: true,
+  teamCollaboration: true,
+  benchmarkDocuments: true,
+  complianceCalendar: true,
+  licenseManagement: true,
+  regulatoryAlerts: true,
+  regulatoryDashboard: true,
+  knowledgeBaseAccess: 'full',
+  analytics: 'advanced',
   sso: false,
   onPremise: false,
   slaGuarantee: undefined,
   legalCorpusManagement: false,
   dedicatedAccountManager: false,
+  agenticComplexityLevel: 'complex',
 };
 
 export const PILOT_ENTITLEMENT_PROFILES: PilotEntitlementProfiles = {

@@ -118,20 +118,35 @@ function canManageOrganization(memberRole: MemberRole | null | undefined, platfo
 }
 
 async function assertOrganizationCanUseTeamSeats(ctx: Context, organizationId: string) {
-  const organization = await ctx.prisma.organization.findUnique({
-    where: { id: organizationId },
-    select: { id: true, plan: true, deletedAt: true } as any,
-  });
+  const [organization, pilotAccess] = await Promise.all([
+    ctx.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { id: true, plan: true, deletedAt: true } as any,
+    }),
+    (ctx.prisma as any).pilotAccess.findFirst({
+      where: {
+        organizationId,
+        status: 'ACTIVE',
+        expiresAt: { gt: new Date() },
+      },
+      select: { id: true, entitlementProfile: true },
+    }).catch(() => null),
+  ]);
 
   if (!organization || (organization as any).deletedAt) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this organization' });
+  }
+
+  if (pilotAccess) {
+    // Active pilot organizations receive team collaboration privileges within their seat allowance
+    return;
   }
 
   const entitlements = PLAN_ENTITLEMENTS[(organization as any).plan as SubscriptionPlan];
   if (!entitlements?.teamCollaboration && ctx.user!.role !== 'ADMIN') {
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: 'Team member management requires the Business plan or higher.',
+      message: 'Team member management requires the Growth plan or higher.',
     });
   }
 }
