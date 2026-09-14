@@ -106,6 +106,8 @@ model User {
   // Marketing & Outreach module relations (Phase B1)
   // =====================================================
   companiesCreated            Company[]               @relation("CompanyCreatedBy")
+  companiesOwned              Company[]               @relation("CompanyOwner")
+  companiesReviewed           Company[]               @relation("CompanyReviewedBy")
   contactsCreated             Contact[]               @relation("ContactCreatedBy")
   contactListsCreated         ContactList[]           @relation("ContactListCreatedBy")
   contactListMembershipsAdded ContactListMembership[] @relation("ContactListMembershipAddedBy")
@@ -2451,16 +2453,145 @@ model Company {
   industry     String?
   regulatorMix String[]  @default([])
   notes        String?
-  createdById  String
-  createdBy    User      @relation("CompanyCreatedBy", fields: [createdById], references: [id])
-  contacts     Contact[]
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
+
+  // Origin & Discovery Metadata
+  origin             CompanyOrigin     @default(MANUAL_CRM)
+  leadStatus         LeadStatus        @default(UNASSESSED)
+  salesStage         SalesStage        @default(PROSPECT)
+  icpTier            IcpTier           @default(UNASSESSED)
+  leadScore          Int?
+  sizeClass          CompanySizeClass  @default(UNKNOWN)
+
+  // Jurisdiction & Regulatory Specifics
+  country            String            @default("Kenya")
+  regulatoryBody     String?
+  licenceType        String?
+  licenceNumber      String?
+  licenceStatus      String?
+
+  // Source Provenance
+  primarySourceUrl       String?
+  primarySourceAuthority String?
+
+  // Qualification & Review Audit
+  discoveredAt       DateTime?
+  lastVerifiedAt     DateTime?
+  confidence         Float?
+  reviewReason       String?
+  rejectionReason    String?
+
+  // Ownership & Review Assignment
+  ownerId            String?
+  owner              User?             @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  reviewedById       String?
+  reviewedBy         User?             @relation("CompanyReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt         DateTime?
+
+  createdById        String
+  createdBy          User              @relation("CompanyCreatedBy", fields: [createdById], references: [id])
+  contacts           Contact[]
+  evidence           DiscoveryEvidence[]
+  discoveryRuns      DiscoveryRunCompany[]
+
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  deletedAt          DateTime?
 
   @@index([name])
   @@index([createdById])
   @@index([deletedAt])
+  @@index([leadStatus])
+  @@index([icpTier])
+  @@index([leadScore])
+  @@index([country])
+  @@index([ownerId])
+  @@index([reviewedById])
+  @@index([origin])
+  @@index([licenceNumber])
+}
+
+model DiscoveryEvidence {
+  id                String                    @id @default(cuid())
+  companyId         String
+  company           Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  discoveryRunId    String?
+  discoveryRun      DiscoveryRun?             @relation(fields: [discoveryRunId], references: [id], onDelete: SetNull)
+
+  field             String
+  extractedValue    String
+  normalizedValue   String?
+  confidence        Float                     @default(1.0)
+  sourceUrl         String
+  sourceAuthority   String?
+  sourceRecordId    String?
+  evidenceSnippet   String?                   @db.Text
+  verificationState EvidenceVerificationState @default(UNVERIFIED)
+  evidenceHash      String                    // SHA-256 for duplicate protection
+
+  // AI Extraction Metadata
+  extractionMethod  String?                   // e.g. "AI_SCRAPE", "REGULATOR_SYNC", "MANUAL"
+  modelProvider     String?                   // e.g. "openai", "anthropic"
+  modelName         String?                   // e.g. "gpt-4o", "claude-3-5-sonnet"
+  extractorVersion  String?                   // e.g. "v1.2.0"
+  retrievedAt       DateTime                  @default(now())
+
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  @@unique([companyId, evidenceHash])
+  @@index([companyId])
+  @@index([discoveryRunId])
+  @@index([sourceUrl])
+  @@index([field])
+  @@index([verificationState])
+}
+
+model DiscoveryRun {
+  id                 String                @id @default(cuid())
+  runIdempotencyKey  String                @unique
+  workflowName       String                // e.g. "W-SALES-LEADS-01"
+  sourceAuthority    String                // e.g. "CBK_DCP_DIRECTORY"
+  sourceUrl          String
+  status             DiscoveryRunStatus    @default(RUNNING)
+  totalDiscovered    Int                   @default(0)
+  totalQualified     Int                   @default(0)
+  totalDeduplicated  Int                   @default(0)
+  totalRejected      Int                   @default(0)
+  totalCreated       Int                   @default(0)
+  totalUpdated       Int                   @default(0)
+  errorMessage       String?               @db.Text
+  metadata           Json?
+
+  startedAt          DateTime              @default(now())
+  completedAt        DateTime?
+
+  evidence           DiscoveryEvidence[]
+  companies          DiscoveryRunCompany[]
+
+  @@index([workflowName])
+  @@index([sourceAuthority])
+  @@index([status])
+  @@index([startedAt])
+}
+
+model DiscoveryRunCompany {
+  id              String        @id @default(cuid())
+  discoveryRunId  String
+  discoveryRun    DiscoveryRun  @relation(fields: [discoveryRunId], references: [id], onDelete: Cascade)
+  companyId       String
+  company         Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  action          String        // "CREATED" | "UPDATED" | "MATCHED" | "REJECTED" | "DUPLICATE"
+  scoreAtRun      Int?
+  icpTierAtRun    IcpTier?
+  leadStatusAtRun LeadStatus?
+  reason          String?
+  createdAt       DateTime      @default(now())
+
+  @@unique([discoveryRunId, companyId])
+  @@index([discoveryRunId])
+  @@index([companyId])
+  @@index([action])
 }
 
 model Contact {
@@ -2475,6 +2606,10 @@ model Contact {
   primaryRegulator  String?
   tags              String[]             @default([])
   notes             String?
+  salesStage        SalesStage           @default(PROSPECT)
+  linkedinUrl       String?
+  lastContactedAt   DateTime?
+  nextFollowUpAt    DateTime?
   consentStatus     ContactConsentStatus @default(PENDING)
   consentSource     String?
   consentTimestamp  DateTime?
@@ -2499,6 +2634,7 @@ model Contact {
   @@index([suppressedAt])
   @@index([createdById])
   @@index([deletedAt])
+  @@index([salesStage])
 }
 
 model ContactList {
@@ -2700,6 +2836,74 @@ model ConsentRecord {
 // =============================================================================
 // MARKETING ENUMS
 // =============================================================================
+
+enum CompanyOrigin {
+  MANUAL_CRM
+  AI_DISCOVERY
+  PILOT_APPLICATION
+  CONTACT_IMPORT
+  INBOUND_LEAD
+}
+
+enum LeadStatus {
+  UNASSESSED
+  DISCOVERED
+  QUALIFIED
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  NURTURE
+  CONVERTED
+  DO_NOT_CONTACT
+}
+
+enum SalesStage {
+  PROSPECT
+  LEAD_QUALIFIED
+  OUTREACH_PENDING
+  CONTACTED
+  ENGAGED
+  MEETING_SCHEDULED
+  DEMO_COMPLETED
+  TRIAL_ACTIVE
+  PILOT_ACTIVE
+  OPPORTUNITY
+  CLOSED_WON
+  CLOSED_LOST
+  DISQUALIFIED
+  UNRESPONSIVE
+}
+
+enum IcpTier {
+  UNASSESSED
+  TIER_1_CORE_FINTECH
+  TIER_2_HIGH_EXPOSURE
+  TIER_3_ADJACENT
+  NON_ICP
+}
+
+enum CompanySizeClass {
+  UNKNOWN
+  MICRO
+  SMALL
+  MEDIUM
+  LARGE
+  ENTERPRISE
+}
+
+enum EvidenceVerificationState {
+  UNVERIFIED
+  VERIFIED
+  CONFLICTING
+  REJECTED
+}
+
+enum DiscoveryRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIALLY_COMPLETED
+}
 
 enum ContactConsentStatus {
   PENDING

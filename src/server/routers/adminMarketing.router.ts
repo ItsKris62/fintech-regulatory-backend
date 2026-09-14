@@ -27,6 +27,11 @@ import {
   MarketingCampaignStatus,
   MarketingTemplateKey,
   SuppressionReason,
+  CompanyOrigin,
+  LeadStatus,
+  SalesStage,
+  IcpTier,
+  CompanySizeClass,
   type Prisma,
 } from '@prisma/client';
 import { router, adminProcedure } from '../trpc/trpc';
@@ -36,6 +41,14 @@ import { suppress, isSuppressed } from '@/modules/marketing/suppression.service'
 import { recordConsent } from '@/modules/marketing/consent.service';
 import { sendQueueService } from '@/modules/marketing/send-queue.service';
 import { buildDynamicContactWhere } from '@/modules/marketing/list.service';
+import {
+  createCompany,
+  updateCompany,
+  deleteCompany,
+  getCompany,
+  listCompanies,
+} from '@/modules/marketing/company.service';
+import { mergeCompanies } from '@/modules/marketing/company-dedup.service';
 import { BadRequestError, NotFoundError } from '@/utils/error';
 import { logger } from '@/utils/logger';
 
@@ -834,6 +847,303 @@ const suppressionRouter = router({
 });
 
 // ===========================================================================
+// COMPANIES sub-router (P0)
+// ===========================================================================
+
+const companiesRouter = router({
+  list: adminProcedure
+    .input(z.object({
+      query: z.string().optional(),
+      leadStatus: z.nativeEnum(LeadStatus).optional(),
+      icpTier: z.nativeEnum(IcpTier).optional(),
+      salesStage: z.nativeEnum(SalesStage).optional(),
+      origin: z.nativeEnum(CompanyOrigin).optional(),
+      country: z.string().optional(),
+      minScore: z.number().int().min(0).max(100).optional(),
+      maxScore: z.number().int().min(0).max(100).optional(),
+      take: z.number().int().positive().max(100).default(50),
+      skip: z.number().int().nonnegative().default(0),
+      orderBy: z.enum(['name', 'leadScore', 'createdAt', 'updatedAt']).default('createdAt'),
+      orderDir: z.enum(['asc', 'desc']).default('desc'),
+    }).optional())
+    .query(async ({ input }) => {
+      try {
+        return await listCompanies(input ?? {});
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  getById: adminProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .query(async ({ input }) => {
+      try {
+        return await getCompany(input.id);
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  create: adminProcedure
+    .input(z.object({
+      name: z.string().min(1).max(255),
+      domain: z.string().max(255).optional().nullable(),
+      industry: z.string().max(100).optional().nullable(),
+      country: z.string().max(100).default('Kenya'),
+      regulatorMix: z.array(z.string()).default([]),
+      regulatoryBody: z.string().max(100).optional().nullable(),
+      licenceType: z.string().max(100).optional().nullable(),
+      licenceNumber: z.string().max(100).optional().nullable(),
+      licenceStatus: z.string().max(50).optional().nullable(),
+      notes: z.string().max(5000).optional().nullable(),
+      ownerId: z.string().optional().nullable(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        return await createCompany(input, ctx.user!.id);
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  update: adminProcedure
+    .input(z.object({
+      id: z.string().min(1),
+      name: z.string().min(1).max(255).optional(),
+      domain: z.string().max(255).optional().nullable(),
+      industry: z.string().max(100).optional().nullable(),
+      country: z.string().max(100).optional(),
+      regulatorMix: z.array(z.string()).optional(),
+      regulatoryBody: z.string().max(100).optional().nullable(),
+      licenceType: z.string().max(100).optional().nullable(),
+      licenceNumber: z.string().max(100).optional().nullable(),
+      licenceStatus: z.string().max(50).optional().nullable(),
+      notes: z.string().max(5000).optional().nullable(),
+      leadStatus: z.nativeEnum(LeadStatus).optional(),
+      salesStage: z.nativeEnum(SalesStage).optional(),
+      icpTier: z.nativeEnum(IcpTier).optional(),
+      leadScore: z.number().int().min(0).max(100).optional().nullable(),
+      sizeClass: z.nativeEnum(CompanySizeClass).optional(),
+      ownerId: z.string().optional().nullable(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const { id, ...data } = input;
+        return await updateCompany(id, data, ctx.user!.id);
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  delete: adminProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        await deleteCompany(input.id, ctx.user!.id);
+        return { success: true };
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  merge: adminProcedure
+    .input(z.object({
+      primaryCompanyId: z.string().min(1),
+      secondaryCompanyId: z.string().min(1),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        return await mergeCompanies({
+          primaryCompanyId: input.primaryCompanyId,
+          secondaryCompanyId: input.secondaryCompanyId,
+          userId: ctx.user!.id,
+        });
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+});
+
+// ===========================================================================
+// LEADS REVIEW QUEUE sub-router (P0)
+// ===========================================================================
+
+const leadsRouter = router({
+  listReviewQueue: adminProcedure
+    .input(z.object({
+      leadStatus: z.nativeEnum(LeadStatus).default(LeadStatus.PENDING_REVIEW),
+      icpTier: z.nativeEnum(IcpTier).optional(),
+      country: z.string().optional(),
+      take: z.number().int().positive().max(100).default(50),
+      skip: z.number().int().nonnegative().default(0),
+    }).optional())
+    .query(async ({ input }) => {
+      try {
+        const status = input?.leadStatus ?? LeadStatus.PENDING_REVIEW;
+        return await listCompanies({
+          leadStatus: status,
+          icpTier: input?.icpTier,
+          country: input?.country,
+          take: input?.take ?? 50,
+          skip: input?.skip ?? 0,
+          orderBy: 'leadScore',
+          orderDir: 'desc',
+        });
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  getReviewDetail: adminProcedure
+    .input(z.object({ companyId: z.string().min(1) }))
+    .query(async ({ input }) => {
+      try {
+        return await getCompany(input.companyId);
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  approveLead: adminProcedure
+    .input(z.object({
+      companyId: z.string().min(1),
+      reviewReason: z.string().max(1000).optional(),
+      addToListId: z.string().optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const company = await prisma.company.findUnique({
+          where: { id: input.companyId },
+          include: { contacts: { where: { deletedAt: null } } },
+        });
+        if (!company || company.deletedAt) throw new NotFoundError('Company not found');
+
+        // Update company state to APPROVED and advance salesStage
+        const updated = await prisma.company.update({
+          where: { id: input.companyId },
+          data: {
+            leadStatus: LeadStatus.APPROVED,
+            salesStage: SalesStage.LEAD_QUALIFIED,
+            reviewedById: ctx.user!.id,
+            reviewedAt: new Date(),
+            reviewReason: input.reviewReason || 'Approved by admin review',
+          },
+        });
+
+        // If list membership requested and contacts exist, add them (Amendment 14)
+        if (input.addToListId && company.contacts.length > 0) {
+          for (const contact of company.contacts) {
+            await prisma.contactListMembership.upsert({
+              where: {
+                listId_contactId: {
+                  listId: input.addToListId,
+                  contactId: contact.id,
+                },
+              },
+              create: {
+                listId: input.addToListId,
+                contactId: contact.id,
+                addedById: ctx.user!.id,
+              },
+              update: {},
+            });
+          }
+        }
+
+        await writeAuditLog(ctx.user!.id, 'MARKETING_LEAD_APPROVED', 'Company', input.companyId, {
+          companyName: company.name,
+          contactCount: company.contacts.length,
+          addedToListId: input.addToListId || null,
+        });
+
+        return updated;
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  rejectLead: adminProcedure
+    .input(z.object({
+      companyId: z.string().min(1),
+      rejectionReason: z.string().min(1).max(1000),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const updated = await prisma.company.update({
+          where: { id: input.companyId },
+          data: {
+            leadStatus: LeadStatus.REJECTED,
+            salesStage: SalesStage.DISQUALIFIED,
+            rejectionReason: input.rejectionReason,
+            reviewedById: ctx.user!.id,
+            reviewedAt: new Date(),
+          },
+        });
+
+        await writeAuditLog(ctx.user!.id, 'MARKETING_LEAD_REJECTED', 'Company', input.companyId, {
+          reason: input.rejectionReason,
+        });
+
+        return updated;
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  nurtureLead: adminProcedure
+    .input(z.object({
+      companyId: z.string().min(1),
+      reason: z.string().max(1000).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const updated = await prisma.company.update({
+          where: { id: input.companyId },
+          data: {
+            leadStatus: LeadStatus.NURTURE,
+            reviewReason: input.reason || 'Deferred to nurture by admin',
+            reviewedById: ctx.user!.id,
+            reviewedAt: new Date(),
+          },
+        });
+
+        await writeAuditLog(ctx.user!.id, 'MARKETING_LEAD_NURTURED', 'Company', input.companyId);
+        return updated;
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  requestResearch: adminProcedure
+    .input(z.object({
+      companyId: z.string().min(1),
+      researchNotes: z.string().min(1).max(2000),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const updated = await prisma.company.update({
+          where: { id: input.companyId },
+          data: {
+            reviewReason: `[RESEARCH REQUESTED]: ${input.researchNotes}`,
+            reviewedById: ctx.user!.id,
+            reviewedAt: new Date(),
+          },
+        });
+
+        await writeAuditLog(ctx.user!.id, 'MARKETING_LEAD_RESEARCH_REQUESTED', 'Company', input.companyId, {
+          notes: input.researchNotes,
+        });
+
+        return updated;
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+
+  doNotContact: adminProcedure
+    .input(z.object({
+      companyId: z.string().min(1),
+      reason: z.string().max(1000).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const updated = await prisma.company.update({
+          where: { id: input.companyId },
+          data: {
+            leadStatus: LeadStatus.DO_NOT_CONTACT,
+            salesStage: SalesStage.DISQUALIFIED,
+            reviewReason: input.reason || 'Marked DO NOT CONTACT by admin',
+            reviewedById: ctx.user!.id,
+            reviewedAt: new Date(),
+          },
+        });
+
+        await writeAuditLog(ctx.user!.id, 'MARKETING_COMPANY_DO_NOT_CONTACT', 'Company', input.companyId, {
+          reason: input.reason,
+        });
+
+        return updated;
+      } catch (error: unknown) { mapServiceError(error); }
+    }),
+});
+
+// ===========================================================================
 // Root adminMarketing router
 // ===========================================================================
 
@@ -842,4 +1152,6 @@ export const adminMarketingRouter = router({
   contacts:    contactsRouter,
   lists:       listsRouter,
   suppression: suppressionRouter,
+  companies:   companiesRouter,
+  leads:       leadsRouter,
 });

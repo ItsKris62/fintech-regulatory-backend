@@ -78,6 +78,8 @@ export const AGENT_CAPABILITIES = [
   'agents.automation.regulatory.alertDraft.create',
   'agents.automation.regulatory.enrichment.process',
   'agents.automation.regulatory.enrichment.listPending',
+  // Lead Ingestion capability for W-SALES-LEADS automation (P0)
+  'agents.marketing.leads.ingest',
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
@@ -131,6 +133,7 @@ export const AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [
   'agents.automation.regulatory.alertDraft.create',
   'agents.automation.regulatory.enrichment.process',
   'agents.automation.regulatory.enrichment.listPending',
+  'agents.marketing.leads.ingest',
 ];
 
 export const REGULATORY_AUTOMATION_CAPABILITIES: readonly AgentCapability[] = [

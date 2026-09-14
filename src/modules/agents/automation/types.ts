@@ -10,6 +10,10 @@ type AutomationUseCase = NonNullable<LLMCompletionRequest['useCase']>;
 // so n8n's free-form taskType is mapped onto it rather than passed through.
 export const TASK_TYPE_USE_CASE_MAP: Readonly<Record<string, AutomationUseCase>> = {
   regulatory_content_draft: 'analysis',
+  lead_source_extract: 'analysis',
+  lead_company_research: 'analysis',
+  lead_product_fit: 'analysis',
+  lead_evidence_verify: 'verification',
 };
 
 export const DEFAULT_USE_CASE: AutomationUseCase = 'analysis';

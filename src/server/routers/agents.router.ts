@@ -29,6 +29,8 @@ import { revisionRequestService } from '@/modules/blog-automation/revision-reque
 import { runSourceDiscoveryForMonitor } from '@/modules/blog-automation/source-discovery.service';
 import { createSuggestionFromSourceItem } from '@/modules/blog-automation/suggestion-builder';
 import { regulatoryAutomationService } from '@/modules/agents/automation/regulatory-automation.service';
+import { leadIngestionService } from '@/modules/marketing/lead-ingestion.service';
+import { CompanySizeClass, EvidenceVerificationState, DiscoveryRunStatus } from '@prisma/client';
 import {
   fetchRegulatorySourceSchema,
   ingestRegulatorySnapshotSchema,
@@ -39,6 +41,53 @@ import {
   processRegulatorySnapshotMachineSchema,
   listPendingRegulatorySnapshotsMachineSchema,
 } from '@/modules/regulatory-intelligence/domain/types';
+
+// Strict Zod schemas for untrusted AI / n8n lead ingestion (P0)
+const safeUrlSchema = z.string().url().max(1000).refine(
+  (url) => url.startsWith('http://') || url.startsWith('https://'),
+  { message: 'URL must use http or https protocol' }
+);
+
+const evidenceItemSchema = z.object({
+  field: z.string().min(1).max(100),
+  extractedValue: z.string().min(1).max(1000),
+  normalizedValue: z.string().max(1000).optional().nullable(),
+  confidence: z.number().min(0).max(1).optional(),
+  sourceUrl: safeUrlSchema,
+  sourceAuthority: z.string().max(100).optional().nullable(),
+  sourceRecordId: z.string().max(100).optional().nullable(),
+  evidenceSnippet: z.string().max(2000).optional().nullable(),
+  verificationState: z.nativeEnum(EvidenceVerificationState).optional(),
+  extractionMethod: z.string().max(50).optional().nullable(),
+  modelProvider: z.string().max(50).optional().nullable(),
+  modelName: z.string().max(50).optional().nullable(),
+  extractorVersion: z.string().max(50).optional().nullable(),
+});
+
+const candidateLeadSchema = z.object({
+  name: z.string().min(2).max(255),
+  domain: z.string().max(255).optional().nullable(),
+  country: z.string().max(100).default('Kenya'),
+  industry: z.string().max(100).optional().nullable(),
+  regulatoryBody: z.string().max(100).optional().nullable(),
+  licenceType: z.string().max(100).optional().nullable(),
+  licenceNumber: z.string().max(100).optional().nullable(),
+  licenceStatus: z.string().max(50).optional().nullable(),
+  sizeClass: z.nativeEnum(CompanySizeClass).optional().nullable(),
+  primarySourceUrl: safeUrlSchema,
+  primarySourceAuthority: z.string().max(100).optional().nullable(),
+  confidence: z.number().min(0).max(1).optional().default(0.8),
+  hasComplianceObligation: z.boolean().optional(),
+  operatesCrossBorder: z.boolean().optional(),
+  handlesPersonalData: z.boolean().optional(),
+  handlesCustomerFunds: z.boolean().optional(),
+  hasNamedBuyerContact: z.boolean().optional(),
+  buyerRoleIdentified: z.boolean().optional(),
+  targetRoleTitle: z.string().max(100).optional().nullable(),
+  recentRegulatoryEvent: z.boolean().optional(),
+  recentLicensingDeadline: z.boolean().optional(),
+  evidence: z.array(evidenceItemSchema).max(20).optional(),
+});
 
 type JsonInputValue = string | number | boolean | JsonInputValue[] | { [key: string]: JsonInputValue };
 
@@ -151,6 +200,65 @@ export const agentsRouter = router({
         editedBody: input.editedBody,
         reviewedBy: ctx.user!.id,
       })),
+
+    // =========================================================================
+    // AI Lead Ingestion Sub-Router (P0/P1 - W-SALES-LEADS Automation Boundary)
+    // =========================================================================
+    leads: router({
+      getDiscoverySources: agentProcedure('agents.marketing.leads.ingest')
+        .input(z.object({
+          jurisdiction: z.string().max(10).default('KE'),
+        }).optional())
+        .query(async ({ input }) => leadIngestionService.getDiscoverySources(input?.jurisdiction || 'KE')),
+
+      updateDiscoverySourceState: agentProcedure('agents.marketing.leads.ingest')
+        .input(z.object({
+          sourceId: z.string().min(1).max(100),
+          contentFingerprint: z.string().max(256).optional().nullable(),
+          processedCursor: z.string().max(256).optional().nullable(),
+          recordIdentifier: z.string().max(256).optional().nullable(),
+          sourceVersion: z.string().max(100).optional().nullable(),
+          result: z.enum(['SUCCESS', 'FAILED', 'SKIPPED_UNCHANGED']),
+          errorMessage: z.string().max(2000).optional().nullable(),
+          metadata: jsonObjectSchema.optional(),
+        }))
+        .mutation(async ({ input }) => leadIngestionService.updateDiscoverySourceState(input)),
+
+      getBudgetStatus: agentProcedure('agents.marketing.leads.ingest')
+        .input(z.object({
+          period: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+        }).optional())
+        .query(async ({ input }) => leadIngestionService.getBudgetStatus(input?.period)),
+
+      initDiscoveryRun: agentProcedure('agents.marketing.leads.ingest')
+        .input(z.object({
+          runIdempotencyKey: z.string().min(8).max(200),
+          workflowName: z.string().max(100).default('W-SALES-LEADS-01'),
+          sourceAuthority: z.string().max(100).optional().nullable(),
+          sourceUrl: safeUrlSchema.optional().nullable(),
+          jurisdiction: z.string().max(10).optional(),
+          sourceSetId: z.string().max(100).optional(),
+          metadata: jsonObjectSchema.optional(),
+        }))
+        .mutation(async ({ input }) => leadIngestionService.initDiscoveryRun(input)),
+
+      ingestBatch: agentProcedure('agents.marketing.leads.ingest')
+        .input(z.object({
+          discoveryRunId: z.string().min(1),
+          batchId: z.string().min(1).max(100),
+          candidates: z.array(candidateLeadSchema).min(1).max(50),
+        }))
+        .mutation(async ({ input }) => leadIngestionService.ingestBatch(input)),
+
+      completeDiscoveryRun: agentProcedure('agents.marketing.leads.ingest')
+        .input(z.object({
+          discoveryRunId: z.string().min(1),
+          status: z.nativeEnum(DiscoveryRunStatus).default(DiscoveryRunStatus.COMPLETED),
+          errorMessage: z.string().max(2000).optional(),
+          metadata: jsonObjectSchema.optional(),
+        }))
+        .mutation(async ({ input }) => leadIngestionService.completeDiscoveryRun(input)),
+    }),
   }),
   regIntel: router({
     // Callable only by sys-scheduler-orchestrator (n8n trigger surface, daily
