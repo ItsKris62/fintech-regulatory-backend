@@ -1,8 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { leadIngestionService } from './lead-ingestion.service';
 import { prisma } from '@/lib/prisma/client';
 import {
-  CompanyOrigin,
   LeadStatus,
   IcpTier,
   CompanySizeClass,

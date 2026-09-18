@@ -42,7 +42,7 @@ export const KENYA_PRIORITY_APPROVED_SOURCES: ApprovedSourceSeed[] = [
     authorityName: 'Kenya Law / National Council for Law Reporting',
     authorityType: 'OFFICIAL_LEGAL_PUBLISHER',
     baseUrl: 'https://kenyalaw.org',
-    allowedDomains: ['kenyalaw.org', 'www.kenyalaw.org'],
+    allowedDomains: ['kenyalaw.org', 'www.kenyalaw.org', 'new.kenyalaw.org'],
   },
   {
     id: 'ke-communications-authority',
@@ -50,7 +50,7 @@ export const KENYA_PRIORITY_APPROVED_SOURCES: ApprovedSourceSeed[] = [
     authorityName: 'Communications Authority of Kenya',
     authorityType: 'REGULATOR',
     baseUrl: 'https://www.ca.go.ke',
-    allowedDomains: ['ca.go.ke', 'www.ca.go.ke'],
+    allowedDomains: ['ca.go.ke', 'www.ca.go.ke', 'repository.ca.go.ke'],
   },
   {
     id: 'ke-capital-markets-authority',
@@ -59,6 +59,24 @@ export const KENYA_PRIORITY_APPROVED_SOURCES: ApprovedSourceSeed[] = [
     authorityType: 'REGULATOR',
     baseUrl: 'https://www.cma.or.ke',
     allowedDomains: ['cma.or.ke', 'www.cma.or.ke'],
+  },
+  {
+    id: 'nist',
+    jurisdiction: 'GLOBAL',
+    authorityName: 'National Institute of Standards and Technology',
+    authorityType: 'STANDARDS_BODY',
+    baseUrl: 'https://www.nist.gov',
+    allowedDomains: ['nist.gov', 'www.nist.gov', 'csrc.nist.gov', 'airc.nist.gov'],
+    notes: 'Approved standards body for NIST Cybersecurity Framework and AI RMF standards.',
+  },
+  {
+    id: 'ict-ministry-ke',
+    jurisdiction: 'KE',
+    authorityName: 'Ministry of Information, Communications and The Digital Economy',
+    authorityType: 'MINISTRY',
+    baseUrl: 'https://www.ict.go.ke',
+    allowedDomains: ['ict.go.ke', 'www.ict.go.ke', 'icta.go.ke', 'www.icta.go.ke'],
+    notes: 'Approved issuing ministry for Kenya national ICT policies, cloud policies, and national AI strategies.',
   },
 ];
 
@@ -77,6 +95,11 @@ export const PRIORITY_SOURCE_KEYWORDS = [
   'risk management',
   'banking act',
   'prudential guideline',
+  'nist',
+  'cloud policy',
+  'artificial intelligence',
+  'ai strategy',
+  'ict policy',
 ];
 
 export function isPriorityRegulatoryDocument(doc: {
@@ -107,12 +130,14 @@ export function matchApprovedSourceId(doc: { source?: string | null; title?: str
   }
 
   const haystack = [doc.source, doc.title, doc.category].filter(Boolean).join(' ').toLowerCase();
-  if (/\bodpc\b|data protection commissioner/.test(haystack)) return 'ke-office-data-protection-commissioner';
-  if (/central bank|cbk|payment system|digital credit|prudential|banking act/.test(haystack)) return 'ke-central-bank-of-kenya';
-  if (/financial reporting centre|\bfrc\b|pocamla|aml|anti-money laundering|proceeds of crime/.test(haystack)) return 'ke-financial-reporting-centre';
-  if (/kenya law|national council for law reporting|act|regulation/.test(haystack)) return 'ke-kenya-law';
-  if (/communications authority|\bca\b/.test(haystack)) return 'ke-communications-authority';
-  if (/capital markets|cma/.test(haystack)) return 'ke-capital-markets-authority';
+  if (/\bnist\b|national institute of standards/i.test(haystack)) return 'nist';
+  if (/ministry of ict|ict ministry|ict authority|information, communications and the digital economy|government of kenya|ict policy|cloud policy|artificial intelligence strategy|ai strategy/i.test(haystack)) return 'ict-ministry-ke';
+  if (/\bodpc\b|data protection commissioner/i.test(haystack)) return 'ke-office-data-protection-commissioner';
+  if (/communications authority|\bca\b/i.test(haystack)) return 'ke-communications-authority';
+  if (/central bank|cbk|payment system|digital credit|prudential|banking act/i.test(haystack)) return 'ke-central-bank-of-kenya';
+  if (/financial reporting centre|\bfrc\b|pocamla|aml|anti-money laundering|proceeds of crime/i.test(haystack)) return 'ke-financial-reporting-centre';
+  if (/capital markets|cma/i.test(haystack)) return 'ke-capital-markets-authority';
+  if (/kenya law|national council for law reporting|act|regulation/i.test(haystack)) return 'ke-kenya-law';
   return null;
 }
 

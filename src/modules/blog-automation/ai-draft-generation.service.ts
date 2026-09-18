@@ -3,6 +3,12 @@ import { complete } from '../../lib/ai/client';
 import { getBlogDraftUserPrompt, BLOG_DRAFT_SYSTEM_PROMPT } from './blog-draft-prompt';
 import { blogNotificationService } from './blog-notification.service';
 
+export interface GenerateAiDraftOptions {
+  notifyUserId?: string;
+  modelOverride?: string;
+  targetWordCount?: number;
+}
+
 /**
  * notifyUserId defaults to adminUserId (identical to prior behavior for the
  * existing admin-dashboard caller, adminGenerateAiDraft, which never passes
@@ -11,7 +17,25 @@ import { blogNotificationService } from './blog-notification.service';
  * since adminUserId for an automation call is the sys-automation-orchestrator
  * service principal - notifying that id directly would never reach a human.
  */
-export async function generateAiDraftForBlogPost(blogPostId: string, adminUserId: string, notifyUserId?: string) {
+export async function generateAiDraftForBlogPost(
+  blogPostId: string,
+  adminUserId: string,
+  notifyUserIdOrOptions?: string | GenerateAiDraftOptions,
+  maybeOptions?: GenerateAiDraftOptions
+) {
+  let notifyUserId: string | undefined;
+  let options: GenerateAiDraftOptions = {};
+
+  if (typeof notifyUserIdOrOptions === 'string') {
+    notifyUserId = notifyUserIdOrOptions;
+    if (maybeOptions) {
+      options = maybeOptions;
+    }
+  } else if (notifyUserIdOrOptions && typeof notifyUserIdOrOptions === 'object') {
+    options = notifyUserIdOrOptions;
+    notifyUserId = options.notifyUserId;
+  }
+
   const post = await prisma.blogPost.findUnique({
     where: { id: blogPostId },
     include: {
@@ -46,7 +70,10 @@ export async function generateAiDraftForBlogPost(blogPostId: string, adminUserId
     })),
   };
 
-  const userPrompt = getBlogDraftUserPrompt(promptInput);
+  let userPrompt = getBlogDraftUserPrompt(promptInput);
+  if (options.targetWordCount) {
+    userPrompt += `\nTarget Word Count: approximately ${options.targetWordCount} words.`;
+  }
 
   // Track the run
   const run = await prisma.blogDraftGenerationRun.create({
@@ -65,7 +92,7 @@ export async function generateAiDraftForBlogPost(blogPostId: string, adminUserId
     const aiResponse = await complete({
       prompt: userPrompt,
       systemPrompt: BLOG_DRAFT_SYSTEM_PROMPT,
-      model: 'claude-3-5-sonnet-20240620',
+      model: options.modelOverride || 'claude-3-5-sonnet-20240620',
       temperature: 0.2, // Low temp for regulatory content
     });
 

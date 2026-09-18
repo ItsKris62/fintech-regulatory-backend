@@ -77,6 +77,20 @@ export const adminGetMonitorSchema = z.object({
   id: z.string().min(1),
 });
 
+export const apiMonitorConfigSchema = z.object({
+  endpoint: safeUrlSchema,
+  headers: z.record(z.string(), z.string()).optional(),
+  itemsPath: z.string().default('data'),
+  fieldMapping: z.object({
+    title: z.string().min(1, 'Title field key is required'),
+    url: z.string().min(1, 'URL field key is required'),
+    publicationDate: z.string().min(1, 'Publication date field key is required'),
+    content: z.string().optional(),
+  }),
+});
+
+export type ApiMonitorConfig = z.infer<typeof apiMonitorConfigSchema>;
+
 export const adminCreateMonitorSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   description: z.string().optional().nullable(),
@@ -87,6 +101,7 @@ export const adminCreateMonitorSchema = z.object({
   monitoringMethod: blogMonitoringMethodSchema.default('MANUAL'),
   baseUrl: safeUrlSchema,
   feedUrl: z.union([safeUrlSchema, z.literal(''), z.null()]).optional(),
+  apiConfig: apiMonitorConfigSchema.optional().nullable(),
   topics: z.array(z.string()).max(20).default([]),
   keywords: z.array(z.string()).max(50).default([]),
   status: blogMonitorStatusSchema.default('NEEDS_VERIFICATION'),
@@ -108,6 +123,7 @@ export const adminUpdateMonitorSchema = z.object({
   monitoringMethod: blogMonitoringMethodSchema.optional(),
   baseUrl: safeUrlSchema.optional(),
   feedUrl: z.union([safeUrlSchema, z.literal(''), z.null()]).optional(),
+  apiConfig: apiMonitorConfigSchema.optional().nullable(),
   topics: z.array(z.string()).max(20).optional(),
   keywords: z.array(z.string()).max(50).optional(),
   maxItemsPerRun: z.number().min(1).max(100).optional(),
@@ -229,9 +245,16 @@ export const adminCreateDraftFromSuggestionSchema = z.object({
   suggestionId: z.string().min(1),
 });
 
-export const adminGenerateAiDraftSchema = z.object({
-  blogPostId: z.string().min(1),
-});
+export const adminGenerateAiDraftSchema = z
+  .object({
+    blogPostId: z.string().optional(),
+    suggestionId: z.string().optional(),
+    modelOverride: z.string().optional(),
+    targetWordCount: z.number().int().positive().optional(),
+  })
+  .refine((data) => data.blogPostId || data.suggestionId, {
+    message: 'Either blogPostId or suggestionId must be provided',
+  });
 
 export const adminRunBlogVerificationSchema = z.object({
   blogPostId: z.string().min(1),

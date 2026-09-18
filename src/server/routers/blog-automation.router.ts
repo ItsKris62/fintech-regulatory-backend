@@ -55,6 +55,7 @@ import { createSuggestionFromSourceItem } from '../../modules/blog-automation/su
 import { createBlogDraftFromSuggestion } from '../../modules/blog-automation/draft-creation.service';
 import { generateAiDraftForBlogPost } from '../../modules/blog-automation/ai-draft-generation.service';
 import { runBlogPostVerification } from '../../modules/blog-automation/blog-verification.service';
+import { semanticVerificationService } from '../../modules/blog-automation/semantic-verification.service';
 import { blogEditorialDigestService } from '../../modules/blog-automation/blog-editorial-digest.service';
 
 export const blogAutomationRouter = router({
@@ -135,12 +136,14 @@ export const blogAutomationRouter = router({
   adminCreateMonitor: adminProcedure
     .input(adminCreateMonitorSchema)
     .mutation(async ({ input, ctx }): Promise<any> => {
+      const { apiConfig, ...data } = input;
+
       // Check baseUrl uniqueness per jurisdiction
       const existing = await ctx.prisma.blogSourceMonitor.findUnique({
         where: {
           jurisdiction_baseUrl: {
-            jurisdiction: input.jurisdiction,
-            baseUrl: input.baseUrl,
+            jurisdiction: data.jurisdiction,
+            baseUrl: data.baseUrl,
           },
         },
       });
@@ -152,9 +155,18 @@ export const blogAutomationRouter = router({
         });
       }
 
+      let notes = data.notes;
+      if (apiConfig) {
+        notes = JSON.stringify({
+          notes: data.notes || '',
+          apiConfig,
+        });
+      }
+
       return ctx.prisma.blogSourceMonitor.create({
         data: {
-          ...input,
+          ...data,
+          notes,
           createdById: ctx.user!.id,
           updatedById: ctx.user!.id,
           status: 'NEEDS_VERIFICATION',
@@ -167,7 +179,7 @@ export const blogAutomationRouter = router({
   adminUpdateMonitor: adminProcedure
     .input(adminUpdateMonitorSchema)
     .mutation(async ({ input, ctx }): Promise<any> => {
-      const { id, ...data } = input;
+      const { id, apiConfig, ...data } = input;
 
       const monitor = await ctx.prisma.blogSourceMonitor.findUnique({
         where: { id },
@@ -195,10 +207,21 @@ export const blogAutomationRouter = router({
         }
       }
 
+      let notes = data.notes;
+      if (apiConfig !== undefined) {
+        if (apiConfig) {
+          notes = JSON.stringify({
+            notes: data.notes !== undefined ? data.notes : (monitor.notes || ''),
+            apiConfig,
+          });
+        }
+      }
+
       return ctx.prisma.blogSourceMonitor.update({
         where: { id },
         data: {
           ...data,
+          ...(notes !== undefined ? { notes } : {}),
           updatedById: ctx.user!.id,
         },
       });
@@ -657,7 +680,99 @@ export const blogAutomationRouter = router({
   adminGenerateAiDraft: adminProcedure
     .input(adminGenerateAiDraftSchema)
     .mutation(async ({ input, ctx }): Promise<any> => {
-      return generateAiDraftForBlogPost(input.blogPostId, ctx.user!.id);
+      let targetBlogPostId = input.blogPostId;
+
+      if (!targetBlogPostId && input.suggestionId) {
+        const suggestion = await ctx.prisma.blogArticleSuggestion.findUnique({
+          where: { id: input.suggestionId },
+        });
+
+        if (!suggestion || suggestion.deletedAt) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: `Suggestion "${input.suggestionId}" not found.`,
+          });
+        }
+
+        if (suggestion.blogPostId) {
+          targetBlogPostId = suggestion.blogPostId;
+        } else {
+          if (suggestion.status === 'PENDING_REVIEW') {
+            await ctx.prisma.blogArticleSuggestion.update({
+              where: { id: suggestion.id },
+              data: {
+                status: 'APPROVED_FOR_DRAFT',
+                approvedAt: new Date(),
+                approvedById: ctx.user!.id,
+              },
+            });
+          }
+          const created = await createBlogDraftFromSuggestion({
+            prisma: ctx.prisma,
+            suggestionId: input.suggestionId,
+            createdById: ctx.user!.id,
+          });
+          targetBlogPostId = created.blogPostId;
+        }
+      }
+
+      if (!targetBlogPostId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Either blogPostId or suggestionId must be provided.',
+        });
+      }
+
+      // Execute AI draft generation
+      let generationResult;
+      try {
+        generationResult = await generateAiDraftForBlogPost(
+          targetBlogPostId,
+          ctx.user!.id,
+          {
+            modelOverride: input.modelOverride,
+            targetWordCount: input.targetWordCount,
+          }
+        );
+      } catch (error: any) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error.message || 'Draft generation failed',
+        });
+      }
+
+      // Run post-generation semantic verification against canonical linked source documents
+      try {
+        const idempotencyKey = `draft-verify-${targetBlogPostId}-${Date.now()}`;
+        await semanticVerificationService.runSemanticVerification({
+          blogPostId: targetBlogPostId,
+          idempotencyKey,
+          requestedByUserId: ctx.user!.id,
+        });
+      } catch (error: any) {
+        console.error('Semantic verification post-generation error:', error);
+      }
+
+      // Fetch the latest draft generation run & verification run for rich return telemetry
+      const generationRun = await ctx.prisma.blogDraftGenerationRun.findFirst({
+        where: { blogPostId: targetBlogPostId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const latestVerification = await ctx.prisma.blogVerificationRun.findFirst({
+        where: { blogPostId: targetBlogPostId },
+        orderBy: { createdAt: 'desc' },
+        include: { issues: true },
+      });
+
+      return {
+        success: true,
+        blogPostId: targetBlogPostId,
+        generationRun,
+        verificationRun: latestVerification,
+        reviewerNotes: generationResult?.reviewerNotes,
+        uncertaintyFlags: generationResult?.uncertaintyFlags,
+      };
     }),
 
   adminRunBlogVerification: adminProcedure

@@ -195,3 +195,54 @@ describe('blogAutomationRouter.adminListSuggestions', () => {
     );
   });
 });
+
+describe('blogAutomationRouter.adminGenerateAiDraft', () => {
+  const mockFindUniqueSuggestion = vi.fn();
+  const mockUpdateSuggestion = vi.fn();
+  const mockFindFirstDraftRun = vi.fn();
+  const mockFindFirstVerificationRun = vi.fn();
+
+  const mockPrisma = {
+    blogArticleSuggestion: {
+      findUnique: mockFindUniqueSuggestion,
+      update: mockUpdateSuggestion,
+    },
+    blogDraftGenerationRun: {
+      findFirst: mockFindFirstDraftRun,
+    },
+    blogVerificationRun: {
+      findFirst: mockFindFirstVerificationRun,
+    },
+  } as any;
+
+  const adminCtx = {
+    user: { id: 'admin-1', email: 'admin@sheriabot.com', role: 'ADMIN' },
+    req: { ip: '127.0.0.1' },
+    prisma: mockPrisma,
+  };
+
+  const userCtx = {
+    user: { id: 'user-1', email: 'user@sheriabot.com', role: 'USER' },
+    req: { ip: '127.0.0.1' },
+    prisma: mockPrisma,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('denies access to non-admin users', async () => {
+    const caller = blogAutomationRouter.createCaller(userCtx as any);
+    await expect(
+      caller.adminGenerateAiDraft({ blogPostId: 'post-1' })
+    ).rejects.toThrow(TRPCError);
+  });
+
+  it('rejects call when neither blogPostId nor suggestionId is provided', async () => {
+    const caller = blogAutomationRouter.createCaller(adminCtx as any);
+    await expect(
+      caller.adminGenerateAiDraft({} as any)
+    ).rejects.toThrow();
+  });
+});
+

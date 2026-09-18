@@ -5,6 +5,7 @@ import { acquireDiscoveryLock, releaseDiscoveryLock } from './discovery-lock';
 import { generateContentHash } from './content-hash';
 import { parseRssFeed } from './rss-parser';
 import { parseHtmlListing } from './html-listing-parser';
+import { parseApiFeed, extractApiConfig } from './api-parser';
 import { blogNotificationService } from './blog-notification.service';
 
 type BlogAutomationPrisma = typeof appPrisma;
@@ -82,7 +83,22 @@ export async function runSourceDiscoveryForMonitor({
     } else if (monitor.monitoringMethod === 'HTML_LISTING') {
       rawItems = await parseHtmlListing(targetUrl, monitor.maxItemsPerRun, monitor.fetchTimeoutMs);
     } else if (monitor.monitoringMethod === 'API') {
-      throw new Error('API monitoring not implemented yet');
+      const apiConfig = extractApiConfig(monitor) || {
+        endpoint: targetUrl,
+        itemsPath: 'data',
+        fieldMapping: {
+          title: 'title',
+          url: 'url',
+          publicationDate: 'publicationDate',
+          content: 'content',
+        },
+      };
+
+      if (!isUrlSafe(apiConfig.endpoint)) {
+        throw new Error(`Unsafe API endpoint URL detected: ${apiConfig.endpoint}`);
+      }
+
+      rawItems = await parseApiFeed(apiConfig, monitor.maxItemsPerRun, monitor.fetchTimeoutMs);
     } else if (monitor.monitoringMethod === 'MANUAL') {
       throw new Error('Manual monitoring cannot be fetched');
     } else {
