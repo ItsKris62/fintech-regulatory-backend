@@ -1,8 +1,8 @@
 import * as React from 'react';
-import { Section, Text, Link, Hr, Row, Column } from '@react-email/components';
+import { Section, Text, Link, Hr } from '@react-email/components';
 import { BaseLayout } from '../../components/BaseLayout';
 import { EmailButton } from '../../components/EmailButton';
-import { EMAIL_THEME, SHERIABOT_URL } from '../../theme';
+import { EMAIL_THEME, SHERIA_EMAIL_PALETTE, SHERIABOT_URL } from '../../theme';
 
 export interface PaymentReceiptEmailProps {
   userName: string;
@@ -15,6 +15,8 @@ export interface PaymentReceiptEmailProps {
   billingPeriod: string;
   receiptUrl?: string;
   items: Array<{ description: string; amount: string }>;
+  kraPin?: string;
+  customerOrgName?: string;
 }
 
 export function PaymentReceiptEmail({
@@ -28,68 +30,112 @@ export function PaymentReceiptEmail({
   billingPeriod,
   receiptUrl,
   items,
+  kraPin,
+  customerOrgName,
 }: PaymentReceiptEmailProps) {
   return (
-    <BaseLayout preheaderText={`Payment of ${amount} received — Receipt #${invoiceNumber}`}>
-      <Text style={styles.greeting}>Hi {userName},</Text>
+    <BaseLayout
+      preheaderText={`Payment of ${currency} ${amount} received — Tax Invoice #${invoiceNumber}`}
+      headerBadgeText={`PAID • ${currency} ${amount}`}
+    >
+      <Text style={styles.greeting}>Dear {userName},</Text>
+      <h1 style={styles.title}>Official Electronic Tax Receipt</h1>
       <Text style={styles.body}>
-        Thank you for your payment. Here is your receipt.
+        Thank you for subscribing to SheriaBot RegTech Platform. This email serves as your official electronic tax invoice and confirmation of payment.
       </Text>
 
-      {/* Receipt Card */}
-      <Section style={styles.receiptCard}>
-        <Row>
-          <Column style={styles.receiptMetaLabel}>Invoice #</Column>
-          <Column style={styles.receiptMetaValue}>{invoiceNumber}</Column>
-        </Row>
-        <Row>
-          <Column style={styles.receiptMetaLabel}>Date</Column>
-          <Column style={styles.receiptMetaValue}>{paymentDate}</Column>
-        </Row>
-        <Row>
-          <Column style={styles.receiptMetaLabel}>Payment Method</Column>
-          <Column style={styles.receiptMetaValue}>{paymentMethod}</Column>
-        </Row>
-        <Row>
-          <Column style={styles.receiptMetaLabel}>Plan</Column>
-          <Column style={styles.receiptMetaValue}>{planName}</Column>
-        </Row>
-        <Row>
-          <Column style={styles.receiptMetaLabel}>Billing Period</Column>
-          <Column style={styles.receiptMetaValue}>{billingPeriod}</Column>
-        </Row>
+      {/* Structured Receipt Card */}
+      <table
+        border={0}
+        cellPadding={0}
+        cellSpacing={0}
+        width="100%"
+        style={styles.receiptCard}
+      >
+        <tbody>
+          <tr>
+            <td style={{ padding: '20px 24px' }}>
+              <table border={0} cellPadding={0} cellSpacing={0} width="100%">
+                <tbody>
+                  {customerOrgName && (
+                    <tr>
+                      <td style={styles.metaLabel}>Billed To</td>
+                      <td style={styles.metaValue}>
+                        {customerOrgName} {kraPin ? `(KRA PIN: ${kraPin})` : ''}
+                      </td>
+                    </tr>
+                  )}
+                  <tr>
+                    <td style={styles.metaLabel}>Invoice Number</td>
+                    <td style={styles.metaValueMono}>#{invoiceNumber}</td>
+                  </tr>
+                  <tr>
+                    <td style={styles.metaLabel}>Payment Date</td>
+                    <td style={styles.metaValue}>{paymentDate}</td>
+                  </tr>
+                  <tr>
+                    <td style={styles.metaLabel}>Payment Channel</td>
+                    <td style={styles.metaValue}>{paymentMethod}</td>
+                  </tr>
+                  <tr>
+                    <td style={styles.metaLabel}>Subscription Tier</td>
+                    <td style={styles.metaValue}>{planName}</td>
+                  </tr>
+                  <tr>
+                    <td style={styles.metaLabel}>Billing Period</td>
+                    <td style={styles.metaValue}>{billingPeriod}</td>
+                  </tr>
+                </tbody>
+              </table>
 
-        <Hr style={styles.receiptDivider} />
+              <Hr style={styles.receiptDivider} />
 
-        {/* Line Items */}
-        {items.map((item, index) => (
-          <Row key={index}>
-            <Column style={styles.itemDescription}>{item.description}</Column>
-            <Column style={styles.itemAmount}>{item.amount}</Column>
-          </Row>
-        ))}
+              {/* Line Items */}
+              <table border={0} cellPadding={0} cellSpacing={0} width="100%">
+                <tbody>
+                  {items.map((item, index) => (
+                    <tr key={index}>
+                      <td style={styles.itemDescription}>{item.description}</td>
+                      <td style={styles.itemAmount}>{item.amount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
 
-        <Hr style={styles.receiptDivider} />
+              <Hr style={styles.receiptDivider} />
 
-        {/* Total */}
-        <Row>
-          <Column style={styles.totalLabel}>Total ({currency})</Column>
-          <Column style={styles.totalAmount}>{amount}</Column>
-        </Row>
-      </Section>
+              {/* Total Row */}
+              <table border={0} cellPadding={0} cellSpacing={0} width="100%">
+                <tbody>
+                  <tr>
+                    <td style={styles.totalLabel}>Total Paid ({currency})</td>
+                    <td style={styles.totalAmount}>
+                      {currency} {amount}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </td>
+          </tr>
+        </tbody>
+      </table>
 
       {receiptUrl && (
         <Section style={styles.ctaSection}>
           <EmailButton href={receiptUrl} variant="secondary">
-            Download PDF Receipt
+            📄 Download eTIMS Compliant PDF Receipt
           </EmailButton>
         </Section>
       )}
 
       <Text style={styles.note}>
-        Questions about this charge? Reply to this email or contact our{' '}
+        Questions regarding this charge or tax validation? Contact{' '}
+        <Link href={`mailto:billing@sheriabot.com`} style={styles.link}>
+          billing@sheriabot.com
+        </Link>{' '}
+        or visit our{' '}
         <Link href={`${SHERIABOT_URL}/support`} style={styles.link}>
-          support team
+          help center
         </Link>
         .
       </Text>
@@ -103,78 +149,103 @@ export function getPaymentReceiptSubject(amount: string, invoiceNumber: string):
 
 const styles: Record<string, React.CSSProperties> = {
   greeting: {
-    color: EMAIL_THEME.colors.text,
-    fontSize: '16px',
+    color: SHERIA_EMAIL_PALETTE.text.body,
+    fontFamily: EMAIL_THEME.fonts.body,
+    fontSize: '14px',
     fontWeight: '600',
-    margin: '0 0 16px',
+    margin: '0 0 10px',
+  },
+  title: {
+    color: SHERIA_EMAIL_PALETTE.text.primary,
+    fontFamily: EMAIL_THEME.fonts.sans,
+    fontSize: '18px',
+    fontWeight: '700',
+    margin: '0 0 12px',
   },
   body: {
-    color: EMAIL_THEME.colors.text,
-    fontSize: '15px',
-    lineHeight: '1.6',
+    color: SHERIA_EMAIL_PALETTE.text.body,
+    fontFamily: EMAIL_THEME.fonts.body,
+    fontSize: '14px',
+    lineHeight: '22px',
     margin: '0 0 20px',
   },
   receiptCard: {
-    backgroundColor: EMAIL_THEME.colors.background,
-    border: `1px solid ${EMAIL_THEME.colors.border}`,
+    backgroundColor: SHERIA_EMAIL_PALETTE.surfaces.cardSubtle,
+    border: `1px solid ${SHERIA_EMAIL_PALETTE.surfaces.borderLight}`,
     borderRadius: '6px',
-    padding: '20px',
     margin: '0 0 20px',
   },
-  receiptMetaLabel: {
-    color: EMAIL_THEME.colors.textSecondary,
-    fontSize: '13px',
-    width: '40%',
+  metaLabel: {
+    color: SHERIA_EMAIL_PALETTE.text.muted,
+    fontFamily: EMAIL_THEME.fonts.sans,
+    fontSize: '12px',
+    width: '35%',
     padding: '4px 0',
   },
-  receiptMetaValue: {
-    color: EMAIL_THEME.colors.text,
-    fontSize: '13px',
-    fontWeight: '500',
+  metaValue: {
+    color: SHERIA_EMAIL_PALETTE.text.primary,
+    fontFamily: EMAIL_THEME.fonts.sans,
+    fontSize: '12px',
+    fontWeight: '600',
+    textAlign: 'right',
+    padding: '4px 0',
+  },
+  metaValueMono: {
+    color: SHERIA_EMAIL_PALETTE.brand.navy,
+    fontFamily: EMAIL_THEME.fonts.citation,
+    fontSize: '12px',
+    fontWeight: '600',
+    textAlign: 'right',
     padding: '4px 0',
   },
   receiptDivider: {
-    borderColor: EMAIL_THEME.colors.border,
+    borderColor: SHERIA_EMAIL_PALETTE.surfaces.borderLight,
     margin: '12px 0',
   },
   itemDescription: {
-    color: EMAIL_THEME.colors.text,
-    fontSize: '14px',
-    width: '70%',
+    color: SHERIA_EMAIL_PALETTE.text.body,
+    fontFamily: EMAIL_THEME.fonts.body,
+    fontSize: '13px',
     padding: '4px 0',
   },
   itemAmount: {
-    color: EMAIL_THEME.colors.text,
-    fontSize: '14px',
+    color: SHERIA_EMAIL_PALETTE.text.primary,
+    fontFamily: EMAIL_THEME.fonts.sans,
+    fontSize: '13px',
+    fontWeight: '600',
     textAlign: 'right',
     padding: '4px 0',
   },
   totalLabel: {
-    color: EMAIL_THEME.colors.text,
-    fontSize: '15px',
+    color: SHERIA_EMAIL_PALETTE.text.primary,
+    fontFamily: EMAIL_THEME.fonts.sans,
+    fontSize: '14px',
     fontWeight: '700',
-    width: '70%',
-    padding: '4px 0',
+    padding: '6px 0 0',
   },
   totalAmount: {
-    color: EMAIL_THEME.colors.primary,
-    fontSize: '15px',
-    fontWeight: '700',
+    color: SHERIA_EMAIL_PALETTE.brand.primary,
+    fontFamily: EMAIL_THEME.fonts.sans,
+    fontSize: '16px',
+    fontWeight: '800',
     textAlign: 'right',
-    padding: '4px 0',
+    padding: '6px 0 0',
   },
   ctaSection: {
     textAlign: 'center',
-    margin: '20px 0',
+    margin: '16px 0',
   },
   note: {
-    color: EMAIL_THEME.colors.textSecondary,
-    fontSize: '13px',
+    color: SHERIA_EMAIL_PALETTE.text.muted,
+    fontFamily: EMAIL_THEME.fonts.body,
+    fontSize: '12px',
+    lineHeight: '18px',
     margin: '16px 0 0',
     textAlign: 'center',
   },
   link: {
-    color: EMAIL_THEME.colors.primary,
+    color: SHERIA_EMAIL_PALETTE.brand.primary,
     textDecoration: 'none',
+    fontWeight: '600',
   },
 };
