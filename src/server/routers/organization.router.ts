@@ -455,12 +455,24 @@ export const organizationRouter = router({
           });
         }
 
+        const updateData: any = {
+          ...data,
+          updatedAt: new Date(),
+        };
+
+        if (data.homeJurisdictionCode) {
+          updateData.needsCountryConfirmation = false;
+          const currentEnabled = Array.isArray((existingOrg as any)?.enabledJurisdictions)
+            ? (existingOrg as any).enabledJurisdictions
+            : [];
+          if (!currentEnabled.includes(data.homeJurisdictionCode)) {
+            updateData.enabledJurisdictions = Array.from(new Set([data.homeJurisdictionCode, ...currentEnabled]));
+          }
+        }
+
         const organization = await ctx.prisma.organization.update({
           where: { id },
-          data: {
-            ...data,
-            updatedAt: new Date(),
-          },
+          data: updateData,
         });
 
         logger.info({
@@ -1105,6 +1117,9 @@ export const organizationRouter = router({
           contactEmail: true,
           contactPhone: true,
           homeJurisdictionCode: true,
+          enabledJurisdictions: true,
+          needsCountryConfirmation: true,
+          plan: true,
         },
       });
 
@@ -1729,15 +1744,27 @@ export const organizationRouter = router({
 
         const existingOrg = await ctx.prisma.organization.findUnique({
           where: { id: organizationId },
-          select: { homeJurisdictionCode: true },
+          select: { homeJurisdictionCode: true, enabledJurisdictions: true },
         });
+
+        const updateData: any = {
+          ...data,
+          updatedAt: new Date(),
+        };
+
+        if (data.homeJurisdictionCode) {
+          updateData.needsCountryConfirmation = false;
+          const currentEnabled = Array.isArray(existingOrg?.enabledJurisdictions)
+            ? existingOrg.enabledJurisdictions
+            : [];
+          if (!currentEnabled.includes(data.homeJurisdictionCode)) {
+            updateData.enabledJurisdictions = Array.from(new Set([data.homeJurisdictionCode, ...currentEnabled]));
+          }
+        }
 
         const organization = await ctx.prisma.organization.update({
           where: { id: organizationId },
-          data: {
-            ...data,
-            updatedAt: new Date(),
-          },
+          data: updateData,
           select: {
             id: true,
             name: true,
@@ -1750,6 +1777,9 @@ export const organizationRouter = router({
             contactEmail: true,
             contactPhone: true,
             homeJurisdictionCode: true,
+            enabledJurisdictions: true,
+            needsCountryConfirmation: true,
+            plan: true,
           },
         });
 

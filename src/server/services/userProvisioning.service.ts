@@ -159,6 +159,8 @@ async function resolveOrganization(
       verificationStatus: 'verified',
       verifiedAt: new Date(),
       homeJurisdictionCode: input.homeJurisdictionCode,
+      enabledJurisdictions: input.homeJurisdictionCode ? [input.homeJurisdictionCode] : [],
+      needsCountryConfirmation: !input.homeJurisdictionCode,
     },
     select: { id: true, name: true, subscriptionTier: true, plan: true },
   });

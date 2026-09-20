@@ -421,11 +421,33 @@ export const authRouter = router({
                 subscriptionTier: defaultSubscriptionTier,
                 plan: subscriptionTierToPlanOrFree(defaultSubscriptionTier),
                 homeJurisdictionCode: input.homeJurisdictionCode,
+                enabledJurisdictions: input.homeJurisdictionCode ? [input.homeJurisdictionCode] : [],
+                needsCountryConfirmation: !input.homeJurisdictionCode,
                 users: { connect: { id: user.id } },
               },
               select: { id: true },
             });
             user.organizationId = org.id;
+
+            await ctx.prisma.organizationMember.upsert({
+              where: {
+                userId_organizationId: {
+                  userId: user.id,
+                  organizationId: org.id,
+                },
+              },
+              create: {
+                userId: user.id,
+                organizationId: org.id,
+                role: MemberRole.OWNER,
+                status: MemberStatus.ACTIVE,
+                joinedAt: new Date(),
+              },
+              update: {
+                role: MemberRole.OWNER,
+                status: MemberStatus.ACTIVE,
+              },
+            });
           } catch (err: any) {
             logger.warn({ type: 'auth_register_org_create_failed', userId: user.id, error: err.message });
           }

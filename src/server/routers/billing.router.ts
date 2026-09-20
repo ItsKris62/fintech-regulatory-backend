@@ -150,6 +150,8 @@ export const billingRouter = router({
                   subscriptionCycleEnd: true,
                   mpesaPhoneNumber: true,
                   homeJurisdictionCode: true,
+                  enabledJurisdictions: true,
+                  needsCountryConfirmation: true,
                 },
               })
             : Promise.resolve(null),
@@ -218,6 +220,8 @@ export const billingRouter = router({
             subscriptionCycleEnd:    org?.subscriptionCycleEnd?.toISOString()    ?? null,
             mpesaPhoneNumber:        org?.mpesaPhoneNumber ?? null,
             homeJurisdictionCode:    org?.homeJurisdictionCode ?? null,
+            enabledJurisdictions:    org?.enabledJurisdictions ?? [],
+            needsCountryConfirmation: Boolean(org?.needsCountryConfirmation),
             catalogPrice,
             activePaymentProvider: appConfig.payments.activeProvider,
             stripeEnabled: appConfig.payments.stripeEnabled,
