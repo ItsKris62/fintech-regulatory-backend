@@ -49,11 +49,11 @@ services:
       - key: SUPABASE_JWT_SECRET
         sync: false
 
-      # Performance Feature Flags (Release Engineer Controls - Off for deploy)
+      # Performance Feature Flags (Milestone 1 Production State)
       - key: ENABLE_CONTEXT_FAST_PATH
-        value: "false"
+        value: "true"
       - key: ENABLE_SESSION_LRU
-        value: "false"
+        value: "true"
 
       # Email (Resend)
       - key: RESEND_API_KEY
