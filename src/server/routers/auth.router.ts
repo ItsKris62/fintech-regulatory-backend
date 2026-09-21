@@ -8,6 +8,7 @@ import { router, publicProcedure, protectedProcedure } from '../trpc/trpc';
 import {
   registerSchema,
   loginSchema,
+  verifyTotpLoginSchema,
   resetPasswordRequestSchema,
   resetPasswordSchema,
   verifyEmailSchema,
@@ -22,6 +23,9 @@ import { logger } from '@/utils/logger';
 import { hashIp, revokedBearerTokenKey } from '@/utils/request-identifiers';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
 import { SESSION_CONFIG, lastSeenKey, sessionStartKey } from '@/config/session';
+import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
+import { issueSessionForUser } from '@/server/services/session.service';
+import { encryptMfaChallenge, decryptMfaChallenge, MfaChallengeDecryptError } from '@/server/lib/mfa-challenge-crypto';
 import { revokedJtiKey, revokeAllUserTokens } from '@/utils/token-revocation';
 import { extractExp, extractJti } from '@/utils/jwt';
 import { loadSystemConfig } from '@/lib/system-config';
@@ -655,6 +659,44 @@ export const authRouter = router({
           }
         }
 
+        // If user has 2FA enabled, issue an MFA login challenge token instead of direct session tokens
+        if ((user as any).totpEnabled) {
+          const tempToken = nanoid(32);
+          const encrypted = encryptMfaChallenge({
+            userId: user.id,
+            accessToken: authData.session.access_token,
+            refreshToken: authData.session.refresh_token,
+          });
+
+          await redis.set(
+            `sheriabot:auth:mfa_challenge:${tempToken}`,
+            encrypted,
+            { ex: 300 }, // 5 minutes
+          );
+
+          logger.info({
+            type: 'auth_login_mfa_challenge_issued',
+            userId: user.id,
+            email: maskEmail(user.email),
+          });
+
+          await logSecurityEvent({
+            eventType: SECURITY_EVENT_TYPES.MFA_CHALLENGE_ISSUED,
+            userId: user.id,
+            organizationId: user.organizationId,
+            ipAddress: ctx.req.ip,
+            userAgent: ctx.req.headers['user-agent'],
+          });
+
+          return {
+            mfaRequired: true,
+            tempToken,
+            accessToken: null,
+            refreshToken: null,
+            user: null,
+          };
+        }
+
         let dbSessionId: string | undefined;
         try {
           const session = await ctx.prisma.session.create({
@@ -690,6 +732,7 @@ export const authRouter = router({
           organizationId: user.organizationId ?? undefined,
           supabaseAuthId: authData.user.id,
           mustChangePassword: (user as any).mustChangePassword === true,
+          totpEnabled: (user as any).totpEnabled ?? false,
           sessionId: dbSessionId,
           sessionExpiresAt,
         };
@@ -740,6 +783,8 @@ export const authRouter = router({
         logger.info({ type: 'auth_login_success', userId: user.id, loginIp, duration: Date.now() - startTime });
 
         return {
+          mfaRequired: false,
+          tempToken: null,
           accessToken: authData.session.access_token,
           refreshToken: authData.session.refresh_token,
           user: {
@@ -761,6 +806,260 @@ export const authRouter = router({
         }
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: getAuthErrorMessage(AUTH_ERROR_CODES.SERVER_ERROR), cause: error });
+      }
+    }),
+
+  /**
+   * Verify TOTP / 2FA login challenge  -  validates OTP or backup code and returns session tokens.
+   */
+  verifyTotpLogin: publicProcedure
+    .input(verifyTotpLoginSchema)
+    .mutation(async ({ input, ctx }) => {
+      const startTime = Date.now();
+      const challengeKey = `sheriabot:auth:mfa_challenge:${input.tempToken}`;
+      const attemptKey = `sheriabot:auth:mfa_attempts:${input.tempToken}`;
+
+      try {
+        // Rate limiting: cap at 5 attempts per tempToken
+        const attempts = await redis.incr(attemptKey);
+        if (attempts === 1) {
+          await redis.expire(attemptKey, 300);
+        }
+
+        if (attempts > 5) {
+          await redis.del(challengeKey).catch(() => {});
+          await redis.del(attemptKey).catch(() => {});
+          await logSecurityEvent({
+            eventType: SECURITY_EVENT_TYPES.MFA_RATE_LIMITED,
+            ipAddress: ctx.req.ip,
+            userAgent: ctx.req.headers['user-agent'],
+            metadata: { reason: 'tempToken_attempts_exceeded', attempts },
+          });
+          throw new TRPCError({
+            code: 'TOO_MANY_REQUESTS',
+            message: 'MFA_ATTEMPTS_EXCEEDED',
+          });
+        }
+
+        const raw = await redis.get<string>(challengeKey);
+        if (!raw) {
+          throw new TRPCError({
+            code: 'UNAUTHORIZED',
+            message: 'MFA session expired or invalid. Please sign in again.',
+          });
+        }
+
+        const userIdPrefix = typeof raw === 'string' ? raw.split('.')[0] : 'unknown';
+
+        // Global per-user rate limit across multiple tempTokens: 15 attempts in 15 minutes
+        if (userIdPrefix && userIdPrefix !== 'unknown') {
+          const userAttemptKey = `sheriabot:auth:mfa_user_attempts:${userIdPrefix}`;
+          const userAttempts = await redis.incr(userAttemptKey);
+          if (userAttempts === 1) {
+            await redis.expire(userAttemptKey, 900);
+          }
+
+          if (userAttempts > 15) {
+            await redis.del(challengeKey).catch(() => {});
+            await logSecurityEvent({
+              eventType: SECURITY_EVENT_TYPES.MFA_RATE_LIMITED,
+              userId: userIdPrefix,
+              ipAddress: ctx.req.ip,
+              userAgent: ctx.req.headers['user-agent'],
+              metadata: { reason: 'user_attempts_exceeded', attempts: userAttempts },
+            });
+            throw new TRPCError({
+              code: 'TOO_MANY_REQUESTS',
+              message: 'MFA_ATTEMPTS_EXCEEDED',
+            });
+          }
+        }
+
+        let decrypted: { userId: string; accessToken: string; refreshToken: string };
+        try {
+          decrypted = decryptMfaChallenge(raw);
+        } catch (err) {
+          const reason = err instanceof MfaChallengeDecryptError ? err.reason : 'unknown';
+          logger.warn({ type: 'mfa_challenge_decrypt_failed', userId: userIdPrefix, ip: ctx.req.ip, reason });
+          await logSecurityEvent({
+            eventType: SECURITY_EVENT_TYPES.MFA_CHALLENGE_DECRYPTION_FAILED,
+            userId: userIdPrefix !== 'unknown' ? userIdPrefix : undefined,
+            ipAddress: ctx.req.ip,
+            userAgent: ctx.req.headers['user-agent'] as string | undefined,
+            metadata: { reason },
+          });
+          await redis.del(challengeKey).catch(() => {});
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: 'MFA session expired. Please sign in again.' });
+        }
+
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: decrypted.userId },
+          include: {
+            organization: { select: { id: true, name: true, type: true } },
+            backupCodes: { where: { usedAt: null } },
+          },
+        });
+
+        if (!user || (user as any).deletedAt || (user as any).accountStatus !== 'active') {
+          throw new TRPCError({
+            code: 'UNAUTHORIZED',
+            message: 'Account not active or not found.',
+          });
+        }
+
+        let isValidMfa = false;
+
+        if (input.isBackupCode) {
+          const cleanCode = input.code.trim().replace(/[-\s]/g, '').toUpperCase();
+          if (!/^[A-Z0-9]{8}$/i.test(cleanCode)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Invalid backup code format. Expected 8 alphanumeric characters.',
+            });
+          }
+
+          let matchedBackupCodeId: string | null = null;
+          for (const bc of user.backupCodes) {
+            const matches = await verifyPassword(cleanCode, bc.codeHash);
+            if (matches) {
+              matchedBackupCodeId = bc.id;
+              break;
+            }
+          }
+
+          if (matchedBackupCodeId) {
+            // Atomic single-use claim: only updates if usedAt is still null
+            const claimResult = await ctx.prisma.userBackupCode.updateMany({
+              where: {
+                id: matchedBackupCodeId,
+                userId: user.id,
+                usedAt: null,
+              },
+              data: {
+                usedAt: new Date(),
+              },
+            });
+
+            if (claimResult.count === 1) {
+              isValidMfa = true;
+              logger.info({
+                type: 'auth_mfa_backup_code_used',
+                userId: user.id,
+                backupCodeId: matchedBackupCodeId,
+              });
+              await logSecurityEvent({
+                eventType: SECURITY_EVENT_TYPES.MFA_BACKUP_CODE_USED,
+                userId: user.id,
+                organizationId: user.organizationId,
+                ipAddress: ctx.req.ip,
+                userAgent: ctx.req.headers['user-agent'],
+                metadata: { backupCodeId: matchedBackupCodeId },
+              });
+            }
+          }
+
+          if (!isValidMfa) {
+            await logSecurityEvent({
+              eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_FAILED,
+              userId: user.id,
+              organizationId: user.organizationId,
+              ipAddress: ctx.req.ip,
+              userAgent: ctx.req.headers['user-agent'],
+              metadata: { method: 'backup_code' },
+            });
+            throw new TRPCError({
+              code: 'UNAUTHORIZED',
+              message: 'Invalid backup code. Please check and try again.',
+            });
+          }
+        } else {
+          const cleanToken = input.code.trim();
+          if (!/^\d{6}$/.test(cleanToken)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Invalid authentication code. Please enter a 6-digit code.',
+            });
+          }
+
+          if (!user.totpSecret) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Two-factor authentication is not configured for this account.',
+            });
+          }
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const otplib = require('otplib');
+          const verified = await otplib.verify({
+            secret: user.totpSecret,
+            token: cleanToken,
+          });
+          if (verified?.valid !== true) {
+            await logSecurityEvent({
+              eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_FAILED,
+              userId: user.id,
+              organizationId: user.organizationId,
+              ipAddress: ctx.req.ip,
+              userAgent: ctx.req.headers['user-agent'],
+              metadata: { method: 'totp' },
+            });
+            throw new TRPCError({
+              code: 'UNAUTHORIZED',
+              message: 'Invalid authentication code. Please check your authenticator app and try again.',
+            });
+          }
+          isValidMfa = true;
+        }
+
+        // Terminal success: Delete challenge key and rate limit attempt counters
+        const userAttemptKey = `sheriabot:auth:mfa_user_attempts:${decrypted.userId}`;
+        await Promise.all([
+          redis.del(challengeKey),
+          redis.del(attemptKey),
+          redis.del(userAttemptKey),
+        ]).catch(() => {});
+
+        await logSecurityEvent({
+          eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_SUCCESS,
+          userId: user.id,
+          organizationId: user.organizationId,
+          ipAddress: ctx.req.ip,
+          userAgent: ctx.req.headers['user-agent'],
+          metadata: { method: input.isBackupCode ? 'backup_code' : 'totp' },
+        });
+
+        const systemConfig = await loadSystemConfig();
+        const sessionTtlSeconds = resolveSessionTimeoutSeconds(systemConfig.sessionTimeoutHours);
+
+        const sessionResult = await issueSessionForUser({
+          prisma: ctx.prisma,
+          redis,
+          user,
+          req: ctx.req,
+          reason: input.isBackupCode ? 'backup_code' : 'password_totp',
+          supabaseTokens: {
+            accessToken: decrypted.accessToken,
+            refreshToken: decrypted.refreshToken,
+            supabaseAuthId: user.supabaseAuthId ?? undefined,
+          },
+          sessionTtlSeconds,
+        });
+
+        logger.info({
+          type: 'auth_mfa_login_success',
+          userId: user.id,
+          loginIp: ctx.req.ip,
+          duration: Date.now() - startTime,
+        });
+
+        return sessionResult;
+      } catch (error: any) {
+        if (error instanceof TRPCError && error.code !== 'INTERNAL_SERVER_ERROR') {
+          logger.warn({ type: 'auth_verify_mfa_error', error: error.message, code: error.code, duration: Date.now() - startTime });
+        } else {
+          logger.error({ type: 'auth_verify_mfa_error', error: error.message, duration: Date.now() - startTime });
+        }
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to complete two-factor authentication', cause: error });
       }
     }),
 

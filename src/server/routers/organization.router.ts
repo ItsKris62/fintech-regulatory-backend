@@ -16,7 +16,9 @@ import {
   updateEnabledJurisdictionsSchema,
   scheduleCountryReplacementSchema,
   cancelCountryReplacementSchema,
+  setMfaPolicySchema,
 } from '../schemas/organization.schema';
+import { userSatisfiesMfa } from '../lib/mfa-compliance';
 import { countryReplacementService } from '@/services/country-replacement.service';
 import { userCache } from '@/lib/redis/cache.service';
 import { redis } from '@/lib/redis/client';
@@ -1384,6 +1386,7 @@ export const organizationRouter = router({
         policy: {
           requireMfa: Boolean((organization as any).requireMfa),
           mfaPolicyEnabledAt: (organization as any).mfaPolicyEnabledAt,
+          mfaPolicyGraceHours: (organization as any).mfaPolicyGraceHours ?? 48,
           mfaPolicyUpdatedBy: (organization as any).mfaPolicyUpdatedBy,
         },
         posture: {
@@ -1407,7 +1410,7 @@ export const organizationRouter = router({
     }),
 
   updateSecurityPolicy: protectedProcedure
-    .input(z.object({ requireMfa: z.boolean() }))
+    .input(z.object({ requireMfa: z.boolean(), graceHours: z.number().int().min(0).max(720).optional() }))
     .mutation(async ({ input, ctx }) => {
       const organizationId = ctx.user.organizationId;
       if (!organizationId) {
@@ -1423,11 +1426,17 @@ export const organizationRouter = router({
         });
       }
 
+      const existingOrg = await ctx.prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { mfaPolicyEnabledAt: true, mfaPolicyGraceHours: true },
+      });
+
       const updated = await ctx.prisma.organization.update({
         where: { id: organizationId },
         data: {
           requireMfa: input.requireMfa,
-          mfaPolicyEnabledAt: input.requireMfa ? new Date() : null,
+          mfaPolicyEnabledAt: input.requireMfa ? ((existingOrg as any)?.mfaPolicyEnabledAt ?? new Date()) : null,
+          mfaPolicyGraceHours: input.graceHours !== undefined ? input.graceHours : ((existingOrg as any)?.mfaPolicyGraceHours ?? 48),
           mfaPolicyUpdatedBy: ctx.user.id,
           updatedAt: new Date(),
         } as any,
@@ -1435,6 +1444,7 @@ export const organizationRouter = router({
           id: true,
           requireMfa: true,
           mfaPolicyEnabledAt: true,
+          mfaPolicyGraceHours: true,
           mfaPolicyUpdatedBy: true,
         } as any,
       });
@@ -1444,7 +1454,75 @@ export const organizationRouter = router({
         action: 'organization_security_policy_updated',
         entityType: 'Organization',
         entityId: organizationId,
-        metadata: { organizationId, requireMfa: input.requireMfa },
+        metadata: { organizationId, requireMfa: input.requireMfa, graceHours: (updated as any).mfaPolicyGraceHours },
+        ipAddress: ctx.req.ip ?? null,
+        userAgent: ctx.req.headers['user-agent'] ?? null,
+      });
+
+      return { success: true, policy: updated };
+    }),
+
+  setMfaPolicy: protectedProcedure
+    .input(setMfaPolicySchema)
+    .mutation(async ({ input, ctx }) => {
+      const organizationId = input.organizationId || ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
+      }
+
+      await assertOrganizationManager(ctx, organizationId);
+
+      if (input.requireMfa && !userSatisfiesMfa(ctx.user)) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Enable two-factor authentication on your own account before requiring it for the organization.',
+        });
+      }
+
+      const existingOrg = await ctx.prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { mfaPolicyEnabledAt: true, mfaPolicyFirstEnabledAt: true, mfaPolicyGraceHours: true },
+      });
+
+      const now = new Date();
+      let mfaPolicyEnabledAt: Date | null = null;
+      let mfaPolicyFirstEnabledAt: Date | null | undefined = undefined;
+
+      if (input.requireMfa) {
+        mfaPolicyEnabledAt = now;
+        if (!existingOrg?.mfaPolicyFirstEnabledAt) {
+          mfaPolicyFirstEnabledAt = now;
+        }
+      } else {
+        mfaPolicyEnabledAt = null;
+      }
+
+      const updated = await ctx.prisma.organization.update({
+        where: { id: organizationId },
+        data: {
+          requireMfa: input.requireMfa,
+          mfaPolicyEnabledAt,
+          ...(mfaPolicyFirstEnabledAt !== undefined ? { mfaPolicyFirstEnabledAt } : {}),
+          mfaPolicyGraceHours: input.graceHours !== undefined ? input.graceHours : (existingOrg?.mfaPolicyGraceHours ?? 48),
+          mfaPolicyUpdatedBy: ctx.user.id,
+          updatedAt: now,
+        },
+        select: {
+          id: true,
+          requireMfa: true,
+          mfaPolicyEnabledAt: true,
+          mfaPolicyFirstEnabledAt: true,
+          mfaPolicyGraceHours: true,
+          mfaPolicyUpdatedBy: true,
+        },
+      });
+
+      await writeSafeAuditLog(ctx.prisma as any, {
+        userId: ctx.user.id,
+        action: 'organization_mfa_policy_set',
+        entityType: 'Organization',
+        entityId: organizationId,
+        metadata: { organizationId, requireMfa: input.requireMfa, graceHours: updated.mfaPolicyGraceHours },
         ipAddress: ctx.req.ip ?? null,
         userAgent: ctx.req.headers['user-agent'] ?? null,
       });

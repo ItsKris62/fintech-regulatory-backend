@@ -52,6 +52,9 @@ model User {
   categoryPreferences               NotificationCategoryPreference[]
   policies                          Policy[]
   sessions                          Session[]
+  backupCodes                       UserBackupCode[]
+  securityAuditEvents               SecurityAuditEvent[]
+  passkeys                          Passkey[]
   organization                      Organization?                    @relation(fields: [organizationId], references: [id])
   queryFeedbacks                    QueryFeedback[]
   savedResponses                    SavedResponse[]
@@ -228,6 +231,8 @@ model Organization {
   contactPhone           String?
   requireMfa             Boolean                   @default(false)
   mfaPolicyEnabledAt     DateTime?
+  mfaPolicyFirstEnabledAt DateTime?
+  mfaPolicyGraceHours    Int                       @default(48)
   mfaPolicyUpdatedBy     String?
   createdAt              DateTime                  @default(now())
   updatedAt              DateTime                  @updatedAt
@@ -283,6 +288,50 @@ model Session {
 
   @@index([userId])
   @@index([token])
+}
+
+model UserBackupCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model SecurityAuditEvent {
+  id             String    @id @default(cuid())
+  userId         String?
+  organizationId String?
+  eventType      String
+  ipAddress      String?
+  userAgent      String?
+  metadata       Json?
+  createdAt      DateTime  @default(now())
+  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+model Passkey {
+  id           String    @id @default(cuid())
+  userId       String
+  credentialId String    @unique // base64url of the raw credential ID
+  publicKey    Bytes // COSE-encoded public key
+  counter      BigInt    @default(0)
+  deviceName   String?
+  transports   String[]  @default([])
+  aaguid       String?
+  backedUp     Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Policy {
@@ -849,7 +898,7 @@ model AuditLog {
   ipAddress  String?
   userAgent  String?
   createdAt  DateTime @default(now())
-  user       User?    @relation(fields: [userId], references: [id])
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([action])

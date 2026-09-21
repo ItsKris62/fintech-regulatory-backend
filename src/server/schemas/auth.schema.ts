@@ -143,3 +143,17 @@ export const refreshTokenSchema = z.object({
 });
 
 export type RefreshTokenInput = z.infer<typeof refreshTokenSchema>;
+
+/**
+ * Verify TOTP / 2FA login challenge (via authenticator app or backup code)
+ */
+export const verifyTotpLoginSchema = z.object({
+  tempToken: z.string().min(1, 'MFA challenge session token is required'),
+  code: z
+    .string()
+    .min(6, 'Code must be at least 6 characters')
+    .max(20, 'Code must not exceed 20 characters'),
+  isBackupCode: z.boolean().default(false),
+});
+
+export type VerifyTotpLoginInput = z.infer<typeof verifyTotpLoginSchema>;

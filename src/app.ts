@@ -129,6 +129,12 @@ export async function buildApp(): Promise<FastifyInstance> {
         'Production startup blocked: INTASEND_WEBHOOK_CHALLENGE must be at least 32 characters and not a placeholder.',
       );
     }
+    const mfaEncryptionKey = process.env.MFA_CHALLENGE_ENCRYPTION_KEY;
+    if (!mfaEncryptionKey || !/^[0-9a-fA-F]{64}$/.test(mfaEncryptionKey.trim())) {
+      throw new Error(
+        'Production startup blocked: MFA_CHALLENGE_ENCRYPTION_KEY must be a 64-character hex string (256-bit).',
+      );
+    }
   }
 
   const app = Fastify({

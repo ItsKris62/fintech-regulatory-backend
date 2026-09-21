@@ -166,6 +166,14 @@ export const cancelCountryReplacementSchema = z.object({
 
 export type CancelCountryReplacementInput = z.infer<typeof cancelCountryReplacementSchema>;
 
+export const setMfaPolicySchema = z.object({
+  organizationId: z.string().optional(),
+  requireMfa: z.boolean(),
+  graceHours: z.number().int().min(0).max(720).optional(),
+});
+
+export type SetMfaPolicyInput = z.infer<typeof setMfaPolicySchema>;
+
 /**
  * Shared DTO for Organization Members
  */

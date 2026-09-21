@@ -472,6 +472,26 @@ await resetMutation.mutateAsync({
 
 ---
 
+## 🛡️ Audit Logging Architecture (`AuditLog` vs `SecurityAuditEvent`)
+
+SheriaBot maintains a strict two-table audit architecture:
+
+1. **`AuditLog` (Business & Entity Operations)**:
+   - **Purpose**: Records administrative, regulatory, and business entity lifecycle actions.
+   - **Service / Writer**: `prisma.auditLog.create` / `organization-invitation.service:writeSafeAuditLog`.
+   - **Examples**: `USER_LOGIN`, `organization_mfa_policy_set`, `DOCUMENT_UPLOAD`, `ORGANIZATION_INVITE_SENT`.
+
+2. **`SecurityAuditEvent` (Security Ceremonies & Auth Invariants)**:
+   - **Purpose**: High-fidelity regulatory security ledger tracking all authentication lifecycle, MFA, and WebAuthn ceremonies.
+   - **Service / Writer**: `src/server/services/audit.service.ts` (`logSecurityEvent`).
+   - **Examples**: `MFA_CHALLENGE_ISSUED`, `MFA_VERIFY_SUCCESS`, `MFA_CHALLENGE_DECRYPTION_FAILED`, `PASSKEY_REGISTRATION_SUCCESS`, `PASSKEY_COUNTER_REGRESSION`.
+
+**Boundary & Overlap Rules**:
+- Sensitive credentials, ciphertexts, and tokens are strictly excluded from both tables.
+- Authentication ceremony events write exclusively to `SecurityAuditEvent`. User entity logins write high-level session events to `AuditLog` alongside specific ceremony records in `SecurityAuditEvent`.
+
+---
+
 **Status**: ✅ Complete and Production-Ready
 
 This auth router implementation follows all Phase 2 requirements and integrates seamlessly with Phase 1 services. It's ready for integration with the tRPC context and middleware setup.

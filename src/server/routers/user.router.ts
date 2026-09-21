@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc/trpc';
@@ -21,13 +22,23 @@ import { hashPassword, verifyPassword } from '@/utils/helpers';
 import { userCache } from '@/lib/redis/cache.service';
 import { redis } from '@/lib/redis/client';
 import { rateLimiter } from '@/lib/redis/rate-limiter';
-import { supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
 import { logger } from '@/utils/logger';
 import { getSystemConfigNumber } from '@/lib/system-config';
 import { validatePassword } from '@/shared/validation/password.schema';
+import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
 
 const TOTP_PENDING_PREFIX = 'totp:pending:';
 const TOTP_PENDING_TTL = 600; // 10 minutes
+
+function generateBackupCodes(count = 8): string[] {
+  const codes: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const raw = randomBytes(4).toString('hex').toUpperCase();
+    codes.push(`${raw.slice(0, 4)}-${raw.slice(4, 8)}`);
+  }
+  return codes;
+}
 
 /**
  * User Router
@@ -659,7 +670,7 @@ export const userRouter = router({
   }),
 
   /**
-   * Confirm TOTP setup  -  verify first code from authenticator app and enable 2FA
+   * Confirm TOTP setup  -  verify first code from authenticator app, generate backup codes, and enable 2FA
    */
   confirmTotpSetup: protectedProcedure
     .input(confirmTotpSchema)
@@ -685,12 +696,29 @@ export const userRouter = router({
           });
         }
 
-        await ctx.prisma.user.update({
-          where: { id: ctx.user.id },
-          data: {
-            totpSecret: secret,
-            totpEnabled: true,
-          } as any,
+        // Generate 8 cryptographically secure single-use backup codes
+        const backupCodes = generateBackupCodes(8);
+        const hashedCodes = await Promise.all(backupCodes.map((c) => hashPassword(c)));
+
+        await ctx.prisma.$transaction(async (tx) => {
+          await tx.user.update({
+            where: { id: ctx.user.id },
+            data: {
+              totpSecret: secret,
+              totpEnabled: true,
+            } as any,
+          });
+
+          await tx.userBackupCode.deleteMany({
+            where: { userId: ctx.user.id },
+          });
+
+          await tx.userBackupCode.createMany({
+            data: hashedCodes.map((codeHash) => ({
+              userId: ctx.user.id,
+              codeHash,
+            })),
+          });
         });
 
         await redis.del(`${TOTP_PENDING_PREFIX}${ctx.user.id}`);
@@ -698,7 +726,19 @@ export const userRouter = router({
 
         logger.info({ type: 'user_totp_enabled', userId: ctx.user.id });
 
-        return { success: true, message: 'Two-factor authentication enabled successfully.' };
+        await logSecurityEvent({
+          eventType: SECURITY_EVENT_TYPES.MFA_ENROLLED,
+          userId: ctx.user.id,
+          organizationId: ctx.user.organizationId,
+          ipAddress: ctx.req.ip,
+          userAgent: ctx.req.headers['user-agent'],
+        });
+
+        return {
+          success: true,
+          message: 'Two-factor authentication enabled successfully.',
+          backupCodes,
+        };
       } catch (error: any) {
         if (error instanceof TRPCError) throw error;
 
@@ -717,45 +757,201 @@ export const userRouter = router({
     }),
 
   /**
-   * Disable TOTP 2FA  -  requires current password for security confirmation
+   * Disable TOTP 2FA  -  requires current password and second factor (TOTP or backup code)
    */
   disableTotp: protectedProcedure
     .input(disableTotpSchema)
     .mutation(async ({ input, ctx }) => {
+      const disableAttemptKey = `sheriabot:auth:mfa_disable_attempts:${ctx.user.id}`;
+
       try {
+        // Rate limiting for disableTotp: 5 attempts per 5 minutes per user
+        const attempts = await redis.incr(disableAttemptKey);
+        if (attempts === 1) {
+          await redis.expire(disableAttemptKey, 300);
+        }
+
+        if (attempts > 5) {
+          await logSecurityEvent({
+            eventType: SECURITY_EVENT_TYPES.MFA_RATE_LIMITED,
+            userId: ctx.user.id,
+            organizationId: ctx.user.organizationId,
+            ipAddress: ctx.req.ip,
+            userAgent: ctx.req.headers['user-agent'],
+            metadata: { action: 'disableTotp', attempts },
+          });
+          throw new TRPCError({
+            code: 'TOO_MANY_REQUESTS',
+            message: 'MFA_ATTEMPTS_EXCEEDED',
+          });
+        }
+
         const user = await ctx.prisma.user.findUnique({
           where: { id: ctx.user.id },
+          include: {
+            backupCodes: { where: { usedAt: null } },
+          },
         });
 
         if (!user) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
         }
 
-        if (!user.password) {
+        if (!user.totpEnabled) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'Password verification is unavailable for your account. Please use "Forgot Password" to set a new password.',
+            message: 'Two-factor authentication is not enabled on this account.',
           });
         }
-        const isValid = await verifyPassword(input.password, user.password);
-        if (!isValid) {
+
+        // 1. Password factor verification
+        let isPasswordValid = false;
+        if (user.password) {
+          isPasswordValid = await verifyPassword(input.password, user.password);
+        } else if (user.email) {
+          // Fallback to Supabase authentication for Supabase-only registered users
+          const { data: authData, error: authError } = await supabaseClient.auth.signInWithPassword({
+            email: user.email,
+            password: input.password,
+          });
+          if (!authError && authData?.user) {
+            isPasswordValid = true;
+          }
+        }
+
+        if (!isPasswordValid) {
+          await logSecurityEvent({
+            eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_FAILED,
+            userId: ctx.user.id,
+            organizationId: ctx.user.organizationId,
+            ipAddress: ctx.req.ip,
+            userAgent: ctx.req.headers['user-agent'],
+            metadata: { action: 'disableTotp', failedFactor: 'password' },
+          });
           throw new TRPCError({
             code: 'UNAUTHORIZED',
             message: 'Incorrect password. Please try again.',
           });
         }
 
-        await ctx.prisma.user.update({
-          where: { id: ctx.user.id },
-          data: {
-            totpSecret: null,
-            totpEnabled: false,
-          } as any,
+        // 2. Second factor verification (TOTP code or Backup Code)
+        let isValidSecondFactor = false;
+
+        if (input.isBackupCode) {
+          const cleanCode = input.code.trim().replace(/[-\s]/g, '').toUpperCase();
+          let matchedBackupCodeId: string | null = null;
+          for (const bc of user.backupCodes) {
+            const matches = await verifyPassword(cleanCode, bc.codeHash);
+            if (matches) {
+              matchedBackupCodeId = bc.id;
+              break;
+            }
+          }
+
+          if (matchedBackupCodeId) {
+            const claimResult = await ctx.prisma.userBackupCode.updateMany({
+              where: {
+                id: matchedBackupCodeId,
+                userId: ctx.user.id,
+                usedAt: null,
+              },
+              data: {
+                usedAt: new Date(),
+              },
+            });
+            if (claimResult.count === 1) {
+              isValidSecondFactor = true;
+              await logSecurityEvent({
+                eventType: SECURITY_EVENT_TYPES.MFA_BACKUP_CODE_USED,
+                userId: ctx.user.id,
+                organizationId: ctx.user.organizationId,
+                ipAddress: ctx.req.ip,
+                userAgent: ctx.req.headers['user-agent'],
+                metadata: { action: 'disableTotp', backupCodeId: matchedBackupCodeId },
+              });
+            }
+          }
+
+          if (!isValidSecondFactor) {
+            await logSecurityEvent({
+              eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_FAILED,
+              userId: ctx.user.id,
+              organizationId: ctx.user.organizationId,
+              ipAddress: ctx.req.ip,
+              userAgent: ctx.req.headers['user-agent'],
+              metadata: { action: 'disableTotp', failedFactor: 'backup_code' },
+            });
+            throw new TRPCError({
+              code: 'UNAUTHORIZED',
+              message: 'Invalid backup code. Please check and try again.',
+            });
+          }
+        } else {
+          if (!user.totpSecret) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Two-factor secret is missing on account.',
+            });
+          }
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const otplib = require('otplib');
+          const verified = await otplib.verify({
+            secret: user.totpSecret,
+            token: input.code.trim(),
+          });
+          if (verified?.valid !== true) {
+            await logSecurityEvent({
+              eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_FAILED,
+              userId: ctx.user.id,
+              organizationId: ctx.user.organizationId,
+              ipAddress: ctx.req.ip,
+              userAgent: ctx.req.headers['user-agent'],
+              metadata: { action: 'disableTotp', failedFactor: 'totp' },
+            });
+            throw new TRPCError({
+              code: 'UNAUTHORIZED',
+              message: 'Invalid authentication code. Please check your authenticator app.',
+            });
+          }
+          isValidSecondFactor = true;
+        }
+
+        // 3. Persist disable state and clean up backup codes
+        await ctx.prisma.$transaction(async (tx) => {
+          await tx.user.update({
+            where: { id: ctx.user.id },
+            data: {
+              totpSecret: null,
+              totpEnabled: false,
+            } as any,
+          });
+
+          await tx.userBackupCode.deleteMany({
+            where: { userId: ctx.user.id },
+          });
+        });
+
+        // 4. Explicit session eviction: Revoke DB sessions and Redis session caches
+        await ctx.prisma.session.deleteMany({
+          where: { userId: ctx.user.id },
         });
 
         await userCache.delete(ctx.user.id);
+        if ((user as any).supabaseAuthId) {
+          await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch(() => {});
+        }
+        // No userId-keyed session cache exists; fingerprint keys are keyed by sessionId and become unreachable once DB rows are deleted.
+        await redis.del(disableAttemptKey).catch(() => {});
 
         logger.info({ type: 'user_totp_disabled', userId: ctx.user.id });
+
+        await logSecurityEvent({
+          eventType: SECURITY_EVENT_TYPES.MFA_DISABLED,
+          userId: ctx.user.id,
+          organizationId: ctx.user.organizationId,
+          ipAddress: ctx.req.ip,
+          userAgent: ctx.req.headers['user-agent'],
+        });
 
         return { success: true, message: 'Two-factor authentication disabled.' };
       } catch (error: any) {

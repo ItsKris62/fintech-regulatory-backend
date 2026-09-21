@@ -42,6 +42,7 @@ export interface User {
   supabaseAuthId: string; // Supabase auth.users UUID (= JWT sub)
   mustChangePassword?: boolean;
   totpEnabled?: boolean;
+  hasPasskey?: boolean;
   /** Unix ms timestamp of Session.expiresAt  -  enforced on every request (B6). */
   sessionExpiresAt?: number;
 }
@@ -58,6 +59,10 @@ export interface Context {
   // Populated by withPlanContext middleware (optional -- only present after that middleware runs)
   plan?: EffectivePlan;
   effectivePlanSource?: EffectivePlanSource;
+  mfaEnforcement?: {
+    state: 'grace' | 'enforced';
+    deadline?: Date;
+  };
   entitlementProfile?: PilotEntitlementProfile | null;
   entitlements?: PlanEntitlementConfig;
   appliedPlanOverrides?: AppliedEnterpriseOverride[];
@@ -216,6 +221,10 @@ export async function createContext({
             totpEnabled: true,
             accountStatus: true,
             deletedAt: true,
+            passkeys: {
+              select: { id: true },
+              take: 1,
+            },
           },
         });
 
@@ -245,6 +254,7 @@ export async function createContext({
               supabaseAuthId: dbUser.supabaseAuthId,
               mustChangePassword: dbUser.mustChangePassword,
               totpEnabled: dbUser.totpEnabled,
+              hasPasskey: (dbUser.passkeys && dbUser.passkeys.length > 0) || false,
               sessionId: activeSession.id,
               sessionExpiresAt: activeSession.expiresAt.getTime(),
             };

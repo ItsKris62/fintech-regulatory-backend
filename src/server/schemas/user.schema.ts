@@ -86,10 +86,15 @@ export const confirmTotpSchema = z.object({
 export type ConfirmTotpInput = z.infer<typeof confirmTotpSchema>;
 
 /**
- * Disable TOTP  -  requires current password for security
+ * Disable TOTP  -  requires current password and second factor (TOTP code or backup code)
  */
 export const disableTotpSchema = z.object({
   password: z.string().min(1, 'Password is required'),
+  code: z
+    .string()
+    .min(6, 'Verification code or backup code is required')
+    .max(20, 'Code must not exceed 20 characters'),
+  isBackupCode: z.boolean().default(false),
 });
 
 export type DisableTotpInput = z.infer<typeof disableTotpSchema>;
