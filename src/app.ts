@@ -1,9 +1,8 @@
 import Fastify, { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import { z } from 'zod';
-import Stripe from 'stripe';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
-import { createContext } from './server/trpc/context';
+import { createContext, contextMetrics } from './server/trpc/context';
 import { appRouter } from './server/trpc/router';
 import { logger } from './utils/logger';
 import { sanitizeErrorMessage } from './utils/error-sanitizer';
@@ -599,7 +598,63 @@ export async function buildApp(): Promise<FastifyInstance> {
         uniqueErrors: errorSummary.totalUniqueErrors,
         recentErrors: errorSummary.topErrors.slice(0, 5),
       },
+      authContextMetrics: {
+        totalRequests: contextMetrics.totalRequests,
+        memoryHits: contextMetrics.memoryHits,
+        redisHits: contextMetrics.redisHits,
+        dbMisses: contextMetrics.dbMisses,
+        expiredTokens: contextMetrics.expiredTokens,
+        signatureMismatches: contextMetrics.signatureMismatches,
+        hardRejections: contextMetrics.hardRejections,
+        fallbackToGetUser: contextMetrics.fallbackToGetUser,
+      },
     });
+  });
+
+  // -- Prometheus / OpenMetrics metrics endpoint (Protected) -----------------
+  app.get('/metrics', async (request, reply) => {
+    const metricsSecret = process.env.METRICS_SCRAPE_SECRET;
+    if (metricsSecret) {
+      const authHeader = request.headers.authorization;
+      const scrapeHeader = request.headers['x-metrics-token'];
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : scrapeHeader;
+      if (token !== metricsSecret) {
+        return reply.status(401).send({ error: 'Unauthorized metrics scrape' });
+      }
+    }
+
+    const lines = [
+      '# HELP sheriabot_auth_context_requests_total Total number of tRPC auth context creations.',
+      '# TYPE sheriabot_auth_context_requests_total counter',
+      `sheriabot_auth_context_requests_total ${contextMetrics.totalRequests}`,
+      '',
+      '# HELP sheriabot_auth_memory_hits_total In-process LRU session memory cache hits.',
+      '# TYPE sheriabot_auth_memory_hits_total counter',
+      `sheriabot_auth_memory_hits_total ${contextMetrics.memoryHits}`,
+      '',
+      '# HELP sheriabot_auth_redis_hits_total Distributed Redis session cache hits.',
+      '# TYPE sheriabot_auth_redis_hits_total counter',
+      `sheriabot_auth_redis_hits_total ${contextMetrics.redisHits}`,
+      '',
+      '# HELP sheriabot_auth_db_misses_total Database session query fallbacks.',
+      '# TYPE sheriabot_auth_db_misses_total counter',
+      `sheriabot_auth_db_misses_total ${contextMetrics.dbMisses}`,
+      '',
+      '# HELP sheriabot_auth_expired_tokens_total Expired JWTs rejected (informational).',
+      '# TYPE sheriabot_auth_expired_tokens_total counter',
+      `sheriabot_auth_expired_tokens_total ${contextMetrics.expiredTokens}`,
+      '',
+      '# HELP sheriabot_auth_signature_mismatches_total Cryptographic signature mismatches or forged tokens (alertable).',
+      '# TYPE sheriabot_auth_signature_mismatches_total counter',
+      `sheriabot_auth_signature_mismatches_total ${contextMetrics.signatureMismatches}`,
+      '',
+      '# HELP sheriabot_auth_fallback_getuser_total Fallbacks to Supabase Auth API.',
+      '# TYPE sheriabot_auth_fallback_getuser_total counter',
+      `sheriabot_auth_fallback_getuser_total ${contextMetrics.fallbackToGetUser}`,
+    ];
+
+    reply.header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    return lines.join('\n') + '\n';
   });
 
   // -- Root endpoint --------------------------------------------------------
@@ -607,7 +662,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     name: 'SheriaBot API',
     version: '1.0.0',
     description: 'AI-Powered Regulatory Compliance Platform for Kenya',
-    endpoints: { health: '/health', healthDetailed: '/health/detailed', trpc: '/trpc' },
+    endpoints: { health: '/health', healthDetailed: '/health/detailed', metrics: '/metrics', trpc: '/trpc' },
   }));
 
   // -- Regulatory Alerts SSE stream -----------------------------------------

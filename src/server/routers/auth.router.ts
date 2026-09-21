@@ -30,6 +30,7 @@ import { revokedJtiKey, revokeAllUserTokens } from '@/utils/token-revocation';
 import { extractExp, extractJti } from '@/utils/jwt';
 import { loadSystemConfig } from '@/lib/system-config';
 import { subscriptionTierToPlanOrFree } from '@/utils/plan-mapping';
+import { durableTaskRunner } from '../services/durable-background-tasks';
 
 import {
   isFreeEmailDomain,
@@ -501,8 +502,12 @@ export const authRouter = router({
       const startTime = Date.now();
 
       try {
-        // Rate limiting  -  count by hashed IP in addition to email for layered defence
-        const rlResult = await authRateLimiter.login(input.email);
+        // Run rate limiting and system configuration concurrently
+        const [rlResult, systemConfig] = await Promise.all([
+          authRateLimiter.login(input.email),
+          loadSystemConfig(),
+        ]);
+
         if (!rlResult.allowed) {
           logger.warn({
             type: 'auth_login_rate_limited',
@@ -518,7 +523,6 @@ export const authRouter = router({
         }
 
         logger.info({ type: 'auth_login_attempt', email: maskEmail(input.email) });
-        const systemConfig = await loadSystemConfig();
         const requireEmailVerification = systemConfig.requireEmailVerification !== false;
         const sessionTtlSeconds = resolveSessionTimeoutSeconds(systemConfig.sessionTimeoutHours);
 
@@ -636,17 +640,15 @@ export const authRouter = router({
           const temporaryPasswordExpiresAt = (user as any).temporaryPasswordExpiresAt as Date | null | undefined;
           if (temporaryPasswordExpiresAt && temporaryPasswordExpiresAt <= new Date()) {
             await supabaseAdmin.auth.admin.signOut(authData.user.id).catch(() => {});
-            await ctx.prisma.auditLog.create({
-              data: {
-                userId: user.id,
-                action: 'PILOT_TEMP_PASSWORD_EXPIRED_LOGIN_ATTEMPT',
-                entityType: 'User',
-                entityId: user.id,
-                ipAddress: ctx.req.ip || undefined,
-                userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
-                metadata: { temporaryPasswordExpiresAt: temporaryPasswordExpiresAt.toISOString() },
-              },
-            }).catch(() => {});
+            durableTaskRunner.enqueueAuditLog({
+              userId: user.id,
+              action: 'PILOT_TEMP_PASSWORD_EXPIRED_LOGIN_ATTEMPT',
+              entityType: 'User',
+              entityId: user.id,
+              ipAddress: ctx.req.ip || undefined,
+              userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
+              metadata: { temporaryPasswordExpiresAt: temporaryPasswordExpiresAt.toISOString() },
+            });
             logger.warn({
               type: 'pilot_temp_password_expired_login_attempt',
               userId: user.id,
@@ -680,13 +682,13 @@ export const authRouter = router({
             email: maskEmail(user.email),
           });
 
-          await logSecurityEvent({
+          durableTaskRunner.enqueue('log_mfa_challenge_security_event', {
             eventType: SECURITY_EVENT_TYPES.MFA_CHALLENGE_ISSUED,
             userId: user.id,
             organizationId: user.organizationId,
             ipAddress: ctx.req.ip,
             userAgent: ctx.req.headers['user-agent'],
-          });
+          }, (data) => logSecurityEvent(data));
 
           return {
             mfaRequired: true,
@@ -719,9 +721,7 @@ export const authRouter = router({
           });
         }
 
-        // B6: Include session expiry in the Redis user profile so context.ts
-        // can enforce it on every request without an extra DB query.
-        // Session.expiresAt is controlled by System Configuration.
+        // B6: Include session expiry in user profile for fast validation
         const sessionExpiresAt = Date.now() + sessionTtlSeconds * 1000;
 
         // Cache user profile in Upstash for fast context lookups (1 hour)
@@ -736,36 +736,35 @@ export const authRouter = router({
           sessionId: dbSessionId,
           sessionExpiresAt,
         };
-        await redis.set(`user:session:${authData.user.id}`, JSON.stringify(userProfile), { ex: 3600 });
 
-        // B3: Seed idle-timeout window and absolute session-start on login.
-        // Both keys are TTL-only; their string value is the epoch-ms timestamp.
         const loginNow = Date.now();
-        await Promise.all([
-          redis.set(lastSeenKey(user.id),    String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
-          redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
-        ]).catch((err: unknown) => {
-          logger.warn({ type: 'auth_login_session_keys_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
-        });
+        const rawIp = ctx.req.ip ?? '';
+        const rawUa = (ctx.req.headers['user-agent'] ?? '').substring(0, 500);
+        const fingerprint = createHash('sha256').update(`${rawIp}:${rawUa}`).digest('hex');
 
-        // B5: Store a session fingerprint (SHA-256 of IP + UA) so context.ts
-        // can detect anomalies (UA change, IP change) in monitor mode.
-        // Key is scoped to sessionId so each login gets its own fingerprint.
+        // Parallelize all Redis session/state initializations
+        const redisWrites: Promise<unknown>[] = [
+          redis.set(`user:session:${authData.user.id}`, JSON.stringify(userProfile), { ex: 3600 }),
+          redis.set(lastSeenKey(user.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
+          redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
+        ];
+
         if (dbSessionId) {
-          const rawIp = ctx.req.ip ?? '';
-          const rawUa = (ctx.req.headers['user-agent'] ?? '').substring(0, 500);
-          const fingerprint = createHash('sha256').update(`${rawIp}:${rawUa}`).digest('hex');
-          await redis
-            .set(`sheriabot:session_fingerprint:${dbSessionId}`, fingerprint, { ex: sessionTtlSeconds })
-            .catch((err: unknown) => {
-              logger.warn({ type: 'auth_login_fingerprint_store_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
-            });
+          redisWrites.push(
+            redis.set(`sheriabot:session_fingerprint:${dbSessionId}`, fingerprint, { ex: sessionTtlSeconds }),
+          );
         }
 
-        const loginIp = ctx.req.ip || ctx.req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() || null;
-        await ctx.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), lastLoginIp: loginIp } });
+        await Promise.all(redisWrites).catch((err: unknown) => {
+          logger.warn({ type: 'auth_login_session_redis_writes_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
+        });
 
-        // Write audit log entry for login
+        const loginIp = ctx.req.ip || ctx.req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() || null;
+
+        // Telemetry offloaded to durable background worker
+        durableTaskRunner.enqueueLastLoginUpdate(user.id, loginIp);
+
+        // Synchronous audit logging for strict RPO=0 compliance
         await ctx.prisma.auditLog.create({
           data: {
             userId: user.id,
@@ -773,7 +772,7 @@ export const authRouter = router({
             entityType: 'User',
             entityId: user.id,
             ipAddress: loginIp ?? undefined,
-            userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
+            userAgent: rawUa,
             metadata: { email: user.email, sessionId: dbSessionId },
           },
         }).catch((err: unknown) => {
