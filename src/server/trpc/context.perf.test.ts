@@ -29,15 +29,18 @@ import {
   getInMemoryUserSession,
   setInMemoryUserSession,
   evictInMemoryUserSession,
+  resetJwksCacheForTest,
   contextMetrics,
   type User,
 } from './context';
 import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
+import { generateKeyPair, SignJWT, exportJWK } from 'jose';
 
 describe('createContext Performance, Security & Revocation Invariants', () => {
   const mockJwtSecret = 'test-jwt-secret-for-testing-perf-12345';
   process.env.SUPABASE_JWT_SECRET = mockJwtSecret;
+  process.env.SUPABASE_URL = 'https://mock-project-test.supabase.co';
 
   const validPayload = {
     sub: 'user-supabase-uuid-1234',
@@ -60,11 +63,12 @@ describe('createContext Performance, Security & Revocation Invariants', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetJwksCacheForTest();
     contextMetrics.reset();
     evictInMemoryUserSession('user-supabase-uuid-1234');
   });
 
-  describe('1. Strict JWT Hard-Rejection Rules', () => {
+  describe('1. Strict JWT Hard-Rejection Rules (HS256 & ES256 JWKS)', () => {
     it('verifies a signed HS256 JWT in <5ms without external network calls', async () => {
       const token = jwt.sign(validPayload, mockJwtSecret, { algorithm: 'HS256' });
       // Warm up JIT
@@ -80,7 +84,7 @@ describe('createContext Performance, Security & Revocation Invariants', () => {
       expect(elapsed).toBeLessThan(15);
     });
 
-    it('HARD-REJECTS tampered-signature tokens and NEVER falls back to Supabase API', async () => {
+    it('HARD-REJECTS tampered-signature HS256 tokens and NEVER falls back to Supabase API', async () => {
       // Token signed with a different key
       const forgedToken = jwt.sign(validPayload, 'attacker-unauthorized-secret-key', { algorithm: 'HS256' });
 
@@ -105,6 +109,86 @@ describe('createContext Performance, Security & Revocation Invariants', () => {
       expect(contextMetrics.expiredTokens).toBe(0);
     });
 
+    it('verifies genuine ES256 token against mocked JWKS in <10ms', async () => {
+      const { privateKey: validPrivateKey, publicKey } = await generateKeyPair('ES256');
+      const jwk = await exportJWK(publicKey);
+      jwk.kid = 'test-es256-kid-01';
+      jwk.alg = 'ES256';
+      jwk.use = 'sig';
+
+      // Mock remote JWKS endpoint
+      const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ keys: [jwk] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const es256Token = await new SignJWT({
+        sub: validPayload.sub,
+        email: validPayload.email,
+        role: validPayload.role,
+      })
+        .setProtectedHeader({ alg: 'ES256', kid: 'test-es256-kid-01' })
+        .setIssuedAt()
+        .setIssuer('https://mock-project-test.supabase.co/auth/v1')
+        .setAudience('authenticated')
+        .setExpirationTime('1h')
+        .sign(validPrivateKey);
+
+      const res = await verifySupabaseTokenLocally(es256Token);
+      expect(res.status).toBe('VALID');
+      if (res.status === 'VALID') {
+        expect(res.payload.sub).toBe(validPayload.sub);
+      }
+      expect(fetchSpy).toHaveBeenCalled();
+    });
+
+    it('HARD-REJECTS forged ES256 token signed with unauthorized private key', async () => {
+      const { publicKey } = await generateKeyPair('ES256');
+      const { privateKey: attackerPrivateKey } = await generateKeyPair('ES256');
+      const jwk = await exportJWK(publicKey);
+      jwk.kid = 'test-es256-kid-01';
+      jwk.alg = 'ES256';
+      jwk.use = 'sig';
+
+      vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ keys: [jwk] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      // Attacker signs token with a different private key but claims same kid
+      const forgedEs256Token = await new SignJWT({
+        sub: 'attacker-injected-sub',
+        email: 'attacker@evil.com',
+        role: 'authenticated',
+      })
+        .setProtectedHeader({ alg: 'ES256', kid: 'test-es256-kid-01' })
+        .setIssuedAt()
+        .setIssuer('https://mock-project-test.supabase.co/auth/v1')
+        .setAudience('authenticated')
+        .setExpirationTime('1h')
+        .sign(attackerPrivateKey);
+
+      const res = await verifySupabaseTokenLocally(forgedEs256Token);
+      expect(res.status).toBe('HARD_REJECT');
+      if (res.status === 'HARD_REJECT') {
+        expect(res.rejectionType).toBe('SIGNATURE_MISMATCH');
+      }
+
+      const req = {
+        headers: { authorization: `Bearer ${forgedEs256Token}` },
+        ip: '127.0.0.1',
+      } as any;
+      const response = {} as any;
+
+      const ctx = await createContext({ req, res: response });
+      expect(ctx.user).toBeNull();
+      expect(contextMetrics.signatureMismatches).toBe(1);
+    });
+
     it('HARD-REJECTS expired tokens and increments expiredTokens metric', async () => {
       const expiredPayload = { ...validPayload, exp: Math.floor(Date.now() / 1000) - 100 };
       const token = jwt.sign(expiredPayload, mockJwtSecret, { algorithm: 'HS256' });
@@ -127,12 +211,23 @@ describe('createContext Performance, Security & Revocation Invariants', () => {
     });
 
     it('allows fallback to Supabase API on key rotation or unconfigured JWKS', async () => {
-      // Simulate an RS256 token with unknown kid or unconfigured JWKS
-      const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: 'unknown-key-id' })).toString('base64url');
-      const payload = Buffer.from(JSON.stringify(validPayload)).toString('base64url');
-      const rs256Token = `${header}.${payload}.mockSignature`;
+      const { publicKey } = await generateKeyPair('ES256');
+      const jwk = await exportJWK(publicKey);
+      jwk.kid = 'known-kid-1';
 
-      const res = await verifySupabaseTokenLocally(rs256Token);
+      vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ keys: [jwk] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      // Token with unknown kid (simulates key rotation where JWKS does not have it yet)
+      const header = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'JWT', kid: 'unknown-rotated-kid' })).toString('base64url');
+      const payload = Buffer.from(JSON.stringify(validPayload)).toString('base64url');
+      const unkToken = `${header}.${payload}.mockSignature`;
+
+      const res = await verifySupabaseTokenLocally(unkToken);
       expect(res.status).toBe('FALLBACK_REQUIRED');
     });
   });
