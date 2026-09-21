@@ -611,8 +611,18 @@ export async function buildApp(): Promise<FastifyInstance> {
     });
   });
 
-  // -- Prometheus / OpenMetrics metrics endpoint -----------------------------
+  // -- Prometheus / OpenMetrics metrics endpoint (Protected) -----------------
   app.get('/metrics', async (request, reply) => {
+    const metricsSecret = process.env.METRICS_SCRAPE_SECRET;
+    if (metricsSecret) {
+      const authHeader = request.headers.authorization;
+      const scrapeHeader = request.headers['x-metrics-token'];
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : scrapeHeader;
+      if (token !== metricsSecret) {
+        return reply.status(401).send({ error: 'Unauthorized metrics scrape' });
+      }
+    }
+
     const lines = [
       '# HELP sheriabot_auth_context_requests_total Total number of tRPC auth context creations.',
       '# TYPE sheriabot_auth_context_requests_total counter',
