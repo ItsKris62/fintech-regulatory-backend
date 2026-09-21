@@ -32,6 +32,7 @@ import {
   getIntaSendWebhookClientIp,
 } from './lib/intasend/webhook-verifier';
 import { hashIp } from './utils/request-identifiers';
+import Stripe from 'stripe';
 import * as Sentry from '@sentry/node';
 import { isClientOrExpectedError, sanitizeHeadersForSentry } from './lib/sentry';
 
