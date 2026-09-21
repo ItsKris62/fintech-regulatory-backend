@@ -101,6 +101,7 @@
     "fastify-plugin": "^5.1.0",
     "file-type": "^21.3.0",
     "intasend-node": "^1.1.2",
+    "jose": "^6.2.12",
     "jsonwebtoken": "^9.0.3",
     "mammoth": "^1.11.0",
     "nanoid": "^5.1.6",

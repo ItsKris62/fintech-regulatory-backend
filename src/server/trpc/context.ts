@@ -152,6 +152,47 @@ export function evictInMemoryUserSession(supabaseUserId: string): void {
   inMemorySessionCache.delete(supabaseUserId);
 }
 
+import {
+  createRemoteJWKSet,
+  jwtVerify,
+  decodeProtectedHeader,
+  errors as joseErrors,
+  type JWTVerifyGetKey,
+} from 'jose';
+
+let cachedJwks: JWTVerifyGetKey | null = null;
+let cachedJwksUrl: string | null = null;
+
+export function getSupabaseJwks(): JWTVerifyGetKey | null {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  if (!supabaseUrl) return null;
+
+  const jwksUrl = `${supabaseUrl.replace(/\/$/, '')}/auth/v1/.well-known/jwks.json`;
+  if (cachedJwks && cachedJwksUrl === jwksUrl) {
+    return cachedJwks;
+  }
+
+  try {
+    cachedJwks = createRemoteJWKSet(new URL(jwksUrl), {
+      cooldownDuration: 30_000,
+      cacheMaxAge: 600_000,
+    });
+    cachedJwksUrl = jwksUrl;
+    return cachedJwks;
+  } catch (err: unknown) {
+    logger.warn({
+      type: 'context_jwks_init_failed',
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+export function resetJwksCacheForTest(): void {
+  cachedJwks = null;
+  cachedJwksUrl = null;
+}
+
 // -----------------------------------------------------------------------------
 // Fast-path Local JWT Verification with Strict Hard-Rejection
 // -----------------------------------------------------------------------------
@@ -171,53 +212,125 @@ export type LocalJwtVerificationResult =
   | { status: 'FALLBACK_REQUIRED'; reason: string };
 
 /**
- * Fast-path local cryptographic verification of Supabase access token (HS256).
+ * Fast-path local cryptographic verification of Supabase access tokens:
+ * - Asymmetric ES256 / RS256 via cached remote JWKS
+ * - Symmetric HS256 via SUPABASE_JWT_SECRET
  *
  * Security & Compliance Invariants:
- * 1. If SUPABASE_JWT_SECRET is configured and token is HS256:
- *    HARD REJECT immediately on signature mismatch, expiration, or malformed claims.
+ * 1. Hard-rejects immediately on signature failure, token expiration, or malformed claims.
  *    Fallback to supabaseAdmin.auth.getUser() is STRICTLY FORBIDDEN to prevent forged tokens.
- * 2. Fallback to Supabase Auth API is permitted ONLY when SUPABASE_JWT_SECRET is absent
- *    or the token header explicitly specifies a non-HS256 asymmetric algorithm (e.g. RS256/ES256).
+ * 2. Fallback to Supabase Auth API is permitted ONLY on unknown key IDs during rotation
+ *    (JWKSNoMatchingKey) or network fetch degradation.
  */
-export function verifySupabaseTokenLocally(token: string): LocalJwtVerificationResult {
-  const secret = process.env.SUPABASE_JWT_SECRET;
-  if (!secret) {
-    return { status: 'FALLBACK_REQUIRED', reason: 'SUPABASE_JWT_SECRET_ABSENT' };
+export async function verifySupabaseTokenLocally(token: string): Promise<LocalJwtVerificationResult> {
+  let header;
+  try {
+    header = decodeProtectedHeader(token);
+  } catch {
+    return { status: 'HARD_REJECT', reason: 'MALFORMED_JWT', rejectionType: 'MALFORMED' };
   }
 
+  const alg = header.alg;
+  if (!alg) {
+    return { status: 'HARD_REJECT', reason: 'MISSING_ALG_HEADER', rejectionType: 'MALFORMED' };
+  }
+
+  // 1. Symmetric HS256 tokens (HMAC secret)
+  if (alg === 'HS256') {
+    const secret = process.env.SUPABASE_JWT_SECRET;
+    if (!secret) {
+      return { status: 'FALLBACK_REQUIRED', reason: 'SUPABASE_JWT_SECRET_ABSENT' };
+    }
+
+    try {
+      const verified = jwt.verify(token, secret, {
+        algorithms: ['HS256'],
+      }) as SupabaseJwtPayload;
+
+      if (verified && typeof verified === 'object' && typeof verified.sub === 'string') {
+        return { status: 'VALID', payload: verified };
+      }
+
+      return { status: 'HARD_REJECT', reason: 'MISSING_SUB_CLAIM', rejectionType: 'MALFORMED' };
+    } catch (err: any) {
+      if (err instanceof jwt.TokenExpiredError || err?.name === 'TokenExpiredError') {
+        return {
+          status: 'HARD_REJECT',
+          reason: err.message || 'jwt expired',
+          rejectionType: 'EXPIRED',
+        };
+      }
+      return {
+        status: 'HARD_REJECT',
+        reason: err?.message || 'JWT_SIGNATURE_VERIFICATION_FAILED',
+        rejectionType: 'SIGNATURE_MISMATCH',
+      };
+    }
+  }
+
+  // 2. Asymmetric ES256 / RS256 tokens (Supabase Auth v2 default)
+  const jwks = getSupabaseJwks();
+  if (!jwks) {
+    return { status: 'FALLBACK_REQUIRED', reason: 'SUPABASE_JWKS_NOT_CONFIGURED' };
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, '');
+  const expectedIssuer = supabaseUrl ? `${supabaseUrl}/auth/v1` : undefined;
+
   try {
-    const decodedComplete = jwt.decode(token, { complete: true });
-    if (!decodedComplete || typeof decodedComplete !== 'object') {
-      return { status: 'HARD_REJECT', reason: 'MALFORMED_JWT', rejectionType: 'MALFORMED' };
+    const { payload } = await jwtVerify(token, jwks, {
+      issuer: expectedIssuer,
+      audience: 'authenticated',
+      algorithms: ['ES256', 'RS256'],
+    });
+
+    if (payload && typeof payload.sub === 'string') {
+      return {
+        status: 'VALID',
+        payload: {
+          sub: payload.sub,
+          email: typeof payload.email === 'string' ? payload.email : undefined,
+          role: typeof payload.role === 'string' ? payload.role : undefined,
+          aud: payload.aud,
+          iss: payload.iss,
+          exp: payload.exp,
+          iat: payload.iat,
+          jti: typeof payload.jti === 'string' ? payload.jti : undefined,
+        },
+      };
     }
-
-    const alg = decodedComplete.header?.alg;
-    if (alg && alg !== 'HS256') {
-      return { status: 'FALLBACK_REQUIRED', reason: `NON_HS256_ALGORITHM_${alg}` };
-    }
-
-    const verified = jwt.verify(token, secret, {
-      algorithms: ['HS256'],
-    }) as SupabaseJwtPayload;
-
-    if (verified && typeof verified === 'object' && typeof verified.sub === 'string') {
-      return { status: 'VALID', payload: verified };
-    }
-
     return { status: 'HARD_REJECT', reason: 'MISSING_SUB_CLAIM', rejectionType: 'MALFORMED' };
   } catch (err: any) {
-    if (err instanceof jwt.TokenExpiredError || err?.name === 'TokenExpiredError') {
+    if (err instanceof joseErrors.JWTExpired || err?.code === 'ERR_JWT_EXPIRED') {
       return {
         status: 'HARD_REJECT',
         reason: err.message || 'jwt expired',
         rejectionType: 'EXPIRED',
       };
     }
+    if (err instanceof joseErrors.JWKSNoMatchingKey || err?.code === 'ERR_JWKS_NO_MATCHING_KEY') {
+      return {
+        status: 'FALLBACK_REQUIRED',
+        reason: 'JWKS_NO_MATCHING_KEY_ROTATION',
+      };
+    }
+    if (
+      err instanceof joseErrors.JWSSignatureVerificationFailed ||
+      err instanceof joseErrors.JWTInvalid ||
+      err instanceof joseErrors.JWTClaimValidationFailed ||
+      err?.code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED' ||
+      err?.code === 'ERR_JWT_CLAIM_VALIDATION_FAILED'
+    ) {
+      return {
+        status: 'HARD_REJECT',
+        reason: err.message || 'JWT_SIGNATURE_VERIFICATION_FAILED',
+        rejectionType: 'SIGNATURE_MISMATCH',
+      };
+    }
+
     return {
-      status: 'HARD_REJECT',
-      reason: err?.message || 'JWT_SIGNATURE_VERIFICATION_FAILED',
-      rejectionType: 'SIGNATURE_MISMATCH',
+      status: 'FALLBACK_REQUIRED',
+      reason: err?.message || 'JWKS_VERIFICATION_ERROR',
     };
   }
 }
@@ -283,7 +396,7 @@ export async function createContext({
       let supabaseUserId: string | null = null;
 
       if (FEATURE_FLAG_CONTEXT_FAST_PATH) {
-        const localCheck = verifySupabaseTokenLocally(token);
+        const localCheck = await verifySupabaseTokenLocally(token);
         if (localCheck.status === 'VALID') {
           supabaseUserId = localCheck.payload.sub;
         } else if (localCheck.status === 'HARD_REJECT') {

@@ -65,24 +65,26 @@ describe('createContext Performance, Security & Revocation Invariants', () => {
   });
 
   describe('1. Strict JWT Hard-Rejection Rules', () => {
-    it('verifies a signed HS256 JWT in <5ms without external network calls', () => {
+    it('verifies a signed HS256 JWT in <5ms without external network calls', async () => {
       const token = jwt.sign(validPayload, mockJwtSecret, { algorithm: 'HS256' });
+      // Warm up JIT
+      await verifySupabaseTokenLocally(token);
       const t0 = performance.now();
-      const res = verifySupabaseTokenLocally(token);
+      const res = await verifySupabaseTokenLocally(token);
       const elapsed = performance.now() - t0;
 
       expect(res.status).toBe('VALID');
       if (res.status === 'VALID') {
         expect(res.payload.sub).toBe(validPayload.sub);
       }
-      expect(elapsed).toBeLessThan(25);
+      expect(elapsed).toBeLessThan(15);
     });
 
     it('HARD-REJECTS tampered-signature tokens and NEVER falls back to Supabase API', async () => {
       // Token signed with a different key
       const forgedToken = jwt.sign(validPayload, 'attacker-unauthorized-secret-key', { algorithm: 'HS256' });
 
-      const localResult = verifySupabaseTokenLocally(forgedToken);
+      const localResult = await verifySupabaseTokenLocally(forgedToken);
       expect(localResult.status).toBe('HARD_REJECT');
 
       const supabaseGetUserSpy = vi.spyOn(supabaseAdmin.auth, 'getUser');
@@ -106,7 +108,7 @@ describe('createContext Performance, Security & Revocation Invariants', () => {
     it('HARD-REJECTS expired tokens and increments expiredTokens metric', async () => {
       const expiredPayload = { ...validPayload, exp: Math.floor(Date.now() / 1000) - 100 };
       const token = jwt.sign(expiredPayload, mockJwtSecret, { algorithm: 'HS256' });
-      const res = verifySupabaseTokenLocally(token);
+      const res = await verifySupabaseTokenLocally(token);
       expect(res.status).toBe('HARD_REJECT');
       if (res.status === 'HARD_REJECT') {
         expect(res.rejectionType).toBe('EXPIRED');
@@ -124,13 +126,13 @@ describe('createContext Performance, Security & Revocation Invariants', () => {
       expect(contextMetrics.signatureMismatches).toBe(0);
     });
 
-    it('allows fallback to Supabase API ONLY when token uses an asymmetric algorithm', () => {
-      // Simulate an RS256 token
-      const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+    it('allows fallback to Supabase API on key rotation or unconfigured JWKS', async () => {
+      // Simulate an RS256 token with unknown kid or unconfigured JWKS
+      const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: 'unknown-key-id' })).toString('base64url');
       const payload = Buffer.from(JSON.stringify(validPayload)).toString('base64url');
       const rs256Token = `${header}.${payload}.mockSignature`;
 
-      const res = verifySupabaseTokenLocally(rs256Token);
+      const res = await verifySupabaseTokenLocally(rs256Token);
       expect(res.status).toBe('FALLBACK_REQUIRED');
     });
   });
