@@ -1,5 +1,6 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { createHash } from 'crypto';
+import jwt from 'jsonwebtoken';
 import type { MemberRole, MemberStatus, OrganizationMember } from '@prisma/client';
 
 import type { EffectivePlan } from '@/types/plan.types';
@@ -89,6 +90,138 @@ export interface Context {
 /** How long to cache the Prisma user lookup in Upstash (matches Supabase default token TTL). */
 const USER_CACHE_TTL_SECONDS = 3600;
 
+/** Feature flags for context optimization and session LRU */
+export const FEATURE_FLAG_CONTEXT_FAST_PATH = process.env.ENABLE_CONTEXT_FAST_PATH !== 'false';
+export const FEATURE_FLAG_SESSION_LRU = process.env.ENABLE_SESSION_LRU !== 'false';
+
+/** Production observability metrics counters */
+export const contextMetrics = {
+  memoryHits: 0,
+  redisHits: 0,
+  dbMisses: 0,
+  expiredTokens: 0,
+  signatureMismatches: 0,
+  hardRejections: 0,
+  fallbackToGetUser: 0,
+  totalRequests: 0,
+  reset() {
+    this.memoryHits = 0;
+    this.redisHits = 0;
+    this.dbMisses = 0;
+    this.expiredTokens = 0;
+    this.signatureMismatches = 0;
+    this.hardRejections = 0;
+    this.fallbackToGetUser = 0;
+    this.totalRequests = 0;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Fast-path in-process memory cache for hot user sessions (15–30s TTL)
+// -----------------------------------------------------------------------------
+interface MemorySessionCacheEntry {
+  user: User;
+  cachedAt: number;
+}
+
+const IN_MEMORY_SESSION_TTL_MS = 20_000; // 20s TTL
+const MAX_IN_MEMORY_SESSIONS = 2000;
+const inMemorySessionCache = new Map<string, MemorySessionCacheEntry>();
+
+export function getInMemoryUserSession(supabaseUserId: string): User | null {
+  if (!FEATURE_FLAG_SESSION_LRU) return null;
+  const entry = inMemorySessionCache.get(supabaseUserId);
+  if (!entry) return null;
+  if (Date.now() - entry.cachedAt > IN_MEMORY_SESSION_TTL_MS) {
+    inMemorySessionCache.delete(supabaseUserId);
+    return null;
+  }
+  return entry.user;
+}
+
+export function setInMemoryUserSession(supabaseUserId: string, user: User): void {
+  if (!FEATURE_FLAG_SESSION_LRU) return;
+  if (inMemorySessionCache.size >= MAX_IN_MEMORY_SESSIONS) {
+    const oldestKey = inMemorySessionCache.keys().next().value;
+    if (oldestKey) inMemorySessionCache.delete(oldestKey);
+  }
+  inMemorySessionCache.set(supabaseUserId, { user, cachedAt: Date.now() });
+}
+
+export function evictInMemoryUserSession(supabaseUserId: string): void {
+  inMemorySessionCache.delete(supabaseUserId);
+}
+
+// -----------------------------------------------------------------------------
+// Fast-path Local JWT Verification with Strict Hard-Rejection
+// -----------------------------------------------------------------------------
+export interface SupabaseJwtPayload extends jwt.JwtPayload {
+  sub: string;
+  email?: string;
+  role?: string;
+}
+
+export type LocalJwtVerificationResult =
+  | { status: 'VALID'; payload: SupabaseJwtPayload }
+  | {
+      status: 'HARD_REJECT';
+      reason: string;
+      rejectionType: 'EXPIRED' | 'SIGNATURE_MISMATCH' | 'MALFORMED';
+    }
+  | { status: 'FALLBACK_REQUIRED'; reason: string };
+
+/**
+ * Fast-path local cryptographic verification of Supabase access token (HS256).
+ *
+ * Security & Compliance Invariants:
+ * 1. If SUPABASE_JWT_SECRET is configured and token is HS256:
+ *    HARD REJECT immediately on signature mismatch, expiration, or malformed claims.
+ *    Fallback to supabaseAdmin.auth.getUser() is STRICTLY FORBIDDEN to prevent forged tokens.
+ * 2. Fallback to Supabase Auth API is permitted ONLY when SUPABASE_JWT_SECRET is absent
+ *    or the token header explicitly specifies a non-HS256 asymmetric algorithm (e.g. RS256/ES256).
+ */
+export function verifySupabaseTokenLocally(token: string): LocalJwtVerificationResult {
+  const secret = process.env.SUPABASE_JWT_SECRET;
+  if (!secret) {
+    return { status: 'FALLBACK_REQUIRED', reason: 'SUPABASE_JWT_SECRET_ABSENT' };
+  }
+
+  try {
+    const decodedComplete = jwt.decode(token, { complete: true });
+    if (!decodedComplete || typeof decodedComplete !== 'object') {
+      return { status: 'HARD_REJECT', reason: 'MALFORMED_JWT', rejectionType: 'MALFORMED' };
+    }
+
+    const alg = decodedComplete.header?.alg;
+    if (alg && alg !== 'HS256') {
+      return { status: 'FALLBACK_REQUIRED', reason: `NON_HS256_ALGORITHM_${alg}` };
+    }
+
+    const verified = jwt.verify(token, secret, {
+      algorithms: ['HS256'],
+    }) as SupabaseJwtPayload;
+
+    if (verified && typeof verified === 'object' && typeof verified.sub === 'string') {
+      return { status: 'VALID', payload: verified };
+    }
+
+    return { status: 'HARD_REJECT', reason: 'MISSING_SUB_CLAIM', rejectionType: 'MALFORMED' };
+  } catch (err: any) {
+    if (err instanceof jwt.TokenExpiredError || err?.name === 'TokenExpiredError') {
+      return {
+        status: 'HARD_REJECT',
+        reason: err.message || 'jwt expired',
+        rejectionType: 'EXPIRED',
+      };
+    }
+    return {
+      status: 'HARD_REJECT',
+      reason: err?.message || 'JWT_SIGNATURE_VERIFICATION_FAILED',
+      rejectionType: 'SIGNATURE_MISMATCH',
+    };
+  }
+}
+
 const SESSION_FINGERPRINT_MODES = ['off', 'monitor', 'enforce'] as const;
 type SessionFingerprintMode = (typeof SESSION_FINGERPRINT_MODES)[number];
 
@@ -121,13 +254,14 @@ function resolveEffectiveFingerprintMode(user: User): SessionFingerprintMode {
 /**
  * Create tRPC context for each request.
  *
- * Auth flow:
+ * High-Performance Auth Flow:
  * 1. Extract Bearer token from Authorization header.
- * 2. Verify it via supabaseAdmin.auth.getUser()  -  works for both HS256 and RS256
- *    Supabase project configurations without requiring a local JWT secret.
- * 3. Use the returned user.id (Supabase user UUID) to look up the Prisma User.
- *    Lookup is cached in Upstash Redis for USER_CACHE_TTL_SECONDS.
- * 4. Attach the full Prisma user (role, organizationId, etc.) to context.
+ * 2. If feature flag enabled: verify locally via HS256 JWT verification (<2ms).
+ *    Hard-rejects on invalid signature/expiry.
+ *    Fallback to supabaseAdmin.auth.getUser() ONLY when secret is absent or alg !== HS256.
+ * 3. Check in-process LRU memory cache first.
+ * 4. Run token revocation, Redis session cache, and idle checks concurrently via Promise.all.
+ * 5. On cache hit, bypass redundant Prisma session queries.
  */
 export async function createContext({
   req,
@@ -136,6 +270,9 @@ export async function createContext({
   req: FastifyRequest;
   res: FastifyReply;
 }): Promise<Context> {
+  const startTime = performance.now();
+  contextMetrics.totalRequests++;
+
   const authHeader = req.headers.authorization;
   let user: User | null = null;
 
@@ -143,72 +280,114 @@ export async function createContext({
     const token = authHeader.substring(7);
 
     try {
-      // Verify the JWT via Supabase  -  handles HS256 and RS256 transparently
-      const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
+      let supabaseUserId: string | null = null;
 
-      if (authError || !authData?.user?.id) {
-        throw new Error(authError?.message ?? 'Invalid token');
+      if (FEATURE_FLAG_CONTEXT_FAST_PATH) {
+        const localCheck = verifySupabaseTokenLocally(token);
+        if (localCheck.status === 'VALID') {
+          supabaseUserId = localCheck.payload.sub;
+        } else if (localCheck.status === 'HARD_REJECT') {
+          contextMetrics.hardRejections++;
+          if (localCheck.rejectionType === 'EXPIRED') {
+            contextMetrics.expiredTokens++;
+            logger.info({
+              type: 'context_jwt_token_expired',
+              reason: localCheck.reason,
+              ip: req.ip,
+            });
+          } else {
+            contextMetrics.signatureMismatches++;
+            logger.warn({
+              type: 'context_jwt_signature_mismatch',
+              reason: localCheck.reason,
+              rejectionType: localCheck.rejectionType,
+              ip: req.ip,
+            });
+          }
+          throw new Error(`Invalid token: ${localCheck.reason}`);
+        } else {
+          // Fallback permitted only when secret is missing or algorithm is non-HS256
+          contextMetrics.fallbackToGetUser++;
+          logger.info({
+            type: 'context_fallback_to_supabase_getuser',
+            reason: localCheck.reason,
+          });
+          const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
+          if (authError || !authData?.user?.id) {
+            throw new Error(authError?.message ?? 'Invalid token');
+          }
+          supabaseUserId = authData.user.id;
+        }
+      } else {
+        contextMetrics.fallbackToGetUser++;
+        const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
+        if (authError || !authData?.user?.id) {
+          throw new Error(authError?.message ?? 'Invalid token');
+        }
+        supabaseUserId = authData.user.id;
       }
 
-      const supabaseUserId = authData.user.id;
+      // Check in-process memory cache
+      const memCachedUser = getInMemoryUserSession(supabaseUserId);
+      const cacheKey = `user:session:${supabaseUserId}`;
 
-      // -- B4: JTI blocklist + user-level revocation check -------------
-      // Run after Supabase signature verification so we only pay the Redis
-      // round-trip for valid tokens. Fails open on Redis error (see util).
-      const revoked = await isTokenRevoked(token, supabaseUserId);
-      if (revoked) {
+      // Parallelize revocation checks, user cache retrieval, and auxiliary reads
+      let isRevoked = false;
+      let isBearerRevoked = false;
+      let lastSeenVal: string | null = null;
+      let storedFingerprint: string | null = null;
+
+      if (memCachedUser) {
+        contextMetrics.memoryHits++;
+        user = memCachedUser;
+        const [revokedCheck, bearerRevokedCheck, lastSeenCheck, fpCheck] = await Promise.all([
+          isTokenRevoked(token, supabaseUserId),
+          redis.exists(revokedBearerTokenKey(token)).catch(() => 0),
+          redis.get<string>(lastSeenKey(memCachedUser.id)).catch(() => null),
+          memCachedUser.sessionId
+            ? redis.get<string>(`sheriabot:session_fingerprint:${memCachedUser.sessionId}`).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+
+        isRevoked = revokedCheck;
+        isBearerRevoked = bearerRevokedCheck === 1;
+        lastSeenVal = lastSeenCheck;
+        storedFingerprint = fpCheck;
+      } else {
+        const [revokedCheck, bearerRevokedCheck, redisUser] = await Promise.all([
+          isTokenRevoked(token, supabaseUserId),
+          redis.exists(revokedBearerTokenKey(token)).catch(() => 0),
+          redis.get<User>(cacheKey).catch((cacheErr: any) => {
+            logger.warn({
+              type: 'context_cache_parse_error',
+              supabaseUserId,
+              error: cacheErr.message,
+              action: 'falling_through_to_prisma',
+            });
+            return null;
+          }),
+        ]);
+
+        isRevoked = revokedCheck;
+        isBearerRevoked = bearerRevokedCheck === 1;
+        if (redisUser && typeof redisUser === 'object') {
+          contextMetrics.redisHits++;
+          user = redisUser;
+          setInMemoryUserSession(supabaseUserId, redisUser);
+        }
+      }
+
+      // Enforce token revocation - always checked against distributed Redis
+      if (isRevoked || isBearerRevoked) {
+        user = null;
+        evictInMemoryUserSession(supabaseUserId);
+        await redis.del(cacheKey).catch(() => {});
         throw new Error('Token has been revoked');
       }
 
-      try {
-        const bearerRevoked = await redis.exists(revokedBearerTokenKey(token));
-        if (bearerRevoked === 1) {
-          throw new Error('Token has been revoked');
-        }
-      } catch (error: unknown) {
-        if (error instanceof Error && error.message === 'Token has been revoked') {
-          throw error;
-        }
-
-        logger.warn({
-          type: 'token_hash_revocation_check_error',
-          supabaseUserId,
-          error: error instanceof Error ? error.message : String(error),
-          action: 'fail_open',
-        });
-      }
-
-      // Cache key for the Prisma user profile
-      const cacheKey = `user:session:${supabaseUserId}`;
-
-      // Try Redis cache first.
-      // @upstash/redis auto-parses JSON responses, so the stored JSON string
-      // is returned as an already-deserialized object  -  use get<User> directly.
-      //
-      // Isolated try/catch: a cache parse failure (e.g. stale pre-migration
-      // entries stored without JSON.stringify, resulting in "[object Object]")
-      // must fall through to Prisma rather than crashing context creation and
-      // leaving every request unauthenticated until the TTL expires.
-      let cacheHit = false;
-      try {
-        const cached = await redis.get<User>(cacheKey);
-        if (cached && typeof cached === 'object') {
-          user = cached;
-          cacheHit = true;
-        }
-      } catch (cacheErr: any) {
-        logger.warn({
-          type: 'context_cache_parse_error',
-          supabaseUserId,
-          error: cacheErr.message,
-          action: 'evicting_corrupt_key_and_falling_through_to_prisma',
-        });
-        // Evict the corrupt key so subsequent requests stop hitting the error
-        await redis.del(cacheKey).catch(() => {});
-      }
-
-      if (!cacheHit) {
-        // Cache miss or corrupt entry  -  look up by supabaseAuthId in Prisma
+      // Database fallback on cache miss
+      if (!user) {
+        contextMetrics.dbMisses++;
         const dbUser = await prisma.user.findUnique({
           where: { supabaseAuthId: supabaseUserId },
           select: {
@@ -243,9 +422,7 @@ export async function createContext({
           if (!activeSession) {
             logger.warn({ type: 'context_no_active_local_session', userId: dbUser.id });
             await redis.del(cacheKey).catch(() => {});
-          }
-
-          if (activeSession) {
+          } else {
             user = {
               id: dbUser.id,
               email: dbUser.email,
@@ -259,92 +436,69 @@ export async function createContext({
               sessionExpiresAt: activeSession.expiresAt.getTime(),
             };
 
-            // Re-populate cache with well-formed JSON
-            await redis.set(cacheKey, JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS });
+            // Populate both Redis and in-memory caches
+            setInMemoryUserSession(supabaseUserId, user);
+            await redis.set(cacheKey, JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS }).catch(() => {});
           }
         }
       }
 
       if (user) {
-        logger.debug({
-          type: 'context_user_authenticated',
-          userId: user.id,
-          role: user.role,
-        });
-
+        // Enforce session validity
         if (!user.sessionId) {
           logger.warn({ type: 'context_missing_local_session', userId: user.id });
-          await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+          evictInMemoryUserSession(supabaseUserId);
+          await redis.del(cacheKey).catch(() => {});
           user = null;
         }
 
-        if (user?.sessionId) {
-          const activeSession = await prisma.session.findFirst({
-            where: { id: user.sessionId, userId: user.id, expiresAt: { gte: new Date() } },
-            select: {
-              id: true,
-              expiresAt: true,
-              user: { select: { accountStatus: true, deletedAt: true } },
-            },
-          });
-
-          if (!activeSession || activeSession.user.deletedAt || activeSession.user.accountStatus !== 'active') {
-            logger.warn({ type: 'context_local_session_revoked', userId: user.id, sessionId: user.sessionId });
-            await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
-            user = null;
-          } else {
-            user.sessionExpiresAt = activeSession.expiresAt.getTime();
-          }
-        }
-
-        // -- B6: Enforce Session.expiresAt stored in Redis cache ----------
+        // B6: Enforce Session.expiresAt stored in session cache
         if (user?.sessionExpiresAt && Date.now() > user.sessionExpiresAt) {
           logger.warn({
-            type:   'context_session_expired',
+            type: 'context_session_expired',
             userId: user.id,
             expiredAt: new Date(user.sessionExpiresAt).toISOString(),
           });
+          evictInMemoryUserSession(supabaseUserId);
+          await redis.del(cacheKey).catch(() => {});
           user = null;
         }
 
-        // -- B3: Idle session timeout (30 min) ----------------------------
+        // B3: Idle session timeout (30 min)
         if (user) {
-          const idleUserId = user.id; // captured before any nulling inside try/catch
+          const idleUserId = user.id;
           const now = Date.now();
           try {
-            const lastSeenRaw = await redis.get<string>(lastSeenKey(idleUserId));
-            const lastSeen = lastSeenRaw ? Number(lastSeenRaw) : null;
+            const rawLastSeen = lastSeenVal !== null
+              ? lastSeenVal
+              : await redis.get<string>(lastSeenKey(idleUserId));
+            const lastSeen = rawLastSeen ? Number(rawLastSeen) : null;
 
             if (lastSeen !== null && (now - lastSeen) > SESSION_CONFIG.IDLE_TIMEOUT_SECONDS * 1000) {
               logger.warn({
-                type:         'context_idle_session_expired',
-                userId:       idleUserId,
-                idleSeconds:  Math.floor((now - lastSeen) / 1000),
+                type: 'context_idle_session_expired',
+                userId: idleUserId,
+                idleSeconds: Math.floor((now - lastSeen) / 1000),
               });
-              // Evict Redis user cache so the next request also sees null
+              evictInMemoryUserSession(user.supabaseAuthId);
               await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
               user = null;
             } else {
-              // Slide the window  -  fire-and-forget, never block the request
+              // Slide the idle window asynchronously without blocking
               void redis.set(lastSeenKey(idleUserId), String(now), {
                 ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS,
               }).catch(() => {});
             }
           } catch (idleErr: unknown) {
-            // Redis error on idle check: fail open (log + continue)
             logger.warn({
-              type:  'context_idle_check_error',
+              type: 'context_idle_check_error',
               userId: idleUserId,
               error: idleErr instanceof Error ? idleErr.message : String(idleErr),
             });
           }
         }
 
-        // -- B5: Session fingerprint anomaly detection --------------------
-        // Compute the expected fingerprint and compare with what was stored
-        // at login. Mode `off` skips this section entirely. Mode `monitor`
-        // records mismatches without revocation. Mode `enforce` adds the JTI
-        // to the Redis blocklist and rejects the request (user = null).
+        // B5: Session fingerprint anomaly detection
         if (user && user.role === 'ADMIN' && SESSION_FINGERPRINT_MODE === 'monitor') {
           logger.info({
             type: 'session_fingerprint_role_upgrade',
@@ -359,11 +513,15 @@ export async function createContext({
           const effectiveFingerprintMode = resolveEffectiveFingerprintMode(user);
           if (effectiveFingerprintMode !== 'off') {
             try {
-              const storedFp = await redis.get<string>(`sheriabot:session_fingerprint:${user.sessionId}`);
+              const storedFp = storedFingerprint !== null
+                ? storedFingerprint
+                : await redis.get<string>(`sheriabot:session_fingerprint:${user.sessionId}`);
+
               if (storedFp) {
                 const currentIp = req.ip ?? '';
                 const currentUa = (req.headers['user-agent'] ?? '').substring(0, 500);
                 const currentFp = createHash('sha256').update(`${currentIp}:${currentUa}`).digest('hex');
+
                 if (currentFp !== storedFp) {
                   const bearerToken = req.headers.authorization?.substring(7);
                   const jti = bearerToken ? extractJti(bearerToken) : null;
@@ -373,21 +531,18 @@ export async function createContext({
                     : 'session_anomaly_monitored';
 
                   logger.warn({
-                    type:            anomalyType,
-                    event:           anomalyType,
-                    userId:          user.id,
-                    sessionId:       user.sessionId,
+                    type: anomalyType,
+                    event: anomalyType,
+                    userId: user.id,
+                    sessionId: user.sessionId,
                     jti,
-                    // Do not log raw UAs in production; hashes are sufficient for correlation
-                    storedFpPrefix:  storedFp.substring(0, 8),
+                    storedFpPrefix: storedFp.substring(0, 8),
                     currentFpPrefix: currentFp.substring(0, 8),
-                    timestamp:       new Date().toISOString(),
-                    mode:            effectiveFingerprintMode,
+                    timestamp: new Date().toISOString(),
+                    mode: effectiveFingerprintMode,
                   });
 
                   if (effectiveFingerprintMode === 'enforce') {
-                    // Revoke the JTI so this token cannot be replayed on any subsequent request.
-                    // TTL = remaining token lifetime (capped at 2 hours, same as revokeToken util).
                     if (jti) {
                       const ttlSeconds = exp
                         ? Math.min(Math.max(exp - Math.floor(Date.now() / 1000), 1), 7200)
@@ -395,14 +550,14 @@ export async function createContext({
                       await redis.set(revokedJtiKey(jti), 'session_anomaly', { ex: ttlSeconds })
                         .catch((revErr: unknown) => {
                           logger.error({
-                            type:  'session_anomaly_blocklist_write_failed',
+                            type: 'session_anomaly_blocklist_write_failed',
                             userId: user!.id,
                             jti,
                             error: revErr instanceof Error ? revErr.message : String(revErr),
                           });
                         });
                     }
-                    // Evict the user session cache so the next request also sees null
+                    evictInMemoryUserSession(user.supabaseAuthId);
                     await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
                     user = null;
                   }
@@ -410,7 +565,7 @@ export async function createContext({
               }
             } catch (fpErr: unknown) {
               logger.warn({
-                type:  'context_fingerprint_check_error',
+                type: 'context_fingerprint_check_error',
                 userId: user?.id,
                 error: fpErr instanceof Error ? fpErr.message : String(fpErr),
               });

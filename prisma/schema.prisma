@@ -288,6 +288,8 @@ model Session {
 
   @@index([userId])
   @@index([token])
+  @@index([userId, expiresAt])
+  @@index([id, userId, expiresAt])
 }
 
 model UserBackupCode {
@@ -903,6 +905,7 @@ model AuditLog {
   @@index([userId])
   @@index([action])
   @@index([createdAt])
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model ApiKey {
