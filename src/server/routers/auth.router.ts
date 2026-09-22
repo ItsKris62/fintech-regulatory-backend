@@ -29,8 +29,8 @@ import { encryptMfaChallenge, decryptMfaChallenge, MfaChallengeDecryptError } fr
 import { revokedJtiKey, revokeAllUserTokens } from '@/utils/token-revocation';
 import { extractExp, extractJti } from '@/utils/jwt';
 import { loadSystemConfig } from '@/lib/system-config';
-import { subscriptionTierToPlanOrFree } from '@/utils/plan-mapping';
 import { durableTaskRunner } from '../services/durable-background-tasks';
+import { provisionDefaultOrganization } from '@/services/organization-provisioning.service';
 
 import {
   isFreeEmailDomain,
@@ -412,49 +412,29 @@ export const authRouter = router({
           await redis.del(`sheriabot:orgmem:${user.id}:${invitation.organizationId}`).catch(() => {});
         }
 
-        // F3.1  -  Create and link Organization if companyName was provided and user has no org yet.
-        // Awaited so that user.organizationId is set before the response and first session cache.
-        if (input.companyName && !user.organizationId) {
+        // Provision organization and owner membership if user has no org yet
+        if (!user.organizationId) {
           try {
             const defaultSubscriptionTier = typeof systemConfig.defaultSubscriptionTier === 'string'
               ? systemConfig.defaultSubscriptionTier
               : 'starter';
-            const org = await ctx.prisma.organization.create({
-              data: {
-                name: input.companyName,
-                type: resolvedRole,
-                subscriptionTier: defaultSubscriptionTier,
-                plan: subscriptionTierToPlanOrFree(defaultSubscriptionTier),
-                homeJurisdictionCode: input.homeJurisdictionCode,
-                enabledJurisdictions: input.homeJurisdictionCode ? [input.homeJurisdictionCode] : [],
-                needsCountryConfirmation: !input.homeJurisdictionCode,
-                users: { connect: { id: user.id } },
-              },
-              select: { id: true },
-            });
-            user.organizationId = org.id;
 
-            await ctx.prisma.organizationMember.upsert({
-              where: {
-                userId_organizationId: {
-                  userId: user.id,
-                  organizationId: org.id,
-                },
+            const provisionRes = await provisionDefaultOrganization(ctx.prisma, {
+              user: {
+                id: user.id,
+                email: user.email,
+                fullName: (user as any).fullName,
+                role: resolvedRole,
+                organizationId: user.organizationId,
               },
-              create: {
-                userId: user.id,
-                organizationId: org.id,
-                role: MemberRole.OWNER,
-                status: MemberStatus.ACTIVE,
-                joinedAt: new Date(),
-              },
-              update: {
-                role: MemberRole.OWNER,
-                status: MemberStatus.ACTIVE,
-              },
+              companyName: input.companyName,
+              homeJurisdictionCode: input.homeJurisdictionCode,
+              defaultSubscriptionTier,
             });
+
+            user.organizationId = provisionRes.organizationId;
           } catch (err: any) {
-            logger.warn({ type: 'auth_register_org_create_failed', userId: user.id, error: err.message });
+            logger.warn({ type: 'auth_register_org_provision_failed', userId: user.id, error: err?.message });
           }
         }
 
