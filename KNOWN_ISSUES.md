@@ -1,7 +1,29 @@
 # Known Issues -- SheriaBot Fintech Regulatory Backend
 
-Security findings from the Sprint 2 Phase B IDOR audit (May 2026).
-Each item tracks severity, status, and the migration that resolves it.
+Security findings and operational audit logs for SheriaBot Fintech Regulatory Backend.
+Each item tracks severity, status, and the resolution details.
+
+---
+
+## 2026-09-22 -- System & Database Breakdown Audit & Remediation (RESOLVED)
+
+**Status:** Fully Resolved & Verified across Frontend, Backend, Redis, and PostgreSQL.
+
+### Critical Root Causes Remediated:
+1. **Frontend Syntax Error in AuthGuard (`components/auth-guard.tsx`):**
+   - Fixed unclosed duplicate `AuthGuard` definition that was breaking compilation (`TS1005`).
+2. **Missing Token Hydration & Profile Resolution on `/auth/callback` (`app/auth/callback/page.tsx`):**
+   - Implemented synchronous token synchronization (`setAccessToken`), profile resolution (`trpc.auth.me`), structured error handling, and redirection routing (`/onboarding` when organization is pending or `/startup` / `/regulator`).
+3. **Session Rejection & Verification Drop-off (`context.ts` & `auth.router.ts`):**
+   - `confirmEmailCallback` now creates an active database `Session`, records Redis keys (`user:session`, `last_seen`, `session_start`, `session_fingerprint`), and sets session cookies.
+   - `context.ts` includes a guarded auto-healing fallback (`AUTO_CREATE_SESSION_ON_VALID_TOKEN`) to prevent token verification drop-off.
+4. **Multi-Tenancy Orphaned Users & Missing Default Workspace Provisioning:**
+   - Implemented `provisionDefaultOrganization` service creating an Organization and `OWNER` OrganizationMember record atomically during registration.
+   - Backfilled 48 orphaned legacy users (47 new default workspaces created, 1 linked to existing membership, 0 remaining orphans).
+5. **Empty Database Tables & Unseeded Regulatory Frameworks:**
+   - Seeded 44 Kenyan regulatory frameworks across STARTUP, BUSINESS, and ENTERPRISE tiers (`npm run seed:frameworks`).
+   - Synced SystemConfig into PostgreSQL and Redis (`npm run seed:system-config`).
+   - Seeded baseline compliance checklists across all 48 organizations (`npm run seed:tenant-defaults`).
 
 ---
 

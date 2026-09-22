@@ -6,7 +6,7 @@ async function main() {
   console.log('🔄 Syncing system config definitions into database...');
 
   // 1. Sync definitions via system-config loader
-  const config = await loadSystemConfig({ syncDefinitions: true });
+  await loadSystemConfig({ syncDefinitions: true });
 
   // 2. Query count in database
   const rowCount = await prisma.systemConfig.count();

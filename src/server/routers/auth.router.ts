@@ -456,6 +456,7 @@ export const authRouter = router({
           success: true,
           userId: user.id,
           email: user.email,
+          requiresEmailVerification: requireEmailVerification,
           message: requireEmailVerification
             ? 'Registration successful. Please check your email to verify your account.'
             : 'Registration successful. You can now log in.',
