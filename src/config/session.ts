@@ -19,8 +19,14 @@ export const SESSION_CONFIG = {
   ABSOLUTE_TIMEOUT_SECONDS: 8 * 60 * 60,
 } as const;
 
-/** Redis key for the last-activity timestamp of an authenticated user. */
-export const lastSeenKey = (userId: string) => `sheriabot:last_seen:${userId}`;
+/** Redis key for user session cache (anchored on DB User ID). */
+export const userSessionKey = (userId: string) => `user:session:${userId}`;
 
-/** Redis key for the absolute session start timestamp. */
-export const sessionStartKey = (userId: string) => `sheriabot:session_start:${userId}`;
+/** Redis key for the last-activity timestamp of an authenticated user (anchored on DB User ID). */
+export const lastSeenKey = (userId: string) => `user:session:last_seen:${userId}`;
+
+/** Redis key for session fingerprint (anchored on Session ID). */
+export const sessionFingerprintKey = (sessionId: string) => `user:session:fingerprint:${sessionId}`;
+
+/** Redis key for the absolute session start timestamp (anchored on DB User ID). */
+export const sessionStartKey = (userId: string) => `user:session:session_start:${userId}`;

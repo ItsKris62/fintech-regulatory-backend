@@ -10,8 +10,6 @@ export interface AsyncTaskJob<T = unknown> {
 }
 
 class DurableTaskRunner {
-  private queue: AsyncTaskJob[] = [];
-  private isProcessing = false;
   private pendingPromises = new Set<Promise<void>>();
 
   /**

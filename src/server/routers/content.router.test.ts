@@ -170,15 +170,18 @@ describe('content.router.ts legacy BLOG_POST controls', () => {
       findMany: vi.fn(),
       count: vi.fn(),
     },
+    organization: {
+      findUnique: vi.fn().mockResolvedValue({ requireMfa: false }),
+    },
   } as any;
 
   const nonAdminCtx = {
-    user: { id: 'user-1', email: 'editor@example.com', role: 'STARTUP', organizationId: 'org-1' },
+    user: { id: 'user-1', email: 'editor@example.com', role: 'STARTUP', organizationId: 'org-1', isTotpEnabled: true, mfaEnabled: true },
     req: { ip: '127.0.0.1' },
     prisma: mockPrisma,
   };
   const adminCtx = {
-    user: { id: 'admin-1', email: 'admin@example.com', role: 'ADMIN', organizationId: 'org-1' },
+    user: { id: 'admin-1', email: 'admin@example.com', role: 'ADMIN', organizationId: 'org-1', isTotpEnabled: true, mfaEnabled: true },
     req: { ip: '127.0.0.1' },
     prisma: mockPrisma,
   };

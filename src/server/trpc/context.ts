@@ -16,8 +16,11 @@ import { ragService } from '@/lib/rag/rag.service';
 import { storageService } from '@/lib/storage/storage.service';
 import { mailer } from '@/lib/email/mailer.service';
 import { logger } from '@/utils/logger';
+import { nanoid } from 'nanoid';
+import { appConfig } from '@/config/app.config';
+import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey } from '@/config/session';
 import { revokedBearerTokenKey } from '@/utils/request-identifiers';
-import { SESSION_CONFIG, lastSeenKey } from '@/config/session';
+import { parseDeviceLabel } from '@/server/services/session.service';
 import { isTokenRevoked, revokedJtiKey } from '@/utils/token-revocation';
 import { extractJti, extractExp } from '@/utils/jwt';
 
@@ -383,7 +386,6 @@ export async function createContext({
   req: FastifyRequest;
   res: FastifyReply;
 }): Promise<Context> {
-  const startTime = performance.now();
   contextMetrics.totalRequests++;
 
   const authHeader = req.headers.authorization;
@@ -458,7 +460,7 @@ export async function createContext({
           redis.exists(revokedBearerTokenKey(token)).catch(() => 0),
           redis.get<string>(lastSeenKey(memCachedUser.id)).catch(() => null),
           memCachedUser.sessionId
-            ? redis.get<string>(`sheriabot:session_fingerprint:${memCachedUser.sessionId}`).catch(() => null)
+            ? redis.get<string>(sessionFingerprintKey(memCachedUser.sessionId)).catch(() => null)
             : Promise.resolve(null),
         ]);
 
@@ -526,13 +528,52 @@ export async function createContext({
           !dbUser.deletedAt &&
           dbUser.accountStatus === 'active'
         ) {
-          const activeSession = await prisma.session.findFirst({
+          let effectiveSession = await prisma.session.findFirst({
             where: { userId: dbUser.id, expiresAt: { gte: new Date() } },
             orderBy: { createdAt: 'desc' },
             select: { id: true, expiresAt: true },
           });
 
-          if (!activeSession) {
+          if (!effectiveSession && appConfig.features.autoCreateSessionOnValidToken) {
+            try {
+              const rawUa = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : '';
+              const forwardedFor = typeof req.headers['x-forwarded-for'] === 'string' ? req.headers['x-forwarded-for'].split(',')[0]?.trim() : undefined;
+              const loginIp = req.ip || forwardedFor || 'Unknown';
+              const sessionTtlSeconds = SESSION_CONFIG.ABSOLUTE_TIMEOUT_SECONDS;
+              
+              const newSession = await prisma.session.create({
+                data: {
+                  userId: dbUser.id,
+                  token: nanoid(64),
+                  expiresAt: new Date(Date.now() + sessionTtlSeconds * 1000),
+                  device: parseDeviceLabel(rawUa),
+                  ipAddress: loginIp,
+                  userAgent: rawUa ? rawUa.substring(0, 500) : null,
+                },
+                select: { id: true, expiresAt: true },
+              });
+              effectiveSession = newSession;
+
+              const loginNow = Date.now();
+              await Promise.all([
+                redis.set(lastSeenKey(dbUser.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
+                redis.set(sessionStartKey(dbUser.id), String(loginNow), { ex: sessionTtlSeconds }),
+              ]).catch(() => {});
+
+              if (newSession.id) {
+                const fingerprint = createHash('sha256').update(`${req.ip || ''}:${rawUa.substring(0, 500)}`).digest('hex');
+                await redis
+                  .set(sessionFingerprintKey(newSession.id), fingerprint, { ex: sessionTtlSeconds })
+                  .catch(() => {});
+              }
+
+              logger.info({ type: 'context_session_auto_healed', userId: dbUser.id, sessionId: newSession.id });
+            } catch (healErr: any) {
+              logger.warn({ type: 'context_session_auto_heal_failed', userId: dbUser.id, error: healErr?.message });
+            }
+          }
+
+          if (!effectiveSession) {
             logger.warn({ type: 'context_no_active_local_session', userId: dbUser.id });
             await redis.del(cacheKey).catch(() => {});
           } else {
@@ -545,13 +586,14 @@ export async function createContext({
               mustChangePassword: dbUser.mustChangePassword,
               totpEnabled: dbUser.totpEnabled,
               hasPasskey: (dbUser.passkeys && dbUser.passkeys.length > 0) || false,
-              sessionId: activeSession.id,
-              sessionExpiresAt: activeSession.expiresAt.getTime(),
+              sessionId: effectiveSession.id,
+              sessionExpiresAt: effectiveSession.expiresAt.getTime(),
             };
 
             // Populate both Redis and in-memory caches
             setInMemoryUserSession(supabaseUserId, user);
             await redis.set(cacheKey, JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS }).catch(() => {});
+            await redis.set(userSessionKey(dbUser.id), JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS }).catch(() => {});
           }
         }
       }
@@ -628,7 +670,7 @@ export async function createContext({
             try {
               const storedFp = storedFingerprint !== null
                 ? storedFingerprint
-                : await redis.get<string>(`sheriabot:session_fingerprint:${user.sessionId}`);
+                : await redis.get<string>(sessionFingerprintKey(user.sessionId));
 
               if (storedFp) {
                 const currentIp = req.ip ?? '';

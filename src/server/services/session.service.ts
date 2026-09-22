@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { createHash } from 'crypto';
 import { nanoid } from 'nanoid';
 import { logger } from '@/utils/logger';
-import { SESSION_CONFIG, lastSeenKey, sessionStartKey } from '@/config/session';
+import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey } from '@/config/session';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
 
 export function parseDeviceLabel(userAgent: string | undefined): string {
@@ -142,8 +142,9 @@ export async function issueSessionForUser(params: IssueSessionParams): Promise<S
     sessionExpiresAt,
   };
 
+  await redis.set(userSessionKey(user.id), JSON.stringify(userProfile), { ex: 3600 });
   if (supabaseAuthId) {
-    await redis.set(`user:session:${supabaseAuthId}`, JSON.stringify(userProfile), { ex: 3600 });
+    await redis.set(`user:session:${supabaseAuthId}`, JSON.stringify(userProfile), { ex: 3600 }).catch(() => {});
   }
 
   const loginNow = Date.now();
@@ -156,7 +157,7 @@ export async function issueSessionForUser(params: IssueSessionParams): Promise<S
     const rawIp = req.ip ?? '';
     const fingerprint = createHash('sha256').update(`${rawIp}:${rawUa.substring(0, 500)}`).digest('hex');
     await redis
-      .set(`sheriabot:session_fingerprint:${dbSessionId}`, fingerprint, { ex: sessionTtlSeconds })
+      .set(sessionFingerprintKey(dbSessionId), fingerprint, { ex: sessionTtlSeconds })
       .catch(() => {});
   }
 

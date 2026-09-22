@@ -269,16 +269,15 @@ async function persistDatabaseRows(
   keys: string[],
   updatedBy?: string
 ): Promise<void> {
-  const operations = keys.flatMap((rawKey) => {
-    const primaryKey = toPrimaryKey(rawKey);
+  const uniquePrimaryKeys = [...new Set(keys.map((rawKey) => toPrimaryKey(rawKey)))];
+  const operations = uniquePrimaryKeys.map((primaryKey) => {
     const definition = definitionByKey.get(primaryKey);
     const value = config[primaryKey];
     const type = definition?.type ?? inferValueType(value);
     const category = definition?.category ?? 'general';
     const description = definition?.description ?? null;
-    const entries = [primaryKey, ...(definition?.aliases ?? [])];
-    return entries.map((key) => prisma.systemConfig.upsert({
-      where: { key },
+    return prisma.systemConfig.upsert({
+      where: { key: primaryKey },
       update: {
         value: serializeValue(type, value),
         type,
@@ -287,14 +286,14 @@ async function persistDatabaseRows(
         updatedBy,
       },
       create: {
-        key,
+        key: primaryKey,
         value: serializeValue(type, value),
         type,
         category,
         description,
         updatedBy,
       },
-    }));
+    });
   });
 
   if (operations.length > 0) {
@@ -384,8 +383,10 @@ export function resolveRuntimeAIConfigFromSystemConfig(
 }
 
 export async function loadSystemConfig(options?: { syncDefinitions?: boolean }): Promise<SystemConfig> {
-  const cached = parseSerializedConfig(await redis.get<string>(SYSTEM_CONFIG_CACHE_KEY));
-  if (cached) return applyAliases(cached);
+  if (!options?.syncDefinitions) {
+    const cached = parseSerializedConfig(await redis.get<string>(SYSTEM_CONFIG_CACHE_KEY));
+    if (cached) return applyAliases(cached);
+  }
 
   const [persistedRaw, dbRows] = await Promise.all([
     redis.get<string>(SYSTEM_CONFIG_PERSISTED_KEY),
@@ -400,16 +401,16 @@ export async function loadSystemConfig(options?: { syncDefinitions?: boolean }):
   const snapshot = applyAliases({ ...SYSTEM_CONFIG_DEFAULTS, ...persisted, ...fromDatabase });
   const serialized = JSON.stringify(snapshot);
 
-  await Promise.all([
-    redis.set(SYSTEM_CONFIG_PERSISTED_KEY, serialized),
-    redis.set(SYSTEM_CONFIG_CACHE_KEY, serialized, { ex: CACHE_TTL.SYSTEM_CONFIG }),
-  ]);
-
   if (options?.syncDefinitions) {
     await persistDatabaseRows(snapshot, SYSTEM_CONFIG_DEFINITIONS.map((definition) => definition.key)).catch((error: unknown) => {
       logger.warn({ type: 'system_config_definition_sync_failed', error: error instanceof Error ? error.message : String(error) });
     });
   }
+
+  await Promise.all([
+    redis.set(SYSTEM_CONFIG_PERSISTED_KEY, serialized),
+    redis.set(SYSTEM_CONFIG_CACHE_KEY, serialized, { ex: CACHE_TTL.SYSTEM_CONFIG }),
+  ]);
 
   return snapshot;
 }

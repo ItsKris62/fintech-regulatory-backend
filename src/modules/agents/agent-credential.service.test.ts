@@ -143,6 +143,7 @@ describe('AgentCredentialService', () => {
           'agents.automation.regulatory.alertDraft.create',
           'agents.automation.regulatory.enrichment.process',
           'agents.automation.regulatory.enrichment.listPending',
+          'agents.marketing.leads.ingest',
         ].sort(),
       );
     });
