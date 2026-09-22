@@ -1,4 +1,4 @@
-import { MemberRole, MemberStatus, SubscriptionPlan } from '@prisma/client';
+import { MemberRole, MemberStatus, SubscriptionPlan, Prisma, PrismaClient } from '@prisma/client';
 import { logger } from '@/utils/logger';
 import { subscriptionTierToPlanOrFree } from '@/utils/plan-mapping';
 
@@ -27,21 +27,22 @@ export interface ProvisionOrganizationResult {
  * Can be executed inside a Prisma interactive transaction (tx) or standalone with the Prisma client.
  */
 export async function provisionDefaultOrganization(
-  tx: any,
+  tx: Prisma.TransactionClient | PrismaClient,
   params: ProvisionOrganizationParams
 ): Promise<ProvisionOrganizationResult> {
+  const db = tx as PrismaClient;
   const { user, companyName, homeJurisdictionCode, defaultSubscriptionTier = 'starter' } = params;
 
   // 1. If user already has an organization linked, verify it exists and return it
   if (user.organizationId) {
-    const existingOrg = await tx.organization.findUnique({
+    const existingOrg = await db.organization.findUnique({
       where: { id: user.organizationId },
       select: { id: true, name: true },
     });
 
     if (existingOrg) {
       // Ensure user has an ACTIVE membership in this organization
-      const membership = await tx.organizationMember.upsert({
+      const membership = await db.organizationMember.upsert({
         where: {
           userId_organizationId: {
             userId: user.id,
@@ -71,7 +72,7 @@ export async function provisionDefaultOrganization(
   }
 
   // 2. Check if user already has any active organization membership
-  const existingMembership = await tx.organizationMember.findFirst({
+  const existingMembership = await db.organizationMember.findFirst({
     where: {
       userId: user.id,
       status: MemberStatus.ACTIVE,
@@ -84,7 +85,7 @@ export async function provisionDefaultOrganization(
 
   if (existingMembership?.organization) {
     // Sync User.organizationId if it was not set
-    await tx.user.update({
+    await db.user.update({
       where: { id: user.id },
       data: { organizationId: existingMembership.organization.id },
     });
@@ -108,7 +109,7 @@ export async function provisionDefaultOrganization(
   const resolvedPlan = subscriptionTierToPlanOrFree(defaultSubscriptionTier);
 
   // 4. Create Organization
-  const org = await tx.organization.create({
+  const org = await db.organization.create({
     data: {
       name: orgName,
       type: resolvedRole,
@@ -124,13 +125,13 @@ export async function provisionDefaultOrganization(
   });
 
   // 5. Update user organizationId
-  await tx.user.update({
+  await db.user.update({
     where: { id: user.id },
     data: { organizationId: org.id },
   });
 
   // 6. Create OWNER membership
-  const membership = await tx.organizationMember.create({
+  const membership = await db.organizationMember.create({
     data: {
       userId: user.id,
       organizationId: org.id,

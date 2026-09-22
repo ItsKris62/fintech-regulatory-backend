@@ -131,7 +131,7 @@ describe('Auth Session Recovery & Email Callback Pipeline', () => {
 
     // Verify Redis user session and session keys written
     expect(mockRedis.set).toHaveBeenCalledWith(
-      'user:session:supa_user_123',
+      'user:session:user_123',
       expect.stringContaining('"sessionId":"sess_new_123"'),
       expect.objectContaining({ ex: 3600 })
     );

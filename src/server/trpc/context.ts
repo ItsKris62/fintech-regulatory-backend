@@ -18,7 +18,7 @@ import { mailer } from '@/lib/email/mailer.service';
 import { logger } from '@/utils/logger';
 import { nanoid } from 'nanoid';
 import { appConfig } from '@/config/app.config';
-import { SESSION_CONFIG, lastSeenKey, sessionStartKey } from '@/config/session';
+import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey } from '@/config/session';
 import { revokedBearerTokenKey } from '@/utils/request-identifiers';
 import { parseDeviceLabel } from '@/server/services/session.service';
 import { isTokenRevoked, revokedJtiKey } from '@/utils/token-revocation';
@@ -460,7 +460,7 @@ export async function createContext({
           redis.exists(revokedBearerTokenKey(token)).catch(() => 0),
           redis.get<string>(lastSeenKey(memCachedUser.id)).catch(() => null),
           memCachedUser.sessionId
-            ? redis.get<string>(`sheriabot:session_fingerprint:${memCachedUser.sessionId}`).catch(() => null)
+            ? redis.get<string>(sessionFingerprintKey(memCachedUser.sessionId)).catch(() => null)
             : Promise.resolve(null),
         ]);
 
@@ -563,7 +563,7 @@ export async function createContext({
               if (newSession.id) {
                 const fingerprint = createHash('sha256').update(`${req.ip || ''}:${rawUa.substring(0, 500)}`).digest('hex');
                 await redis
-                  .set(`sheriabot:session_fingerprint:${newSession.id}`, fingerprint, { ex: sessionTtlSeconds })
+                  .set(sessionFingerprintKey(newSession.id), fingerprint, { ex: sessionTtlSeconds })
                   .catch(() => {});
               }
 
@@ -593,6 +593,7 @@ export async function createContext({
             // Populate both Redis and in-memory caches
             setInMemoryUserSession(supabaseUserId, user);
             await redis.set(cacheKey, JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS }).catch(() => {});
+            await redis.set(userSessionKey(dbUser.id), JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS }).catch(() => {});
           }
         }
       }
@@ -669,7 +670,7 @@ export async function createContext({
             try {
               const storedFp = storedFingerprint !== null
                 ? storedFingerprint
-                : await redis.get<string>(`sheriabot:session_fingerprint:${user.sessionId}`);
+                : await redis.get<string>(sessionFingerprintKey(user.sessionId));
 
               if (storedFp) {
                 const currentIp = req.ip ?? '';

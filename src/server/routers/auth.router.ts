@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { MemberRole, MemberStatus } from '@prisma/client';
+import { MemberRole, MemberStatus, PrismaClient } from '@prisma/client';
 import { createHash, randomBytes } from 'crypto';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -22,7 +22,7 @@ import { authRateLimiter, rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { hashIp, revokedBearerTokenKey } from '@/utils/request-identifiers';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
-import { SESSION_CONFIG, lastSeenKey, sessionStartKey } from '@/config/session';
+import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey } from '@/config/session';
 import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
 import { issueSessionForUser } from '@/server/services/session.service';
 import { encryptMfaChallenge, decryptMfaChallenge, MfaChallengeDecryptError } from '@/server/lib/mfa-challenge-crypto';
@@ -419,7 +419,7 @@ export const authRouter = router({
               ? systemConfig.defaultSubscriptionTier
               : 'starter';
 
-            const provisionRes = await provisionDefaultOrganization(ctx.prisma, {
+            const provisionRes = await provisionDefaultOrganization(ctx.prisma as unknown as PrismaClient, {
               user: {
                 id: user.id,
                 email: user.email,
@@ -725,14 +725,14 @@ export const authRouter = router({
 
         // Parallelize all Redis session/state initializations
         const redisWrites: Promise<unknown>[] = [
-          redis.set(`user:session:${authData.user.id}`, JSON.stringify(userProfile), { ex: 3600 }),
+          redis.set(userSessionKey(user.id), JSON.stringify(userProfile), { ex: 3600 }),
           redis.set(lastSeenKey(user.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
           redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
         ];
 
         if (dbSessionId) {
           redisWrites.push(
-            redis.set(`sheriabot:session_fingerprint:${dbSessionId}`, fingerprint, { ex: sessionTtlSeconds }),
+            redis.set(sessionFingerprintKey(dbSessionId), fingerprint, { ex: sessionTtlSeconds }),
           );
         }
 
@@ -1095,7 +1095,10 @@ export const authRouter = router({
 
     // Step 3: Redis user cache eviction. Non-fatal after JTI blocklist succeeds.
     try {
-      await redis.del(`user:session:${supabaseAuthId}`);
+      await redis.del(userSessionKey(userId));
+      if (supabaseAuthId) {
+        await redis.del(`user:session:${supabaseAuthId}`).catch(() => {});
+      }
     } catch (error: unknown) {
       logger.warn({
         type: 'auth_logout_user_cache_cleanup_failed',
@@ -1121,9 +1124,10 @@ export const authRouter = router({
     // Step 5: B3/B5 key cleanup. Non-fatal after JTI blocklist succeeds.
     try {
       const keysToDelete: string[] = [
+        userSessionKey(userId),
         lastSeenKey(userId),
         sessionStartKey(userId),
-        ...(sessionId ? [`sheriabot:session_fingerprint:${sessionId}`] : []),
+        ...(sessionId ? [sessionFingerprintKey(sessionId)] : []),
       ];
       await Promise.all(keysToDelete.map((key) => redis.del(key)));
     } catch (error: unknown) {
@@ -1265,7 +1269,10 @@ export const authRouter = router({
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update password. Please try again.' });
         }
 
-        await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch(() => {});
+        await redis.del(userSessionKey(user.id)).catch(() => {});
+        if ((user as any).supabaseAuthId) {
+          await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch(() => {});
+        }
       }
       await redis.del(lastSeenKey(user.id)).catch(() => {});
       await redis.del(sessionStartKey(user.id)).catch(() => {});
@@ -1439,9 +1446,10 @@ export const authRouter = router({
 
           // Invalidate Redis user cache + idle/session-start keys
           await Promise.all([
-            redis.del(`user:session:${supabaseAuthId}`),
+            redis.del(userSessionKey(user.id)),
             redis.del(lastSeenKey(user.id)),
             redis.del(sessionStartKey(user.id)),
+            ...(supabaseAuthId ? [redis.del(`user:session:${supabaseAuthId}`)] : []),
           ]).catch(() => {});
         }
 
@@ -1728,10 +1736,10 @@ export const authRouter = router({
             const fingerprint = createHash('sha256').update(`${loginIp}:${rawUa.substring(0, 500)}`).digest('hex');
 
             await Promise.all([
-              redis.set(`user:session:${supabaseUser.id}`, JSON.stringify(userProfile), { ex: 3600 }),
+              redis.set(userSessionKey(user.id), JSON.stringify(userProfile), { ex: 3600 }),
               redis.set(lastSeenKey(user.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
               redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
-              redis.set(`sheriabot:session_fingerprint:${dbSession.id}`, fingerprint, { ex: sessionTtlSeconds }),
+              redis.set(sessionFingerprintKey(dbSession.id), fingerprint, { ex: sessionTtlSeconds }),
             ]).catch((err: unknown) => {
               logger.warn({ type: 'auth_email_callback_redis_writes_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
             });

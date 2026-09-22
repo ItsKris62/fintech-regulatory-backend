@@ -1,6 +1,6 @@
 import 'dotenv/config';
-import { prisma } from '../lib/prisma/client';
-import { loadSystemConfig, SYSTEM_CONFIG_DEFINITIONS } from '../lib/system-config';
+import { prisma } from '../src/lib/prisma/client';
+import { loadSystemConfig, SYSTEM_CONFIG_DEFINITIONS } from '../src/lib/system-config';
 
 async function main() {
   console.log('🔄 Syncing system config definitions into database...');
