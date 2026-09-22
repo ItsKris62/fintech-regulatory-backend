@@ -17,21 +17,21 @@ function platformSrc(relativePath: string): string {
 
 describe('framework access helpers', () => {
   it('allows Startup to see only basic framework tiers', () => {
-    expect(allowedFrameworkTiersForPlan(SubscriptionPlan.STARTUP)).toEqual(['STARTUP']);
+    expect(allowedFrameworkTiersForPlan(SubscriptionPlan.STARTUP)).toEqual(['FREE', 'STARTER', 'STARTUP']);
     expect(canAccessFrameworkTier(SubscriptionPlan.STARTUP, 'STARTUP')).toBe(true);
     expect(canAccessFrameworkTier(SubscriptionPlan.STARTUP, 'BUSINESS')).toBe(false);
     expect(canAccessFrameworkTier(SubscriptionPlan.STARTUP, 'ENTERPRISE')).toBe(false);
   });
 
   it('allows Business to see Startup and Business framework tiers', () => {
-    expect(allowedFrameworkTiersForPlan(SubscriptionPlan.BUSINESS)).toEqual(['STARTUP', 'BUSINESS']);
+    expect(allowedFrameworkTiersForPlan(SubscriptionPlan.BUSINESS)).toEqual(['FREE', 'STARTER', 'GROWTH', 'STARTUP', 'BUSINESS']);
     expect(canAccessFrameworkTier(SubscriptionPlan.BUSINESS, 'STARTUP')).toBe(true);
     expect(canAccessFrameworkTier(SubscriptionPlan.BUSINESS, 'BUSINESS')).toBe(true);
     expect(canAccessFrameworkTier(SubscriptionPlan.BUSINESS, 'ENTERPRISE')).toBe(false);
   });
 
   it('allows Enterprise and active pilots with Enterprise effective plan to see Enterprise framework tiers', () => {
-    expect(allowedFrameworkTiersForPlan(SubscriptionPlan.ENTERPRISE)).toEqual(['STARTUP', 'BUSINESS', 'ENTERPRISE']);
+    expect(allowedFrameworkTiersForPlan(SubscriptionPlan.ENTERPRISE)).toEqual(['FREE', 'STARTER', 'GROWTH', 'STARTUP', 'BUSINESS', 'ENTERPRISE']);
     expect(canAccessFrameworkTier(SubscriptionPlan.ENTERPRISE, 'ENTERPRISE')).toBe(true);
   });
 

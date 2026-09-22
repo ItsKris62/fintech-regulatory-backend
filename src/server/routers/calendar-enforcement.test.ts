@@ -62,8 +62,8 @@ describe('calendar router entitlement and RBAC map', () => {
   });
 
   it('preserves tier behavior for calendar access', () => {
-    expect(PLAN_ENTITLEMENTS.STARTUP.complianceCalendar).toBe(false);
-    expect(hasFeature(SubscriptionPlan.STARTUP, 'complianceCalendar')).toBe(false);
+    expect(PLAN_ENTITLEMENTS.FREE.complianceCalendar).toBe(false);
+    expect(hasFeature(SubscriptionPlan.FREE, 'complianceCalendar')).toBe(false);
     expect(hasFeature(SubscriptionPlan.BUSINESS, 'complianceCalendar')).toBe(true);
     expect(hasFeature(SubscriptionPlan.ENTERPRISE, 'complianceCalendar')).toBe(true);
     expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL.complianceCalendar).toBe(true);

@@ -23,7 +23,7 @@ describe('runtime billing plan catalog', () => {
     expect(starter?.trialDays).toBe(21);
     expect(starter?.stripe?.monthlyPriceId).toBe('price_starter_new');
     expect(enterprise?.editable).toBe(false);
-    expect(enterprise?.price.monthly).toBeNull();
+    expect(enterprise?.price.monthly).toBe(PLANS.ENTERPRISE.price.monthly);
   });
 
   it('drops invalid persisted override values instead of corrupting the catalog', () => {

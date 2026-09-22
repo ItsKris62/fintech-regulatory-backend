@@ -26,22 +26,22 @@ describe('pilot entitlement profiles', () => {
   it('grants active pilot access to requested product features', () => {
     const pilot = PILOT_ENTITLEMENT_PROFILES.PILOT_FULL;
 
-    expect(getQuotaFromEntitlements(pilot, 'complianceQueries').limit).toBe(-1);
+    expect(getQuotaFromEntitlements(pilot, 'complianceQueries').limit).toBe(1200);
     expect(getQuotaFromEntitlements(pilot, 'checklistGenerations').limit).toBe(-1);
     expect(getQuotaFromEntitlements(pilot, 'gapAnalysis').limit).not.toBe(0);
     expect(pilot.benchmarkDocuments).toBe(true);
-    expect(pilot.customFrameworks).toBe(false);
+    expect(pilot.customFrameworks).toBe(true);
     expect(getLimitFromEntitlements(pilot, 'documentRepository')).not.toBe(0);
     expect(pilot.regulatoryDashboard).toBe(true);
   });
 
-  it('does not include policy generation unless explicitly enabled', () => {
-    expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL.policyGeneration).toBe(false);
+  it('includes policy generation on full pilot profiles', () => {
+    expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL.policyGeneration).toBe(true);
     expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL_WITH_POLICY_GENERATION.policyGeneration).toBe(true);
   });
 
-  it('keeps non-pilot startup gap analysis behavior unchanged', () => {
-    expect(PLAN_ENTITLEMENTS.STARTUP.gapAnalysis).toEqual({ limit: 0, period: 'month' });
+  it('keeps free tier gap analysis behavior gated', () => {
+    expect(PLAN_ENTITLEMENTS.FREE.gapAnalysis).toEqual({ limit: 0, period: 'month' });
   });
 });
 
@@ -51,30 +51,31 @@ describe('plan entitlement normalization', () => {
     expect(getLimitFromEntitlements(PLAN_ENTITLEMENTS.BUSINESS, 'maxSeats')).toBe(6);
   });
 
-  it('gates full compliance calendar to Business and Enterprise paid tiers', () => {
-    expect(PLAN_ENTITLEMENTS.STARTUP.complianceCalendar).toBe(false);
-    expect(hasFeature(SubscriptionPlan.STARTUP, 'complianceCalendar')).toBe(false);
+  it('gates full compliance calendar to Starter, Growth, Business and Enterprise paid tiers', () => {
+    expect(PLAN_ENTITLEMENTS.FREE.complianceCalendar).toBe(false);
+    expect(hasFeature(SubscriptionPlan.FREE, 'complianceCalendar')).toBe(false);
+    expect(hasFeature(SubscriptionPlan.STARTER, 'complianceCalendar')).toBe(true);
     expect(hasFeature(SubscriptionPlan.BUSINESS, 'complianceCalendar')).toBe(true);
     expect(hasFeature(SubscriptionPlan.ENTERPRISE, 'complianceCalendar')).toBe(true);
   });
 
   it('resolves benchmark document entitlement by plan and pilot profile', () => {
-    expect(PLAN_ENTITLEMENTS.STARTUP.benchmarkDocuments).toBe(false);
+    expect(PLAN_ENTITLEMENTS.STARTER.benchmarkDocuments).toBe(false);
     expect(PLAN_ENTITLEMENTS.BUSINESS.benchmarkDocuments).toBe(true);
     expect(PLAN_ENTITLEMENTS.ENTERPRISE.benchmarkDocuments).toBe(true);
     expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL.benchmarkDocuments).toBe(true);
   });
 
   it('resolves custom framework entitlement by plan and pilot profile', () => {
-    expect(PLAN_ENTITLEMENTS.STARTUP.customFrameworks).toBe(false);
+    expect(PLAN_ENTITLEMENTS.STARTER.customFrameworks).toBe(false);
     expect(PLAN_ENTITLEMENTS.BUSINESS.customFrameworks).toBe(false);
     expect(PLAN_ENTITLEMENTS.ENTERPRISE.customFrameworks).toBe(true);
-    expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL.customFrameworks).toBe(false);
+    expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL.customFrameworks).toBe(true);
   });
 
   it('treats zero-limit quota objects as blocked', () => {
-    expect(hasFeature(SubscriptionPlan.STARTUP, 'gapAnalysis')).toBe(false);
-    expect(getQuota(SubscriptionPlan.STARTUP, 'gapAnalysis')).toEqual({ limit: 0, period: 'month' });
+    expect(hasFeature(SubscriptionPlan.FREE, 'gapAnalysis')).toBe(false);
+    expect(getQuota(SubscriptionPlan.FREE, 'gapAnalysis')).toEqual({ limit: 0, period: 'month' });
   });
 
   it('keeps the frontend plan helper aligned on zero-limit feature blocking', () => {

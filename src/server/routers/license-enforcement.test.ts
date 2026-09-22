@@ -58,8 +58,8 @@ describe('license management entitlement, RBAC, and governance map', () => {
   });
 
   it('preserves tier behavior for license management', () => {
-    expect(PLAN_ENTITLEMENTS.STARTUP.licenseManagement).toBe(false);
-    expect(hasFeature(SubscriptionPlan.STARTUP, 'licenseManagement')).toBe(false);
+    expect(PLAN_ENTITLEMENTS.FREE.licenseManagement).toBe(false);
+    expect(hasFeature(SubscriptionPlan.FREE, 'licenseManagement')).toBe(false);
     expect(hasFeature(SubscriptionPlan.BUSINESS, 'licenseManagement')).toBe(true);
     expect(hasFeature(SubscriptionPlan.ENTERPRISE, 'licenseManagement')).toBe(true);
     expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL.licenseManagement).toBe(true);

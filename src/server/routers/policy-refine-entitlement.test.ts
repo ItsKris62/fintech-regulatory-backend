@@ -40,10 +40,10 @@ describe('policy refinement entitlement & enforcement', () => {
     expect(PLAN_ENTITLEMENTS.FREE_TRIAL.policyGeneration).toBe(false);
   });
 
-  it('verifies that policyGeneration is enabled for ENTERPRISE and PILOT_FULL_WITH_POLICY_GENERATION', () => {
+  it('verifies that policyGeneration is enabled for ENTERPRISE and pilot profiles', () => {
     expect(hasFeature(SubscriptionPlan.ENTERPRISE, 'policyGeneration')).toBe(true);
     expect(PLAN_ENTITLEMENTS.ENTERPRISE.policyGeneration).toBe(true);
     expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL_WITH_POLICY_GENERATION.policyGeneration).toBe(true);
-    expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL.policyGeneration).toBe(false);
+    expect(PILOT_ENTITLEMENT_PROFILES.PILOT_FULL.policyGeneration).toBe(true);
   });
 });
