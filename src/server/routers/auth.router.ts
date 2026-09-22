@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { MemberRole, MemberStatus } from '@prisma/client';
+import { MemberRole, MemberStatus, PrismaClient } from '@prisma/client';
 import { createHash, randomBytes } from 'crypto';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -22,15 +22,15 @@ import { authRateLimiter, rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { hashIp, revokedBearerTokenKey } from '@/utils/request-identifiers';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
-import { SESSION_CONFIG, lastSeenKey, sessionStartKey } from '@/config/session';
+import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey } from '@/config/session';
 import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
 import { issueSessionForUser } from '@/server/services/session.service';
 import { encryptMfaChallenge, decryptMfaChallenge, MfaChallengeDecryptError } from '@/server/lib/mfa-challenge-crypto';
 import { revokedJtiKey, revokeAllUserTokens } from '@/utils/token-revocation';
 import { extractExp, extractJti } from '@/utils/jwt';
 import { loadSystemConfig } from '@/lib/system-config';
-import { subscriptionTierToPlanOrFree } from '@/utils/plan-mapping';
 import { durableTaskRunner } from '../services/durable-background-tasks';
+import { provisionDefaultOrganization } from '@/services/organization-provisioning.service';
 
 import {
   isFreeEmailDomain,
@@ -412,49 +412,29 @@ export const authRouter = router({
           await redis.del(`sheriabot:orgmem:${user.id}:${invitation.organizationId}`).catch(() => {});
         }
 
-        // F3.1  -  Create and link Organization if companyName was provided and user has no org yet.
-        // Awaited so that user.organizationId is set before the response and first session cache.
-        if (input.companyName && !user.organizationId) {
+        // Provision organization and owner membership if user has no org yet
+        if (!user.organizationId) {
           try {
             const defaultSubscriptionTier = typeof systemConfig.defaultSubscriptionTier === 'string'
               ? systemConfig.defaultSubscriptionTier
               : 'starter';
-            const org = await ctx.prisma.organization.create({
-              data: {
-                name: input.companyName,
-                type: resolvedRole,
-                subscriptionTier: defaultSubscriptionTier,
-                plan: subscriptionTierToPlanOrFree(defaultSubscriptionTier),
-                homeJurisdictionCode: input.homeJurisdictionCode,
-                enabledJurisdictions: input.homeJurisdictionCode ? [input.homeJurisdictionCode] : [],
-                needsCountryConfirmation: !input.homeJurisdictionCode,
-                users: { connect: { id: user.id } },
-              },
-              select: { id: true },
-            });
-            user.organizationId = org.id;
 
-            await ctx.prisma.organizationMember.upsert({
-              where: {
-                userId_organizationId: {
-                  userId: user.id,
-                  organizationId: org.id,
-                },
+            const provisionRes = await provisionDefaultOrganization(ctx.prisma as unknown as PrismaClient, {
+              user: {
+                id: user.id,
+                email: user.email,
+                fullName: (user as any).fullName,
+                role: resolvedRole,
+                organizationId: user.organizationId,
               },
-              create: {
-                userId: user.id,
-                organizationId: org.id,
-                role: MemberRole.OWNER,
-                status: MemberStatus.ACTIVE,
-                joinedAt: new Date(),
-              },
-              update: {
-                role: MemberRole.OWNER,
-                status: MemberStatus.ACTIVE,
-              },
+              companyName: input.companyName,
+              homeJurisdictionCode: input.homeJurisdictionCode,
+              defaultSubscriptionTier,
             });
+
+            user.organizationId = provisionRes.organizationId;
           } catch (err: any) {
-            logger.warn({ type: 'auth_register_org_create_failed', userId: user.id, error: err.message });
+            logger.warn({ type: 'auth_register_org_provision_failed', userId: user.id, error: err?.message });
           }
         }
 
@@ -476,6 +456,7 @@ export const authRouter = router({
           success: true,
           userId: user.id,
           email: user.email,
+          requiresEmailVerification: requireEmailVerification,
           message: requireEmailVerification
             ? 'Registration successful. Please check your email to verify your account.'
             : 'Registration successful. You can now log in.',
@@ -744,14 +725,14 @@ export const authRouter = router({
 
         // Parallelize all Redis session/state initializations
         const redisWrites: Promise<unknown>[] = [
-          redis.set(`user:session:${authData.user.id}`, JSON.stringify(userProfile), { ex: 3600 }),
+          redis.set(userSessionKey(user.id), JSON.stringify(userProfile), { ex: 3600 }),
           redis.set(lastSeenKey(user.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
           redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
         ];
 
         if (dbSessionId) {
           redisWrites.push(
-            redis.set(`sheriabot:session_fingerprint:${dbSessionId}`, fingerprint, { ex: sessionTtlSeconds }),
+            redis.set(sessionFingerprintKey(dbSessionId), fingerprint, { ex: sessionTtlSeconds }),
           );
         }
 
@@ -1114,7 +1095,10 @@ export const authRouter = router({
 
     // Step 3: Redis user cache eviction. Non-fatal after JTI blocklist succeeds.
     try {
-      await redis.del(`user:session:${supabaseAuthId}`);
+      await redis.del(userSessionKey(userId));
+      if (supabaseAuthId) {
+        await redis.del(`user:session:${supabaseAuthId}`).catch(() => {});
+      }
     } catch (error: unknown) {
       logger.warn({
         type: 'auth_logout_user_cache_cleanup_failed',
@@ -1140,9 +1124,10 @@ export const authRouter = router({
     // Step 5: B3/B5 key cleanup. Non-fatal after JTI blocklist succeeds.
     try {
       const keysToDelete: string[] = [
+        userSessionKey(userId),
         lastSeenKey(userId),
         sessionStartKey(userId),
-        ...(sessionId ? [`sheriabot:session_fingerprint:${sessionId}`] : []),
+        ...(sessionId ? [sessionFingerprintKey(sessionId)] : []),
       ];
       await Promise.all(keysToDelete.map((key) => redis.del(key)));
     } catch (error: unknown) {
@@ -1284,7 +1269,10 @@ export const authRouter = router({
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update password. Please try again.' });
         }
 
-        await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch(() => {});
+        await redis.del(userSessionKey(user.id)).catch(() => {});
+        if ((user as any).supabaseAuthId) {
+          await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch(() => {});
+        }
       }
       await redis.del(lastSeenKey(user.id)).catch(() => {});
       await redis.del(sessionStartKey(user.id)).catch(() => {});
@@ -1458,9 +1446,10 @@ export const authRouter = router({
 
           // Invalidate Redis user cache + idle/session-start keys
           await Promise.all([
-            redis.del(`user:session:${supabaseAuthId}`),
+            redis.del(userSessionKey(user.id)),
             redis.del(lastSeenKey(user.id)),
             redis.del(sessionStartKey(user.id)),
+            ...(supabaseAuthId ? [redis.del(`user:session:${supabaseAuthId}`)] : []),
           ]).catch(() => {});
         }
 
@@ -1663,51 +1652,107 @@ export const authRouter = router({
         // 2. Find the matching Prisma user
         const user = await ctx.prisma.user.findUnique({
           where: { supabaseAuthId: supabaseUser.id },
-          select: { id: true, email: true, fullName: true, role: true, emailVerified: true },
+          select: {
+            id: true,
+            email: true,
+            fullName: true,
+            role: true,
+            emailVerified: true,
+            organizationId: true,
+            mustChangePassword: true,
+            totpEnabled: true,
+            accountStatus: true,
+          },
         });
 
         if (!user) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'User account not found' });
         }
 
-        // 3. Idempotent  -  return early if already verified
-        if (user.emailVerified) {
-          return {
-            success: true,
-            requiresApproval: user.role === 'REGULATOR',
-            alreadyVerified: true,
-          };
-        }
-
         const newAccountStatus = user.role === 'REGULATOR' ? 'pending_approval' : 'active';
+        const wasAlreadyVerified = !!user.emailVerified;
 
-        // 4. Mark Prisma user as verified
-        await ctx.prisma.user.update({
-          where: { id: user.id },
-          data: {
-            emailVerified: true,
-            emailVerifiedAt: new Date(),
-            emailVerificationToken: null,
-            emailVerificationExpiry: null,
-            accountStatus: newAccountStatus,
-          } as any,
-        });
+        // 3. Mark Prisma user as verified if not already
+        if (!wasAlreadyVerified) {
+          await ctx.prisma.user.update({
+            where: { id: user.id },
+            data: {
+              emailVerified: true,
+              emailVerifiedAt: new Date(),
+              emailVerificationToken: null,
+              emailVerificationExpiry: null,
+              accountStatus: newAccountStatus,
+            } as any,
+          });
 
-        // 5. Send welcome email for non-regulator users
-        if (user.role !== 'REGULATOR') {
-          reactMailer.sendWelcomeEmail(user.email, {
-            userName: user.fullName || user.email,
-            role: user.role,
-            dashboardUrl: `${appConfig.frontendUrl}/dashboard`,
-          }).catch(() => {});
+          // Send welcome email for non-regulator users
+          if (user.role !== 'REGULATOR') {
+            reactMailer.sendWelcomeEmail(user.email, {
+              userName: user.fullName || user.email,
+              role: user.role,
+              dashboardUrl: `${appConfig.frontendUrl}/dashboard`,
+            }).catch(() => {});
+          }
+
+          logger.info({ type: 'auth_email_callback_verified', userId: user.id, accountStatus: newAccountStatus });
         }
 
-        logger.info({ type: 'auth_email_callback_verified', userId: user.id, accountStatus: newAccountStatus });
+        // 4. Issue session and hydrate Redis cache for active accounts
+        let sessionData: { id: string; expiresAt: Date } | null = null;
+        if (newAccountStatus === 'active' || (wasAlreadyVerified && user.accountStatus === 'active')) {
+          const sessionTtlSeconds = SESSION_CONFIG.ABSOLUTE_TIMEOUT_SECONDS;
+          const rawUa = typeof ctx.req.headers['user-agent'] === 'string' ? ctx.req.headers['user-agent'] : '';
+          const forwardedFor = typeof ctx.req.headers['x-forwarded-for'] === 'string' ? ctx.req.headers['x-forwarded-for'].split(',')[0]?.trim() : undefined;
+          const loginIp = ctx.req.ip || forwardedFor || 'Unknown';
+
+          try {
+            const dbSession = await ctx.prisma.session.create({
+              data: {
+                userId: user.id,
+                token: nanoid(64),
+                expiresAt: new Date(Date.now() + sessionTtlSeconds * 1000),
+                device: parseDeviceLabel(rawUa),
+                ipAddress: loginIp,
+                userAgent: rawUa ? rawUa.substring(0, 500) : null,
+              },
+              select: { id: true, expiresAt: true },
+            });
+            sessionData = dbSession;
+
+            const sessionExpiresAt = Date.now() + sessionTtlSeconds * 1000;
+            const userProfile = {
+              id: user.id,
+              email: user.email,
+              role: user.role,
+              organizationId: user.organizationId ?? undefined,
+              supabaseAuthId: supabaseUser.id,
+              mustChangePassword: (user as any).mustChangePassword === true,
+              totpEnabled: (user as any).totpEnabled ?? false,
+              sessionId: dbSession.id,
+              sessionExpiresAt,
+            };
+
+            const loginNow = Date.now();
+            const fingerprint = createHash('sha256').update(`${loginIp}:${rawUa.substring(0, 500)}`).digest('hex');
+
+            await Promise.all([
+              redis.set(userSessionKey(user.id), JSON.stringify(userProfile), { ex: 3600 }),
+              redis.set(lastSeenKey(user.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
+              redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
+              redis.set(sessionFingerprintKey(dbSession.id), fingerprint, { ex: sessionTtlSeconds }),
+            ]).catch((err: unknown) => {
+              logger.warn({ type: 'auth_email_callback_redis_writes_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
+            });
+          } catch (sessionErr: any) {
+            logger.warn({ type: 'auth_email_callback_session_creation_failed', userId: user.id, error: sessionErr?.message });
+          }
+        }
 
         return {
           success: true,
           requiresApproval: user.role === 'REGULATOR',
-          alreadyVerified: false,
+          alreadyVerified: wasAlreadyVerified,
+          session: sessionData ? { id: sessionData.id, expiresAt: sessionData.expiresAt.toISOString() } : null,
         };
       } catch (error: any) {
         if (error instanceof TRPCError) throw error;

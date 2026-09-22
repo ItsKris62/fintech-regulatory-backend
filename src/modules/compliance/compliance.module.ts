@@ -2318,6 +2318,7 @@ Follow-up Question: ${followUp}
    */
   async getUserChecklists(userId: string, organizationId: string): Promise<{
     id: string;
+    organizationId?: string | null;
     title: string;
     productType: string | null;
     businessStage: string | null;
@@ -2334,15 +2335,13 @@ Follow-up Question: ${followUp}
     const checklists = await prisma.checklist.findMany({
       where: {
         userId,
-        ...({ deletedAt: null } as any),
-        OR: [
-          { organizationId },
-          { organizationId: null }, // Legacy rows per KNOWN_ISSUES B5; remove when migrated
-        ],
+        organizationId,
+        deletedAt: null,
       },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
+        organizationId: true,
         title: true,
         productType: true,
         businessStage: true,
@@ -2351,7 +2350,16 @@ Follow-up Question: ${followUp}
         additionalConcerns: true,
         progress: true,
         status: true,
+        totalItems: true,
+        completedItems: true,
         checklistData: true,
+        checklistItems: {
+          select: {
+            id: true,
+            priority: true,
+            status: true,
+          },
+        },
         createdAt: true,
         updatedAt: true,
       },
@@ -2359,8 +2367,17 @@ Follow-up Question: ${followUp}
 
     return checklists.map((c) => {
       const data = c.checklistData as GeneratedChecklist | null;
+      const relationalItems = c.checklistItems ?? [];
+      const totalCount = relationalItems.length > 0
+        ? relationalItems.length
+        : (c.totalItems > 0 ? c.totalItems : (data?.metadata?.totalItems ?? 0));
+      const criticalCount = relationalItems.length > 0
+        ? relationalItems.filter((i) => i.priority === 'CRITICAL' || i.priority === 'HIGH').length
+        : (data?.metadata?.criticalItems ?? (c.totalItems > 0 ? 1 : 0));
+
       return {
         id: c.id,
+        organizationId: c.organizationId,
         title: c.title,
         productType: c.productType,
         businessStage: c.businessStage,
@@ -2371,8 +2388,8 @@ Follow-up Question: ${followUp}
         status: c.status,
         createdAt: c.createdAt,
         updatedAt: c.updatedAt,
-        totalItems: data?.metadata?.totalItems ?? 0,
-        criticalItems: data?.metadata?.criticalItems ?? 0,
+        totalItems: totalCount,
+        criticalItems: criticalCount,
       };
     });
   }
