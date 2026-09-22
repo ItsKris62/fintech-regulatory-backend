@@ -77,6 +77,10 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  AUTO_CREATE_SESSION_ON_VALID_TOKEN: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
   AGENTS_ENABLED: z
     .enum(['true', 'false'])
     .default('false')
@@ -345,6 +349,7 @@ export const appConfig = {
   features: {
     orchestratorEnabled: env.ORCHESTRATOR_ENABLED,
     agentsEnabled: env.AGENTS_ENABLED,
+    autoCreateSessionOnValidToken: env.AUTO_CREATE_SESSION_ON_VALID_TOKEN,
   },
   payments: {
     activeProvider: env.ACTIVE_PAYMENT_PROVIDER,
