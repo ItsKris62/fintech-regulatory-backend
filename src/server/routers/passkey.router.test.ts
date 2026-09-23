@@ -37,6 +37,17 @@ vi.mock('@/lib/redis/client', () => ({
   getRedisStats: vi.fn(),
 }));
 
+vi.mock('@/lib/prisma/client', () => ({
+  prisma: {
+    systemConfig: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    securityAuditEvent: {
+      create: vi.fn().mockResolvedValue({}),
+    },
+  },
+}));
+
 vi.mock('@simplewebauthn/server', () => ({
   generateRegistrationOptions: (...args: any[]) => mockWebAuthn.generateRegistrationOptions(...args),
   verifyRegistrationResponse: (...args: any[]) => mockWebAuthn.verifyRegistrationResponse(...args),
@@ -71,6 +82,9 @@ function createMockPrisma(overrides: any = {}) {
   const defaultAuditEvent = {
     create: vi.fn().mockResolvedValue({}),
   };
+  const defaultSystemConfig = {
+    findMany: vi.fn().mockResolvedValue([]),
+  };
 
   return {
     ...overrides,
@@ -80,6 +94,7 @@ function createMockPrisma(overrides: any = {}) {
     session: { ...defaultSession, ...(overrides.session || {}) },
     auditLog: { create: vi.fn().mockResolvedValue({}), ...(overrides.auditLog || {}) },
     securityAuditEvent: { ...defaultAuditEvent, ...(overrides.securityAuditEvent || {}) },
+    systemConfig: { ...defaultSystemConfig, ...(overrides.systemConfig || {}) },
   };
 }
 
@@ -112,10 +127,14 @@ describe('Passkey Router & Security Hardening Unit Tests', () => {
     mockRedis.del.mockResolvedValue(1);
     mockRedis.get.mockResolvedValue(null);
 
-    // Default rate limit allowed
+    // Default audit log spy
+    vi.spyOn(auditService, 'logSecurityEvent').mockResolvedValue(undefined);
+
+    // Default rate limit allowed for checkRateLimit
     vi.spyOn(webauthnRateLimit, 'checkRateLimit').mockResolvedValue({
       allowed: true,
       remaining: 9,
+      resetAt: Math.floor(Date.now() / 1000) + 900,
     });
   });
 
@@ -346,10 +365,12 @@ describe('Passkey Router & Security Hardening Unit Tests', () => {
   it('7. generateAuthenticationOptions rate-limits per IP (30/15min)', async () => {
     expect(PASSKEY_RATE_LIMITS.authOptions).toEqual({ max: 30, windowSec: 900 });
 
-    vi.spyOn(webauthnRateLimit, 'checkRateLimit').mockResolvedValue({
+    vi.spyOn(webauthnRateLimit, 'checkAuthOptionsRateLimit').mockResolvedValueOnce({
       allowed: false,
       remaining: 0,
+      resetAt: Math.floor(Date.now() / 1000) + 900,
     });
+    mockRedis.incr.mockResolvedValue(31);
     const auditSpy = vi.spyOn(auditService, 'logSecurityEvent').mockResolvedValue(undefined);
 
     const ctx = createMockCtx(null);
@@ -361,6 +382,54 @@ describe('Passkey Router & Security Hardening Unit Tests', () => {
       expect.objectContaining({
         eventType: 'PASSKEY_RATE_LIMITED',
         ipAddress: '192.168.1.50',
+      }),
+    );
+  });
+
+  it('7b. generateAuthenticationOptions fails closed when IP is missing in production', async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const auditSpy = vi.spyOn(auditService, 'logSecurityEvent').mockResolvedValue(undefined);
+
+    const ctx = createMockCtx(null);
+    ctx.req.ip = undefined as any;
+
+    const caller = passkeyRouter.createCaller(ctx as any);
+    await expect(caller.generateAuthenticationOptions({})).rejects.toThrow('PASSKEY_RATE_LIMITED');
+    expect(auditSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'PASSKEY_RATE_LIMITED',
+        ipAddress: 'missing',
+      }),
+    );
+
+    process.env.NODE_ENV = originalEnv;
+  });
+
+  it('7c. generateAuthenticationOptions allows request with valid real IP when within limits', async () => {
+    vi.spyOn(webauthnRateLimit, 'checkRateLimit').mockResolvedValue({
+      allowed: true,
+      remaining: 29,
+      resetAt: Math.floor(Date.now() / 1000) + 900,
+    });
+    mockWebAuthn.generateAuthenticationOptions.mockResolvedValue({
+      challenge: 'chal_test_123',
+    });
+    mockRedis.set.mockResolvedValue('OK');
+    const auditSpy = vi.spyOn(auditService, 'logSecurityEvent').mockResolvedValue(undefined);
+
+    const ctx = createMockCtx(null);
+    ctx.req.ip = '198.51.100.77';
+
+    const caller = passkeyRouter.createCaller(ctx as any);
+    const res = await caller.generateAuthenticationOptions({});
+
+    expect(res).toBeDefined();
+    expect(res.options.challenge).toBe('chal_test_123');
+    expect(auditSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'PASSKEY_AUTH_STARTED',
+        ipAddress: '198.51.100.77',
       }),
     );
   });
@@ -650,6 +719,7 @@ describe('Passkey Router & Security Hardening Unit Tests', () => {
     vi.spyOn(webauthnRateLimit, 'checkRateLimit').mockResolvedValue({
       allowed: false,
       remaining: 0,
+      resetAt: Math.floor(Date.now() / 1000) + 300,
     });
     mockRedis.del.mockResolvedValue(1);
     const auditSpy = vi.spyOn(auditService, 'logSecurityEvent').mockResolvedValue(undefined);

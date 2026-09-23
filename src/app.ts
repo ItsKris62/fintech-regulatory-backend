@@ -1,4 +1,4 @@
-import Fastify, { FastifyInstance, FastifyServerOptions } from 'fastify';
+import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { z } from 'zod';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
@@ -28,7 +28,6 @@ import {
   isAllowedIntaSendIp,
   parseAllowedIps,
   isStrongIntaSendWebhookChallenge,
-  parseTrustedProxyHops,
   getIntaSendWebhookClientIp,
 } from './lib/intasend/webhook-verifier';
 import { hashIp } from './utils/request-identifiers';
@@ -67,30 +66,21 @@ const intaSendWebhookSchema = z.object({
   challenge:     z.string().max(512).optional(),
 }).passthrough();
 
-type TrustProxyValue = NonNullable<FastifyServerOptions['trustProxy']>;
+import {
+  resolveTrustProxy,
+  parseTrustProxy,
+  type TrustProxyValue,
+  type TrustProxyMode,
+  type ResolvedTrustProxy,
+} from './server/lib/trust-proxy';
 
-export function parseTrustProxy(rawValue: string | undefined, rawHopValue = process.env.TRUST_PROXY_HOPS): TrustProxyValue {
-  if (rawValue === undefined || rawValue.trim() === '') {
-    const hops = parseTrustedProxyHops(rawHopValue);
-    return hops > 0 ? hops : false;
-  }
-
-  const normalized = rawValue.trim().toLowerCase();
-  if (normalized === 'false') {
-    return false;
-  }
-
-  if (normalized === 'true') {
-    return true;
-  }
-
-  const hopCount = Number(normalized);
-  if (Number.isInteger(hopCount) && hopCount >= 0) {
-    return hopCount;
-  }
-
-  return rawValue;
-}
+export {
+  resolveTrustProxy,
+  parseTrustProxy,
+  type TrustProxyValue,
+  type TrustProxyMode,
+  type ResolvedTrustProxy,
+};
 
 function getFastifyStatusCode(error: Error): number {
   const maybeFastifyError = error as Error & { statusCode?: unknown };
@@ -137,14 +127,44 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
   }
 
+  const resolvedProxy = resolveTrustProxy(process.env);
+
+  logger.info({
+    type: 'trust_proxy_config',
+    trustProxyMode: resolvedProxy.mode,
+    trustProxySummary: resolvedProxy.summary,
+  });
+
+  if (process.env.NODE_ENV === 'production' && resolvedProxy.mode === 'false') {
+    logger.warn({
+      type: 'trust_proxy_disabled_in_production',
+      message:
+        'Fastify trustProxy is resolved to false in production. If the application runs behind a reverse proxy (e.g. Render, AWS ALB, Cloudflare), X-Forwarded-For will be ignored and real client IPs will be lost. Configure TRUST_PROXY_HOPS or TRUST_PROXY_CIDRS.',
+    });
+  }
+
   const app = Fastify({
     logger: false, // Structured logging handled by Pino via src/utils/logger
     maxParamLength: 5000,
     bodyLimit: 31457280, // 30 MB  -  covers 20 MB base64 gap analysis uploads
-    // Render's reverse proxy is trusted  -  accepts X-Forwarded-For.
-    // Override with TRUST_PROXY env var if deploying behind a different proxy.
-    // See: https://fastify.dev/docs/latest/Reference/Server/#trustproxy
-    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+    trustProxy: resolvedProxy.trustProxy,
+  });
+
+  // Sampled warning for incoming X-Forwarded-For when proxy trust is disabled (at most once every 60 seconds)
+  let lastUntrustedXffWarningTime = 0;
+  app.addHook('onRequest', async (req) => {
+    if (resolvedProxy.mode === 'false' && req.headers['x-forwarded-for']) {
+      const now = Date.now();
+      if (now - lastUntrustedXffWarningTime > 60000) {
+        lastUntrustedXffWarningTime = now;
+        logger.warn({
+          type: 'untrusted_x_forwarded_for_detected',
+          message:
+            'Request contains X-Forwarded-For header, but trustProxy is disabled. req.ip will not reflect client IP.',
+          path: req.url,
+        });
+      }
+    }
   });
 
   // -- CORS  -  must be registered before Helmet so security headers don't --

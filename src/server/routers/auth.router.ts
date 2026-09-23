@@ -21,6 +21,7 @@ import { hashPassword, verifyPassword } from '@/utils/helpers';
 import { authRateLimiter, rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { hashIp, revokedBearerTokenKey } from '@/utils/request-identifiers';
+import { getClientIp } from '@/server/lib/client-ip';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
 import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey } from '@/config/session';
 import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
@@ -378,7 +379,7 @@ export const authRouter = router({
                   invitedBy: acceptedInvitation.invitedBy,
                   organizationRole: acceptedInvitation.organizationRole ?? MemberRole.MEMBER,
                 },
-                ipAddress: ctx.req.ip ?? null,
+                ipAddress: getClientIp(ctx.req) ?? null,
                 userAgent: ctx.req.headers['user-agent'] ?? null,
               });
             }
@@ -493,7 +494,7 @@ export const authRouter = router({
           logger.warn({
             type: 'auth_login_rate_limited',
             email: maskEmail(input.email),
-            ipHash: hashIp(ctx.req.ip),
+            ipHash: hashIp(getClientIp(ctx.req) ?? undefined),
             retryAfter: rlResult.retryAfter,
           });
           const suffix = rlResult.retryAfter ? ` Try again in ${rlResult.retryAfter} seconds.` : '';
@@ -516,7 +517,7 @@ export const authRouter = router({
           logger.warn({
             type: 'auth_login_failed',
             email: maskEmail(input.email),
-            ipHash: hashIp(ctx.req.ip),
+            ipHash: hashIp(getClientIp(ctx.req) ?? undefined),
           });
           throw new TRPCError({
             code: 'UNAUTHORIZED',
@@ -532,7 +533,7 @@ export const authRouter = router({
         // SECURITY: merge deleted-account and not-found into the same generic response
         // to prevent user enumeration via the login path.
         if (!user || (user as any).deletedAt) {
-          logger.warn({ type: 'auth_login_account_not_found', ipHash: hashIp(ctx.req.ip) });
+          logger.warn({ type: 'auth_login_account_not_found', ipHash: hashIp(getClientIp(ctx.req) ?? undefined) });
           throw new TRPCError({
             code: 'UNAUTHORIZED',
             message: getAuthErrorMessage(AUTH_ERROR_CODES.INVALID_CREDENTIALS),
@@ -626,7 +627,7 @@ export const authRouter = router({
               action: 'PILOT_TEMP_PASSWORD_EXPIRED_LOGIN_ATTEMPT',
               entityType: 'User',
               entityId: user.id,
-              ipAddress: ctx.req.ip || undefined,
+              ipAddress: getClientIp(ctx.req) || undefined,
               userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
               metadata: { temporaryPasswordExpiresAt: temporaryPasswordExpiresAt.toISOString() },
             });
@@ -667,7 +668,7 @@ export const authRouter = router({
             eventType: SECURITY_EVENT_TYPES.MFA_CHALLENGE_ISSUED,
             userId: user.id,
             organizationId: user.organizationId,
-            ipAddress: ctx.req.ip,
+            ipAddress: getClientIp(ctx.req) || undefined,
             userAgent: ctx.req.headers['user-agent'],
           }, (data) => logSecurityEvent(data));
 
@@ -688,7 +689,7 @@ export const authRouter = router({
               token: nanoid(64),
               expiresAt: new Date(Date.now() + sessionTtlSeconds * 1000),
               device: parseDeviceLabel(ctx.req.headers['user-agent']),
-              ipAddress: ctx.req.ip || 'Unknown',
+              ipAddress: getClientIp(ctx.req) || 'Unknown',
               userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
             },
           });
@@ -719,7 +720,7 @@ export const authRouter = router({
         };
 
         const loginNow = Date.now();
-        const rawIp = ctx.req.ip ?? '';
+        const rawIp = getClientIp(ctx.req) ?? '';
         const rawUa = (ctx.req.headers['user-agent'] ?? '').substring(0, 500);
         const fingerprint = createHash('sha256').update(`${rawIp}:${rawUa}`).digest('hex');
 
@@ -740,7 +741,7 @@ export const authRouter = router({
           logger.warn({ type: 'auth_login_session_redis_writes_failed', userId: user.id, error: err instanceof Error ? err.message : String(err) });
         });
 
-        const loginIp = ctx.req.ip || ctx.req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() || null;
+        const loginIp = getClientIp(ctx.req);
 
         // Telemetry offloaded to durable background worker
         durableTaskRunner.enqueueLastLoginUpdate(user.id, loginIp);
@@ -844,7 +845,7 @@ export const authRouter = router({
             await logSecurityEvent({
               eventType: SECURITY_EVENT_TYPES.MFA_RATE_LIMITED,
               userId: userIdPrefix,
-              ipAddress: ctx.req.ip,
+              ipAddress: getClientIp(ctx.req) || undefined,
               userAgent: ctx.req.headers['user-agent'],
               metadata: { reason: 'user_attempts_exceeded', attempts: userAttempts },
             });
@@ -860,11 +861,11 @@ export const authRouter = router({
           decrypted = decryptMfaChallenge(raw);
         } catch (err) {
           const reason = err instanceof MfaChallengeDecryptError ? err.reason : 'unknown';
-          logger.warn({ type: 'mfa_challenge_decrypt_failed', userId: userIdPrefix, ip: ctx.req.ip, reason });
+          logger.warn({ type: 'mfa_challenge_decrypt_failed', userId: userIdPrefix, ip: getClientIp(ctx.req) || 'unknown', reason });
           await logSecurityEvent({
             eventType: SECURITY_EVENT_TYPES.MFA_CHALLENGE_DECRYPTION_FAILED,
             userId: userIdPrefix !== 'unknown' ? userIdPrefix : undefined,
-            ipAddress: ctx.req.ip,
+            ipAddress: getClientIp(ctx.req) || undefined,
             userAgent: ctx.req.headers['user-agent'] as string | undefined,
             metadata: { reason },
           });
@@ -931,7 +932,7 @@ export const authRouter = router({
                 eventType: SECURITY_EVENT_TYPES.MFA_BACKUP_CODE_USED,
                 userId: user.id,
                 organizationId: user.organizationId,
-                ipAddress: ctx.req.ip,
+                ipAddress: getClientIp(ctx.req) || undefined,
                 userAgent: ctx.req.headers['user-agent'],
                 metadata: { backupCodeId: matchedBackupCodeId },
               });
@@ -943,7 +944,7 @@ export const authRouter = router({
               eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_FAILED,
               userId: user.id,
               organizationId: user.organizationId,
-              ipAddress: ctx.req.ip,
+              ipAddress: getClientIp(ctx.req) || undefined,
               userAgent: ctx.req.headers['user-agent'],
               metadata: { method: 'backup_code' },
             });
@@ -978,7 +979,7 @@ export const authRouter = router({
               eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_FAILED,
               userId: user.id,
               organizationId: user.organizationId,
-              ipAddress: ctx.req.ip,
+              ipAddress: getClientIp(ctx.req) || undefined,
               userAgent: ctx.req.headers['user-agent'],
               metadata: { method: 'totp' },
             });
@@ -1002,7 +1003,7 @@ export const authRouter = router({
           eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_SUCCESS,
           userId: user.id,
           organizationId: user.organizationId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) || undefined,
           userAgent: ctx.req.headers['user-agent'],
           metadata: { method: input.isBackupCode ? 'backup_code' : 'totp' },
         });
@@ -1027,7 +1028,7 @@ export const authRouter = router({
         logger.info({
           type: 'auth_mfa_login_success',
           userId: user.id,
-          loginIp: ctx.req.ip,
+          loginIp: getClientIp(ctx.req) || 'unknown',
           duration: Date.now() - startTime,
         });
 
@@ -1702,8 +1703,7 @@ export const authRouter = router({
         if (newAccountStatus === 'active' || (wasAlreadyVerified && user.accountStatus === 'active')) {
           const sessionTtlSeconds = SESSION_CONFIG.ABSOLUTE_TIMEOUT_SECONDS;
           const rawUa = typeof ctx.req.headers['user-agent'] === 'string' ? ctx.req.headers['user-agent'] : '';
-          const forwardedFor = typeof ctx.req.headers['x-forwarded-for'] === 'string' ? ctx.req.headers['x-forwarded-for'].split(',')[0]?.trim() : undefined;
-          const loginIp = ctx.req.ip || forwardedFor || 'Unknown';
+          const loginIp = getClientIp(ctx.req) || 'Unknown';
 
           try {
             const dbSession = await ctx.prisma.session.create({
@@ -1769,7 +1769,7 @@ export const authRouter = router({
     .input(refreshTokenSchema)
     .mutation(async ({ ctx }) => {
       await enforcePublicTokenRateLimit(
-        ctx.req.ip,
+        getClientIp(ctx.req) ?? '',
         'refresh-token',
         20,
         'Too many token refresh attempts. Please try again later.',

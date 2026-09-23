@@ -22,6 +22,7 @@ import {
 } from '@/modules/trial';
 import { resolveEffectivePlan } from '@/modules/billing/resolve-effective-plan';
 import { hashIp } from '@/utils/request-identifiers';
+import { getClientIp } from '@/server/lib/client-ip';
 import {
   AGENT_CREDENTIAL_HEADER,
   agentCredentialService,
@@ -42,7 +43,7 @@ export const loggedMiddlewareHandler = async ({ ctx, path, type, next }: any) =>
     path,
     requestType: type,
     userId: ctx.user?.id || 'anonymous',
-    ip: ctx.req.ip,
+    ip: getClientIp(ctx.req) || 'unknown',
   });
 
   const result = await next({ ctx });
@@ -157,7 +158,7 @@ export const rateLimited = (
     // ctx.req.ip explicitly. Authenticated procedures fall back to user ID.
     const identifier = opts?.identifier
       ? opts.identifier(ctx)
-      : ctx.user?.id || ctx.req.ip || 'anonymous';
+      : ctx.user?.id || getClientIp(ctx.req) || 'anonymous';
     const windowSeconds = opts?.window ?? 900;
 
     try {
@@ -304,7 +305,7 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
   const organizationId = ctx.user!.organizationId;
 
   // Capture request metadata once for all audit writes below.
-  const ipAddr = ctx.req.ip ?? (ctx.req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? null;
+  const ipAddr = getClientIp(ctx.req);
   const ua     = (ctx.req.headers['user-agent'] as string | undefined)?.substring(0, 500) ?? null;
 
   if (!organizationId) {
@@ -840,7 +841,7 @@ function agentRequestMetadata(ctx: { req: { ip?: string; headers: Record<string,
   userAgent: string | null;
 } {
   return {
-    ipAddress: ctx.req.ip ?? null,
+    ipAddress: getClientIp(ctx.req),
     userAgent: (ctx.req.headers['user-agent'] as string | undefined)?.substring(0, 500) ?? null,
   };
 }
@@ -878,7 +879,7 @@ function auditAgentAuthorization(args: {
 export const requireAgentCapability = (capability: string) =>
   middleware(async ({ ctx, next }) => {
     const requestMetadata = agentRequestMetadata(ctx);
-    const identifier = hashIp(ctx.req.ip);
+    const identifier = hashIp(getClientIp(ctx.req) ?? undefined);
     const rateLimit = await rateLimiter.check(identifier, 'agent-auth', 20, 60, { failClosed: true });
 
     if (!rateLimit.allowed) {

@@ -23,7 +23,9 @@ import {
   PASSKEY_RATE_LIMITS,
   PASSKEY_REDIS_KEYS,
   checkRateLimit,
+  checkAuthOptionsRateLimit,
 } from '@/server/lib/webauthn-rate-limit';
+import { getClientIp } from '@/server/lib/client-ip';
 import {
   logSecurityEvent,
   SECURITY_EVENT_TYPES,
@@ -57,7 +59,7 @@ export const passkeyRouter = router({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_RATE_LIMITED,
           userId,
           organizationId: ctx.user.organizationId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { action: 'generateRegistrationOptions' },
         });
@@ -106,7 +108,7 @@ export const passkeyRouter = router({
         eventType: SECURITY_EVENT_TYPES.PASSKEY_REGISTRATION_STARTED,
         userId,
         organizationId: ctx.user.organizationId,
-        ipAddress: ctx.req.ip,
+        ipAddress: getClientIp(ctx.req) ?? undefined,
         userAgent: ctx.req.headers['user-agent'] as string,
         metadata: { existingPasskeyCount: existingPasskeys.length },
       });
@@ -134,7 +136,7 @@ export const passkeyRouter = router({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_RATE_LIMITED,
           userId,
           organizationId: ctx.user.organizationId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { action: 'verifyRegistration' },
         });
@@ -175,7 +177,7 @@ export const passkeyRouter = router({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_REGISTRATION_FAILED,
           userId,
           organizationId: ctx.user.organizationId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { reason: 'verification_exception' },
         });
@@ -190,7 +192,7 @@ export const passkeyRouter = router({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_REGISTRATION_FAILED,
           userId,
           organizationId: ctx.user.organizationId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { reason: 'not_verified' },
         });
@@ -239,7 +241,7 @@ export const passkeyRouter = router({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_REGISTRATION_SUCCESS,
           userId,
           organizationId: ctx.user.organizationId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: {
             passkeyId: passkey.id,
@@ -279,25 +281,28 @@ export const passkeyRouter = router({
   generateAuthenticationOptions: publicProcedure
     .input(generateAuthenticationOptionsSchema)
     .mutation(async ({ input, ctx }) => {
-      const rawIp = ctx.req.ip ||
-        (typeof ctx.req.headers['x-forwarded-for'] === 'string'
-          ? ctx.req.headers['x-forwarded-for'].split(',')[0].trim()
-          : '') ||
-        '127.0.0.1';
+      const clientIp = getClientIp(ctx.req);
+      const sessionIdentifier =
+        input.userHandle ||
+        ctx.user?.id ||
+        (ctx.req as any).cookies?.['session_id'] ||
+        (ctx.req as any).cookies?.['sb-access-token'] ||
+        undefined;
 
-      // Rate limit: per IP
-      const rl = await checkRateLimit({
-        key: PASSKEY_REDIS_KEYS.authOptionsRateLimit(rawIp),
-        max: PASSKEY_RATE_LIMITS.authOptions.max,
-        windowSec: PASSKEY_RATE_LIMITS.authOptions.windowSec,
+      const rl = await checkAuthOptionsRateLimit({
+        ip: clientIp,
+        sessionIdentifier,
       });
 
       if (!rl.allowed) {
         await logSecurityEvent({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_RATE_LIMITED,
-          ipAddress: rawIp,
+          ipAddress: clientIp ?? 'missing',
           userAgent: ctx.req.headers['user-agent'] as string,
-          metadata: { action: 'generateAuthenticationOptions' },
+          metadata: {
+            action: 'generateAuthenticationOptions',
+            reason: !clientIp ? 'missing_client_ip' : 'rate_limit_exceeded',
+          },
         });
         throw new TRPCError({
           code: 'TOO_MANY_REQUESTS',
@@ -339,7 +344,7 @@ export const passkeyRouter = router({
 
       await logSecurityEvent({
         eventType: SECURITY_EVENT_TYPES.PASSKEY_AUTH_STARTED,
-        ipAddress: rawIp,
+        ipAddress: clientIp ?? 'unknown',
         userAgent: ctx.req.headers['user-agent'] as string,
         metadata: {
           challengeId,
@@ -373,7 +378,7 @@ export const passkeyRouter = router({
         await redis.del(challengeKey).catch(() => {});
         await logSecurityEvent({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_RATE_LIMITED,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { action: 'verifyAuthentication', challengeId: input.challengeId },
         });
@@ -413,7 +418,7 @@ export const passkeyRouter = router({
       if (!passkey) {
         await logSecurityEvent({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_AUTH_FAILED,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { reason: 'unknown_credential' },
         });
@@ -427,7 +432,7 @@ export const passkeyRouter = router({
         await logSecurityEvent({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_AUTH_FAILED,
           userId: passkey.userId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { reason: 'user_handle_mismatch' },
         });
@@ -461,7 +466,7 @@ export const passkeyRouter = router({
         await logSecurityEvent({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_AUTH_FAILED,
           userId: passkey.userId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { reason: 'signature_invalid' },
         });
@@ -475,7 +480,7 @@ export const passkeyRouter = router({
         await logSecurityEvent({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_AUTH_FAILED,
           userId: passkey.userId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { reason: 'signature_invalid' },
         });
@@ -493,7 +498,7 @@ export const passkeyRouter = router({
           await logSecurityEvent({
             eventType: SECURITY_EVENT_TYPES.PASSKEY_COUNTER_REGRESSION,
             userId: passkey.userId,
-            ipAddress: ctx.req.ip,
+            ipAddress: getClientIp(ctx.req) ?? undefined,
             userAgent: ctx.req.headers['user-agent'] as string,
             metadata: {
               passkeyId: passkey.id,
@@ -518,7 +523,7 @@ export const passkeyRouter = router({
         await logSecurityEvent({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_AUTH_FAILED,
           userId: passkey.userId,
-          ipAddress: ctx.req.ip,
+          ipAddress: getClientIp(ctx.req) ?? undefined,
           userAgent: ctx.req.headers['user-agent'] as string,
           metadata: { reason: 'counter_race' },
         });
@@ -549,7 +554,7 @@ export const passkeyRouter = router({
         eventType: SECURITY_EVENT_TYPES.PASSKEY_AUTH_SUCCESS,
         userId: user.id,
         organizationId: user.organizationId,
-        ipAddress: ctx.req.ip,
+        ipAddress: getClientIp(ctx.req) ?? undefined,
         userAgent: ctx.req.headers['user-agent'] as string,
         metadata: {
           passkeyId: passkey.id,
@@ -608,7 +613,7 @@ export const passkeyRouter = router({
         eventType: SECURITY_EVENT_TYPES.PASSKEY_RENAMED,
         userId: ctx.user.id,
         organizationId: ctx.user.organizationId,
-        ipAddress: ctx.req.ip,
+        ipAddress: getClientIp(ctx.req) ?? undefined,
         userAgent: ctx.req.headers['user-agent'] as string,
         metadata: {
           passkeyId: input.id,
@@ -649,7 +654,7 @@ export const passkeyRouter = router({
         eventType: SECURITY_EVENT_TYPES.PASSKEY_REVOKED,
         userId: ctx.user.id,
         organizationId: ctx.user.organizationId,
-        ipAddress: ctx.req.ip,
+        ipAddress: getClientIp(ctx.req) ?? undefined,
         userAgent: ctx.req.headers['user-agent'] as string,
         metadata: {
           passkeyId: input.id,

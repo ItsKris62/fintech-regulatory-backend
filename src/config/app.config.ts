@@ -223,6 +223,15 @@ const envSchema = z.object({
   R2_PUBLIC_BUCKET_NAME: z.string().min(1, 'R2 public bucket name is required'),
   R2_PUBLIC_BUCKET_URL: z.string().url('R2 public bucket URL must be a valid URL'),
 
+  // Reverse Proxy Trust Configuration
+  TRUST_PROXY: z.enum(['true', 'false']).optional(),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).optional(),
+  TRUST_PROXY_CIDRS: z.string().optional(),
+
+  // WebAuthn Passkey Rate Limiting
+  WEBAUTHN_AUTH_OPTS_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  WEBAUTHN_AUTH_OPTS_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(900),
+
   // Rate Limiting
   RATE_LIMIT_MAX: z.string().transform(Number).pipe(z.number().positive()).default(100),
   RATE_LIMIT_WINDOW: z.string().default('15m'),
@@ -479,6 +488,19 @@ export const appConfig = {
     // Endpoint is the same R2 account; only credentials + bucket differ
     endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
     bucketUrl: env.R2_PUBLIC_BUCKET_URL,
+  },
+
+  // Reverse Proxy Configuration
+  proxy: {
+    trustProxy: env.TRUST_PROXY,
+    trustProxyHops: env.TRUST_PROXY_HOPS,
+    trustProxyCidrs: env.TRUST_PROXY_CIDRS,
+  },
+
+  // WebAuthn Passkey Rate Limits
+  webauthnRateLimit: {
+    authOptsMax: env.WEBAUTHN_AUTH_OPTS_RATE_LIMIT_MAX,
+    authOptsWindowSeconds: env.WEBAUTHN_AUTH_OPTS_RATE_LIMIT_WINDOW_SECONDS,
   },
 
   // Rate Limiting

@@ -15,9 +15,10 @@ import {
 import { loadSystemConfig } from '@/lib/system-config';
 import type { AgentCapability } from '@/modules/agents/agent-credential.service';
 import { redis } from '@/lib/redis/client';
-import { logger } from '@/utils/logger';
 import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
 import { userSatisfiesMfa } from '../lib/mfa-compliance';
+import { getClientIp } from '@/server/lib/client-ip';
+import { logger } from '@/utils/logger';
 
 // Export router builder for use in your controllers
 export { router };
@@ -195,7 +196,7 @@ export const organizationMfaEnforced = middleware(async ({ ctx, path, next }) =>
             eventType: SECURITY_EVENT_TYPES.MFA_ENFORCEMENT_GRACE,
             userId: ctx.user.id,
             organizationId: ctx.user.organizationId,
-            ipAddress: ctx.req.ip,
+            ipAddress: getClientIp(ctx.req) ?? undefined,
             userAgent: ctx.req.headers['user-agent'],
             metadata: {
               graceDeadline: new Date(graceDeadlineMs).toISOString(),
@@ -220,7 +221,7 @@ export const organizationMfaEnforced = middleware(async ({ ctx, path, next }) =>
         eventType: SECURITY_EVENT_TYPES.MFA_ENFORCEMENT_BLOCKED,
         userId: ctx.user.id,
         organizationId: ctx.user.organizationId,
-        ipAddress: ctx.req.ip,
+        ipAddress: getClientIp(ctx.req) ?? undefined,
         userAgent: ctx.req.headers['user-agent'],
         metadata: {
           blockedPath: path,
