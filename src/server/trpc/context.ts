@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { createHash } from 'crypto';
+
 import jwt from 'jsonwebtoken';
 import type { MemberRole, MemberStatus, OrganizationMember } from '@prisma/client';
 
@@ -18,11 +18,12 @@ import { mailer } from '@/lib/email/mailer.service';
 import { logger } from '@/utils/logger';
 import { nanoid } from 'nanoid';
 import { appConfig } from '@/config/app.config';
-import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey } from '@/config/session';
+import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey, hashUserAgent, buildSessionFingerprint, parseSessionFingerprint } from '@/config/session';
 import { revokedBearerTokenKey } from '@/utils/request-identifiers';
 import { parseDeviceLabel } from '@/server/services/session.service';
 import { isTokenRevoked, revokedJtiKey } from '@/utils/token-revocation';
 import { extractJti, extractExp } from '@/utils/jwt';
+import { getClientIp } from '@/server/lib/client-ip';
 
 /**
  * Minimal membership record attached by requireOrgMembership middleware.
@@ -355,6 +356,13 @@ function parseSessionFingerprintMode(value: string | undefined): SessionFingerpr
 /**
  * Session fingerprint runtime mode. Read once at module load so an invalid
  * deployment value fails loudly during startup instead of drifting per request.
+ *
+ * CRITICAL ARCHITECTURE RULE:
+ * Behind Cloudflare Anycast, mobile cellular handoffs, and reverse proxies (Render),
+ * client IP addresses change frequently during normal browsing. IP must NEVER be a hard
+ * gate that invalidates or revokes sessions. Fingerprint enforcement is strictly reserved
+ * for explicit runtime configurations (e.g. User-Agent mutation detection) and does NOT
+ * hard-lock admin accounts on IP shifts.
  */
 const SESSION_FINGERPRINT_MODE = parseSessionFingerprintMode(process.env.SESSION_FINGERPRINT_MODE);
 
@@ -363,8 +371,8 @@ logger.info({
   mode: SESSION_FINGERPRINT_MODE,
 });
 
-function resolveEffectiveFingerprintMode(user: User): SessionFingerprintMode {
-  return user.role === 'ADMIN' ? 'enforce' : SESSION_FINGERPRINT_MODE;
+function resolveEffectiveFingerprintMode(_user: User): SessionFingerprintMode {
+  return SESSION_FINGERPRINT_MODE;
 }
 
 /**
@@ -561,7 +569,7 @@ export async function createContext({
               ]).catch(() => {});
 
               if (newSession.id) {
-                const fingerprint = createHash('sha256').update(`${req.ip || ''}:${rawUa.substring(0, 500)}`).digest('hex');
+                const fingerprint = buildSessionFingerprint(loginIp, rawUa);
                 await redis
                   .set(sessionFingerprintKey(newSession.id), fingerprint, { ex: sessionTtlSeconds })
                   .catch(() => {});
@@ -653,68 +661,80 @@ export async function createContext({
           }
         }
 
-        // B5: Session fingerprint anomaly detection
-        if (user && user.role === 'ADMIN' && SESSION_FINGERPRINT_MODE === 'monitor') {
-          logger.info({
-            type: 'session_fingerprint_role_upgrade',
-            userId: user.id,
-            role: user.role,
-            fromMode: SESSION_FINGERPRINT_MODE,
-            toMode: 'enforce',
-          });
-        }
-
+        // B5: Session fingerprint anomaly & IP telemetry detection
         if (user && user.sessionId) {
           const effectiveFingerprintMode = resolveEffectiveFingerprintMode(user);
           if (effectiveFingerprintMode !== 'off') {
             try {
-              const storedFp = storedFingerprint !== null
+              const storedFpRaw = storedFingerprint !== null
                 ? storedFingerprint
                 : await redis.get<string>(sessionFingerprintKey(user.sessionId));
 
-              if (storedFp) {
-                const currentIp = req.ip ?? '';
+              if (storedFpRaw) {
+                const parsedFp = parseSessionFingerprint(storedFpRaw);
+                const currentIp = getClientIp(req) || req.ip || '';
                 const currentUa = (req.headers['user-agent'] ?? '').substring(0, 500);
-                const currentFp = createHash('sha256').update(`${currentIp}:${currentUa}`).digest('hex');
+                const currentUaHash = hashUserAgent(currentUa);
 
-                if (currentFp !== storedFp) {
-                  const bearerToken = req.headers.authorization?.substring(7);
-                  const jti = bearerToken ? extractJti(bearerToken) : null;
-                  const exp = bearerToken ? extractExp(bearerToken) : null;
-                  const anomalyType = effectiveFingerprintMode === 'enforce'
-                    ? 'session_anomaly_blocked'
-                    : 'session_anomaly_monitored';
+                if (parsedFp) {
+                  // 1. IP change telemetry:
+                  // Under Cloudflare Anycast, mobile carrier handoffs, and dual-stack IPv4/IPv6,
+                  // client egress IPs change frequently between sequential requests.
+                  // We log 'session_ip_changed' at warn level for SIEM/audit compliance,
+                  // but MUST NEVER revoke the JWT or block authenticated requests.
+                  if (parsedFp.ip && currentIp && currentIp !== parsedFp.ip) {
+                    logger.warn({
+                      type: 'session_ip_changed',
+                      event: 'session_ip_changed',
+                      userId: user.id,
+                      sessionId: user.sessionId,
+                      oldIp: parsedFp.ip,
+                      newIp: currentIp,
+                      timestamp: new Date().toISOString(),
+                    });
+                  }
 
-                  logger.warn({
-                    type: anomalyType,
-                    event: anomalyType,
-                    userId: user.id,
-                    sessionId: user.sessionId,
-                    jti,
-                    storedFpPrefix: storedFp.substring(0, 8),
-                    currentFpPrefix: currentFp.substring(0, 8),
-                    timestamp: new Date().toISOString(),
-                    mode: effectiveFingerprintMode,
-                  });
+                  // 2. User-Agent anomaly evaluation:
+                  // Detects session hijacking attempts where tokens are exfiltrated to a different client/browser.
+                  if (parsedFp.uaHash && currentUaHash !== parsedFp.uaHash) {
+                    const bearerToken = req.headers.authorization?.substring(7);
+                    const jti = bearerToken ? extractJti(bearerToken) : null;
+                    const exp = bearerToken ? extractExp(bearerToken) : null;
+                    const anomalyType = effectiveFingerprintMode === 'enforce'
+                      ? 'session_anomaly_blocked'
+                      : 'session_anomaly_monitored';
 
-                  if (effectiveFingerprintMode === 'enforce') {
-                    if (jti) {
-                      const ttlSeconds = exp
-                        ? Math.min(Math.max(exp - Math.floor(Date.now() / 1000), 1), 7200)
-                        : 3600;
-                      await redis.set(revokedJtiKey(jti), 'session_anomaly', { ex: ttlSeconds })
-                        .catch((revErr: unknown) => {
-                          logger.error({
-                            type: 'session_anomaly_blocklist_write_failed',
-                            userId: user!.id,
-                            jti,
-                            error: revErr instanceof Error ? revErr.message : String(revErr),
+                    logger.warn({
+                      type: anomalyType,
+                      event: anomalyType,
+                      userId: user.id,
+                      sessionId: user.sessionId,
+                      jti,
+                      storedFpPrefix: parsedFp.uaHash.substring(0, 8),
+                      currentFpPrefix: currentUaHash.substring(0, 8),
+                      timestamp: new Date().toISOString(),
+                      mode: effectiveFingerprintMode,
+                    });
+
+                    if (effectiveFingerprintMode === 'enforce') {
+                      if (jti) {
+                        const ttlSeconds = exp
+                          ? Math.min(Math.max(exp - Math.floor(Date.now() / 1000), 1), 7200)
+                          : 3600;
+                        await redis.set(revokedJtiKey(jti), 'session_anomaly', { ex: ttlSeconds })
+                          .catch((revErr: unknown) => {
+                            logger.error({
+                              type: 'session_anomaly_blocklist_write_failed',
+                              userId: user!.id,
+                              jti,
+                              error: revErr instanceof Error ? revErr.message : String(revErr),
+                            });
                           });
-                        });
+                      }
+                      evictInMemoryUserSession(user.supabaseAuthId);
+                      await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+                      user = null;
                     }
-                    evictInMemoryUserSession(user.supabaseAuthId);
-                    await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
-                    user = null;
                   }
                 }
               }

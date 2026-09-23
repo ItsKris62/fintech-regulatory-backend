@@ -1,8 +1,8 @@
 import { TRPCError } from '@trpc/server';
-import { createHash } from 'crypto';
+
 import { nanoid } from 'nanoid';
 import { logger } from '@/utils/logger';
-import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey } from '@/config/session';
+import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey, buildSessionFingerprint } from '@/config/session';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
 
 export function parseDeviceLabel(userAgent: string | undefined): string {
@@ -144,7 +144,7 @@ export async function issueSessionForUser(params: IssueSessionParams): Promise<S
 
   await redis.set(userSessionKey(user.id), JSON.stringify(userProfile), { ex: 3600 });
   if (supabaseAuthId) {
-    await redis.set(`user:session:${supabaseAuthId}`, JSON.stringify(userProfile), { ex: 3600 }).catch(() => {});
+    await redis.set(userSessionKey(supabaseAuthId), JSON.stringify(userProfile), { ex: 3600 }).catch(() => {});
   }
 
   const loginNow = Date.now();
@@ -154,8 +154,7 @@ export async function issueSessionForUser(params: IssueSessionParams): Promise<S
   ]).catch(() => {});
 
   if (dbSessionId) {
-    const rawIp = req.ip ?? '';
-    const fingerprint = createHash('sha256').update(`${rawIp}:${rawUa.substring(0, 500)}`).digest('hex');
+    const fingerprint = buildSessionFingerprint(loginIp, rawUa);
     await redis
       .set(sessionFingerprintKey(dbSessionId), fingerprint, { ex: sessionTtlSeconds })
       .catch(() => {});

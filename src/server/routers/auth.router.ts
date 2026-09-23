@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { MemberRole, MemberStatus, PrismaClient } from '@prisma/client';
-import { createHash, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 
@@ -23,7 +23,7 @@ import { logger } from '@/utils/logger';
 import { hashIp, revokedBearerTokenKey } from '@/utils/request-identifiers';
 import { getClientIp } from '@/server/lib/client-ip';
 import { supabaseAdmin, supabaseClient } from '@/lib/supabase';
-import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey } from '@/config/session';
+import { SESSION_CONFIG, lastSeenKey, sessionStartKey, userSessionKey, sessionFingerprintKey, buildSessionFingerprint } from '@/config/session';
 import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
 import { issueSessionForUser } from '@/server/services/session.service';
 import { encryptMfaChallenge, decryptMfaChallenge, MfaChallengeDecryptError } from '@/server/lib/mfa-challenge-crypto';
@@ -722,11 +722,14 @@ export const authRouter = router({
         const loginNow = Date.now();
         const rawIp = getClientIp(ctx.req) ?? '';
         const rawUa = (ctx.req.headers['user-agent'] ?? '').substring(0, 500);
-        const fingerprint = createHash('sha256').update(`${rawIp}:${rawUa}`).digest('hex');
+        const fingerprint = buildSessionFingerprint(rawIp, rawUa);
 
         // Parallelize all Redis session/state initializations
+        // Write to both user.id (Prisma CUID) and authData.user.id (Supabase UUID)
+        // to ensure instant hits on tRPC context fast-path lookups (JWT sub).
         const redisWrites: Promise<unknown>[] = [
           redis.set(userSessionKey(user.id), JSON.stringify(userProfile), { ex: 3600 }),
+          redis.set(userSessionKey(authData.user.id), JSON.stringify(userProfile), { ex: 3600 }),
           redis.set(lastSeenKey(user.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
           redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
         ];
@@ -1733,10 +1736,11 @@ export const authRouter = router({
             };
 
             const loginNow = Date.now();
-            const fingerprint = createHash('sha256').update(`${loginIp}:${rawUa.substring(0, 500)}`).digest('hex');
+            const fingerprint = buildSessionFingerprint(loginIp, rawUa);
 
             await Promise.all([
               redis.set(userSessionKey(user.id), JSON.stringify(userProfile), { ex: 3600 }),
+              redis.set(userSessionKey(supabaseUser.id), JSON.stringify(userProfile), { ex: 3600 }),
               redis.set(lastSeenKey(user.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
               redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
               redis.set(sessionFingerprintKey(dbSession.id), fingerprint, { ex: sessionTtlSeconds }),

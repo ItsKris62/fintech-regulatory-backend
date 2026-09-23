@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import Fastify from 'fastify';
 import { getClientIp, normalizeIp } from './client-ip';
 
 describe('client-ip utility', () => {
@@ -74,5 +75,50 @@ describe('client-ip utility', () => {
       expect(getClientIp({ ip: undefined, headers: {} })).toBeNull();
       expect(getClientIp({ ip: 'invalid_ip', headers: {} })).toBeNull();
     });
+
+    it('resolves a real public client IP for CF -> Render -> Fastify when TRUST_PROXY_HOPS=2', async () => {
+      const app = Fastify({ trustProxy: 2 });
+      let capturedIp: string | null = null;
+
+      app.get('/test-ip', async (req) => {
+        capturedIp = getClientIp(req);
+        return { ip: capturedIp };
+      });
+
+      // Simulation: Client (198.51.100.44) -> Cloudflare (172.70.242.164) -> Render -> Fastify
+      await app.inject({
+        method: 'GET',
+        url: '/test-ip',
+        headers: {
+          'x-forwarded-for': '198.51.100.44, 172.70.242.164',
+        },
+      });
+
+      expect(capturedIp).toBe('198.51.100.44');
+      await app.close();
+    });
+
+    it('resolves a Cloudflare proxy IP when hops are undercounted (TRUST_PROXY_HOPS=1)', async () => {
+      const app = Fastify({ trustProxy: 1 });
+      let capturedIp: string | null = null;
+
+      app.get('/test-ip', async (req) => {
+        capturedIp = getClientIp(req);
+        return { ip: capturedIp };
+      });
+
+      // Simulation: With hops=1, Fastify only strips 1 hop, landing on Cloudflare's IP
+      await app.inject({
+        method: 'GET',
+        url: '/test-ip',
+        headers: {
+          'x-forwarded-for': '198.51.100.44, 172.70.242.164',
+        },
+      });
+
+      expect(capturedIp).toBe('172.70.242.164');
+      await app.close();
+    });
   });
 });
+
