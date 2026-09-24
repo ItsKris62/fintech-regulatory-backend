@@ -53,7 +53,8 @@ describe('email theme logo URLs', () => {
 
     const theme = await import('../theme');
     expect(theme).toBeDefined();
-    expect(theme.LOGO_URL).toBe('/branding/Sheriabot%20logo%20-%20email.png');
+    expect(theme.LOGO_URL.startsWith('https://')).toBe(true);
+    expect(theme.LOGO_URL).toBe('https://pub-724936356a15494f9ce61480c5225e6f.r2.dev/branding/Sheriabot%20logo%20-%20email.png');
   });
 
   it('logs a warning exactly once when bucketUrl is empty', async () => {

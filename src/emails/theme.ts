@@ -6,6 +6,8 @@ import { logger } from '@/utils/logger';
  * Authoritative RegTech & GovTech Design System for Kenya
  */
 
+export const DEFAULT_R2_PUBLIC_BUCKET_URL = 'https://pub-724936356a15494f9ce61480c5225e6f.r2.dev';
+
 if (!appConfig.publicStorage.bucketUrl) {
   logger.warn({ type: 'email_theme_public_url_missing' });
 }
@@ -148,13 +150,19 @@ export const EMAIL_THEME = {
   },
 } as const;
 
-export const LOGO_URL = `${appConfig.publicStorage.bucketUrl}/branding/Sheriabot%20logo%20-%20email.png`;
-export const EMAIL_SIGNATURE_LOGO_URL = `${appConfig.publicStorage.bucketUrl}/branding/Sheriabot%20logo-Email%20signature.png`;
+const resolvedPublicStorageUrl = (
+  appConfig.publicStorage?.bucketUrl ||
+  process.env.R2_PUBLIC_BUCKET_URL ||
+  DEFAULT_R2_PUBLIC_BUCKET_URL
+).replace(/\/+$/, '');
+
+export const LOGO_URL = `${resolvedPublicStorageUrl}/branding/Sheriabot%20logo%20-%20email.png`;
+export const EMAIL_SIGNATURE_LOGO_URL = `${resolvedPublicStorageUrl}/branding/Sheriabot%20logo-Email%20signature.png`;
 
 export const APP_NAME = 'SheriaBot';
 export const SUPPORT_EMAIL = process.env.EMAIL_SUPPORT_ADDRESS || 'support@sheriabot.com';
 export const CURRENT_YEAR = new Date().getFullYear();
-export const REGISTERED_OFFICE = 'The Mirage, Tower 2, Penthouse Suite, Westlands, Nairobi, Kenya';
+export const REGISTERED_OFFICE = 'Nairobi, Kenya';
 export const DATA_PROTECTION_DISCLAIMER =
   'SheriaBot processes compliance telemetry in accordance with the Kenya Data Protection Act, 2019 (ODPC Registered).';
 export const LEGAL_DISCLAIMER =

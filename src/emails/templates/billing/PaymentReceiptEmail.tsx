@@ -41,7 +41,7 @@ export function PaymentReceiptEmail({
       <Text style={styles.greeting}>Dear {userName},</Text>
       <h1 style={styles.title}>Official Electronic Tax Receipt</h1>
       <Text style={styles.body}>
-        Thank you for subscribing to SheriaBot RegTech Platform. This email serves as your official electronic tax invoice and confirmation of payment.
+        Thank you for subscribing to SheriaBot AI Platform. This email serves as your official electronic tax invoice and confirmation of payment.
       </Text>
 
       {/* Structured Receipt Card */}

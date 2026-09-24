@@ -776,6 +776,7 @@ export const authRouter = router({
             email: user.email,
             name: user.fullName,
             role: user.role,
+            avatar: user.avatar,
             emailVerified: user.emailVerified,
             mustChangePassword: (user as any).mustChangePassword === true,
             organization: user.organization,

@@ -109,7 +109,7 @@ export function EmailSignature({
 
       {/* Physical Registered Address & Copyright */}
       <Text style={styles.officeAddress}>
-        {APP_NAME} RegTech Ltd &bull; {REGISTERED_OFFICE}
+        {APP_NAME} AI RegTech Ltd &bull; {REGISTERED_OFFICE}
       </Text>
       <Text style={styles.copyright}>
         &copy; {CURRENT_YEAR} {APP_NAME}. All rights reserved.

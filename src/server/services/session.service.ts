@@ -50,6 +50,7 @@ export interface SessionResponsePayload {
     email: string;
     name: string;
     role: string;
+    avatar?: string | null;
     emailVerified: boolean;
     mustChangePassword: boolean;
     organization: any;
@@ -194,6 +195,7 @@ export async function issueSessionForUser(params: IssueSessionParams): Promise<S
       email: user.email,
       name: user.fullName || user.email,
       role: user.role,
+      avatar: user.avatar,
       emailVerified: user.emailVerified,
       mustChangePassword: (user as any).mustChangePassword === true,
       organization: user.organization,

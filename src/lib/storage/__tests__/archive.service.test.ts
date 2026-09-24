@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { S3Client, CopyObjectCommand } from '@aws-sdk/client-s3';
+import { CopyObjectCommand } from '@aws-sdk/client-s3';
 
 describe('Archive Storage Service (archive.service.ts)', () => {
   beforeEach(() => {

@@ -64,6 +64,13 @@ function getPublicR2Client(): S3Client {
 /*                               Key / URL Helpers                            */
 /* -------------------------------------------------------------------------- */
 
+const DEFAULT_R2_PUBLIC_BUCKET_URL = 'https://pub-724936356a15494f9ce61480c5225e6f.r2.dev';
+
+export function getPublicBucketUrl(): string {
+  const url = appConfig.publicStorage?.bucketUrl || process.env.R2_PUBLIC_BUCKET_URL || DEFAULT_R2_PUBLIC_BUCKET_URL;
+  return url.replace(/\/+$/, '');
+}
+
 /**
  * Derives the R2 object key for a user's avatar.
  * Pattern: `avatars/{userId}/avatar.{ext}`
@@ -75,13 +82,31 @@ function buildAvatarKey(userId: string, contentType: AvatarContentType): string 
 
 /**
  * Derives the R2 object key from an existing public avatar URL.
- * Returns null if the URL does not belong to the configured public bucket.
+ * Returns null if the URL cannot be safely resolved to an avatar key.
  */
 export function extractKeyFromAvatarUrl(avatarUrl: string): string | null {
-  const prefix = appConfig.publicStorage.bucketUrl;
-  if (!avatarUrl.startsWith(prefix)) return null;
-  // Strip leading slash after the bucket URL
-  return avatarUrl.slice(prefix.length).replace(/^\//, '');
+  if (!avatarUrl || typeof avatarUrl !== 'string') return null;
+
+  try {
+    if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
+      const parsed = new URL(avatarUrl);
+      const pathname = parsed.pathname.replace(/^\/+/, '');
+      if (pathname.startsWith('avatars/')) {
+        return pathname;
+      }
+    }
+    const clean = avatarUrl.replace(/^\/+/, '');
+    if (clean.startsWith('avatars/')) {
+      return clean;
+    }
+    const prefix = getPublicBucketUrl();
+    if (avatarUrl.startsWith(prefix)) {
+      return avatarUrl.slice(prefix.length).replace(/^\/+/, '');
+    }
+  } catch {
+    // Fallback
+  }
+  return null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -118,7 +143,8 @@ export async function generateAvatarUploadUrl(
     unhoistableHeaders: new Set(['content-length']),
   });
 
-  const publicUrl = `${appConfig.publicStorage.bucketUrl}/${key}`;
+  const bucketUrl = getPublicBucketUrl();
+  const publicUrl = `${bucketUrl}/${key}`;
 
   logger.info({ type: 'avatar_presigned_url_generated', userId, key });
 
