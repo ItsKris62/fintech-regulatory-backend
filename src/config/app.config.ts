@@ -60,7 +60,11 @@ const envSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().min(1, 'R2 access key ID is required'),
   R2_SECRET_ACCESS_KEY: z.string().min(1, 'R2 secret access key is required'),
   R2_BUCKET_NAME: z.string().default('sheriabot-documents'),
-  R2_PUBLIC_URL: z.string().url(),
+  R2_AUDIT_BUCKET_NAME: z.string().default('sheria-bot-audit-immutable'),
+  // Deprecated. Do not populate. Reserved for removal in a follow-up PR
+  // once all consumers are gone. Kept optional so an empty value does
+  // not fail boot validation.
+  R2_PUBLIC_URL: z.string().optional().default(''),
   MALWARE_SCAN_ENABLED: z
     .enum(['true', 'false'])
     .default('false')
@@ -477,7 +481,14 @@ export const appConfig = {
     accessKeyId: env.R2_ACCESS_KEY_ID,
     secretAccessKey: env.R2_SECRET_ACCESS_KEY,
     bucketName: env.R2_BUCKET_NAME,
+    auditBucketName: env.R2_AUDIT_BUCKET_NAME,
     publicUrl: env.R2_PUBLIC_URL,
+  },
+
+  // Audit storage - immutable bucket for audit event logs
+  auditStorage: {
+    bucketName: env.R2_AUDIT_BUCKET_NAME,
+    endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
   },
 
   // Public storage  -  public bucket (avatars, logos, branding assets)
@@ -487,7 +498,13 @@ export const appConfig = {
     bucketName: env.R2_PUBLIC_BUCKET_NAME,
     // Endpoint is the same R2 account; only credentials + bucket differ
     endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    bucketUrl: env.R2_PUBLIC_BUCKET_URL,
+        bucketUrl: env.R2_PUBLIC_BUCKET_URL,
+  },
+
+  // Backup storage - immutable archive bucket for purged accounts & regulatory recordkeeping
+  backupStorage: {
+    bucketName: process.env.R2_BACKUP_BUCKET ?? 'sheria-bot-backups',
+    endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
   },
 
   // Reverse Proxy Configuration

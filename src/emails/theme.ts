@@ -1,14 +1,14 @@
+import { appConfig } from '@/config/app.config';
+import { logger } from '@/utils/logger';
+
 /**
  * SheriaBot Email Design System Tokens & Primitives
  * Authoritative RegTech & GovTech Design System for Kenya
  */
 
-// Logo is served from the R2 public bucket so it loads even when the
-// frontend is down and is immune to Vercel cold-start delays.
-const R2_PUBLIC_URL =
-  process.env.R2_PUBLIC_BUCKET_URL ??
-  process.env.NEXT_PUBLIC_R2_ASSETS_URL ??
-  'https://pub-724936356a15494f9ce61480c5225e6f.r2.dev';
+if (!appConfig.publicStorage.bucketUrl) {
+  logger.warn({ type: 'email_theme_public_url_missing' });
+}
 
 // FRONTEND_URL may be comma-separated for multi-origin CORS - use only the first (canonical) URL.
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'https://sheriabot.com').split(',')[0].trim();
@@ -148,8 +148,8 @@ export const EMAIL_THEME = {
   },
 } as const;
 
-export const LOGO_URL = `${R2_PUBLIC_URL}/branding/Sheriabot%20logo%20-%20email.png`;
-export const EMAIL_SIGNATURE_LOGO_URL = `${R2_PUBLIC_URL}/branding/Sheriabot%20logo-Email%20signature.png`;
+export const LOGO_URL = `${appConfig.publicStorage.bucketUrl}/branding/Sheriabot%20logo%20-%20email.png`;
+export const EMAIL_SIGNATURE_LOGO_URL = `${appConfig.publicStorage.bucketUrl}/branding/Sheriabot%20logo-Email%20signature.png`;
 
 export const APP_NAME = 'SheriaBot';
 export const SUPPORT_EMAIL = process.env.EMAIL_SUPPORT_ADDRESS || 'support@sheriabot.com';

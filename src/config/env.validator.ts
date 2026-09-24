@@ -79,7 +79,9 @@ const envSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().min(1, 'R2_ACCESS_KEY_ID is required'),
   R2_SECRET_ACCESS_KEY: z.string().min(1, 'R2_SECRET_ACCESS_KEY is required'),
   R2_BUCKET_NAME: z.string().default('sheriabot-documents'),
-  R2_PUBLIC_URL: z.string().url('R2_PUBLIC_URL must be a valid URL'),
+  R2_AUDIT_BUCKET_NAME: z.string().default('sheria-bot-audit-immutable'),
+  // PR-1: Deprecated. Do not populate. Reserved for removal in a follow-up PR.
+  R2_PUBLIC_URL: z.string().optional().default(''),
   MALWARE_SCAN_ENABLED: z.coerce.boolean().default(false),
   CLAMAV_HOST: z.string().optional(),
   CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),

@@ -9,7 +9,7 @@ import {
   vaultS3Client,
   vaultStorageConfig,
 } from './client';
-import { storageConfig, isFileTypeAllowed, generateUniqueFilename, getMaxFileSize, getPublicUrl } from '@/config/storage.config';
+import { storageConfig, isFileTypeAllowed, generateUniqueFilename, getMaxFileSize } from '@/config/storage.config';
 import { logger } from '@/utils/logger';
 import { StorageServiceError, ValidationError } from '@/utils/error';
 import { getMimeType } from '@/utils/helpers';
@@ -20,6 +20,13 @@ import { getSystemConfigNumber } from '@/lib/system-config';
  */
 export interface FileUploadResult {
   key: string;
+  /**
+   * Raw R2 storage key. Always safe to persist to the database.
+   * For private categories this is NEVER a public URL — callers that
+   * need a browser-accessible link must call
+   * `storageService.getDownloadUrl(key)` to obtain a short-lived
+   * presigned GET URL.
+   */
   url: string;
   size: number;
   contentType: string;
@@ -156,9 +163,6 @@ export class StorageService {
         },
       });
 
-      // Generate public URL
-      const url = getPublicUrl(key);
-
       logger.info({
         type: 'document_upload_success',
         key,
@@ -167,7 +171,7 @@ export class StorageService {
 
       return {
         key,
-        url,
+        url: key,
         size: fileMetadata.size,
         contentType: fileMetadata.contentType,
         metadata: fileMetadata.metadata,
@@ -222,8 +226,6 @@ export class StorageService {
         },
       });
 
-      const url = getPublicUrl(key);
-
       logger.info({
         type: 'image_upload_success',
         key,
@@ -231,7 +233,7 @@ export class StorageService {
 
       return {
         key,
-        url,
+        url: key,
         size: fileMetadata.size,
         contentType: fileMetadata.contentType,
       };
@@ -282,8 +284,6 @@ export class StorageService {
         },
       });
 
-      const url = getPublicUrl(key);
-
       logger.info({
         type: 'policy_export_upload_success',
         key,
@@ -291,7 +291,7 @@ export class StorageService {
 
       return {
         key,
-        url,
+        url: key,
         size: fileMetadata.size,
         contentType: fileMetadata.contentType,
       };
@@ -331,8 +331,6 @@ export class StorageService {
         },
       });
 
-      const url = getPublicUrl(key);
-
       logger.info({
         type: 'temp_file_uploaded',
         key,
@@ -341,7 +339,7 @@ export class StorageService {
 
       return {
         key,
-        url,
+        url: key,
         size: fileMetadata.size,
         contentType: fileMetadata.contentType,
       };
@@ -678,13 +676,11 @@ export class StorageService {
         metadata: { checklistId, userId, exportedAt: new Date().toISOString() },
       });
 
-      const url = getPublicUrl(key);
-
       logger.info({ type: 'checklist_export_upload_success', key });
 
       return {
         key,
-        url,
+        url: key,
         size: fileMetadata.size,
         contentType: fileMetadata.contentType,
       };
@@ -724,13 +720,11 @@ export class StorageService {
         metadata: { analysisId, userId, exportedAt: new Date().toISOString() },
       });
 
-      const url = getPublicUrl(key);
-
       logger.info({ type: 'gap_analysis_export_upload_success', key });
 
       return {
         key,
-        url,
+        url: key,
         size: fileMetadata.size,
         contentType: fileMetadata.contentType,
       };

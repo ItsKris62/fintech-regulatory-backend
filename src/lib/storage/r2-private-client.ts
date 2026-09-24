@@ -11,3 +11,5 @@ export const r2PrivateClient = new S3Client({
 });
 
 export const r2PrivateBucket = appConfig.storage.bucketName;
+
+export const r2AuditBucket = appConfig.auditStorage.bucketName;

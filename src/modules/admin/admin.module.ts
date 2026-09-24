@@ -10,7 +10,7 @@
 import { SubscriptionPlan as PrismaSubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { r2PrivateClient, r2PrivateBucket } from '@/lib/storage/r2-private-client';
+import { r2PrivateClient, r2PrivateBucket, r2AuditBucket } from '@/lib/storage/r2-private-client';
 import {
   AlignmentType,
   BorderStyle,
@@ -2325,7 +2325,7 @@ class AdminModule {
    */
   async exportAuditLogs(
     filters: AuditLogExportFilters,
-    format: 'csv' | 'docx',
+    format: 'csv' | 'docx' | 'jsonl',
   ): Promise<{ url: string; expiresAt: Date }> {
     const maxRows = format === 'csv'
       ? AdminModule.AUDIT_LOG_CSV_MAX_ROWS
@@ -2384,30 +2384,42 @@ class AdminModule {
       logs = logs.filter(l => l.severity === filters.severity);
     }
 
-    const buffer = format === 'csv'
-      ? this.buildAuditLogCsv(logs)
-      : await this.buildAuditLogDocx(logs);
+    let buffer: Buffer;
+    let contentType: string;
 
-    const contentType = format === 'csv'
-      ? 'text/csv'
-      : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (format === 'csv') {
+      buffer = this.buildAuditLogCsv(logs);
+      contentType = 'text/csv';
+    } else if (format === 'docx') {
+      buffer = await this.buildAuditLogDocx(logs);
+      contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    } else {
+      buffer = this.buildAuditLogJsonl(logs);
+      contentType = 'application/x-ndjson';
+    }
+
+    const now = new Date();
+    const yyyy = now.getUTCFullYear().toString();
+    const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(now.getUTCDate()).padStart(2, '0');
+    const eventId = nanoid(16);
 
     const ext = format;
-    const key = `exports/audit-logs/${nanoid(12)}.${ext}`;
+    const key = `audit/${yyyy}/${mm}/${dd}/${eventId}.${ext}`;
 
     await r2PrivateClient.send(new PutObjectCommand({
-      Bucket:      r2PrivateBucket,
+      Bucket:      r2AuditBucket,
       Key:         key,
       Body:        buffer,
       ContentType: contentType,
-      Metadata:    { 'generated-by': 'sheriabot-admin', format },
+      Metadata:    { 'generated-by': 'sheriabot-admin', format, 'immutable-audit': 'true' },
     }));
 
     const ttl = AdminModule.AUDIT_LOG_EXPORT_URL_TTL;
     const url = await getSignedUrl(
       r2PrivateClient,
       new GetObjectCommand({
-        Bucket:                      r2PrivateBucket,
+        Bucket:                      r2AuditBucket,
         Key:                         key,
         ResponseContentType:         contentType,
         ResponseContentDisposition:  `attachment; filename="audit-logs.${ext}"`,
@@ -2511,6 +2523,11 @@ class AdminModule {
   }
 
   // -- CSV builder -------------------------------------------------------------
+
+  private buildAuditLogJsonl(logs: AuditLogEntry[]): Buffer {
+    const lines = logs.map((l) => JSON.stringify(l)).join('\n');
+    return Buffer.from(lines + (lines.length > 0 ? '\n' : ''), 'utf-8');
+  }
 
   private buildAuditLogCsv(logs: AuditLogEntry[]): Buffer {
     const esc = (v: string | null | undefined): string => {

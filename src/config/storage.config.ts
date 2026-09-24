@@ -21,7 +21,6 @@ export const storageConfig = {
   bucket: {
     name: appConfig.storage.bucketName,
     region: 'auto', // R2 handles region automatically
-    publicUrl: appConfig.storage.publicUrl,
   },
 
   /**
@@ -347,15 +346,6 @@ export function getFileKey(
   filename: string
 ): string {
   return `${storageConfig.paths[category]}${filename}`;
-}
-
-/**
- * Get public URL for file
- * @param key S3 key
- * @returns Public URL
- */
-export function getPublicUrl(key: string): string {
-  return `${storageConfig.bucket.publicUrl}/${key}`;
 }
 
 /**

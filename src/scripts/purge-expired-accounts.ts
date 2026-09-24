@@ -12,10 +12,11 @@
  *   2. Idempotent & batch-safe (processes up to BATCH_SIZE users per execution)
  *   3. Supabase Auth identity hard-purge via Supabase Admin API
  *   4. Redis session & cache key invalidation
- *   5. Scoped R2 private artifact deletion (preserves shared organizational documents)
- *   6. Statutory retention preservation (Payment & tax invoices preserved under TPA/ITA)
- *   7. Structured JSON logging with zero PII
- *   8. Transactional integrity with safe partial-failure behavior
+ *   5. Archive-then-delete across all R2 buckets (sheria-bot-public, sheria-bot-saas, sheriabot-storage -> sheria-bot-backups)
+ *   6. Comprehensive artifact cleanup: avatars, legal documents, policy exports, checklist exports, gap analysis exports, compliance query exports, and vault documents
+ *   7. Statutory retention preservation (Payment & tax invoices preserved under TPA/ITA)
+ *   8. Structured JSON logging with zero PII
+ *   9. Transactional integrity with safe partial-failure behavior
  *
  * Usage:
  *   pnpm tsx src/scripts/purge-expired-accounts.ts
@@ -27,7 +28,12 @@ import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { prisma } from '@/lib/prisma/client';
 import { supabaseAdmin } from '@/lib/supabase';
 import { redis } from '@/lib/redis/client';
+import { appConfig } from '@/config/app.config';
 import { vaultS3Client, vaultStorageConfig } from '@/lib/storage/client';
+import { storageService } from '@/lib/storage/storage.service';
+import { deleteAvatarByKey, extractKeyFromAvatarUrl } from '@/lib/storage/public-storage.service';
+import { archiveObject } from '@/lib/storage/archive.service';
+import { extractR2Key } from '@/scripts/cleanup-deleted-documents';
 import { logger } from '@/utils/logger';
 import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 
@@ -42,6 +48,8 @@ export interface PurgeResult {
   purged: number;
   skipped: number;
   failed: number;
+  archived: number;
+  deleted: number;
   dryRun: boolean;
   details: Array<{
     userId: string;
@@ -50,10 +58,26 @@ export interface PurgeResult {
   }>;
 }
 
+interface PurgeAsset {
+  category:
+    | 'avatar'
+    | 'legalDocument'
+    | 'policyExport'
+    | 'checklistExport'
+    | 'gapAnalysisExport'
+    | 'complianceQueryExport'
+    | 'vaultDocument';
+  bucket: string;
+  key: string;
+  client: 'public' | 'storageService' | 'vault';
+  id?: string;
+}
+
 export async function purgeExpiredAccounts(options: PurgeOptions = {}): Promise<PurgeResult> {
   const isDryRun = options.dryRun ?? (process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true');
   const batchSize = options.batchSize ?? Number(process.env.PURGE_BATCH_SIZE ?? '100');
   const now = options.now ?? new Date();
+  const dateStr = now.toISOString().slice(0, 10);
 
   logger.info({
     type: 'purge_worker_started',
@@ -75,6 +99,7 @@ export async function purgeExpiredAccounts(options: PurgeOptions = {}): Promise<
       id: true,
       supabaseAuthId: true,
       status: true,
+      avatar: true,
       deletionScheduledAt: true,
       organizationId: true,
     },
@@ -87,6 +112,8 @@ export async function purgeExpiredAccounts(options: PurgeOptions = {}): Promise<
     purged: 0,
     skipped: 0,
     failed: 0,
+    archived: 0,
+    deleted: 0,
     dryRun: isDryRun,
     details: [],
   };
@@ -103,13 +130,176 @@ export async function purgeExpiredAccounts(options: PurgeOptions = {}): Promise<
       continue;
     }
 
+    const archivePrefix = `purge/${dateStr}/${user.id}`;
+    const assetsToPurge: PurgeAsset[] = [];
+    const seenKeys = new Set<string>();
+
+    // 1. Collect user avatar from sheria-bot-public
+    if (user.avatar) {
+      const avatarKey = extractKeyFromAvatarUrl(user.avatar) ?? extractR2Key(user.avatar);
+      if (avatarKey && !seenKeys.has(avatarKey)) {
+        seenKeys.add(avatarKey);
+        assetsToPurge.push({
+          category: 'avatar',
+          bucket: appConfig.publicStorage.bucketName,
+          key: avatarKey,
+          client: 'public',
+        });
+      }
+    }
+
+    // 2. Collect user legal documents from sheria-bot-saas
+    const userLegalDocs = await prisma.legalDocument.findMany({
+      where: user.organizationId
+        ? { OR: [{ userId: user.id }, { organizationId: user.organizationId }] }
+        : { userId: user.id },
+      select: { id: true, fileUrl: true },
+    });
+
+    for (const doc of userLegalDocs) {
+      const docKey = extractR2Key(doc.fileUrl);
+      if (docKey && !seenKeys.has(docKey)) {
+        seenKeys.add(docKey);
+        assetsToPurge.push({
+          category: 'legalDocument',
+          bucket: appConfig.storage.bucketName,
+          key: docKey,
+          client: 'storageService',
+          id: doc.id,
+        });
+      }
+    }
+
+    // 3. Collect policy exports from sheria-bot-saas
+    const userPolicyExports = await prisma.generatedPolicyExportLog.findMany({
+      where: user.organizationId
+        ? { OR: [{ userId: user.id }, { organizationId: user.organizationId }] }
+        : { userId: user.id },
+      select: { id: true, storageKey: true },
+    });
+
+    for (const exp of userPolicyExports) {
+      if (exp.storageKey && !seenKeys.has(exp.storageKey)) {
+        seenKeys.add(exp.storageKey);
+        assetsToPurge.push({
+          category: 'policyExport',
+          bucket: appConfig.storage.bucketName,
+          key: exp.storageKey,
+          client: 'storageService',
+          id: exp.id,
+        });
+      }
+    }
+
+    // 4. Collect gap analysis exports (gap-analysis-exports/) from sheria-bot-saas
+    const userGapAnalyses = await prisma.gapAnalysis.findMany({
+      where: user.organizationId
+        ? { OR: [{ userId: user.id }, { organizationId: user.organizationId }] }
+        : { userId: user.id },
+      select: { id: true, reportUrl: true },
+    });
+
+    for (const ga of userGapAnalyses) {
+      if (ga.reportUrl) {
+        const gapKey = extractR2Key(ga.reportUrl);
+        if (gapKey && !seenKeys.has(gapKey)) {
+          seenKeys.add(gapKey);
+          assetsToPurge.push({
+            category: 'gapAnalysisExport',
+            bucket: appConfig.storage.bucketName,
+            key: gapKey,
+            client: 'storageService',
+            id: ga.id,
+          });
+        }
+      }
+    }
+
+    // 5. Collect checklist exports (checklist-exports/), gap analysis exports, and compliance query exports (exports/compliance-queries/) from AuditLog
+    const exportAuditLogs = await prisma.auditLog.findMany({
+      where: {
+        userId: user.id,
+        action: {
+          in: ['CHECKLIST_EXPORTED', 'GAP_ANALYSIS_EXPORTED', 'COMPLIANCE_QUERY_EXPORTED'],
+        },
+      },
+      select: { id: true, action: true, metadata: true },
+    });
+
+    for (const audit of exportAuditLogs) {
+      const meta = audit.metadata as Record<string, unknown> | null;
+      const r2Key = (meta?.r2Key as string | undefined) ?? (meta?.key as string | undefined);
+      if (!r2Key || seenKeys.has(r2Key)) continue;
+
+      if (audit.action === 'CHECKLIST_EXPORTED' || r2Key.startsWith('checklist-exports/')) {
+        seenKeys.add(r2Key);
+        assetsToPurge.push({
+          category: 'checklistExport',
+          bucket: appConfig.storage.bucketName,
+          key: r2Key,
+          client: 'storageService',
+          id: audit.id,
+        });
+      } else if (audit.action === 'GAP_ANALYSIS_EXPORTED' || r2Key.startsWith('gap-analysis-exports/')) {
+        seenKeys.add(r2Key);
+        assetsToPurge.push({
+          category: 'gapAnalysisExport',
+          bucket: appConfig.storage.bucketName,
+          key: r2Key,
+          client: 'storageService',
+          id: audit.id,
+        });
+      } else if (audit.action === 'COMPLIANCE_QUERY_EXPORTED' || r2Key.startsWith('exports/compliance-queries/')) {
+        seenKeys.add(r2Key);
+        assetsToPurge.push({
+          category: 'complianceQueryExport',
+          bucket: vaultStorageConfig.bucket,
+          key: r2Key,
+          client: 'vault',
+          id: audit.id,
+        });
+      }
+    }
+
+    // 6. Collect vault documents from sheriabot-storage (all soft-deleted and active)
+    const userVaultDocs = await prisma.vaultDocument.findMany({
+      where: user.organizationId
+        ? { OR: [{ uploadedById: user.id }, { organizationId: user.organizationId }] }
+        : { uploadedById: user.id },
+      select: { id: true, storageKey: true, r2Bucket: true },
+    });
+
+    for (const vdoc of userVaultDocs) {
+      if (vdoc.storageKey && !seenKeys.has(vdoc.storageKey)) {
+        seenKeys.add(vdoc.storageKey);
+        assetsToPurge.push({
+          category: 'vaultDocument',
+          bucket: vdoc.r2Bucket ?? vaultStorageConfig.bucket,
+          key: vdoc.storageKey,
+          client: 'vault',
+          id: vdoc.id,
+        });
+      }
+    }
+
     if (isDryRun) {
+      for (const asset of assetsToPurge) {
+        logger.info({
+          type: 'purge_worker_dry_run_asset_plan',
+          userId: user.id,
+          category: asset.category,
+          sourceBucket: asset.bucket,
+          sourceKey: asset.key,
+          archivePrefix,
+        });
+      }
       result.purged++;
       result.details.push({ userId: user.id, success: true });
       logger.info({
         type: 'purge_worker_dry_run_candidate',
         userId: user.id,
         scheduledAt: user.deletionScheduledAt.toISOString(),
+        assetsCount: assetsToPurge.length,
       });
       continue;
     }
@@ -150,30 +340,58 @@ export async function purgeExpiredAccounts(options: PurgeOptions = {}): Promise<
         }
       }
 
-      // 3. Purge user-owned soft-deleted vault documents from Cloudflare R2
-      const userDeletedVaultDocs = await prisma.vaultDocument.findMany({
-        where: {
-          uploadedById: user.id,
-          uploadStatus: 'DELETED',
-        },
-        select: { id: true, storageKey: true, r2Bucket: true },
-      });
+      // 3. Archive to sheria-bot-backups then Delete from source R2 buckets
+      let archiveFailed = false;
 
-      for (const doc of userDeletedVaultDocs) {
+      for (const asset of assetsToPurge) {
+        // Step A: Archive to backups bucket
+        const archiveRes = await archiveObject({
+          sourceBucket: asset.bucket,
+          sourceKey: asset.key,
+          archivePrefix,
+        });
+
+        if (!archiveRes.archived) {
+          archiveFailed = true;
+          logger.error({
+            type: 'purge_worker_archive_failed_skipping_delete',
+            userId: user.id,
+            bucket: asset.bucket,
+            key: asset.key,
+          });
+          continue; // Invariant: Never delete if archive fails
+        }
+
+        result.archived++;
+
+        // Step B: Delete from source bucket only after successful copy
         try {
-          await vaultS3Client.send(
-            new DeleteObjectCommand({
-              Bucket: doc.r2Bucket ?? vaultStorageConfig.bucket,
-              Key: doc.storageKey,
-            }),
-          );
+          if (asset.client === 'vault') {
+            await vaultS3Client.send(
+              new DeleteObjectCommand({
+                Bucket: asset.bucket,
+                Key: asset.key,
+              }),
+            );
+          } else if (asset.client === 'public') {
+            await deleteAvatarByKey(asset.key);
+          } else {
+            await storageService.deleteFile(asset.key);
+          }
+          result.deleted++;
         } catch (r2Err: unknown) {
           logger.warn({
-            type: 'purge_worker_r2_doc_delete_warning',
-            documentId: doc.id,
+            type: 'purge_worker_r2_asset_delete_warning',
+            userId: user.id,
+            bucket: asset.bucket,
+            key: asset.key,
             error: sanitizeErrorMessage(r2Err),
           });
         }
+      }
+
+      if (archiveFailed) {
+        throw new Error(`Archive failed for one or more R2 assets of user ${user.id}`);
       }
 
       // 4. Execute Relational Disassociation & Complete PII Erasure in a Database Transaction
@@ -190,9 +408,9 @@ export async function purgeExpiredAccounts(options: PurgeOptions = {}): Promise<
           data: { userId: null },
         });
 
-        // Delete soft-deleted vault documents belonging to this user
+        // Delete vault documents belonging to this user
         await tx.vaultDocument.deleteMany({
-          where: { uploadedById: user.id, uploadStatus: 'DELETED' },
+          where: { uploadedById: user.id },
         });
 
         // Delete user-private dependent records
@@ -256,8 +474,12 @@ export async function purgeExpiredAccounts(options: PurgeOptions = {}): Promise<
     purged: result.purged,
     skipped: result.skipped,
     failed: result.failed,
+    archived: result.archived,
+    deleted: result.deleted,
     dryRun: isDryRun,
   });
+
+  console.log(`Summary: users=${result.scanned} archived=${result.archived} deleted=${result.deleted} failed=${result.failed}`);
 
   return result;
 }

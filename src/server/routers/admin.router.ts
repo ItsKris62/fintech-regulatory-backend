@@ -3399,7 +3399,7 @@ export const adminRouter = router({
   exportAuditLogs: adminProcedure
     .input(
       z.object({
-        format:     z.enum(['csv', 'docx']),
+        format:     z.enum(['csv', 'docx', 'jsonl']),
         userId:     z.string().optional(),
         actorEmail: z.string().optional(),
         organizationId: z.string().optional(),

@@ -554,23 +554,16 @@ class DocumentModule {
     // Soft delete first
     await this.archiveDocument(documentId);
 
-    // Hard delete from R2 + Pinecone (fire-and-forget cleanup)
-    setTimeout(async () => {
-      try {
-        const storageKey = this.extractStorageKey(doc.fileUrl);
-        await storageService.deleteFile(storageKey);
-        await ragService.deleteDocument(documentId);
-        await prisma.legalDocument.delete({ where: { id: documentId } });
-
-        logger.info({ type: 'document_hard_deleted', documentId });
-      } catch (err: unknown) {
-        logger.error({
-          type: 'document_hard_delete_error',
-          documentId,
-          error: (err as Error).message,
-        });
-      }
-    }, 30 * 24 * 60 * 60 * 1000); // 30 days
+    // Remove vectors from Pinecone (derived data - safe to clear on soft delete)
+    try {
+      await ragService.deleteDocument(documentId);
+    } catch (ragErr: unknown) {
+      logger.warn({
+        type: 'document_rag_remove_error',
+        documentId,
+        error: (ragErr as Error).message,
+      });
+    }
 
     await redis.del(docCacheKey(documentId));
     if (doc.organizationId) await this.invalidateOrgCache(doc.organizationId);

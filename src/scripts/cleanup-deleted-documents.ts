@@ -25,6 +25,31 @@ import { logger } from '@/utils/logger';
 
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS ?? '90', 10);
 
+/**
+ * Extract a raw R2 object key from a stored value that may be:
+ *   - a raw key: "documents/org-1/doc-2/file.pdf"
+ *   - a legacy full URL: "https://.../documents/org-1/doc-2/file.pdf"
+ *   - a path-prefixed URL: "/documents/org-1/doc-2/file.pdf"
+ *
+ * Returns the key, or null if the input cannot be parsed.
+ */
+export function extractR2Key(stored: string): string | null {
+  if (!stored) return null;
+
+  // Raw key — no scheme, no leading slash
+  if (!stored.includes('://') && !stored.startsWith('/')) {
+    return stored;
+  }
+
+  try {
+    const url = new URL(stored, 'https://placeholder.local');
+    const pathname = url.pathname.replace(/^\/+/, '');
+    return pathname || null;
+  } catch {
+    return null;
+  }
+}
+
 async function cleanupDeletedDocuments(): Promise<void> {
   const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
@@ -54,20 +79,30 @@ async function cleanupDeletedDocuments(): Promise<void> {
 
   for (const doc of expired) {
     try {
+      const key = extractR2Key(doc.fileUrl);
+      if (!key) {
+        logger.warn({
+          type: 'cleanup_document_key_unparseable',
+          documentId: doc.id,
+          storedValue: doc.fileUrl,
+        });
+        continue;
+      }
+
       // 1. Delete from R2 (best-effort  -  continue if the object is already gone)
       try {
-        await storageService.deleteFile(doc.fileUrl);
+        await storageService.deleteFile(key);
         logger.info({
           type: 'cleanup_r2_deleted',
           documentId: doc.id,
-          key: doc.fileUrl,
+          key,
         });
       } catch (storageErr: any) {
         // Log but continue  -  object may already be deleted or key may be stale
         logger.warn({
           type: 'cleanup_r2_delete_failed',
           documentId: doc.id,
-          key: doc.fileUrl,
+          key,
           error: storageErr.message,
         });
       }
@@ -100,12 +135,15 @@ async function cleanupDeletedDocuments(): Promise<void> {
   });
 }
 
-cleanupDeletedDocuments()
-  .catch((err) => {
-    logger.error({ type: 'cleanup_fatal', error: err.message });
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-    process.exit(0);
-  });
+// Only execute when run directly from CLI (not when imported in tests)
+if (require.main === module) {
+  cleanupDeletedDocuments()
+    .catch((err) => {
+      logger.error({ type: 'cleanup_fatal', error: err.message });
+      process.exit(1);
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+      process.exit(0);
+    });
+}
