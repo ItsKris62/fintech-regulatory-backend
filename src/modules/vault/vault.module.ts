@@ -79,7 +79,20 @@ const ISO_DATE_TIME_SCHEMA = z.string()
 const FUTURE_ISO_DATE_TIME_SCHEMA = ISO_DATE_TIME_SCHEMA
   .refine((value) => new Date(value).getTime() > Date.now());
 
-const vaultPresignInputSchema = z.object({
+export const VAULT_TIER_VALUES = [
+  'FREE',
+  'FREE_TRIAL',
+  'STARTER',
+  'GROWTH',
+  'STARTUP',
+  'BUSINESS',
+  'ENTERPRISE',
+  'REGULATOR',
+] as const;
+
+export type VaultTier = (typeof VAULT_TIER_VALUES)[number];
+
+export const vaultPresignInputSchema = z.object({
   organizationId: z.string().min(1),
   uploaderId: z.string().min(1),
   documentId: z.string().min(1),
@@ -91,10 +104,10 @@ const vaultPresignInputSchema = z.object({
   declaredSize: z.number().int().positive(),
   category: z.enum(['CORPORATE', 'COMPLIANCE', 'FINANCIAL', 'LICENSE', 'OPERATIONS', 'TAX', 'OTHER']),
   tags: z.array(VAULT_TAG_SCHEMA).max(20),
-  tier: z.enum(['REGULATOR', 'STARTUP', 'BUSINESS', 'ENTERPRISE', 'FREE_TRIAL']),
+  tier: z.enum(VAULT_TIER_VALUES),
 });
 
-const vaultReplacePresignInputSchema = vaultPresignInputSchema.omit({
+export const vaultReplacePresignInputSchema = vaultPresignInputSchema.omit({
   name: true,
   description: true,
   expiryDate: true,
@@ -608,9 +621,31 @@ class VaultModule {
     });
 
     if (!parsed.success) {
+      logger.warn({
+        type: 'vault.presign.validation_failed',
+        userId: params.userId,
+        organizationId: orgId,
+        issues: parsed.error.issues,
+        receivedPlan: params.plan,
+        receivedPlanType: typeof params.plan,
+        // Do not log values that could be PII; log presence and shape only
+        receivedFields: {
+          namePresent: Boolean(params.name),
+          nameLength: params.name?.length,
+          declaredFilenameLength: params.declaredFilename?.length,
+          declaredMimeType: params.declaredMimeType,
+          declaredSize: params.declaredSize,
+          category: params.category,
+          tagsCount: Array.isArray(params.tags) ? params.tags.length : undefined,
+          plan: params.plan,
+          hasDescription: Boolean(params.description),
+          hasExpiryDate: Boolean(params.expiryDate),
+        },
+      });
       throw new TRPCError({
         code: 'BAD_REQUEST',
         message: 'Invalid vault upload request.',
+        cause: parsed.error,
       });
     }
     const uploadRequest = parsed.data;
@@ -1307,9 +1342,24 @@ class VaultModule {
     });
 
     if (!parsed.success) {
+      logger.warn({
+        type: 'vault.replace.validation_failed',
+        userId: params.userId,
+        organizationId: orgId,
+        issues: parsed.error.issues,
+        receivedFields: {
+          declaredFilenameLength: params.filename?.length,
+          declaredMimeType: params.fileType,
+          declaredSize: params.fileSize,
+          category: existing.category,
+          tagsCount: Array.isArray(existing.tags) ? existing.tags.length : undefined,
+          plan: params.plan,
+        },
+      });
       throw new TRPCError({
         code: 'BAD_REQUEST',
         message: 'Invalid vault replacement request.',
+        cause: parsed.error,
       });
     }
 

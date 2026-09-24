@@ -15,7 +15,6 @@ import {
 import { z } from 'zod';
 import { logger } from '@/utils/logger';
 import { incrementTrialUsage } from '@/modules/trial';
-import { SubscriptionPlan } from '@prisma/client';
 import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
 
 /**
@@ -45,9 +44,17 @@ export const vaultRouter = router({
     .input(vaultGetUploadUrlSchema)
     .mutation(async ({ input, ctx }) => {
       try {
+        if (!ctx.plan) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Your plan could not be resolved. Please contact support.',
+          });
+        }
+        const orgId = ctx.orgMembership!.organizationId;
+
         return await vaultModule.generateUploadPresignedUrl({
           userId: ctx.user!.id,
-          organizationId: ctx.orgMembership!.organizationId,
+          organizationId: orgId,
           name: input.name,
           description: input.description,
           expiryDate: input.expiryDate,
@@ -56,7 +63,7 @@ export const vaultRouter = router({
           declaredSize: input.declaredSize,
           category: input.category,
           tags: input.tags,
-          plan: ctx.plan ?? SubscriptionPlan.REGULATOR,
+          plan: ctx.plan,
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;
@@ -261,6 +268,13 @@ export const vaultRouter = router({
     .input(vaultReplaceDocumentSchema)
     .mutation(async ({ input, ctx }) => {
       try {
+        if (!ctx.plan) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Your plan could not be resolved. Please contact support.',
+          });
+        }
+
         return await vaultModule.replaceDocument({
           documentId: input.id,
           userId: ctx.user!.id,
@@ -269,7 +283,7 @@ export const vaultRouter = router({
           filename: input.filename,
           fileType: input.fileType,
           fileSize: input.fileSize,
-          plan: ctx.plan ?? SubscriptionPlan.REGULATOR,
+          plan: ctx.plan,
         });
       } catch (error: unknown) {
         if (error instanceof TRPCError) throw error;

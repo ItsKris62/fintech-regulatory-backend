@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { createHash } from 'crypto';
 import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
-import { BillingMetric, SubscriptionPlan } from '@prisma/client';
+import { BillingMetric } from '@prisma/client';
 import { rateLimited, withPlanContext, requirePlanFeature, resolveUsageLimit } from '../trpc/middleware';
 import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
@@ -34,7 +34,13 @@ export const gapAnalysisRouter = router({
     .use(withPlanContext)
     .input(z.void())
     .query(async ({ ctx }) => {
-      const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
+      if (!ctx.plan) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Your plan could not be resolved. Please contact support.',
+        });
+      }
+      const plan = ctx.plan;
 
       const frameworks = await prisma.regulatoryFramework.findMany({
         where: { isActive: true },
@@ -100,9 +106,17 @@ export const gapAnalysisRouter = router({
           }
         }
 
+        if (!ctx.plan) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Your plan could not be resolved. Please contact support.',
+          });
+        }
+        const plan = ctx.plan;
+
         // Per-tier file size enforcement
         const decodedBytes = Math.ceil(input.fileContent.length * 0.75);
-        const gapLimits = GAP_ANALYSIS_UPLOAD_LIMITS[ctx.plan ?? SubscriptionPlan.REGULATOR];
+        const gapLimits = GAP_ANALYSIS_UPLOAD_LIMITS[plan];
         if (gapLimits.maxFileSizeMB === 0) {
           throw new TRPCError({
             code: 'FORBIDDEN',
@@ -118,7 +132,6 @@ export const gapAnalysisRouter = router({
         }
 
         // Validate framework slugs and enforce tier access
-        const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
         const dbFrameworks = await prisma.regulatoryFramework.findMany({
           where: { slug: { in: input.regulatoryFrameworks }, isActive: true },
           select: { id: true, slug: true, name: true, category: true, tier: true, sortOrder: true },

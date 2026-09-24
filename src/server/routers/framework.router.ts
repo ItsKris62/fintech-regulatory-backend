@@ -1,6 +1,5 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { SubscriptionPlan } from '@prisma/client';
 import { router, protectedProcedure } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
 import { allowedFrameworkTiersForPlan, canAccessFrameworkTier } from '../services/framework-access.service';
@@ -53,7 +52,13 @@ export const frameworkRouter = router({
     .input(z.object({ includeInactive: z.boolean().optional().default(false) }).optional())
     .query(async ({ input, ctx }) => {
       const isPlatformAdmin = ctx.user!.role === 'ADMIN';
-      const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
+      if (!ctx.plan) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Your plan could not be resolved. Please contact support.',
+        });
+      }
+      const plan = ctx.plan;
       const includeInactive = Boolean(input?.includeInactive && isPlatformAdmin);
 
       const frameworks = await ctx.prisma.regulatoryFramework.findMany({
@@ -123,7 +128,13 @@ export const frameworkRouter = router({
     .input(z.object({ slug: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       const isPlatformAdmin = ctx.user!.role === 'ADMIN';
-      const plan = ctx.plan ?? SubscriptionPlan.REGULATOR;
+      if (!ctx.plan) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Your plan could not be resolved. Please contact support.',
+        });
+      }
+      const plan = ctx.plan;
 
       const framework = await ctx.prisma.regulatoryFramework.findUnique({
         where: { slug: input.slug },

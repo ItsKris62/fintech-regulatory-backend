@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
-import { BillingMetric, SubscriptionPlan } from '@prisma/client';
+import { BillingMetric } from '@prisma/client';
 import { rateLimited, withPlanContext, requirePlanFeature, resolveUsageLimit } from '../trpc/middleware';
 import { complianceModule } from '@/modules/compliance';
 import { checklistService } from '@/modules/compliance/checklist.service';
@@ -416,7 +416,13 @@ export const checklistRouter = router({
   getChecklistUsage: orgMemberProcedure
     .use(withPlanContext)
     .query(async ({ ctx }) => {
-      const plan     = ctx.plan ?? SubscriptionPlan.REGULATOR;
+      if (!ctx.plan) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Your plan could not be resolved. Please contact support.',
+        });
+      }
+      const plan     = ctx.plan;
       const scopeId  = ctx.orgMembership!.organizationId;
       const { limit, period } = getQuota(plan, 'checklistGenerations');
 
