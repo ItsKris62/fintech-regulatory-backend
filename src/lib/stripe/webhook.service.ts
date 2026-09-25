@@ -129,30 +129,35 @@ class StripeWebhookService {
       return;
     }
 
-    logger.info({ type: 'stripe_webhook_received', eventType: event.type, eventId: event.id });
+    try {
+      logger.info({ type: 'stripe_webhook_received', eventType: event.type, eventId: event.id });
 
-    switch (event.type) {
-      case 'checkout.session.completed':
-        await this.handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
-        break;
-      case 'customer.subscription.updated':
-        await this.handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
-        break;
-      case 'customer.subscription.deleted':
-        await this.handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
-        break;
-      case 'invoice.payment_failed':
-        await this.handlePaymentFailed(event.data.object as Stripe.Invoice);
-        break;
-      case 'invoice.payment_succeeded':
-        await this.handlePaymentSucceeded(event.data.object as Stripe.Invoice);
-        break;
-      case 'customer.subscription.trial_will_end':
-        await this.handleTrialWillEnd(event.data.object as Stripe.Subscription);
-        break;
-      default:
-        // Ignore unhandled event types  -  Stripe sends many others
-        logger.debug({ type: 'stripe_webhook_unhandled', eventType: event.type });
+      switch (event.type) {
+        case 'checkout.session.completed':
+          await this.handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+          break;
+        case 'customer.subscription.updated':
+          await this.handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
+          break;
+        case 'customer.subscription.deleted':
+          await this.handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+          break;
+        case 'invoice.payment_failed':
+          await this.handlePaymentFailed(event.data.object as Stripe.Invoice);
+          break;
+        case 'invoice.payment_succeeded':
+          await this.handlePaymentSucceeded(event.data.object as Stripe.Invoice);
+          break;
+        case 'customer.subscription.trial_will_end':
+          await this.handleTrialWillEnd(event.data.object as Stripe.Subscription);
+          break;
+        default:
+          // Ignore unhandled event types  -  Stripe sends many others
+          logger.debug({ type: 'stripe_webhook_unhandled', eventType: event.type });
+      }
+    } catch (error) {
+      await this.releaseLock(event.id);
+      throw error;
     }
   }
 
@@ -584,6 +589,23 @@ class StripeWebhookService {
         error: error instanceof Error ? error.message : String(error),
       });
       return false; // Fail open  -  process rather than silently drop
+    }
+  }
+
+  /**
+   * Release the idempotency lock on failure so subsequent retries by Stripe can process.
+   */
+  private async releaseLock(eventId: string): Promise<void> {
+    try {
+      const key = `sheriabot:stripe:evt:${eventId}`;
+      await redis.del(key);
+      logger.info({ type: 'stripe_webhook_lock_released', eventId });
+    } catch (err: unknown) {
+      logger.warn({
+        type: 'stripe_webhook_lock_release_failed',
+        eventId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
