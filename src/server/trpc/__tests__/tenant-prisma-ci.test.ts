@@ -265,4 +265,39 @@ describe('CI Tenant Isolation Guard: TypeScript AST Compiler API (audit SEC-12)'
     expect(ruleViolation).toBeDefined();
     expect(results[0].errorCount).toBeGreaterThan(0);
   }, 30000);
+
+  it('proves ESLint fails on fixture router accessing ctx.prisma.user and passes on auth.router.ts (P1.1-A)', async () => {
+    const { ESLint } = await import('eslint');
+    const eslint = new ESLint();
+    const userViolationCode = `
+      export async function testUserHandler(ctx: any) {
+        return await ctx.prisma.user.findMany({});
+      }
+    `;
+
+    // Fixture in a generic router should trigger the rule
+    const genericResults = await eslint.lintText(userViolationCode, {
+      filePath: resolve(__dirname, '../../routers/synthetic-user.router.ts'),
+    });
+    expect(genericResults).toHaveLength(1);
+    const userViolation = genericResults[0].messages.find(
+      (m) =>
+        m.ruleId === 'no-restricted-syntax' &&
+        m.message.includes('F-03 Tenant Isolation') &&
+        m.message.includes('ctx.tenantPrisma')
+    );
+    expect(userViolation).toBeDefined();
+
+    // Fixture in auth.router.ts should be ignored and pass without violation
+    const authResults = await eslint.lintText(userViolationCode, {
+      filePath: resolve(__dirname, '../../routers/auth.router.ts'),
+    });
+    expect(authResults).toHaveLength(1);
+    const authViolation = authResults[0].messages.find(
+      (m) =>
+        m.ruleId === 'no-restricted-syntax' &&
+        m.message.includes('F-03 Tenant Isolation')
+    );
+    expect(authViolation).toBeUndefined();
+  }, 30000);
 });

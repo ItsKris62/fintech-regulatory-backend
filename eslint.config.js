@@ -21,10 +21,7 @@ function getTenantModelsPattern() {
     if (m) {
       const modelName = m[1];
       const camel = modelName.charAt(0).toLowerCase() + modelName.slice(1);
-      // User is the global authentication subject and accessed across tenants in auth/session handlers
-      if (camel !== 'user') {
-        models.push(camel);
-      }
+      models.push(camel);
     }
   }
   return models.join("|");
@@ -68,9 +65,12 @@ module.exports = [
   },
   {
     files: ["src/server/routers/**/*.ts"],
+    // Auth and user-management routers operate on User records before/outside org selection. All other routers must use ctx.tenantPrisma.user.
     ignores: [
       "src/server/routers/admin.router.ts",
       "src/server/routers/admin-*.ts",
+      "src/server/routers/auth.router.ts",
+      "src/server/routers/user.router.ts",
       "src/server/routers/**/*.test.ts",
       "src/server/routers/**/__tests__/**",
     ],
