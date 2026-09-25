@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 
-import { router, publicProcedure, protectedProcedure } from '../trpc/trpc';
+import { router, publicProcedure, protectedProcedure, recordFreshMfaVerification } from '../trpc/trpc';
 import {
   registerSchema,
   loginSchema,
@@ -1015,6 +1015,7 @@ export const authRouter = router({
         const systemConfig = await loadSystemConfig();
         const sessionTtlSeconds = resolveSessionTimeoutSeconds(systemConfig.sessionTimeoutHours);
 
+        await recordFreshMfaVerification(user.id);
         const sessionResult = await issueSessionForUser({
           prisma: ctx.prisma,
           redis,
@@ -1132,6 +1133,7 @@ export const authRouter = router({
         userSessionKey(userId),
         lastSeenKey(userId),
         sessionStartKey(userId),
+        `sheriabot:admin:mfa_verified:${userId}`,
         ...(sessionId ? [sessionFingerprintKey(sessionId)] : []),
       ];
       await Promise.all(keysToDelete.map((key) => redis.del(key)));
@@ -1281,6 +1283,7 @@ export const authRouter = router({
       }
       await redis.del(lastSeenKey(user.id)).catch(() => {});
       await redis.del(sessionStartKey(user.id)).catch(() => {});
+      await redis.del(`sheriabot:admin:mfa_verified:${user.id}`).catch(() => {});
 
       await ctx.prisma.auditLog.create({
         data: {
@@ -1454,6 +1457,7 @@ export const authRouter = router({
             redis.del(userSessionKey(user.id)),
             redis.del(lastSeenKey(user.id)),
             redis.del(sessionStartKey(user.id)),
+            redis.del(`sheriabot:admin:mfa_verified:${user.id}`),
             ...(supabaseAuthId ? [redis.del(`user:session:${supabaseAuthId}`)] : []),
           ]).catch(() => {});
         }

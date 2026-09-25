@@ -46,7 +46,7 @@ async function assertActiveOrganizationMember(
 ) {
   if (ctx.user.role === 'ADMIN') return;
 
-  const member = await ctx.prisma.organizationMember.findUnique({
+  const member = await ctx.tenantPrisma.organizationMember.findUnique({
     where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
     select: { status: true },
   });
@@ -65,7 +65,7 @@ async function assertOrganizationManager(
 ) {
   if (ctx.user.role === 'ADMIN') return null;
 
-  const member = await ctx.prisma.organizationMember.findUnique({
+  const member = await ctx.tenantPrisma.organizationMember.findUnique({
     where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
     select: { status: true, role: true },
   });
@@ -288,7 +288,7 @@ export const organizationRouter = router({
 
         // Non-admin: verify active OrganizationMember row BEFORE fetching org details.
         // Always FORBIDDEN on failure to prevent org-existence oracle.
-        const member = await ctx.prisma.organizationMember.findUnique({
+        const member = await ctx.tenantPrisma.organizationMember.findUnique({
           where: { userId_organizationId: { userId: ctx.user.id, organizationId: input.id } },
           select: { status: true },
         });
@@ -761,7 +761,7 @@ export const organizationRouter = router({
         await assertActiveOrganizationMember(ctx, organizationId);
 
         const [membersResult, total] = await Promise.all([
-          ctx.prisma.organizationMember.findMany({
+          ctx.tenantPrisma.organizationMember.findMany({
             where: {
               organizationId,
               status: { not: MemberStatus.REMOVED },
@@ -790,7 +790,7 @@ export const organizationRouter = router({
             },
             orderBy: { createdAt: 'desc' },
           }),
-          ctx.prisma.organizationMember.count({
+          ctx.tenantPrisma.organizationMember.count({
             where: {
               organizationId,
               status: { not: MemberStatus.REMOVED },
@@ -869,7 +869,7 @@ export const organizationRouter = router({
         await assertOrganizationManager(ctx, callerOrgId);
 
         // Fetch target user
-        const targetMember = await ctx.prisma.organizationMember.findUnique({
+        const targetMember = await ctx.tenantPrisma.organizationMember.findUnique({
           where: { userId_organizationId: { userId: input.userId, organizationId: callerOrgId } },
           select: {
             id: true,
@@ -902,7 +902,7 @@ export const organizationRouter = router({
           });
         }
 
-        const updatedMember = await ctx.prisma.organizationMember.update({
+        const updatedMember = await ctx.tenantPrisma.organizationMember.update({
           where: { userId_organizationId: { userId: input.userId, organizationId: callerOrgId } },
           data: { role: input.role as MemberRole },
           select: {
@@ -1100,7 +1100,7 @@ export const organizationRouter = router({
       }
       await assertActiveOrganizationMember(ctx, organizationId);
 
-      const member = await ctx.prisma.organizationMember.findUnique({
+      const member = await ctx.tenantPrisma.organizationMember.findUnique({
         where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
         select: { status: true, role: true },
       });
@@ -1167,7 +1167,7 @@ export const organizationRouter = router({
         });
       }
 
-      const member = await ctx.prisma.organizationMember.findUnique({
+      const member = await ctx.tenantPrisma.organizationMember.findUnique({
         where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
         select: { status: true, role: true },
       });
@@ -1197,7 +1197,7 @@ export const organizationRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
       }
 
-      const member = await ctx.prisma.organizationMember.findUnique({
+      const member = await ctx.tenantPrisma.organizationMember.findUnique({
         where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
         select: { status: true, role: true },
       });
@@ -1224,7 +1224,7 @@ export const organizationRouter = router({
           },
         }),
         getSeatUsageForOrganization(ctx.prisma as any, organizationId),
-        ctx.prisma.organizationMember.findMany({
+        ctx.tenantPrisma.organizationMember.findMany({
           where: { organizationId, status: { not: MemberStatus.REMOVED } },
           orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
           take: 100,
@@ -1247,7 +1247,7 @@ export const organizationRouter = router({
             },
           },
         }),
-        ctx.prisma.invitation.findMany({
+        ctx.tenantPrisma.invitation.findMany({
           where: {
             organizationId,
             used: false,
@@ -1264,12 +1264,12 @@ export const organizationRouter = router({
             invitedBy: true,
           },
         }),
-        ctx.prisma.organizationMember.groupBy({
+        ctx.tenantPrisma.organizationMember.groupBy({
           by: ['status'],
           where: { organizationId, status: { not: MemberStatus.REMOVED } },
           _count: { _all: true },
         }),
-        ctx.prisma.organizationMember.findFirst({
+        ctx.tenantPrisma.organizationMember.findFirst({
           where: { organizationId, role: MemberRole.OWNER, status: MemberStatus.ACTIVE },
           orderBy: { joinedAt: 'asc' },
           select: {
@@ -1331,7 +1331,7 @@ export const organizationRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
       }
 
-      const member = await ctx.prisma.organizationMember.findUnique({
+      const member = await ctx.tenantPrisma.organizationMember.findUnique({
         where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
         select: { status: true, role: true },
       });
@@ -1351,7 +1351,7 @@ export const organizationRouter = router({
             mfaPolicyUpdatedBy: true,
           } as any,
         }),
-        ctx.prisma.organizationMember.findMany({
+        ctx.tenantPrisma.organizationMember.findMany({
           where: {
             organizationId,
             status: { in: [MemberStatus.ACTIVE, MemberStatus.SUSPENDED] },
@@ -1655,7 +1655,7 @@ export const organizationRouter = router({
 
       await assertOrganizationManager(ctx, organizationId);
 
-      const invitations = await ctx.prisma.invitation.findMany({
+      const invitations = await ctx.tenantPrisma.invitation.findMany({
         where: {
           organizationId,
           used: false,

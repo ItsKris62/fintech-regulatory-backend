@@ -15,7 +15,7 @@ export type AuthenticatorTransportFuture =
   | 'nfc'
   | 'smart-card'
   | 'usb';
-import { router, publicProcedure, protectedProcedure } from '../trpc/trpc';
+import { router, publicProcedure, protectedProcedure, adminMfaEnforced, recordFreshMfaVerification } from '../trpc/trpc';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { webauthnConfig } from '@/server/config/webauthn';
@@ -254,6 +254,8 @@ export const passkeyRouter = router({
         if (ctx.user.supabaseAuthId) {
           await redis.del(`user:session:${ctx.user.supabaseAuthId}`).catch(() => {});
         }
+
+        await recordFreshMfaVerification(userId);
 
         return passkey;
       } catch (dbErr: any) {
@@ -562,6 +564,8 @@ export const passkeyRouter = router({
         },
       });
 
+      await recordFreshMfaVerification(user.id);
+
       return sessionPayload;
     }),
 
@@ -628,6 +632,7 @@ export const passkeyRouter = router({
    * 7. Delete / Revoke Passkey
    */
   deletePasskey: protectedProcedure
+    .use(adminMfaEnforced)
     .input(deletePasskeySchema)
     .mutation(async ({ input, ctx }) => {
       const passkey = await ctx.prisma.passkey.findUnique({

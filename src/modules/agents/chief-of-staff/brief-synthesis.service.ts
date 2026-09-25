@@ -156,6 +156,7 @@ export class ChiefOfStaffBriefSynthesisService {
       temperature: 0.2,
       maxTokens: 2000,
       systemPrompt: systemPrompt(),
+      globalCache: true, // Prompt contains no tenant-identifying data. Verified on 2026-09-25. Genuinely global: platform-level executive weekly brief synthesized from source reports.
       prompt: promptFor(sources),
       metadata: { agent: 'chief-of-staff' },
     });

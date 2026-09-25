@@ -166,6 +166,8 @@ export async function completeStructured<T>(
         allowFallback: input.allowFallback,
         overrideTimeoutMs: input.overrideTimeoutMs,
         signal: input.signal,
+        orgId: input.orgId,
+        globalCache: input.globalCache,
       });
     } catch (error: unknown) {
       throw mapGatewayError(error, input.schemaName, input.allowFallback);

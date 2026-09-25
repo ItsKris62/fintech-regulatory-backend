@@ -176,7 +176,7 @@ export const licenseRouter = router({
   adminOverrideUpdate: adminProcedure
     .input(adminOverrideUpdateLicenseSchema)
     .mutation(async ({ input, ctx }) => safe('admin_override_update', { userId: ctx.user!.id, licenseId: input.id }, async () => {
-      const license = await ctx.prisma.license.findUnique({
+      const license = await ctx.tenantPrisma.license.findUnique({
         where: { id: input.id },
         select: { organizationId: true },
       });

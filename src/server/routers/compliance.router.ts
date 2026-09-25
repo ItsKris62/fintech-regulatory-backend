@@ -17,7 +17,6 @@ import { ragService, searchAndGetRegulatoryEvidenceContext } from '@/lib/rag/rag
 import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
 import { incrementTrialUsage } from '@/modules/trial';
-import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { runOrchestrator } from '@/modules/compliance/orchestrator';
 import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
@@ -176,7 +175,7 @@ export const complianceRouter = router({
 
         if (!hasUsableSourceContext(ragContext)) {
           const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
-          const query = await (ctx.prisma.complianceQuery.create as any)({
+          const query = await (ctx.tenantPrisma.complianceQuery.create as any)({
             data: {
               query: input.question,
               userId: ctx.user!.id,
@@ -239,7 +238,7 @@ export const complianceRouter = router({
         if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext })) {
           const fallbackReason = fallbackReasonForNoAcceptedSources(preGenerationGrade.diagnostics?.failureClassification);
           const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
-          const query = await (ctx.prisma.complianceQuery.create as any)({
+          const query = await (ctx.tenantPrisma.complianceQuery.create as any)({
             data: {
               query: input.question,
               userId: ctx.user!.id,
@@ -349,7 +348,7 @@ export const complianceRouter = router({
         }
 
         // Persist query with citations stored atomically as JSON
-        const query = await (ctx.prisma.complianceQuery.create as any)({
+        const query = await (ctx.tenantPrisma.complianceQuery.create as any)({
           data: {
             query: input.question,
             userId: ctx.user!.id,
@@ -403,7 +402,7 @@ export const complianceRouter = router({
             shadow: false,
           });
 
-          const run = await prisma.complianceQueryRun.findFirst({
+          const run = await ctx.prisma.complianceQueryRun.findFirst({
             where: { complianceQueryId: query.id },
             orderBy: { createdAt: 'desc' },
             select: { id: true, route: true, grounded: true, verifierVerdict: true, acceptedChunkIds: true },
@@ -460,7 +459,7 @@ export const complianceRouter = router({
             const sourceInsufficientAnswer = claimVerification.verdict === 'FAIL'
               ? buildUnsupportedClaimsAnswer(claimVerification.unsupportedClaims.map((claim) => claim.claimText))
               : buildComplianceSourceInsufficiencyAnswer();
-            await ctx.prisma.complianceQuery.update({
+            await ctx.tenantPrisma.complianceQuery.update({
               where: { id: query.id },
               data: {
                 response: sourceInsufficientAnswer,
@@ -504,7 +503,7 @@ export const complianceRouter = router({
             };
           }
 
-          await ctx.prisma.complianceQuery.update({
+          await ctx.tenantPrisma.complianceQuery.update({
             where: { id: query.id },
             data: {
               response: responseContent,
@@ -651,7 +650,7 @@ export const complianceRouter = router({
       let incrementUsage: (() => Promise<void>) | undefined;
       try {
         // Get original query
-        const originalQuery = await ctx.prisma.complianceQuery.findUnique({
+        const originalQuery = await ctx.tenantPrisma.complianceQuery.findUnique({
           where: { id: input.originalQueryId },
         });
 
@@ -702,7 +701,7 @@ export const complianceRouter = router({
 
         if (!hasUsableSourceContext(ragContext)) {
           const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer();
-          const query = await (ctx.prisma.complianceQuery.create as any)({
+          const query = await (ctx.tenantPrisma.complianceQuery.create as any)({
             data: {
               query: input.question,
               userId,
@@ -752,7 +751,7 @@ export const complianceRouter = router({
         if (!hasUsableSourceContext({ results: acceptedResults, context: acceptedContext })) {
           const fallbackReason = fallbackReasonForNoAcceptedSources(preGenerationGrade.diagnostics?.failureClassification);
           const sourceInsufficientAnswer = buildComplianceSourceInsufficiencyAnswer(fallbackReason);
-          const query = await (ctx.prisma.complianceQuery.create as any)({
+          const query = await (ctx.tenantPrisma.complianceQuery.create as any)({
             data: {
               query: input.question,
               userId,
@@ -834,7 +833,7 @@ export const complianceRouter = router({
         const safeFinalCitations = finalCitationValidation.valid ? finalCitations : [];
 
         // Save follow-up query with citations as JSON
-        const query = await (ctx.prisma.complianceQuery.create as any)({
+        const query = await (ctx.tenantPrisma.complianceQuery.create as any)({
           data: {
             query: input.question,
             userId,
@@ -1005,7 +1004,7 @@ export const complianceRouter = router({
         }
 
         const [queries, total] = await Promise.all([
-          ctx.prisma.complianceQuery.findMany({
+          ctx.tenantPrisma.complianceQuery.findMany({
             where,
             skip,
             take: limit,
@@ -1026,7 +1025,7 @@ export const complianceRouter = router({
               },
             },
           }),
-          ctx.prisma.complianceQuery.count({ where }),
+          ctx.tenantPrisma.complianceQuery.count({ where }),
         ]);
 
         return {
@@ -1063,7 +1062,7 @@ export const complianceRouter = router({
     .input(getQuerySchema)
     .query(async ({ input, ctx }) => {
       try {
-        const query = await ctx.prisma.complianceQuery.findUnique({
+        const query = await ctx.tenantPrisma.complianceQuery.findUnique({
           where: { id: input.id },
           include: {
             user: {
@@ -1122,7 +1121,7 @@ export const complianceRouter = router({
       const userId = ctx.user!.id;
       const organizationId = ctx.orgMembership!.organizationId;
 
-      const originalQuery = await ctx.prisma.complianceQuery.findUnique({
+      const originalQuery = await ctx.tenantPrisma.complianceQuery.findUnique({
         where: { id: input.originalQueryId },
         select: { id: true, userId: true, organizationId: true },
       });
@@ -1138,7 +1137,7 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this query' });
       }
 
-      const followUps = await (ctx.prisma.complianceQuery.findMany as any)({
+      const followUps = await (ctx.tenantPrisma.complianceQuery.findMany as any)({
         where: {
           userId,
           organizationId,
@@ -1548,7 +1547,7 @@ export const complianceRouter = router({
         surface: input.surface,
       });
 
-      ctx.prisma.auditLog.create({
+      ctx.ctx.prisma.auditLog.create({
         data: {
           userId,
           action: 'SUGGESTED_QUERY_CLICKED',
@@ -1599,7 +1598,7 @@ export const complianceRouter = router({
       const userId = ctx.user!.id;
 
       // Verify query exists and caller has access
-      const query = await ctx.prisma.complianceQuery.findUnique({
+      const query = await ctx.tenantPrisma.complianceQuery.findUnique({
         where: { id: input.queryId },
         select: { id: true, userId: true },
       });
@@ -1712,7 +1711,7 @@ export const complianceRouter = router({
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
 
-      const query = await ctx.prisma.complianceQuery.findUnique({
+      const query = await ctx.tenantPrisma.complianceQuery.findUnique({
         where: { id: input.queryId },
         select: { id: true, userId: true },
       });
@@ -1829,7 +1828,7 @@ export const complianceRouter = router({
       const userId = ctx.user!.id;
 
       // Fire-and-forget audit log -- never block the response
-      prisma.auditLog.create({
+      ctx.prisma.auditLog.create({
         data: {
           userId,
           action: 'GAP_ANALYSIS_EXPORTED',
@@ -1866,7 +1865,7 @@ export const complianceRouter = router({
       const orgId = ctx.orgMembership!.organizationId;
 
       // 1. Fetch the analysis record with user relation
-      const analysis = await prisma.gapAnalysis.findUnique({
+      const analysis = await ctx.tenantPrisma.gapAnalysis.findUnique({
         where: { id: input.analysisId },
         include: {
           user: { select: { fullName: true, email: true } },
@@ -1903,7 +1902,7 @@ export const complianceRouter = router({
 
       // 5. Build DOCX buffer -- fetch org name separately (GapAnalysis has no direct org relation)
       const orgName = analysis.organizationId
-        ? (await prisma.organization.findUnique({ where: { id: analysis.organizationId }, select: { name: true } }))?.name
+        ? (await ctx.prisma.organization.findUnique({ where: { id: analysis.organizationId }, select: { name: true } }))?.name
         : undefined;
       const userName = analysis.user?.fullName;
 
@@ -1942,7 +1941,7 @@ export const complianceRouter = router({
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 
       // 8b. Persist report tracking fields (fire-and-forget -- non-blocking)
-      prisma.gapAnalysis.update({
+      ctx.tenantPrisma.gapAnalysis.update({
         where: { id: input.analysisId },
         data: { reportUrl: uploadResult.key, reportGeneratedAt: new Date() },
       }).catch((err: unknown) => {
@@ -1950,7 +1949,7 @@ export const complianceRouter = router({
       });
 
       // 9. Write audit log (fire-and-forget)
-      prisma.auditLog.create({
+      ctx.prisma.auditLog.create({
         data: {
           userId,
           action: 'GAP_ANALYSIS_EXPORTED',
@@ -1988,7 +1987,7 @@ export const complianceRouter = router({
       const orgId = ctx.orgMembership!.organizationId;
 
       // 1. Fetch the checklist with items and user -- no direct org relation on Checklist model
-      const checklist = await prisma.checklist.findUnique({
+      const checklist = await ctx.tenantPrisma.checklist.findUnique({
         where: { id: input.checklistId },
         include: {
           user: { select: { fullName: true } },
@@ -2032,7 +2031,7 @@ export const complianceRouter = router({
 
       // 5. Fetch org name separately (Checklist has organizationId but no @relation to Organization)
       const orgName = checklist.organizationId
-        ? (await prisma.organization.findUnique({ where: { id: checklist.organizationId }, select: { name: true } }))?.name
+        ? (await ctx.prisma.organization.findUnique({ where: { id: checklist.organizationId }, select: { name: true } }))?.name
         : undefined;
 
       // 6. Group items by category
@@ -2119,7 +2118,7 @@ export const complianceRouter = router({
       const expiresAt = new Date(Date.now() + 900 * 1000).toISOString();
 
       // 12. Audit log (fire-and-forget)
-      prisma.auditLog.create({
+      ctx.prisma.auditLog.create({
         data: {
           userId,
           action: 'CHECKLIST_EXPORTED',
@@ -2153,7 +2152,7 @@ export const complianceRouter = router({
       const userId = ctx.user!.id;
 
       // 1. Fetch the query
-      const queryRecord = await prisma.complianceQuery.findUnique({
+      const queryRecord = await ctx.tenantPrisma.complianceQuery.findUnique({
         where: { id: input.queryId },
         select: {
           id: true,
@@ -2185,7 +2184,7 @@ export const complianceRouter = router({
 
       // 4. Fetch org name for the DOCX cover
       const orgName = queryRecord.organizationId
-        ? (await prisma.organization.findUnique({
+        ? (await ctx.prisma.organization.findUnique({
           where: { id: queryRecord.organizationId },
           select: { name: true },
         }))?.name ?? undefined
@@ -2218,7 +2217,7 @@ export const complianceRouter = router({
       const downloadUrl = await storageService.getVaultDownloadUrl(uploadResult.key, 3600, filename);
       const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
 
-      prisma.auditLog.create({
+      ctx.prisma.auditLog.create({
         data: {
           userId,
           action: 'COMPLIANCE_QUERY_EXPORTED',
@@ -2265,7 +2264,7 @@ export const complianceRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       // Verify the query belongs to the calling user (IDOR protection).
-      const complianceQuery = await prisma.complianceQuery.findUnique({
+      const complianceQuery = await ctx.tenantPrisma.complianceQuery.findUnique({
         where: { id: input.queryId },
         select: { userId: true, query: true },
       });
@@ -2281,7 +2280,7 @@ export const complianceRouter = router({
       }
 
       // Verify the run belongs to this query (prevents runId spoofing).
-      const run = await prisma.complianceQueryRun.findFirst({
+      const run = await ctx.prisma.complianceQueryRun.findFirst({
         where: { id: input.runId, complianceQueryId: input.queryId },
         select: { id: true },
       });
@@ -2290,7 +2289,7 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Query run not found' });
       }
 
-      const feedback = await prisma.corpusGapFeedback.create({
+      const feedback = await ctx.tenantPrisma.corpusGapFeedback.create({
         data: {
           complianceQueryId: input.queryId,
           runId: input.runId,

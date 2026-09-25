@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { logger, logPerformance } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
 import { getSystemConfigNumber, getRuntimeAIConfig } from '@/lib/system-config';
@@ -297,15 +298,26 @@ export class LLMGateway {
     };
   }
 
-  generateCacheKey(provider: LLMProviderName, model: string, prompt: string, systemPrompt: string = ''): string {
-    const content = `${systemPrompt}|${prompt}|${model}`;
-    let hash = 0;
-    for (let i = 0; i < content.length; i++) {
-      const char = content.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
+  generateCacheKey(
+    provider: LLMProviderName,
+    model: string,
+    prompt: string,
+    systemPrompt: string = '',
+    scope?: string | { orgId?: string; globalCache?: boolean } | null
+  ): string {
+    const orgId = typeof scope === 'string' ? scope : scope?.orgId;
+    const isGlobal = typeof scope === 'object' && scope?.globalCache === true;
+
+    if (!orgId && !isGlobal) {
+      throw new Error(
+        'Tenant orgId is required for AI cache key generation unless globalCache is explicitly set to true'
+      );
     }
-    return `ai:cache:${provider}:${Math.abs(hash).toString(36)}`;
+
+    const tenantPrefix = isGlobal ? 'global' : orgId!;
+    const payload = `${tenantPrefix}:${systemPrompt}:${prompt}:${model}`;
+    const hash = crypto.createHash('sha256').update(payload).digest('hex');
+    return `ai:cache:${provider}:${hash}`;
   }
 
   async getCachedCompletion(cacheKey: string): Promise<LLMCompletionResult | null> {
@@ -366,7 +378,16 @@ export class LLMGateway {
     req.maxTokens = req.maxTokens ?? aiConfig.parameters.queryMaxTokens;
 
     if (cacheTTL > 0) {
-      const cacheKey = this.generateCacheKey(providerName, model, req.prompt, req.systemPrompt);
+      const scope = {
+        orgId: req.orgId ?? req.metadata?.orgId ?? req.metadata?.organizationId,
+        globalCache: req.globalCache,
+      };
+      if (!scope.orgId && !scope.globalCache) {
+        throw new Error(
+          'LLMCompletionRequest requires a valid orgId or explicit globalCache: true for tenant cache isolation'
+        );
+      }
+      const cacheKey = this.generateCacheKey(providerName, model, req.prompt, req.systemPrompt, scope);
       const cached = await this.getCachedCompletion(cacheKey);
       if (cached) {
         logPerformance('ai_completion_cached', startTime, { provider: providerName, model, useCase: req.useCase });
@@ -418,7 +439,11 @@ export class LLMGateway {
           actualCost = cost;
 
           if (cacheTTL > 0) {
-            const cacheKey = this.generateCacheKey(providerName, model, req.prompt, req.systemPrompt);
+            const scope = {
+              orgId: req.orgId ?? req.metadata?.orgId ?? req.metadata?.organizationId,
+              globalCache: req.globalCache,
+            };
+            const cacheKey = this.generateCacheKey(providerName, model, req.prompt, req.systemPrompt, scope);
             await this.cacheCompletion(cacheKey, result, cacheTTL);
           }
 

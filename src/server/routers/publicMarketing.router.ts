@@ -11,7 +11,6 @@ import { z } from "zod";
 import crypto from "crypto";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc/trpc";
-import { prisma } from "@/lib/prisma/client";
 import { redis } from "@/lib/redis/client";
 import { rateLimiter } from "@/lib/redis/rate-limiter";
 import { logger } from "@/utils/logger";
@@ -86,7 +85,7 @@ export const publicMarketingRouter = router({
 
         const tokenHash = hashToken(input.token);
 
-        const send = await prisma.campaignSend.findFirst({
+        const send = await ctx.prisma.campaignSend.findFirst({
           where: {
             unsubscribeTokenHash: tokenHash,
             unsubscribedAt:       null,
@@ -115,7 +114,7 @@ export const publicMarketingRouter = router({
 
         const tokenHash = hashToken(input.token);
 
-        const send = await prisma.campaignSend.findFirst({
+        const send = await ctx.prisma.campaignSend.findFirst({
           where: {
             unsubscribeTokenHash: tokenHash,
             unsubscribedAt:       null,
@@ -149,13 +148,13 @@ export const publicMarketingRouter = router({
         });
 
         // 3. Mark token as used
-        await prisma.campaignSend.update({
+        await ctx.prisma.campaignSend.update({
           where: { id: send.id },
           data:  { unsubscribedAt: new Date() },
         });
 
         // 4. Increment campaign unsubscribed counter
-        await prisma.marketingCampaign.update({
+        await ctx.prisma.marketingCampaign.update({
           where: { id: campaignId },
           data:  { totalUnsubscribed: { increment: 1 } },
         });
@@ -223,7 +222,7 @@ export const publicMarketingRouter = router({
         );
 
         // 2. Upsert contact (use normalised email consistently)
-        const existing = await prisma.contact.findFirst({
+        const existing = await ctx.prisma.contact.findFirst({
           where: { email: normalizedEmail, deletedAt: null },
         });
 
@@ -237,7 +236,7 @@ export const publicMarketingRouter = router({
           );
           contactId = updated.id;
 
-          await prisma.contact.update({
+          await ctx.prisma.contact.update({
             where: { id: contactId },
             data:  { consentStatus: "GRANTED", consentSource: "pilot_apply_form" },
           });
@@ -255,7 +254,7 @@ export const publicMarketingRouter = router({
           );
           contactId = created.id;
 
-          await prisma.contact.update({
+          await ctx.prisma.contact.update({
             where: { id: contactId },
             data:  { consentStatus: "GRANTED", consentSource: "pilot_apply_form" },
           });
@@ -332,7 +331,7 @@ export const publicMarketingRouter = router({
 
         const listId = process.env.SHERIABOT_BLOG_NEWSLETTER_LIST_ID || process.env.SHERIABOT_NEWSLETTER_LIST_ID;
 
-        const contact = await prisma.$transaction(async (tx) => {
+        const contact = await ctx.prisma.$transaction(async (tx) => {
           const existing = await tx.contact.findUnique({
             where: { email: normalizedEmail },
             select: { id: true, tags: true, deletedAt: true },

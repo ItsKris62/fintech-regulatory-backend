@@ -57,6 +57,7 @@
     "editorial:backfill-human-review": "tsx src/scripts/backfill-editorial-human-review.ts --dry-run",
     "editorial:backfill-human-review:write": "tsx src/scripts/backfill-editorial-human-review.ts --write",
     "typecheck": "tsc --noEmit",
+    "install-hooks": "node scripts/install-hooks.js",
     "lint": "eslint .",
     "lint:ci": "eslint . --max-warnings 0",
     "test": "vitest run",

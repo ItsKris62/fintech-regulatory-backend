@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc/trpc';
+import { router, protectedProcedure, adminMfaEnforced, recordFreshMfaVerification } from '../trpc/trpc';
 import { notificationModule } from '@/modules/notification';
 import {
   updateProfileSchema,
@@ -295,6 +295,8 @@ export const userRouter = router({
           await redis.del(`user:session:${supabaseAuthId}`);
         }
 
+        await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch(() => {});
+
         // -- 7. Revoke other Prisma sessions -------------------------------
         if (ctx.user.sessionId) {
           await ctx.prisma.session.deleteMany({
@@ -517,6 +519,8 @@ export const userRouter = router({
           sessionId: input.sessionId,
         });
 
+        await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch(() => {});
+
         return { success: true };
       } catch (error: any) {
         logger.error({
@@ -581,6 +585,8 @@ export const userRouter = router({
         userId: ctx.user.id,
         count: result.count,
       });
+
+      await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch(() => {});
 
       return { success: true, sessionsRevoked: result.count };
     } catch (error: any) {
@@ -724,6 +730,7 @@ export const userRouter = router({
         await redis.del(`${TOTP_PENDING_PREFIX}${ctx.user.id}`);
         await userCache.delete(ctx.user.id);
 
+        await recordFreshMfaVerification(ctx.user.id);
         logger.info({ type: 'user_totp_enabled', userId: ctx.user.id });
 
         await logSecurityEvent({
@@ -757,9 +764,115 @@ export const userRouter = router({
     }),
 
   /**
+   * Step-up MFA verification: verifies a TOTP code or backup code for an already-enrolled user/admin
+   * and records fresh MFA verification in Redis (sheriabot:admin:mfa_verified:${userId})
+   * allowing high-risk operations within the step-up window.
+   */
+  verifyStepUp: protectedProcedure
+    .input(z.object({
+      code: z.string().min(6).max(12),
+      isBackupCode: z.boolean().optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const stepUpAttemptKey = `sheriabot:auth:mfa_step_up_attempts:${ctx.user.id}`;
+      const attempts = await redis.incr(stepUpAttemptKey);
+      if (attempts === 1) {
+        await redis.expire(stepUpAttemptKey, 900); // 15-minute rate limit window
+      }
+      if (attempts > 5) {
+        await logSecurityEvent({
+          eventType: SECURITY_EVENT_TYPES.MFA_RATE_LIMITED,
+          userId: ctx.user.id,
+          organizationId: ctx.user.organizationId,
+          ipAddress: ctx.req.ip,
+          userAgent: ctx.req.headers['user-agent'],
+          metadata: { action: 'verifyStepUp', attempts },
+        });
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Too many verification attempts. Please wait 15 minutes before trying again.',
+        });
+      }
+
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: ctx.user.id },
+        select: { totpSecret: true, totpEnabled: true },
+      });
+
+      if (!user?.totpEnabled) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'MFA is not enabled on this account.',
+        });
+      }
+
+      let verified = false;
+
+      if (input.isBackupCode) {
+        const backupCodes = await ctx.prisma.userBackupCode.findMany({
+          where: { userId: ctx.user.id },
+        });
+        for (const record of backupCodes) {
+          if (await verifyPassword(input.code, record.codeHash)) {
+            await ctx.prisma.userBackupCode.delete({ where: { id: record.id } });
+            verified = true;
+            await logSecurityEvent({
+              eventType: SECURITY_EVENT_TYPES.MFA_BACKUP_CODE_USED,
+              userId: ctx.user.id,
+              organizationId: ctx.user.organizationId,
+              ipAddress: ctx.req.ip,
+              userAgent: ctx.req.headers['user-agent'],
+              metadata: { action: 'verifyStepUp', backupCodeId: record.id },
+            });
+            break;
+          }
+        }
+      } else if (user.totpSecret) {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const otplib = require('otplib');
+        const result = await otplib.verify({ secret: user.totpSecret, token: input.code });
+        verified = result === true || (result as any)?.valid === true;
+      }
+
+      if (!verified) {
+        await logSecurityEvent({
+          eventType: SECURITY_EVENT_TYPES.MFA_STEP_UP_FAILED,
+          userId: ctx.user.id,
+          organizationId: ctx.user.organizationId,
+          ipAddress: ctx.req.ip,
+          userAgent: ctx.req.headers['user-agent'],
+          metadata: { action: 'verifyStepUp', isBackupCode: !!input.isBackupCode },
+        });
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Invalid MFA verification code.',
+        });
+      }
+
+      // Reset attempt counter on success
+      await redis.del(stepUpAttemptKey).catch(() => {});
+
+      await recordFreshMfaVerification(ctx.user.id);
+
+      await logSecurityEvent({
+        eventType: SECURITY_EVENT_TYPES.MFA_STEP_UP_VERIFIED,
+        userId: ctx.user.id,
+        organizationId: ctx.user.organizationId,
+        ipAddress: ctx.req.ip,
+        userAgent: ctx.req.headers['user-agent'],
+        metadata: { action: 'verifyStepUp', isBackupCode: !!input.isBackupCode },
+      });
+
+      logger.info({ type: 'mfa_step_up_verified', userId: ctx.user.id });
+
+      return { success: true };
+    }),
+
+  /**
    * Disable TOTP 2FA  -  requires current password and second factor (TOTP or backup code)
    */
   disableTotp: protectedProcedure
+    .use(adminMfaEnforced)
     .input(disableTotpSchema)
     .mutation(async ({ input, ctx }) => {
       const disableAttemptKey = `sheriabot:auth:mfa_disable_attempts:${ctx.user.id}`;
@@ -942,6 +1055,7 @@ export const userRouter = router({
         }
         // No userId-keyed session cache exists; fingerprint keys are keyed by sessionId and become unreachable once DB rows are deleted.
         await redis.del(disableAttemptKey).catch(() => {});
+        await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch(() => {});
 
         logger.info({ type: 'user_totp_disabled', userId: ctx.user.id });
 

@@ -59,7 +59,7 @@ describe('LLMGateway Unit Tests', () => {
     });
     vi.mocked(redis.get).mockResolvedValue(null);
 
-    const req: LLMCompletionRequest = { prompt: 'hello' };
+    const req: LLMCompletionRequest = { prompt: 'hello', orgId: 'org-test' };
     const res = await llmGateway.complete(req);
 
     expect(spy).toHaveBeenCalled();
@@ -68,13 +68,37 @@ describe('LLMGateway Unit Tests', () => {
     expect(calledReq.prompt).toBe('hello');
   });
 
+  it('cache key requires orgId or globalCache and throws if both are omitted', () => {
+    expect(() => {
+      llmGateway.generateCacheKey('anthropic', 'modelA', 'prompt', 'sys');
+    }).toThrowError(/Tenant orgId is required/);
+  });
+
   it('cache key differs across provider and model', () => {
-    const key1 = llmGateway.generateCacheKey('anthropic', 'modelA', 'prompt', 'sys');
-    const key2 = llmGateway.generateCacheKey('openai', 'modelA', 'prompt', 'sys');
-    const key3 = llmGateway.generateCacheKey('anthropic', 'modelB', 'prompt', 'sys');
+    const key1 = llmGateway.generateCacheKey('anthropic', 'modelA', 'prompt', 'sys', { orgId: 'org-1' });
+    const key2 = llmGateway.generateCacheKey('openai', 'modelA', 'prompt', 'sys', { orgId: 'org-1' });
+    const key3 = llmGateway.generateCacheKey('anthropic', 'modelB', 'prompt', 'sys', { orgId: 'org-1' });
 
     expect(key1).not.toBe(key2);
     expect(key1).not.toBe(key3);
+  });
+
+  it('cache key produces deterministic sha256 hex hash with ai:cache: prefix', () => {
+    const keyA = llmGateway.generateCacheKey('anthropic', 'claude-3-5-sonnet', 'test prompt', 'system instructions', { orgId: 'org-1' });
+    const keyB = llmGateway.generateCacheKey('anthropic', 'claude-3-5-sonnet', 'test prompt', 'system instructions', { orgId: 'org-1' });
+
+    expect(keyA).toBe(keyB);
+    expect(keyA).toMatch(/^ai:cache:anthropic:[a-f0-9]{64}$/);
+  });
+
+  it('cache key isolates tenants and allows explicit globalCache: true', () => {
+    const keyOrgA = llmGateway.generateCacheKey('anthropic', 'claude-3-5-sonnet', 'identical prompt', 'system', { orgId: 'org-alpha' });
+    const keyOrgB = llmGateway.generateCacheKey('anthropic', 'claude-3-5-sonnet', 'identical prompt', 'system', { orgId: 'org-beta' });
+    const keyGlobal = llmGateway.generateCacheKey('anthropic', 'claude-3-5-sonnet', 'identical prompt', 'system', { globalCache: true });
+
+    expect(keyOrgA).not.toBe(keyOrgB);
+    expect(keyOrgA).not.toBe(keyGlobal);
+    expect(keyOrgB).not.toBe(keyGlobal);
   });
 
   it('missing-price path logs llm_pricing_missing, charges highest-known rate, does not throw', async () => {
@@ -89,7 +113,7 @@ describe('LLMGateway Unit Tests', () => {
     vi.mocked(redis.get).mockResolvedValue('0'); // cost 0
     vi.mocked(logger.warn).mockClear();
 
-    const req: LLMCompletionRequest = { prompt: 'hello', model: 'unknown-model', provider: 'anthropic' };
+    const req: LLMCompletionRequest = { prompt: 'hello', model: 'unknown-model', provider: 'anthropic', orgId: 'org-test' };
     const res = await llmGateway.complete(req);
 
     expect(res.content).toBe('test');
@@ -101,7 +125,7 @@ describe('LLMGateway Unit Tests', () => {
 
   it('unconfigured provider throws LLMProviderNotConfiguredError', async () => {
     (appConfig as any).openai.apiKey = undefined;
-    const req: LLMCompletionRequest = { prompt: 'hello', provider: 'openai', model: 'openai:gpt-4o' };
+    const req: LLMCompletionRequest = { prompt: 'hello', provider: 'openai', model: 'openai:gpt-4o', orgId: 'org-test' };
     await expect(llmGateway.complete(req)).rejects.toThrowError(LLMProviderNotConfiguredError);
   });
 
@@ -109,7 +133,7 @@ describe('LLMGateway Unit Tests', () => {
     const anthropicProvider = llmGateway.getProvider('anthropic');
     vi.spyOn(anthropicProvider, 'complete').mockRejectedValue(new LLMProviderError('anthropic', 'fail', 500, false));
     
-    const req: LLMCompletionRequest = { prompt: 'hello', provider: 'anthropic', allowFallback: false };
+    const req: LLMCompletionRequest = { prompt: 'hello', provider: 'anthropic', allowFallback: false, orgId: 'org-test' };
     
     await expect(llmGateway.complete(req)).rejects.toThrowError('fail');
   });
@@ -129,7 +153,7 @@ describe('LLMGateway Unit Tests', () => {
 
     vi.mocked(logger.warn).mockClear();
 
-    const req: LLMCompletionRequest = { prompt: 'hello', provider: 'anthropic', allowFallback: true };
+    const req: LLMCompletionRequest = { prompt: 'hello', provider: 'anthropic', allowFallback: true, orgId: 'org-test' };
     const res = await llmGateway.complete(req);
 
     expect(res.content).toBe('fallback');
@@ -145,7 +169,7 @@ describe('LLMGateway Unit Tests', () => {
     const anthropicProvider = llmGateway.getProvider('anthropic');
     const spy = vi.spyOn(anthropicProvider, 'complete');
 
-    const req: LLMCompletionRequest = { prompt: 'hello' };
+    const req: LLMCompletionRequest = { prompt: 'hello', orgId: 'org-test' };
     await expect(llmGateway.complete(req)).rejects.toThrowError(LLMCostLimitError);
     expect(spy).not.toHaveBeenCalled();
   });

@@ -436,6 +436,9 @@ export async function registerComplianceStreamRoute(
 ): Promise<void> {
   app.post<{ Body: unknown }>(
     '/api/compliance/stream',
+    {
+      requestTimeout: 0, // SSE streaming: AI response streams can exceed 60s
+    },
     async (request, reply) => {
 
       // Pre-hijack: all checks that need HTTP error responses.

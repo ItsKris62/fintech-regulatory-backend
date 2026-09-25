@@ -149,6 +149,7 @@ export class MarketingContentDrafterService {
       temperature: 0.2,
       maxTokens: contentType === 'newsletter_item' ? 1800 : 1200,
       systemPrompt: systemPrompt(contentType),
+      globalCache: true, // Prompt contains no tenant-identifying data. Verified on 2026-09-25. Genuinely global: platform public marketing & newsletter content derived from public regulatory events.
       prompt: promptFor(contentType, signal),
       metadata: { agent: 'marketing', contentType, sourceSignalIds: [signal.id] },
     });

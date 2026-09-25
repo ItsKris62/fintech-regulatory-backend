@@ -101,6 +101,7 @@ export class SecurityOpsAlertSynthesisService {
       temperature: 0.2,
       maxTokens: 1000,
       systemPrompt: systemPrompt(),
+      globalCache: true, // Prompt contains no tenant-identifying data. Verified on 2026-09-25. Genuinely global: system-wide infrastructure security & operations synthesis.
       prompt: promptFor(snapshot),
       metadata: { agent: 'security-ops', windowStart: snapshot.windowStart, windowEnd: snapshot.windowEnd },
     });

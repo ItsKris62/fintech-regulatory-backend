@@ -174,6 +174,7 @@ export class SignalClassifierService {
       temperature: 0,
       maxTokens: 2000,
       systemPrompt: 'You are a high-volume regulatory source scanning classifier. Return compact JSON only.',
+      globalCache: true, // Prompt contains no tenant-identifying data. Verified on 2026-09-25. Genuinely global: platform-wide scanning of public regulatory gazettes/circulars across jurisdictions.
       prompt: scanPrompt(items),
     });
 
@@ -212,6 +213,7 @@ export class SignalClassifierService {
         temperature: 0.1,
         maxTokens: 2500,
         systemPrompt: 'You are a senior East African fintech regulatory analyst. Return structured JSON only.',
+        globalCache: true, // Prompt contains no tenant-identifying data. Verified on 2026-09-25. Genuinely global: deep analysis of public regulatory notices, identical across all tenants.
         prompt: deepPrompt(candidate),
       });
 

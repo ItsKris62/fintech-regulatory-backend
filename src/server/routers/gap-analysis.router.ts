@@ -8,7 +8,6 @@ import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError } from '@/utils/error';
 import { redis } from '@/lib/redis/client';
-import { prisma } from '@/lib/prisma/client';
 import { GAP_ANALYSIS_UPLOAD_LIMITS, GAP_ANALYSIS_MAX_BASE64_CHARS } from '@/config/upload-limits.config';
 import { validateAuthorizedBenchmarkDocumentIds } from '../services/benchmark-document.service';
 import { canAccessFrameworkTier } from '../services/framework-access.service';
@@ -42,7 +41,7 @@ export const gapAnalysisRouter = router({
       }
       const plan = ctx.plan;
 
-      const frameworks = await prisma.regulatoryFramework.findMany({
+      const frameworks = await ctx.prisma.regulatoryFramework.findMany({
         where: { isActive: true },
         orderBy: { sortOrder: 'asc' },
         select: { slug: true, name: true, category: true, description: true, tier: true },
@@ -132,7 +131,7 @@ export const gapAnalysisRouter = router({
         }
 
         // Validate framework slugs and enforce tier access
-        const dbFrameworks = await prisma.regulatoryFramework.findMany({
+        const dbFrameworks = await ctx.prisma.regulatoryFramework.findMany({
           where: { slug: { in: input.regulatoryFrameworks }, isActive: true },
           select: { id: true, slug: true, name: true, category: true, tier: true, sortOrder: true },
         });
@@ -224,7 +223,7 @@ export const gapAnalysisRouter = router({
 
         const existing = await redis.get<string>(dedupKey);
         if (existing) {
-          const existingAnalysis = await prisma.gapAnalysis.findUnique({ where: { id: existing } });
+          const existingAnalysis = await ctx.tenantPrisma.gapAnalysis.findUnique({ where: { id: existing } });
           if (existingAnalysis) {
             logger.info({ type: 'gap_analysis_dedup_hit', userId, analysisId: existing });
             return existingAnalysis;
@@ -278,7 +277,7 @@ export const gapAnalysisRouter = router({
           trialUserId:          ctx.plan === 'FREE_TRIAL' ? userId : undefined,
         });
 
-        await prisma.gapAnalysisFramework.createMany({
+        await ctx.prisma.gapAnalysisFramework.createMany({
           data: orderedFrameworks.map((framework) => ({
             gapAnalysisId: result.id,
             frameworkId: framework.id,

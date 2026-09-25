@@ -2,6 +2,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { databaseConfig, getRetryDelay } from '@/config/database.config';
 import { appConfig } from '@/config/app.config';
 import { logger, logDatabaseQuery } from '@/utils/logger';
+import pg from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg'
 
 /**
@@ -51,11 +52,25 @@ function getLogConfig(): (Prisma.LogLevel | Prisma.LogDefinition)[] {
  * (no more `datasources` constructor property).
  */
 function createPrismaClient() {
-  const adapter = new PrismaPg({
-  connectionString: process.env.DATABASE_URL!,
-})
+  const pool = new pg.Pool({
+    connectionString: process.env.DATABASE_URL!,
+    max: 10,
+    min: 2,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+    options: '-c statement_timeout=15000 -c idle_in_transaction_session_timeout=10000',
+  });
 
-const base = new PrismaClient({
+  // Guard against managed Postgres / PgBouncer poolers that strip startup parameter options
+  pool.on('connect', (client) => {
+    client.query('SET statement_timeout = 15000; SET idle_in_transaction_session_timeout = 10000;').catch((err) => {
+      logger.warn({ type: 'pg_pool_session_timeout_init_failed', error: err?.message });
+    });
+  });
+
+  const adapter = new PrismaPg(pool);
+
+  const base = new PrismaClient({
   adapter,
   log: getLogConfig(),
   errorFormat: 'pretty',
@@ -447,6 +462,39 @@ export async function findPaginated<T>(
 process.on('beforeExit', async () => {
   await disconnectDatabase();
 });
+
+/**
+ * Executes a transaction with an explicit elevated statement_timeout (via SET LOCAL).
+ * Used for legitimate long-running admin or cron batch jobs (e.g. reconciliation)
+ * without raising the global pool-level statement_timeout.
+ *
+ * NOTE ON $executeRawUnsafe:
+ * PostgreSQL grammar strictly prohibits prepared-statement parameter placeholders ($1)
+ * for SET/SET LOCAL configuration commands (e.g. `SET LOCAL statement_timeout = $1` results in syntax error 42601).
+ * Therefore, raw string construction is required. SQL injection is completely prevented by validating
+ * that timeoutMs is a finite number and clamping it to a strictly bounded integer [1000ms, 300000ms].
+ */
+export async function withElevatedStatementTimeout<T>(
+  timeoutMs: number,
+  callback: (tx: Prisma.TransactionClient) => Promise<T>
+): Promise<T> {
+  const boundedTimeoutMs = Number.isFinite(timeoutMs)
+    ? Math.floor(Math.max(1000, Math.min(timeoutMs, 300000)))
+    : 15000;
+
+  if (!Number.isFinite(timeoutMs) || timeoutMs !== boundedTimeoutMs) {
+    logger.warn({
+      type: 'elevated_statement_timeout_clamped',
+      requestedTimeoutMs: timeoutMs,
+      clampedTimeoutMs: boundedTimeoutMs,
+    });
+  }
+
+  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${boundedTimeoutMs}`);
+    return callback(tx);
+  });
+}
 
 // Export types
 export type { ExtendedPrismaClient };

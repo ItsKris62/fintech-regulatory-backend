@@ -34,6 +34,8 @@ export interface CompleteStructuredInput<T> {
   correctionAttemptLimit?: 0 | 1;
   overrideTimeoutMs?: number;
   signal?: AbortSignal;
+  orgId?: string;
+  globalCache?: boolean;
 }
 
 export type AIStructuredOutputErrorCode =

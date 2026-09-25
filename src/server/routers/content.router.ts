@@ -77,7 +77,7 @@ export const contentRouter = router({
         // Generate excerpt if not provided
         const excerpt = input.excerpt || contentService.generateExcerpt(input.content);
 
-        const document = await ctx.prisma.legalDocument.create({
+        const document = await ctx.tenantPrisma.legalDocument.create({
           data: {
             // Required base fields with sensible defaults for content items
             actName: input.title,
@@ -165,7 +165,7 @@ export const contentRouter = router({
     .input(updateContentSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const existing = await ctx.prisma.legalDocument.findUnique({
+        const existing = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.id },
           select: { id: true, contentType: true, authorId: true, userId: true, organizationId: true, deletedAt: true },
         });
@@ -231,7 +231,7 @@ export const contentRouter = router({
           data.publishedBy = ctx.user.id;
         }
 
-        const document = await ctx.prisma.legalDocument.update({
+        const document = await ctx.tenantPrisma.legalDocument.update({
           where: { id: input.id },
           data,
         });
@@ -309,7 +309,7 @@ export const contentRouter = router({
         if (tag) where.tags = { has: tag };
 
         const [documents, total] = await Promise.all([
-          ctx.prisma.legalDocument.findMany({
+          ctx.tenantPrisma.legalDocument.findMany({
             where,
             skip,
             take: limit,
@@ -335,7 +335,7 @@ export const contentRouter = router({
               },
             },
           }),
-          ctx.prisma.legalDocument.count({ where }),
+          ctx.tenantPrisma.legalDocument.count({ where }),
         ]);
 
         return {
@@ -433,7 +433,7 @@ export const contentRouter = router({
         }
 
         const [documents, total] = await Promise.all([
-          ctx.prisma.legalDocument.findMany({
+          ctx.tenantPrisma.legalDocument.findMany({
             where,
             skip,
             take: limit,
@@ -464,7 +464,7 @@ export const contentRouter = router({
               },
             },
           }),
-          ctx.prisma.legalDocument.count({ where }),
+          ctx.tenantPrisma.legalDocument.count({ where }),
         ]);
 
         return {
@@ -502,7 +502,7 @@ export const contentRouter = router({
     .input(getContentSchema)
     .query(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.id },
           include: {
             author: {
@@ -558,7 +558,7 @@ export const contentRouter = router({
           });
         }
 
-        const document = await ctx.prisma.legalDocument.findFirst({
+        const document = await ctx.tenantPrisma.legalDocument.findFirst({
           where: {
             slug: input.slug,
             contentType: input.contentType,
@@ -625,7 +625,7 @@ export const contentRouter = router({
     .input(publishContentSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.id },
           select: {
             id: true,
@@ -659,7 +659,7 @@ export const contentRouter = router({
           });
         }
 
-        const updated = await ctx.prisma.legalDocument.update({
+        const updated = await ctx.tenantPrisma.legalDocument.update({
           where: { id: input.id },
           data: {
             contentStatus: 'PUBLISHED',
@@ -701,7 +701,7 @@ export const contentRouter = router({
     .input(deleteContentSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.id },
           select: { id: true, contentType: true, authorId: true, userId: true, deletedAt: true },
         });
@@ -720,7 +720,7 @@ export const contentRouter = router({
           throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
         }
 
-        await ctx.prisma.legalDocument.update({
+        await ctx.tenantPrisma.legalDocument.update({
           where: { id: input.id },
           data: { deletedAt: new Date() },
         });
@@ -752,7 +752,7 @@ export const contentRouter = router({
     .input(rateContentSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.id },
           select: { id: true, contentType: true, contentStatus: true, deletedAt: true },
         });

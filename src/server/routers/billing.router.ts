@@ -3,7 +3,6 @@ import { TRPCError } from '@trpc/server';
 import { BillingMetric, MemberRole, PaymentProvider, PaymentStatus, SubscriptionPlan } from '@prisma/client';
 import { router, protectedProcedure, orgMemberProcedure, orgMemberProcedureWithRole } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
-import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
 import { getStripeClient } from '@/lib/stripe/client';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
@@ -111,7 +110,7 @@ export const billingRouter = router({
           readUsageCount(scopeId, BillingMetric.API_CALLS),
           (async () => {
             try {
-              const agg = await ctx.prisma.vaultDocument.aggregate({
+              const agg = await ctx.tenantPrisma.vaultDocument.aggregate({
                 where: { organizationId: scopeId, isArchived: false, deletedAt: null },
                 _sum: { fileSize: true },
               });
@@ -134,7 +133,7 @@ export const billingRouter = router({
         // -- Billing + subscription metadata (org row) ----------------------
         const [org, catalog] = await Promise.all([
           orgId
-            ? prisma.organization.findUnique({
+            ? ctx.prisma.organization.findUnique({
                 where: { id: orgId },
                 select: {
                   planStartDate:      true,
@@ -307,7 +306,7 @@ export const billingRouter = router({
       }
 
       // Fetch org for customer ID and current plan
-      const org = await prisma.organization.findUnique({
+      const org = await ctx.prisma.organization.findUnique({
         where: { id: orgId },
         select: {
           plan: true,
@@ -356,7 +355,7 @@ export const billingRouter = router({
       let customerId = org.stripeCustomerId ?? undefined;
 
       if (!customerId) {
-        const userRecord = await prisma.user.findUnique({
+        const userRecord = await ctx.prisma.user.findUnique({
           where: { id: user.id },
           select: { email: true, fullName: true },
         });
@@ -370,7 +369,7 @@ export const billingRouter = router({
         customerId = customer.id;
 
         // Persist immediately so we don't create duplicate customers on retry
-        await prisma.organization.update({
+        await ctx.prisma.organization.update({
           where: { id: orgId },
           data: { stripeCustomerId: customerId },
         });
@@ -437,7 +436,7 @@ export const billingRouter = router({
 
       const orgId = ctx.orgMembership!.organizationId;
 
-      const org = await prisma.organization.findUnique({
+      const org = await ctx.prisma.organization.findUnique({
         where: { id: orgId },
         select: { stripeCustomerId: true, plan: true },
       });
@@ -512,7 +511,7 @@ export const billingRouter = router({
       }
 
       // -- Fetch org details -------------------------------------------------
-      const org = await prisma.organization.findUnique({
+      const org = await ctx.prisma.organization.findUnique({
         where:  { id: orgId },
         select: { name: true, plan: true },
       });
@@ -569,7 +568,7 @@ export const billingRouter = router({
 
       if (input.provider === PaymentProvider.MPESA) {
         const raw = input.mpesaPhoneNumber;
-        const existing = await prisma.organization.findUnique({
+        const existing = await ctx.prisma.organization.findUnique({
           where:  { id: orgId },
           select: { mpesaPhoneNumber: true },
         });
@@ -600,7 +599,7 @@ export const billingRouter = router({
         });
       }
 
-      const updated = await prisma.organization.update({
+      const updated = await ctx.prisma.organization.update({
         where: { id: orgId },
         data: {
           preferredPaymentMethod: input.provider,
@@ -645,7 +644,7 @@ export const billingRouter = router({
       const targetPlan = input.plan;
 
       const [org, runtimePlan, activeMembers, pendingInvitesCount, docAgg] = await Promise.all([
-        prisma.organization.findUnique({
+        ctx.prisma.organization.findUnique({
           where: { id: orgId },
           select: {
             id: true,
@@ -657,7 +656,7 @@ export const billingRouter = router({
           },
         }),
         getRuntimePlan(targetPlan),
-        prisma.organizationMember.findMany({
+        ctx.tenantPrisma.organizationMember.findMany({
           where: { organizationId: orgId, status: 'ACTIVE' },
           include: {
             user: {
@@ -670,10 +669,10 @@ export const billingRouter = router({
           },
           orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
         }),
-        prisma.invitation.count({
+        ctx.tenantPrisma.invitation.count({
           where: { organizationId: orgId, used: false, revokedAt: null },
         }),
-        prisma.vaultDocument.aggregate({
+        ctx.tenantPrisma.vaultDocument.aggregate({
           where: { organizationId: orgId, isArchived: false, deletedAt: null },
           _sum: { fileSize: true },
           _count: { id: true },
@@ -829,7 +828,7 @@ export const billingRouter = router({
       }
 
       // Resolve phone number: use provided value or fall back to stored org number
-      const org = await prisma.organization.findUnique({
+      const org = await ctx.prisma.organization.findUnique({
         where:  { id: orgId },
         select: {
           mpesaPhoneNumber: true,
@@ -881,7 +880,7 @@ export const billingRouter = router({
         });
       }
 
-      await prisma.organization.update({
+      await ctx.prisma.organization.update({
         where: { id: orgId },
         data:  { mpesaPhoneNumber: phoneNumber, preferredPaymentMethod: PaymentProvider.MPESA },
       });
@@ -908,7 +907,7 @@ export const billingRouter = router({
       // Idempotency guard: return existing PENDING payment if created within last 15 minutes
       // for the same org + plan. Prevents duplicate STK prompts on network-drop retries.
       const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
-      const existingPending = await prisma.payment.findFirst({
+      const existingPending = await ctx.tenantPrisma.payment.findFirst({
         where: {
           orgId,
           status:           PaymentStatus.PENDING,
@@ -967,7 +966,7 @@ export const billingRouter = router({
         },
       });
 
-      await prisma.auditLog.create({
+      await ctx.prisma.auditLog.create({
         data: {
           userId: user.id,
           action: 'payment_initiated',
@@ -1001,7 +1000,7 @@ export const billingRouter = router({
         });
       } catch (err: unknown) {
         const failedAt = new Date();
-        await prisma.$transaction(async (tx) => {
+        await ctx.prisma.$transaction(async (tx) => {
           await tx.payment.update({
             where: { id: payment.id },
             data: {
@@ -1033,7 +1032,7 @@ export const billingRouter = router({
       }
 
       // Store IntaSend's invoice ID on the payment record for polling / webhook matching
-      await prisma.payment.update({
+      await ctx.tenantPrisma.payment.update({
         where: { id: payment.id },
         data: {
           providerTransactionId: stkResponse.invoiceId,

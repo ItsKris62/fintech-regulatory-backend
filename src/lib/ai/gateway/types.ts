@@ -10,6 +10,17 @@ export interface LLMCompletionRequest {
   metadata?: Record<string, any>;
   overrideTimeoutMs?: number;
   provider?: LLMProviderName;
+  /**
+   * Tenant identifier for multi-tenant isolation and cache partitioning.
+   * Required for tenant requests. May only be omitted when explicit globalCache: true is set.
+   */
+  orgId?: string;
+  /**
+   * Explicit flag indicating this prompt is genuinely global (e.g. system classification,
+   * non-tenant regulatory definitions) and may use a shared global cache partition.
+   * Must include a code comment justifying each use.
+   */
+  globalCache?: boolean;
   useCase?: 'policy' | 'checklist' | 'query' | 'verification' | 'analysis' | 'default';
   allowFallback?: boolean;
   signal?: AbortSignal;

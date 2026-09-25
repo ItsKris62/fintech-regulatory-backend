@@ -31,6 +31,12 @@ Key environment variables:
 | `AUTO_CREATE_SESSION_ON_VALID_TOKEN` | Enables automatic session healing when valid JWTs arrive without active Redis/DB sessions |
 | `SESSION_FINGERPRINT_MODE` | Session fingerprinting mode (`disabled`, `monitor`, `enforce`) |
 
+### Git Hooks Setup
+After cloning the repository and running `npm install`, you must install the pre-push git hooks to ensure CI tenant-isolation guards are enforced locally:
+```bash
+npm run install-hooks
+```
+
 ---
 
 ## 2. Operational & Data Seeding Commands

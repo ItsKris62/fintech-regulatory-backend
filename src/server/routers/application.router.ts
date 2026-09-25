@@ -14,7 +14,7 @@ import {
 import { logger } from '@/utils/logger';
 
 async function assertApplicationAccess(ctx: any, applicationId: string) {
-  const application = await ctx.prisma.regulatoryApplication.findFirst({
+  const application = await ctx.tenantPrisma.regulatoryApplication.findFirst({
     where: {
       id: applicationId,
       organizationId: ctx.orgMembership!.organizationId,
@@ -56,7 +56,7 @@ export const applicationRouter = router({
       }
 
       const [applications, total] = await Promise.all([
-        ctx.prisma.regulatoryApplication.findMany({
+        ctx.tenantPrisma.regulatoryApplication.findMany({
           where,
           skip,
           take: input.limit,
@@ -65,16 +65,16 @@ export const applicationRouter = router({
             _count: { select: { documents: true, fees: true, regulatorFeedback: true, timelineEvents: true } },
           },
         }),
-        ctx.prisma.regulatoryApplication.count({ where }),
+        ctx.tenantPrisma.regulatoryApplication.count({ where }),
       ]);
 
       return {
         applications,
         stats: {
           total,
-          inProgress: await ctx.prisma.regulatoryApplication.count({ where: { organizationId, deletedAt: null, status: { in: ['DRAFT', 'IN_PROGRESS'] } } }),
-          submitted: await ctx.prisma.regulatoryApplication.count({ where: { organizationId, deletedAt: null, status: { in: ['SUBMITTED', 'AWAITING_FEEDBACK'] } } }),
-          approved: await ctx.prisma.regulatoryApplication.count({ where: { organizationId, deletedAt: null, status: 'APPROVED' } }),
+          inProgress: await ctx.tenantPrisma.regulatoryApplication.count({ where: { organizationId, deletedAt: null, status: { in: ['DRAFT', 'IN_PROGRESS'] } } }),
+          submitted: await ctx.tenantPrisma.regulatoryApplication.count({ where: { organizationId, deletedAt: null, status: { in: ['SUBMITTED', 'AWAITING_FEEDBACK'] } } }),
+          approved: await ctx.tenantPrisma.regulatoryApplication.count({ where: { organizationId, deletedAt: null, status: 'APPROVED' } }),
         },
         pagination: {
           page: input.page,
@@ -89,7 +89,7 @@ export const applicationRouter = router({
     .input(getApplicationSchema)
     .query(async ({ input, ctx }) => {
       await assertApplicationAccess(ctx, input.id);
-      return ctx.prisma.regulatoryApplication.findUnique({
+      return ctx.tenantPrisma.regulatoryApplication.findUnique({
         where: { id: input.id },
         include: {
           user: { select: { id: true, fullName: true, email: true } },
@@ -104,7 +104,7 @@ export const applicationRouter = router({
   create: orgMemberProcedure
     .input(createApplicationSchema)
     .mutation(async ({ input, ctx }) => {
-      const application = await ctx.prisma.regulatoryApplication.create({
+      const application = await ctx.tenantPrisma.regulatoryApplication.create({
         data: {
           ...input,
           organizationId: ctx.orgMembership!.organizationId,
@@ -136,7 +136,7 @@ export const applicationRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       await assertApplicationAccess(ctx, id);
-      const application = await ctx.prisma.regulatoryApplication.update({
+      const application = await ctx.tenantPrisma.regulatoryApplication.update({
         where: { id },
         data,
       });
@@ -148,7 +148,7 @@ export const applicationRouter = router({
     .input(getApplicationSchema)
     .mutation(async ({ input, ctx }) => {
       await assertApplicationAccess(ctx, input.id);
-      await ctx.prisma.regulatoryApplication.update({
+      await ctx.tenantPrisma.regulatoryApplication.update({
         where: { id: input.id },
         data: { deletedAt: new Date() },
       });

@@ -200,7 +200,7 @@ export const documentRouter = router({
           createData.id = input.documentId;
         }
 
-        const document = await ctx.prisma.legalDocument.create({
+        const document = await ctx.tenantPrisma.legalDocument.create({
           data: createData as any,
         });
 
@@ -286,7 +286,7 @@ export const documentRouter = router({
         }
 
         const [documents, total] = await Promise.all([
-          ctx.prisma.legalDocument.findMany({
+          ctx.tenantPrisma.legalDocument.findMany({
             where,
             skip,
             take: limit,
@@ -308,7 +308,7 @@ export const documentRouter = router({
               },
             },
           }),
-          ctx.prisma.legalDocument.count({ where }),
+          ctx.tenantPrisma.legalDocument.count({ where }),
         ]);
 
         return {
@@ -392,7 +392,7 @@ export const documentRouter = router({
     .input(getDocumentSchema)
     .query(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.id },
           include: {
             author: {
@@ -463,7 +463,7 @@ export const documentRouter = router({
     .input(getDownloadUrlSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.id },
         });
 
@@ -546,7 +546,7 @@ export const documentRouter = router({
     .input(deleteDocumentSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.id },
         });
 
@@ -597,7 +597,7 @@ export const documentRouter = router({
         // Soft delete: set deletedAt timestamp only. The R2 object is intentionally
         // retained for the retention period and permanently removed by the scheduled
         // cleanup script (src/scripts/cleanup-deleted-documents.ts).
-        await ctx.prisma.legalDocument.update({
+        await ctx.tenantPrisma.legalDocument.update({
           where: { id: input.id },
           data: { deletedAt: new Date() },
         });
@@ -645,7 +645,7 @@ export const documentRouter = router({
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.id },
           select: { id: true, deletedAt: true, userId: true, organizationId: true },
         });
@@ -677,7 +677,7 @@ export const documentRouter = router({
           });
         }
 
-        await ctx.prisma.legalDocument.update({
+        await ctx.tenantPrisma.legalDocument.update({
           where: { id: input.id },
           data: { deletedAt: null },
         });
@@ -711,7 +711,7 @@ export const documentRouter = router({
     .input(z.object({ documentId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.documentId },
           select: {
             id: true,
@@ -788,7 +788,7 @@ export const documentRouter = router({
     .input(z.object({ documentId: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       try {
-        const document = await ctx.prisma.legalDocument.findUnique({
+        const document = await ctx.tenantPrisma.legalDocument.findUnique({
           where: { id: input.documentId },
           select: {
             id: true,
@@ -806,7 +806,7 @@ export const documentRouter = router({
         }
 
         // Mark as processing immediately so callers can poll status
-        await ctx.prisma.legalDocument.update({
+        await ctx.tenantPrisma.legalDocument.update({
           where: { id: input.documentId },
           data: { status: 'PROCESSING', processedAt: null, totalChunks: null },
         });

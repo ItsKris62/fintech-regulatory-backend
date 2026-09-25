@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-
+import { TRPCError } from '@trpc/server';
 import jwt from 'jsonwebtoken';
 import type { MemberRole, MemberStatus, OrganizationMember } from '@prisma/client';
 
@@ -10,6 +10,7 @@ import type { PlanEntitlementConfig } from '@/config/entitlements.config';
 import type { AppliedEnterpriseOverride } from '@/modules/billing/enterprise-contract-overrides';
 import { supabaseAdmin } from '@/lib/supabase';
 import { prisma } from '@/lib/prisma/client';
+import { createTenantScopedPrisma, type TenantScopedPrismaClient } from '@/lib/prisma/tenant-scope.extension';
 import { redis } from '@/lib/redis/client';
 import { aiService } from '@/lib/ai/ai.service';
 import { ragService } from '@/lib/rag/rag.service';
@@ -55,6 +56,8 @@ export interface User {
 export interface Context {
   user: User | null;
   prisma: typeof prisma;
+  tenantPrisma: TenantScopedPrismaClient;
+  getTenantPrisma?: () => TenantScopedPrismaClient;
   aiService: typeof aiService;
   ragService: typeof ragService;
   storageService: typeof storageService;
@@ -763,9 +766,31 @@ export async function createContext({
     }
   }
 
+  if (user && (!user.organizationId || user.organizationId.trim() === '')) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Active organizationId is required for authenticated context',
+    });
+  }
+
+  // Memoize tenant-scoped Prisma per context (computed once, reused across calls)
+  const tenantPrisma = user
+    ? createTenantScopedPrisma(prisma, user.organizationId)
+    : createTenantScopedPrisma(prisma, undefined);
+
   return {
     user,
     prisma,
+    tenantPrisma,
+    getTenantPrisma: () => {
+      if (!user?.organizationId) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Tenant context error: active organizationId is required for tenant-scoped operations',
+        });
+      }
+      return tenantPrisma;
+    },
     aiService,
     ragService,
     storageService,

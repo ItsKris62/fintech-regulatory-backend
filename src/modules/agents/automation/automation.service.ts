@@ -118,6 +118,7 @@ export class AutomationService {
         systemPrompt: input.systemPrompt,
         prompt: input.userPrompt,
         maxTokens: input.maxTokens,
+        globalCache: true, // Prompt contains no tenant-identifying data. Verified on 2026-09-25. Genuinely global: platform administrative n8n automation workflow generation.
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);

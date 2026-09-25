@@ -3,7 +3,6 @@ import { TRPCError } from '@trpc/server';
 import { PaymentProvider } from '@prisma/client';
 import { router, orgMemberProcedure } from '../trpc/trpc';
 import { paymentService } from '@/modules/billing/payment.service';
-import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
 
 /**
@@ -117,7 +116,7 @@ export const paymentRouter = router({
       const user = ctx.user!;
 
       // Fetch payment with org join
-      const payment = await prisma.payment.findFirst({
+      const payment = await ctx.tenantPrisma.payment.findFirst({
         where: { id: input.paymentId, orgId: user.organizationId! },
         include: {
           org: {
@@ -135,7 +134,7 @@ export const paymentRouter = router({
       }
 
       // Fetch user name separately (not in context)
-      const dbUser = await prisma.user.findUnique({
+      const dbUser = await ctx.prisma.user.findUnique({
         where:  { id: user.id },
         select: { fullName: true, email: true },
       });

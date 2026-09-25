@@ -70,7 +70,7 @@ export const frameworkRouter = router({
         select: frameworkSelect,
       });
 
-      const documentCounts = frameworks.length === 0 ? [] : await ctx.prisma.legalDocument.groupBy({
+      const documentCounts = frameworks.length === 0 ? [] : await ctx.tenantPrisma.legalDocument.groupBy({
         by: ['category'],
         where: {
           category: { in: frameworks.map((framework) => framework.slug) },
@@ -149,7 +149,7 @@ export const frameworkRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Your plan does not include this framework.' });
       }
 
-      const documentCount = await ctx.prisma.legalDocument.count({
+      const documentCount = await ctx.tenantPrisma.legalDocument.count({
         where: { category: framework.slug, deletedAt: null },
       });
 

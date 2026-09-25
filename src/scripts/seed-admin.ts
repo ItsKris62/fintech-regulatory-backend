@@ -117,7 +117,8 @@ async function seedAdmin(): Promise<void> {
 
   console.log('\nAdmin account ready');
   console.log(`   Email: ${email}`);
-  console.log('   Role:  ADMIN\n');
+  console.log('   Role:  ADMIN');
+  console.log('   Notice: First login requires MFA enrollment before administrative procedures can be accessed.\n');
 }
 
 seedAdmin()

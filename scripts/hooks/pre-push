@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Pre-push hook: Enforces tenant-scoped Prisma usage (F-03)
+set -e
+
+echo "[CI Hook] Running Tenant Prisma CI check before push..."
+npm test -- src/server/trpc/__tests__/tenant-prisma-ci.test.ts
+
+echo "[CI Hook] Tenant Prisma CI check passed."
+exit 0

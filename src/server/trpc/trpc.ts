@@ -239,6 +239,152 @@ export const organizationMfaEnforced = middleware(async ({ ctx, path, next }) =>
 });
 
 /**
+ * Procedures permitted when an ADMIN has ZERO MFA factors enrolled.
+ * Strictly limited to factor enrollment so unenrolled/seeded admins can onboard.
+ */
+export const ADMIN_ZERO_FACTOR_ALLOWED_PATHS = new Set([
+  'user.setupTotp',
+  'user.confirmTotpSetup',
+  'passkey.generateRegistrationOptions',
+  'passkey.verifyRegistration',
+]);
+
+/**
+ * High-risk mutation procedures that require a verified fresh MFA challenge (within last N minutes)
+ * when an ADMIN already has MFA factors enrolled.
+ */
+export const ADMIN_STEP_UP_MUTATION_PATHS = new Set([
+  'user.disableTotp',
+  'user.regenerateBackupCodes',
+  'passkey.generateRegistrationOptions',
+  'passkey.verifyRegistration',
+  'passkey.deletePasskey',
+]);
+
+export const ADMIN_MFA_STEP_UP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+export function isAdminStepUpRequiredPath(path: string): boolean {
+  if (ADMIN_STEP_UP_MUTATION_PATHS.has(path)) {
+    return true;
+  }
+  if (path.startsWith('admin.auth.')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Checks whether an admin user has verified MFA within the step-up window.
+ *
+ * FAIL-CLOSED AVAILABILITY BEHAVIOR:
+ * If Redis throws an error or is unreachable, this check logs a warning with event type
+ * `mfa_step_up_check_failed` and immediately returns `false` (denying step-up access).
+ * This fail-closed posture intentionally favors system security over availability:
+ * administrative mutations cannot be executed without positive verification of fresh MFA,
+ * even during transient cache outages.
+ */
+export async function isFreshMfaChallengeVerified(userId: string): Promise<boolean> {
+  try {
+    const verifiedAtStr = await redis.get<string>(`sheriabot:admin:mfa_verified:${userId}`);
+    if (!verifiedAtStr) return false;
+    const verifiedAt = Number(verifiedAtStr);
+    if (!Number.isFinite(verifiedAt)) return false;
+    return Date.now() - verifiedAt <= ADMIN_MFA_STEP_UP_WINDOW_MS;
+  } catch (error: unknown) {
+    logger.warn({
+      type: 'mfa_step_up_check_failed',
+      event: 'mfa_step_up_check_failed',
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'fail_closed_denying_step_up',
+    });
+    return false;
+  }
+}
+
+export async function recordFreshMfaVerification(userId: string): Promise<void> {
+  await redis.set(`sheriabot:admin:mfa_verified:${userId}`, String(Date.now()), {
+    ex: Math.round(ADMIN_MFA_STEP_UP_WINDOW_MS / 1000),
+  });
+}
+
+/**
+ * Admin MFA Enforcement Handler
+ * State-gated multi-factor authorization:
+ * 1. Zero factors enrolled: allows ONLY initial factor enrollment paths (user.setupTotp, user.confirmTotpSetup, passkey registration).
+ *    All other procedures are hard-blocked with PRECONDITION_FAILED (MFA_REQUIRED_FOR_ADMIN).
+ * 2. Factors enrolled: allows normal adminProcedure operations, but sensitive mutations
+ *    (disableTotp, regenerateBackupCodes, passkey modifications, admin.auth.* mutations)
+ *    strictly require a verified fresh MFA challenge within the last 15 minutes.
+ */
+export type AdminMfaMiddlewareParams = Parameters<Parameters<typeof middleware>[0]>[0];
+
+export async function executeAdminMfaEnforced({
+  ctx,
+  path,
+  next,
+}: AdminMfaMiddlewareParams) {
+  if (!ctx.user || ctx.user.role !== 'ADMIN') {
+    return next();
+  }
+
+  const hasFactors = userSatisfiesMfa(ctx.user);
+
+  // 1. Unenrolled admin (0 factors enrolled)
+  if (!hasFactors) {
+    if (ADMIN_ZERO_FACTOR_ALLOWED_PATHS.has(path)) {
+      return next();
+    }
+
+    await logSecurityEvent({
+      eventType: SECURITY_EVENT_TYPES.MFA_ENFORCEMENT_BLOCKED,
+      userId: ctx.user.id,
+      organizationId: ctx.user.organizationId,
+      ipAddress: getClientIp(ctx.req) ?? undefined,
+      userAgent: ctx.req.headers['user-agent'],
+      metadata: {
+        blockedPath: path,
+        reason: 'admin_mfa_required',
+      },
+    });
+
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'MFA_REQUIRED_FOR_ADMIN',
+    });
+  }
+
+  // 2. Enrolled admin (1+ factors) calling sensitive mutation requiring step-up
+  if (isAdminStepUpRequiredPath(path)) {
+    const isFresh = await isFreshMfaChallengeVerified(ctx.user.id);
+    if (!isFresh) {
+      await logSecurityEvent({
+        eventType: SECURITY_EVENT_TYPES.MFA_ENFORCEMENT_BLOCKED,
+        userId: ctx.user.id,
+        organizationId: ctx.user.organizationId,
+        ipAddress: getClientIp(ctx.req) ?? undefined,
+        userAgent: ctx.req.headers['user-agent'],
+        metadata: {
+          blockedPath: path,
+          reason: 'admin_step_up_required',
+        },
+      });
+
+      throw new TRPCError({
+        code: 'PRECONDITION_FAILED',
+        message: 'MFA_STEP_UP_REQUIRED',
+      });
+    }
+  }
+
+  return next();
+}
+
+export const adminMfaEnforced = middleware(async (opts) => {
+  return executeAdminMfaEnforced(opts);
+});
+
+/**
  * Protected Procedure
  * Requires a valid JWT. Guarantees ctx.user is User (non-null) in downstream handlers.
  */
@@ -250,7 +396,9 @@ export const protectedProcedure = publicProcedure
 
 // --- Role-Specific Procedures ---
 
-export const adminProcedure = protectedProcedure.use(isAdmin);
+export const adminProcedure = protectedProcedure
+  .use(isAdmin)
+  .use(adminMfaEnforced);
 export const regulatorProcedure = protectedProcedure.use(isRegulator);
 export const startupProcedure = protectedProcedure.use(isStartup);
 export const enterpriseProcedure = protectedProcedure.use(isEnterprise);

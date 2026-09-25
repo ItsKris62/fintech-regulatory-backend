@@ -148,6 +148,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     maxParamLength: 5000,
     bodyLimit: 31457280, // 30 MB  -  covers 20 MB base64 gap analysis uploads
     trustProxy: resolvedProxy.trustProxy,
+    connectionTimeout: 30000,
+    requestTimeout: 60000,
+    keepAliveTimeout: 5000,
+    pluginTimeout: 15000,
   });
 
   // Sampled warning for incoming X-Forwarded-For when proxy trust is disabled (at most once every 60 seconds)
@@ -691,6 +695,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   // asks tRPC for a short-lived stream token and passes that here.
   app.get<{ Querystring: { token?: string } }>(
     '/api/alerts/stream',
+    {
+      requestTimeout: 0, // SSE persistent stream: disable 60s request timeout
+    },
     async (request, reply) => {
       const token = request.query.token;
 

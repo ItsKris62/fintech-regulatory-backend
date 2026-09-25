@@ -10,7 +10,6 @@ import {
   requirePlanFeature,
   checkUsageLimit,
 } from '../trpc/middleware';
-import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
 import { aiJobRunner } from '@/modules/ai-jobs/ai-job-runner';
 import {
@@ -83,7 +82,7 @@ export const enterprisePolicyRouter = router({
 
       // If linking to a gap analysis, verify ownership
       if (input.sourceGapAnalysisId) {
-        const gap = await prisma.gapAnalysis.findUnique({
+        const gap = await ctx.tenantPrisma.gapAnalysis.findUnique({
           where: { id: input.sourceGapAnalysisId },
           select: { organizationId: true },
         });
@@ -97,7 +96,7 @@ export const enterprisePolicyRouter = router({
       }
 
       // Create the GeneratedPolicy record in INITIALIZING state
-      const policy = await prisma.generatedPolicy.create({
+      const policy = await ctx.tenantPrisma.generatedPolicy.create({
         data: {
           userId,
           organizationId,
@@ -184,7 +183,7 @@ export const enterprisePolicyRouter = router({
     .use(requirePlanFeature('policyGeneration'))
     .input(getStatusSchema)
     .query(async ({ input, ctx }) => {
-      const policy = await prisma.generatedPolicy.findUnique({
+      const policy = await ctx.tenantPrisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
         select: {
           id: true,
@@ -213,7 +212,7 @@ export const enterprisePolicyRouter = router({
         });
       }
 
-      const job = await prisma.aiJob.findFirst({
+      const job = await ctx.tenantPrisma.aiJob.findFirst({
         where: { targetEntityType: 'GeneratedPolicy', targetEntityId: policy.id },
         orderBy: { createdAt: 'desc' },
         select: {
@@ -270,7 +269,7 @@ export const enterprisePolicyRouter = router({
     .query(async ({ input, ctx }) => {
       const organizationId = ctx.orgMembership!.organizationId;
 
-      const policy = await prisma.generatedPolicy.findUnique({
+      const policy = await ctx.tenantPrisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
         include: {
           citations: {
@@ -331,7 +330,7 @@ export const enterprisePolicyRouter = router({
         where.policyType = input.policyType;
       }
 
-      const policies = await prisma.generatedPolicy.findMany({
+      const policies = await ctx.tenantPrisma.generatedPolicy.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         take: input.limit + 1, // fetch one extra for cursor pagination
@@ -369,7 +368,7 @@ export const enterprisePolicyRouter = router({
       return {
         items: policies,
         nextCursor,
-        totalEstimate: await prisma.generatedPolicy.count({ where }),
+        totalEstimate: await ctx.tenantPrisma.generatedPolicy.count({ where }),
       };
     }),
 
@@ -388,7 +387,7 @@ export const enterprisePolicyRouter = router({
       const userId = ctx.user!.id;
       const organizationId = ctx.orgMembership!.organizationId;
 
-      const policy = await prisma.generatedPolicy.findUnique({
+      const policy = await ctx.tenantPrisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
         select: {
           id: true,
@@ -434,7 +433,7 @@ export const enterprisePolicyRouter = router({
       const previousStatus = previousSection.status ?? 'DRAFT';
       const previousContent = previousSection.contentMarkdown ?? previousSection.content ?? null;
       const nextContent = input.contentMarkdown ?? input.content ?? null;
-      const existingVersions = await prisma.generatedPolicySectionVersion.findMany({
+      const existingVersions = await ctx.prisma.generatedPolicySectionVersion.findMany({
         where: { generatedPolicyId: policy.id, sectionId: input.sectionId },
         select: { version: true },
       });
@@ -450,8 +449,8 @@ export const enterprisePolicyRouter = router({
         editedByUserId: userId,
       };
 
-      const [, updatedPolicy] = await prisma.$transaction([
-        prisma.generatedPolicySectionVersion.create({
+      const [, updatedPolicy] = await ctx.prisma.$transaction([
+        ctx.prisma.generatedPolicySectionVersion.create({
           data: {
             generatedPolicyId: policy.id,
             sectionId: input.sectionId,
@@ -463,7 +462,7 @@ export const enterprisePolicyRouter = router({
             editedByUserId: userId,
           },
         }),
-        prisma.generatedPolicy.update({
+        ctx.tenantPrisma.generatedPolicy.update({
           where: { id: input.policyId },
           data: { sections },
           select: { id: true, sections: true, updatedAt: true },
@@ -506,7 +505,7 @@ export const enterprisePolicyRouter = router({
       const userId = ctx.user!.id;
       const organizationId = ctx.orgMembership!.organizationId;
 
-      const policy = await prisma.generatedPolicy.findUnique({
+      const policy = await ctx.tenantPrisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
         select: {
           id: true,
@@ -541,7 +540,7 @@ export const enterprisePolicyRouter = router({
 
       const previousSection = sections[sectionIndex];
       const previousStatus = previousSection.status ?? 'DRAFT';
-      const existingVersions = await prisma.generatedPolicySectionVersion.findMany({
+      const existingVersions = await ctx.prisma.generatedPolicySectionVersion.findMany({
         where: { generatedPolicyId: policy.id, sectionId: input.sectionId },
         select: { version: true },
       });
@@ -555,8 +554,8 @@ export const enterprisePolicyRouter = router({
         editedByUserId: userId,
       };
 
-      const [, updatedPolicy] = await prisma.$transaction([
-        prisma.generatedPolicySectionVersion.create({
+      const [, updatedPolicy] = await ctx.prisma.$transaction([
+        ctx.prisma.generatedPolicySectionVersion.create({
           data: {
             generatedPolicyId: policy.id,
             sectionId: input.sectionId,
@@ -568,7 +567,7 @@ export const enterprisePolicyRouter = router({
             editedByUserId: userId,
           },
         }),
-        prisma.generatedPolicy.update({
+        ctx.tenantPrisma.generatedPolicy.update({
           where: { id: input.policyId },
           data: { sections },
           select: { id: true, sections: true, updatedAt: true },
@@ -603,7 +602,7 @@ export const enterprisePolicyRouter = router({
     .query(async ({ input, ctx }) => {
       const organizationId = ctx.orgMembership!.organizationId;
 
-      const policy = await prisma.generatedPolicy.findUnique({
+      const policy = await ctx.tenantPrisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
         select: {
           id: true,
@@ -625,7 +624,7 @@ export const enterprisePolicyRouter = router({
         getPolicySections(policy.sections).map((section) => [section.id, section.title ?? section.id]),
       );
 
-      const rows = await prisma.generatedPolicySectionVersion.findMany({
+      const rows = await ctx.prisma.generatedPolicySectionVersion.findMany({
         where: { generatedPolicyId: policy.id },
         orderBy: { createdAt: 'desc' },
         take: 100,
@@ -640,7 +639,7 @@ export const enterprisePolicyRouter = router({
         },
       });
 
-      const users = await prisma.user.findMany({
+      const users = await ctx.prisma.user.findMany({
         where: { id: { in: [...new Set(rows.map((row) => row.editedByUserId))] } },
         select: { id: true, fullName: true, email: true },
       });
@@ -667,7 +666,7 @@ export const enterprisePolicyRouter = router({
       const userId = ctx.user!.id;
       const organizationId = ctx.orgMembership!.organizationId;
 
-      const policy = await prisma.generatedPolicy.findUnique({
+      const policy = await ctx.tenantPrisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
         select: { id: true, userId: true, organizationId: true, deletedAt: true },
       });
@@ -686,7 +685,7 @@ export const enterprisePolicyRouter = router({
         });
       }
 
-      await prisma.generatedPolicy.update({
+      await ctx.tenantPrisma.generatedPolicy.update({
         where: { id: input.policyId },
         data: {
           deletedAt: new Date(),
@@ -711,7 +710,7 @@ export const enterprisePolicyRouter = router({
       const userId = ctx.user!.id;
       const organizationId = ctx.orgMembership!.organizationId;
 
-      const policy = await prisma.generatedPolicy.findUnique({
+      const policy = await ctx.tenantPrisma.generatedPolicy.findUnique({
         where: { id: input.policyId },
         include: {
           user: { select: { fullName: true, email: true } },
@@ -788,8 +787,8 @@ export const enterprisePolicyRouter = router({
           filename,
         );
 
-        await prisma.$transaction([
-          prisma.generatedPolicyExportLog.create({
+        await ctx.prisma.$transaction([
+          ctx.tenantPrisma.generatedPolicyExportLog.create({
             data: {
               generatedPolicyId: policy.id,
               userId,
@@ -808,7 +807,7 @@ export const enterprisePolicyRouter = router({
               },
             },
           }),
-          prisma.generatedPolicy.update({
+          ctx.tenantPrisma.generatedPolicy.update({
             where: { id: policy.id },
             data: {
               lastExportedAt: exportedAt,

@@ -341,7 +341,7 @@ export const policyRouter = router({
         }
 
         const [policies, total] = await Promise.all([
-          ctx.prisma.policy.findMany({
+          ctx.tenantPrisma.policy.findMany({
             where,
             skip,
             take: limit,
@@ -363,7 +363,7 @@ export const policyRouter = router({
               },
             },
           }),
-          ctx.prisma.policy.count({ where }),
+          ctx.tenantPrisma.policy.count({ where }),
         ]);
 
         return {
@@ -405,7 +405,7 @@ export const policyRouter = router({
           return cached;
         }
 
-        const policy = await ctx.prisma.policy.findUnique({
+        const policy = await ctx.tenantPrisma.policy.findUnique({
           where: { id: input.id },
           include: {
             user: {
@@ -523,7 +523,7 @@ export const policyRouter = router({
         });
 
         // Create policy record  -  cast to any since schema differs
-        const policy = await (ctx.prisma.policy.create as any)({
+        const policy = await (ctx.tenantPrisma.policy.create as any)({
           data: {
             title: input.title || `Policy for ${input.organizationType}`,
             scenario: input.scenario,
@@ -606,7 +606,7 @@ export const policyRouter = router({
         const { id, ...data } = input;
 
         // Check access
-        const existingPolicy = await ctx.prisma.policy.findUnique({
+        const existingPolicy = await ctx.tenantPrisma.policy.findUnique({
           where: { id },
         });
 
@@ -630,7 +630,7 @@ export const policyRouter = router({
           }
         }
 
-        const policy = await (ctx.prisma.policy.update as any)({
+        const policy = await (ctx.tenantPrisma.policy.update as any)({
           where: { id },
           data: {
             ...data,
@@ -679,7 +679,7 @@ export const policyRouter = router({
     .mutation(async ({ input, ctx }) => {
       try {
         // Check access
-        const policy = await ctx.prisma.policy.findUnique({
+        const policy = await ctx.tenantPrisma.policy.findUnique({
           where: { id: input.id },
         });
 
@@ -703,7 +703,7 @@ export const policyRouter = router({
           }
         }
 
-        await ctx.prisma.policy.update({
+        await ctx.tenantPrisma.policy.update({
           where: { id: input.id },
           data: { deletedAt: new Date() },
         });
@@ -750,7 +750,7 @@ export const policyRouter = router({
     .input(exportPolicySchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        const policy = await ctx.prisma.policy.findUnique({
+        const policy = await ctx.tenantPrisma.policy.findUnique({
           where: { id: input.id },
           include: {
             citations: { include: { document: { select: { actName: true } } } },
@@ -908,7 +908,7 @@ export const policyRouter = router({
           throw error;
         }
 
-        const policy = await ctx.prisma.policy.findUnique({
+        const policy = await ctx.tenantPrisma.policy.findUnique({
           where: { id: input.id },
           include: { citations: true },
         });
@@ -1097,7 +1097,7 @@ export const policyRouter = router({
     .input(verifyCitationsSchema)
     .query(async ({ input, ctx }) => {
       try {
-        const policy = await ctx.prisma.policy.findUnique({
+        const policy = await ctx.tenantPrisma.policy.findUnique({
           where: { id: input.id },
           include: { citations: true },
         });
@@ -1259,7 +1259,7 @@ export const policyRouter = router({
     .input(z.object({ policyId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
-        const policy = await ctx.prisma.policy.findUnique({
+        const policy = await ctx.tenantPrisma.policy.findUnique({
           where: { id: input.policyId },
           select: {
             id: true,
@@ -1346,7 +1346,7 @@ export const policyRouter = router({
     .input(z.object({ policyId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
-        const policy = await ctx.prisma.policy.findUnique({
+        const policy = await ctx.tenantPrisma.policy.findUnique({
           where: { id: input.policyId },
           select: {
             id: true,
@@ -1382,7 +1382,7 @@ export const policyRouter = router({
         const rootId = policy.parentId ?? policy.id;
 
         // Fetch all versions in the family
-        const versions = await ctx.prisma.policy.findMany({
+        const versions = await ctx.tenantPrisma.policy.findMany({
           where: {
             OR: [
               { id: rootId },

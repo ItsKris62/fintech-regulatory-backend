@@ -92,7 +92,10 @@ export async function revokeAllUserTokens(
   const ttlSeconds = 7200;
 
   try {
-    await redis.set(userRevokedAfterKey(userId), String(now), { ex: ttlSeconds });
+    await Promise.all([
+      redis.set(userRevokedAfterKey(userId), String(now), { ex: ttlSeconds }),
+      redis.del(`sheriabot:admin:mfa_verified:${userId}`).catch(() => {}),
+    ]);
     logger.info({ type: 'all_user_tokens_revoked', userId, reason, revokedAfter: now });
   } catch (err: unknown) {
     logger.error({

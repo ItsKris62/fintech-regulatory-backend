@@ -110,6 +110,7 @@ export class SalesOutreachDrafterService {
       maxTokens: 900,
       systemPrompt: systemPrompt(),
       prompt: promptFor(prospect, engagement),
+      orgId: prospect.organizationId, // Tenant-scoped to the prospect organization.
       metadata: { agent: 'sales', signalId: prospect.signalId, organizationId: prospect.organizationId },
     });
 

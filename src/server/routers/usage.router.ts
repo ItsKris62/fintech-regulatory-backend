@@ -17,7 +17,6 @@ import { TRPCError } from '@trpc/server';
 import { router, orgMemberProcedure } from '../trpc/trpc';
 import { withPlanContext } from '../trpc/middleware';
 import { usageTrackingService } from '@/services/usage-tracking.service';
-import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
 import type { UsagePeriod } from '@prisma/client';
 
@@ -261,7 +260,7 @@ export const usageRouter = router({
       const orgId = ctx.orgMembership!.organizationId;
 
       try {
-        const record = await prisma.usagePeriod.findFirst({
+        const record = await ctx.tenantPrisma.usagePeriod.findFirst({
           where: {
             id:             input.periodId,
             organizationId: orgId, // org-scope: users cannot access other orgs' data
