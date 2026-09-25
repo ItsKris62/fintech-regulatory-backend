@@ -312,11 +312,12 @@ export async function resolveAuth(authHeader: string | undefined): Promise<AuthC
 // Usage enforcement
 // Replicates checkUsageLimit(BillingMetric.COMPLIANCE_QUERIES) from tRPC middleware.
 // FREE_TRIAL users are enforced against trial JSON counters before Redis quotas.
-interface UsageCheck {
+export interface UsageCheck {
   allowed: boolean;
   statusCode: 403 | 429;
   message: string;
   increment: (tokensUsed?: number) => Promise<void>;
+  release: () => Promise<void>;
 }
 
 export async function checkAndPrepareUsage(auth: AuthContext, requiredCredits: number = 1): Promise<UsageCheck> {
@@ -330,6 +331,7 @@ export async function checkAndPrepareUsage(auth: AuthContext, requiredCredits: n
           ? `Detailed answers require 2 query credits. Please switch to Standard or upgrade.` 
           : `Trial limit reached (${queryCheck.current}/${queryCheck.limit}). Upgrade to continue.`,
         increment: async () => {},
+        release:   async () => {},
       };
     }
 
@@ -340,6 +342,7 @@ export async function checkAndPrepareUsage(auth: AuthContext, requiredCredits: n
         statusCode: 403,
         message: `Trial token budget reached (${tokenCheck.current}/${tokenCheck.limit}). Upgrade to continue.`,
         increment: async () => {},
+        release:   async () => {},
       };
     }
 
@@ -347,6 +350,7 @@ export async function checkAndPrepareUsage(auth: AuthContext, requiredCredits: n
       allowed: true,
       statusCode: 429,
       message: '',
+      release: async () => {},
       increment: async (tokensUsed?: number) => {
         await incrementTrialUsageAtomic(auth.userId, 'complianceQueries', requiredCredits);
         if (tokensUsed !== undefined && tokensUsed > 0) {
@@ -375,6 +379,7 @@ export async function checkAndPrepareUsage(auth: AuthContext, requiredCredits: n
       statusCode:  429,
       message:     '',
       increment:   async () => {},
+      release:     async () => {},
     };
   }
 
@@ -385,6 +390,7 @@ export async function checkAndPrepareUsage(auth: AuthContext, requiredCredits: n
       statusCode: 403,
       message:    `Compliance queries are not available on the ${auth.plan} plan.`,
       increment:  async () => {},
+      release:    async () => {},
     };
   }
 
@@ -394,11 +400,17 @@ export async function checkAndPrepareUsage(auth: AuthContext, requiredCredits: n
     : new Date().toISOString().slice(0, 7); // 'YYYY-MM'
   const usageKey  = `sheriabot:usage:${auth.organizationId}:${METRIC_KEY}:${periodKey}`;
 
-  const currentRaw = await redis.get<number>(usageKey);
-  const current    = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw ?? 0);
+  // Atomic pre-allocation: INCRBY first
+  const newCount = await redis.incrby(usageKey, requiredCredits);
+  if (newCount === requiredCredits && quota.period !== 'lifetime') {
+    await redis.expire(usageKey, USAGE_TTL_SECONDS);
+  }
 
-  if (current + requiredCredits > quota.limit) {
+  if (newCount > quota.limit) {
+    // Exceeded: DECRBY back immediately to undo pre-allocation
+    await redis.decrby(usageKey, requiredCredits);
     const label = quota.period === 'lifetime' ? 'Lifetime' : 'Monthly';
+    const current = newCount - requiredCredits;
     return {
       allowed:    false,
       statusCode: 429,
@@ -406,18 +418,25 @@ export async function checkAndPrepareUsage(auth: AuthContext, requiredCredits: n
         ? `Detailed answers require 2 query credits. Please switch to Standard or upgrade your plan.`
         : `${label} limit reached (${current}/${quota.limit}). Upgrade your plan for more.`,
       increment:  async () => {},
+      release:    async () => {},
     };
   }
 
-  const increment = async (): Promise<void> => {
-    const newCount = await redis.incrby(usageKey, requiredCredits);
-    if (newCount === requiredCredits && quota.period !== 'lifetime') {
-      await redis.expire(usageKey, USAGE_TTL_SECONDS);
-    }
-    logger.debug({ type: 'usage_incremented', orgId: auth.organizationId, metric: METRIC_KEY, current: newCount });
+  logger.debug({ type: 'usage_preallocated', orgId: auth.organizationId, metric: METRIC_KEY, current: newCount });
+
+  let released = false;
+  const release = async (): Promise<void> => {
+    if (released) return;
+    released = true;
+    await redis.decrby(usageKey, requiredCredits);
+    logger.debug({ type: 'usage_released', orgId: auth.organizationId, metric: METRIC_KEY, amount: requiredCredits });
   };
 
-  return { allowed: true, statusCode: 429, message: '', increment };
+  const increment = async (): Promise<void> => {
+    // Credits already pre-allocated via atomic INCRBY at check time
+  };
+
+  return { allowed: true, statusCode: 429, message: '', increment, release };
 }
 
 // SSE helpers
@@ -489,11 +508,13 @@ export async function registerComplianceStreamRoute(
         return reply.status(429).send({ error: 'Rate limit exceeded. Please try again later.' });
       }
 
-      // Usage entitlement enforcement
+      // Usage entitlement enforcement (atomic pre-allocation)
       const usage = await checkAndPrepareUsage(auth, requiredCredits);
       if (!usage.allowed) {
         return reply.status(usage.statusCode).send({ error: usage.message });
       }
+
+      let creditsCommitted = false;
 
       // Named regulation detection
       const detectedRegulations = extractNamedRegulations(input.question);
@@ -682,6 +703,8 @@ export async function registerComplianceStreamRoute(
         clearInterval(heartbeatTimer);
         reply.raw.end();
 
+        await usage.release().catch(() => {});
+
         logger.info({
           type: 'compliance_stream_source_insufficient',
           userId: auth.userId,
@@ -799,6 +822,8 @@ export async function registerComplianceStreamRoute(
 
         clearInterval(heartbeatTimer);
         reply.raw.end();
+
+        await usage.release().catch(() => {});
 
         logger.info({
           type: 'compliance_stream_no_accepted_sources',
@@ -1047,7 +1072,7 @@ export async function registerComplianceStreamRoute(
         });
 
         if (!abstained) {
-          // Usage increment deferred so failed or unverified synthesis costs nothing.
+          creditsCommitted = true;
           await usage.increment(result.inputTokens + result.outputTokens).catch((err: unknown) => {
             logger.error({
               type: 'compliance_stream_usage_increment_failed',
@@ -1057,6 +1082,8 @@ export async function registerComplianceStreamRoute(
               error: err instanceof Error ? err.message : String(err),
             });
           });
+        } else {
+          await usage.release().catch(() => {});
         }
 
         write({ type: 'chunk', text: fullContent });
@@ -1140,6 +1167,9 @@ export async function registerComplianceStreamRoute(
           write({ type: 'error', message: 'An error occurred while generating the response' });
         }
       } finally {
+        if (!creditsCommitted) {
+          await usage.release().catch(() => {});
+        }
         clearInterval(heartbeatTimer);
         if (!reply.raw.destroyed) reply.raw.end();
       }
