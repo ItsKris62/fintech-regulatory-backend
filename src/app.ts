@@ -12,6 +12,7 @@ import { rateLimiter } from './lib/redis/rate-limiter';
 import { errorTracker } from './lib/error-tracker';
 import { supabaseAdmin } from './lib/supabase';
 import securityPlugin from './plugins/security.plugin';
+import { idempotencyPlugin } from './plugins/idempotency.plugin';
 import { registerSecurityMiddleware } from './middleware/security.middleware';
 import { stripeWebhookService } from './lib/stripe/webhook.service';
 import { intaSendWebhookService } from './lib/intasend/webhook.service';
@@ -191,7 +192,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'idempotency-key'],
   });
 
   // -- Security headers (production-hardened Helmet) ---------------------
@@ -200,6 +201,9 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // -- Runtime security middleware ---------------------------------------
   registerSecurityMiddleware(app);
+
+  // -- REST Idempotency Middleware (F-09) --------------------------------
+  await app.register(idempotencyPlugin);
 
   // -- Stripe Webhook  -  raw body required for signature verification --------
   // Registered in an encapsulated plugin so the Buffer content-type parser is

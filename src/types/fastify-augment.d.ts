@@ -8,6 +8,16 @@ declare module 'fastify' {
      * via parseAs: 'buffer'. Other routes receive undefined.
      */
     rawBody?: Buffer;
+
+    /**
+     * Authenticated user session attached to the request with verified organization ID.
+     */
+    user?: {
+      id?: string;
+      organizationId?: string;
+      email?: string;
+      role?: string;
+    };
   }
 
   interface RouteShorthandOptions {
