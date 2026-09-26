@@ -29,7 +29,10 @@ export function getStripeClient(): Stripe {
       typescript: true,
       // Telemetry is opt-out; disable to avoid sending usage data to Stripe
       telemetry: false,
+      timeout: 10000,
+      maxNetworkRetries: 2,
     });
+
   }
 
   return stripeClient;

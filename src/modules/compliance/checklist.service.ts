@@ -604,7 +604,12 @@ class ChecklistService {
               0
             )) / 4
           );
-      incrementTrialUsage(trialUserId, 'totalTokensUsed', tokenCount).catch(() => {});
+      incrementTrialUsage(trialUserId, 'totalTokensUsed', tokenCount).catch((err: unknown) => {
+      logger.warn({
+        type: 'checklist_service_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     }
   }
 

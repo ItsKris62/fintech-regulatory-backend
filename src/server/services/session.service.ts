@@ -145,26 +145,46 @@ export async function issueSessionForUser(params: IssueSessionParams): Promise<S
 
   await redis.set(userSessionKey(user.id), JSON.stringify(userProfile), { ex: 3600 });
   if (supabaseAuthId) {
-    await redis.set(userSessionKey(supabaseAuthId), JSON.stringify(userProfile), { ex: 3600 }).catch(() => {});
+    await redis.set(userSessionKey(supabaseAuthId), JSON.stringify(userProfile), { ex: 3600 }).catch((err: unknown) => {
+      logger.warn({
+        type: 'session_service_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   const loginNow = Date.now();
   await Promise.all([
     redis.set(lastSeenKey(user.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
     redis.set(sessionStartKey(user.id), String(loginNow), { ex: sessionTtlSeconds }),
-  ]).catch(() => {});
+  ]).catch((err: unknown) => {
+      logger.warn({
+        type: 'session_service_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
   if (dbSessionId) {
     const fingerprint = buildSessionFingerprint(loginIp, rawUa);
     await redis
       .set(sessionFingerprintKey(dbSessionId), fingerprint, { ex: sessionTtlSeconds })
-      .catch(() => {});
+      .catch((err: unknown) => {
+      logger.warn({
+        type: 'session_service_bg_op_3_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   await prisma.user.update({
     where: { id: user.id },
     data: { lastLoginAt: new Date(), lastLoginIp: loginIp },
-  }).catch(() => {});
+  }).catch((err: unknown) => {
+      logger.warn({
+        type: 'session_service_bg_op_4_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
   const actionMap: Record<string, string> = {
     password_totp: 'USER_LOGIN_MFA_TOTP',
@@ -183,7 +203,12 @@ export async function issueSessionForUser(params: IssueSessionParams): Promise<S
       userAgent: rawUa ? rawUa.substring(0, 500) : undefined,
       metadata: { email: user.email, sessionId: dbSessionId, reason },
     },
-  }).catch(() => {});
+  }).catch((err: unknown) => {
+      logger.warn({
+        type: 'session_service_bg_op_5_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
   return {
     mfaRequired: false,

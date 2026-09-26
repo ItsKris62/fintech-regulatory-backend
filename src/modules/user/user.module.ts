@@ -19,6 +19,7 @@ import { sendEmail } from '@/lib/email/client';
 import { logger } from '@/utils/logger';
 import { config } from '@/config';
 import { verifyPassword } from '@/modules/auth/auth.utils';
+import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
 import {
   toUserProfile,
   parsePreferences,
@@ -754,6 +755,21 @@ class UserModule {
         throw new UserError('Invalid password', 'INVALID_PASSWORD', 401);
       }
 
+      await logSecurityEvent({
+        eventType: SECURITY_EVENT_TYPES.DATA_DELETION_REQUESTED,
+        userId: user.id,
+        organizationId: user.organizationId,
+        metadata: {
+          orgId: user.organizationId,
+          resourceId: user.id,
+        },
+      }).catch((err: unknown) => {
+        logger.warn({
+          type: 'data_deletion_requested_audit_write_failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+
       // 3. Export user data first
       let dataExportUrl: string | undefined;
       try {
@@ -929,6 +945,21 @@ class UserModule {
       if (!user) {
         throw new UserError('User not found', 'USER_NOT_FOUND', 404);
       }
+
+      await logSecurityEvent({
+        eventType: SECURITY_EVENT_TYPES.DATA_EXPORT_REQUESTED,
+        userId: user.id,
+        organizationId: user.organizationId,
+        metadata: {
+          orgId: user.organizationId,
+          resourceId: user.id,
+        },
+      }).catch((err: unknown) => {
+        logger.warn({
+          type: 'data_export_requested_audit_write_failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
 
       // 2. Get all user data (parallel queries)
       const [policies, queries, documents, auditLogEntries] = await Promise.all([

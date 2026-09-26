@@ -1103,7 +1103,12 @@ class OrganizationModule {
 
       // 6. Invalidate caches
       // Per-user orgmem cache: requireOrgMembership reads this key to enforce MemberRole.
-      await redis.del(`sheriabot:orgmem:${memberUserId}:${orgId}`).catch(() => {});
+      await redis.del(`sheriabot:orgmem:${memberUserId}:${orgId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_module_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
       logger.info({
         type: 'orgmem_cache_invalidated',
         userId: memberUserId,
@@ -1250,14 +1255,24 @@ class OrganizationModule {
       // 6. Invalidate caches
       // Per-user orgmem cache for both affected members (new OWNER and demoted ADMIN).
       // Both del() calls are independent; one failure must not suppress the other.
-      await redis.del(`sheriabot:orgmem:${newOwnerId}:${orgId}`).catch(() => {});
+      await redis.del(`sheriabot:orgmem:${newOwnerId}:${orgId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_module_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
       logger.info({
         type: 'orgmem_cache_invalidated',
         userId: newOwnerId,
         organizationId: orgId,
         action: 'ownership_transfer',
       });
-      await redis.del(`sheriabot:orgmem:${currentOwnerId}:${orgId}`).catch(() => {});
+      await redis.del(`sheriabot:orgmem:${currentOwnerId}:${orgId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_module_bg_op_3_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
       logger.info({
         type: 'orgmem_cache_invalidated',
         userId: currentOwnerId,

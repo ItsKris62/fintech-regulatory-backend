@@ -11,6 +11,7 @@ import {
   requireOrgMembership,
   requireOrgMembershipRole,
   requireAgentCapability,
+  rateLimited,
 } from './middleware';
 import { loadSystemConfig } from '@/lib/system-config';
 import type { AgentCapability } from '@/modules/agents/agent-credential.service';
@@ -191,7 +192,12 @@ export const organizationMfaEnforced = middleware(async ({ ctx, path, next }) =>
         const graceLogKey = `sheriabot:audit:mfa_grace:${ctx.user.id}`;
         const alreadyLogged = await redis.get(graceLogKey).catch(() => null);
         if (!alreadyLogged) {
-          await redis.set(graceLogKey, '1', { ex: 3600 }).catch(() => {});
+          await redis.set(graceLogKey, '1', { ex: 3600 }).catch((err: unknown) => {
+            logger.warn({
+              type: 'mfa_grace_log_cache_write_failed',
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
           await logSecurityEvent({
             eventType: SECURITY_EVENT_TYPES.MFA_ENFORCEMENT_GRACE,
             userId: ctx.user.id,
@@ -398,7 +404,8 @@ export const protectedProcedure = publicProcedure
 
 export const adminProcedure = protectedProcedure
   .use(isAdmin)
-  .use(adminMfaEnforced);
+  .use(adminMfaEnforced)
+  .use(rateLimited('admin_action', 120, { window: 60, identifier: (ctx: { user?: { id: string } }) => ctx.user?.id || '' }));
 export const regulatorProcedure = protectedProcedure.use(isRegulator);
 export const startupProcedure = protectedProcedure.use(isStartup);
 export const enterpriseProcedure = protectedProcedure.use(isEnterprise);

@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { nanoid } from 'nanoid';
+import { z } from 'zod';
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -72,6 +73,7 @@ export const passkeyRouter = router({
       // Load existing passkeys to exclude them
       const existingPasskeys = await ctx.prisma.passkey.findMany({
         where: { userId },
+        take: 100,
         select: {
           credentialId: true,
           transports: true,
@@ -149,7 +151,12 @@ export const passkeyRouter = router({
       // Load challenge from Redis & strictly single-use delete
       const challengeKey = PASSKEY_REDIS_KEYS.regChallenge(userId);
       const challenge = await redis.get<string>(challengeKey);
-      await redis.del(challengeKey).catch(() => {});
+      await redis.del(challengeKey).catch((err: unknown) => {
+        logger.warn({
+          type: 'passkey_registration_challenge_del_failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
 
       if (!challenge) {
         throw new TRPCError({
@@ -252,7 +259,12 @@ export const passkeyRouter = router({
         });
 
         if (ctx.user.supabaseAuthId) {
-          await redis.del(`user:session:${ctx.user.supabaseAuthId}`).catch(() => {});
+          await redis.del(`user:session:${ctx.user.supabaseAuthId}`).catch((err: unknown) => {
+            logger.warn({
+              type: 'passkey_user_session_cache_del_failed',
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
         }
 
         await recordFreshMfaVerification(userId);
@@ -317,6 +329,7 @@ export const passkeyRouter = router({
       if (input.userHandle) {
         const userPasskeys = await ctx.prisma.passkey.findMany({
           where: { userId: input.userHandle },
+          take: 100,
           select: { credentialId: true, transports: true },
         });
 
@@ -377,7 +390,12 @@ export const passkeyRouter = router({
       });
 
       if (!rl.allowed) {
-        await redis.del(challengeKey).catch(() => {});
+        await redis.del(challengeKey).catch((err: unknown) => {
+          logger.warn({
+            type: 'passkey_auth_rate_limited_challenge_del_failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
         await logSecurityEvent({
           eventType: SECURITY_EVENT_TYPES.PASSKEY_RATE_LIMITED,
           ipAddress: getClientIp(ctx.req) ?? undefined,
@@ -392,7 +410,12 @@ export const passkeyRouter = router({
 
       // Load challenge & delete immediately (single-use)
       const cached = await redis.get<string | Record<string, any>>(challengeKey);
-      await redis.del(challengeKey).catch(() => {});
+      await redis.del(challengeKey).catch((err: unknown) => {
+        logger.warn({
+          type: 'passkey_auth_challenge_del_failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
 
       if (!cached) {
         throw new TRPCError({
@@ -573,9 +596,20 @@ export const passkeyRouter = router({
    * 5. List Current User Passkeys
    */
   listUserPasskeys: protectedProcedure
-    .query(async ({ ctx }) => {
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(100).optional().default(50),
+          cursor: z.string().optional(),
+        })
+        .optional(),
+    )
+    .query(async ({ input, ctx }) => {
+      const limit = Math.min(input?.limit ?? 50, 100);
       const passkeys = await ctx.prisma.passkey.findMany({
         where: { userId: ctx.user.id },
+        take: limit,
+        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
         select: {
           id: true,
           deviceName: true,
@@ -668,7 +702,12 @@ export const passkeyRouter = router({
       });
 
       if (ctx.user.supabaseAuthId) {
-        await redis.del(`user:session:${ctx.user.supabaseAuthId}`).catch(() => {});
+        await redis.del(`user:session:${ctx.user.supabaseAuthId}`).catch((err: unknown) => {
+          logger.warn({
+            type: 'passkey_delete_session_del_failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
       }
 
       return { success: true, remainingPasskeyCount };

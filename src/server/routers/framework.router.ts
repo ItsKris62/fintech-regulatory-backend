@@ -49,7 +49,15 @@ function toFrameworkMetadata(framework: {
 export const frameworkRouter = router({
   list: protectedProcedure
     .use(withPlanContext)
-    .input(z.object({ includeInactive: z.boolean().optional().default(false) }).optional())
+    .input(
+      z
+        .object({
+          includeInactive: z.boolean().optional().default(false),
+          limit: z.number().int().min(1).max(100).optional().default(50),
+          cursor: z.string().optional(),
+        })
+        .optional(),
+    )
     .query(async ({ input, ctx }) => {
       const isPlatformAdmin = ctx.user!.role === 'ADMIN';
       if (!ctx.plan) {
@@ -60,12 +68,15 @@ export const frameworkRouter = router({
       }
       const plan = ctx.plan;
       const includeInactive = Boolean(input?.includeInactive && isPlatformAdmin);
+      const limit = Math.min(input?.limit ?? 50, 100);
 
       const frameworks = await ctx.prisma.regulatoryFramework.findMany({
         where: {
           ...(includeInactive ? {} : { isActive: true }),
           ...(isPlatformAdmin ? {} : { tier: { in: allowedFrameworkTiersForPlan(plan) } }),
         },
+        take: limit,
+        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
         orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
         select: frameworkSelect,
       });
@@ -97,6 +108,8 @@ export const frameworkRouter = router({
           deletedAt: null,
           status: { in: ['DRAFT', 'PUBLISHED'] },
         },
+        take: limit,
+        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
         include: { _count: { select: { sections: true, controls: true } } },
         orderBy: [{ updatedAt: 'desc' }],
       });

@@ -8,7 +8,24 @@ declare module 'fastify' {
      * via parseAs: 'buffer'. Other routes receive undefined.
      */
     rawBody?: Buffer;
+
+    /**
+     * Authenticated user session attached to the request with verified organization ID.
+     */
+    user?: {
+      id?: string;
+      organizationId?: string;
+      email?: string;
+      role?: string;
+    };
+  }
+
+  interface RouteShorthandOptions {
+    /**
+     * Request timeout in ms at the route level (e.g. 0 to disable for long-lived SSE streams).
+     */
+    requestTimeout?: number;
   }
 }
 
-export {};
+export {};

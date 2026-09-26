@@ -301,7 +301,12 @@ export const checklistRouter = router({
         return result;
       } catch (error: unknown) {
         // Always release the lock on error so the user can retry immediately.
-        await redis.del(checklistLockKey).catch(() => {});
+        await redis.del(checklistLockKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'checklist_router_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         const msg = error instanceof Error ? error.message : 'Failed to initiate checklist generation';
         logger.error({ type: 'checklist_generate_async_error', userId: ctx.user!.id, error: msg });
         if (error instanceof TRPCError) throw error;

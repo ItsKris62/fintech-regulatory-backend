@@ -432,7 +432,12 @@ export const adminRouter = router({
 
         // F5.8  -  evict cached user profile so role/status changes take effect immediately
         if (user.supabaseAuthId) {
-          await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+          await redis.del(`user:session:${user.supabaseAuthId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'admin_router_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
 
         logger.info({
@@ -637,7 +642,12 @@ export const adminRouter = router({
 
         // F5.8  -  evict cached user profile so deletion takes effect immediately
         if (targetUser?.supabaseAuthId) {
-          await redis.del(`user:session:${targetUser.supabaseAuthId}`).catch(() => {});
+          await redis.del(`user:session:${targetUser.supabaseAuthId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'admin_router_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
 
         // Write audit log
@@ -705,7 +715,12 @@ export const adminRouter = router({
         );
 
         if (suspendTarget?.supabaseAuthId) {
-          await redis.del(`user:session:${suspendTarget.supabaseAuthId}`).catch(() => {});
+          await redis.del(`user:session:${suspendTarget.supabaseAuthId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'admin_router_bg_op_3_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
 
         logger.info({
@@ -1896,7 +1911,12 @@ export const adminRouter = router({
 
         // F5.8  -  evict cached user profile so approval takes effect immediately
         if (user.supabaseAuthId) {
-          await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+          await redis.del(`user:session:${user.supabaseAuthId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'admin_router_bg_op_4_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
 
         // Write audit log
