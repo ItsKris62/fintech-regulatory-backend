@@ -5,6 +5,7 @@ import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
 import { prisma } from '@/lib/prisma/client';
 import { EmailServiceError } from '@/utils/error';
+import { executeWithBreaker } from '@/lib/circuit-breaker/circuit-breaker.service';
 
 /**
  * Email send options
@@ -323,7 +324,7 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
 
     let response: Awaited<typeof sendPromise>;
     try {
-      response = await Promise.race([sendPromise, timeoutPromise]);
+      response = await executeWithBreaker('resend', () => Promise.race([sendPromise, timeoutPromise]));
     } finally {
       if (timeoutTimer) clearTimeout(timeoutTimer);
     }

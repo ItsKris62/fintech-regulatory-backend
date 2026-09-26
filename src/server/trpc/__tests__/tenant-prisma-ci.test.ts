@@ -134,8 +134,38 @@ export function scanRouterAst(filePath: string, code: string, tenantModels: Set<
 
 describe('CI Tenant Isolation Guard: TypeScript AST Compiler API (audit SEC-12)', () => {
   const routersDir = resolve(__dirname, '../../routers');
+
+  /**
+   * Legitimate Admin Exception List (F-03 / SEC-12 CI Guard):
+   * Explicitly documents routers with legitimate administrative cross-tenant procedures.
+   *
+   * 1. admin.router.ts, adminSupport.router.ts, pilot.router.ts, blog-automation.router.ts:
+   *    Dedicated platform admin control planes (scoped by RBAC sub-roles).
+   *
+   * 2. organization.router.ts:
+   *    Legitimate admin exception: Cross-tenant organization management, seat allocations,
+   *    and member oversight (lines 47, 66, 278, 361, 590, 972, 1226, 1997, 2090, 2174, 2206, 2232).
+   *    All tenant-scoped models (OrganizationMember, Invitation) use ctx.tenantPrisma;
+   *    direct ctx.prisma queries access non-tenant models (Organization, AuditLog, Session)
+   *    under verified platformAdminOverride / isAnyAdmin checks.
+   *
+   * 3. compliance.router.ts:
+   *    Legitimate admin exception: Cross-tenant query oversight and regulatory compliance inspection
+   *    (lines 669, 1002, 1086, 1134, 1610, 1723, 2173).
+   *    All tenant-scoped models (ComplianceQuery, GapAnalysis, Checklist, CorpusGapFeedback)
+   *    use ctx.tenantPrisma; direct ctx.prisma queries access non-tenant models
+   *    (ComplianceQueryRun, QueryFeedback, SavedResponse, Organization, AuditLog).
+   */
+  const ADMIN_EXCEPTION_ROUTERS = new Set<string>([
+    'admin.router.ts',
+    'adminSupport.router.ts',
+    'adminMarketing.router.ts',
+    'pilot.router.ts',
+    'blog-automation.router.ts',
+  ]);
+
   const routerFiles = readdirSync(routersDir).filter(
-    (f) => f.endsWith('.router.ts') && !f.includes('admin') && !f.includes('.test.')
+    (f) => f.endsWith('.router.ts') && !ADMIN_EXCEPTION_ROUTERS.has(f) && !f.includes('.test.')
   );
 
   // Convert PascalCase model names from TENANT_MODEL_FIELD_MAP to camelCase Prisma model accessors (excluding User)

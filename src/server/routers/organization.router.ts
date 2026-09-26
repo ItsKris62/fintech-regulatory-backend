@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { MemberRole, MemberStatus, SubscriptionPlan } from '@prisma/client';
 import { router, protectedProcedure, adminProcedure } from '../trpc/trpc';
+import { isAnyAdmin } from '../trpc/middleware';
 import {
   createOrganizationSchema,
   updateOrganizationSchema,
@@ -44,7 +45,7 @@ async function assertActiveOrganizationMember(
   ctx: Pick<Context, 'prisma' | 'user'> & { user: NonNullable<Context['user']> },
   organizationId: string,
 ) {
-  if (ctx.user.role === 'ADMIN') return;
+  if (isAnyAdmin(ctx.user.role)) return;
 
   const member = await ctx.tenantPrisma.organizationMember.findUnique({
     where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
@@ -63,7 +64,7 @@ async function assertOrganizationManager(
   ctx: Pick<Context, 'prisma' | 'user'> & { user: NonNullable<Context['user']> },
   organizationId: string,
 ) {
-  if (ctx.user.role === 'ADMIN') return null;
+  if (isAnyAdmin(ctx.user.role)) return null;
 
   const member = await ctx.tenantPrisma.organizationMember.findUnique({
     where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
@@ -275,7 +276,7 @@ export const organizationRouter = router({
     .input(getOrganizationSchema)
     .query(async ({ input, ctx }) => {
       try {
-        if (ctx.user.role === 'ADMIN') {
+        if (isAnyAdmin(ctx.user.role)) {
           // Admins see everything -- retain NOT_FOUND for their UX
           const organization = await ctx.prisma.organization.findUnique({
             where: { id: input.id },
@@ -358,7 +359,7 @@ export const organizationRouter = router({
             actorUserId: ctx.user.id,
             actorRole: ctx.user.role,
             sourceProcedure: 'organization.create',
-            platformAdminOverride: ctx.user.role === 'ADMIN',
+            platformAdminOverride: isAnyAdmin(ctx.user.role),
           },
         });
 
@@ -367,7 +368,7 @@ export const organizationRouter = router({
             data: input,
           });
 
-          if (ctx.user.role !== 'ADMIN') {
+          if (!isAnyAdmin(ctx.user.role)) {
             await tx.organizationMember.upsert({
               where: { userId_organizationId: { userId: ctx.user.id, organizationId: org.id } },
               create: {
@@ -587,7 +588,7 @@ export const organizationRouter = router({
             actorUserId: ctx.user.id,
             actorRole: ctx.user.role,
             sourceProcedure: 'organization.addMember',
-            platformAdminOverride: ctx.user.role === 'ADMIN',
+            platformAdminOverride: isAnyAdmin(ctx.user.role),
           },
         });
 
@@ -969,7 +970,7 @@ export const organizationRouter = router({
           previousRole: targetMember.role,
           newRole: input.role,
           orgId: callerOrgId,
-          platformAdminOverride: ctx.user.role === 'ADMIN',
+          platformAdminOverride: isAnyAdmin(ctx.user.role),
         });
 
         return {
@@ -1223,7 +1224,7 @@ export const organizationRouter = router({
       return {
         ...usage,
         canManageMembers:
-          ctx.user.role === 'ADMIN' ||
+          isAnyAdmin(ctx.user.role) ||
           member.role === MemberRole.OWNER ||
           member.role === MemberRole.ADMIN,
       };
@@ -1994,7 +1995,7 @@ export const organizationRouter = router({
     .mutation(async ({ input, ctx }) => {
       try {
         const organizationId =
-          ctx.user.role === 'ADMIN' && input.organizationId
+          isAnyAdmin(ctx.user.role) && input.organizationId
             ? input.organizationId
             : ctx.user.organizationId;
 
@@ -2087,7 +2088,7 @@ export const organizationRouter = router({
     .mutation(async ({ input, ctx }) => {
       try {
         const organizationId =
-          ctx.user.role === 'ADMIN' && input.organizationId
+          isAnyAdmin(ctx.user.role) && input.organizationId
             ? input.organizationId
             : ctx.user.organizationId;
 
@@ -2171,7 +2172,7 @@ export const organizationRouter = router({
     .input(scheduleCountryReplacementSchema)
     .mutation(async ({ input, ctx }) => {
       const organizationId =
-        ctx.user.role === 'ADMIN' && input.organizationId
+        isAnyAdmin(ctx.user.role) && input.organizationId
           ? input.organizationId
           : ctx.user.organizationId;
 
@@ -2203,7 +2204,7 @@ export const organizationRouter = router({
     .input(z.object({ organizationId: z.string().optional() }))
     .query(async ({ input, ctx }) => {
       const organizationId =
-        ctx.user.role === 'ADMIN' && input.organizationId
+        isAnyAdmin(ctx.user.role) && input.organizationId
           ? input.organizationId
           : ctx.user.organizationId;
 
@@ -2229,7 +2230,7 @@ export const organizationRouter = router({
     .input(cancelCountryReplacementSchema)
     .mutation(async ({ input, ctx }) => {
       const organizationId =
-        ctx.user.role === 'ADMIN' && input.organizationId
+        isAnyAdmin(ctx.user.role) && input.organizationId
           ? input.organizationId
           : ctx.user.organizationId;
 

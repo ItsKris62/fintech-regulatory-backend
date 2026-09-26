@@ -47,6 +47,55 @@ export const TENANT_MODEL_FIELD_MAP: Record<string, 'orgId' | 'organizationId'> 
   SalesOutreachDraft: 'organizationId',
 };
 
+export interface TenantScopedPrismaOptions {
+  bypassRls?: boolean;
+}
+
+/**
+ * Executes a callback within a Prisma interactive transaction where
+ * app.current_org_id is configured with SET LOCAL (is_local = true)
+ * to enforce native PostgreSQL Row-Level Security without connection pool leakage.
+ */
+export async function withTenantRlsTransaction<T>(
+  prisma: any,
+  orgId: string,
+  callback: (tx: any) => Promise<T>,
+): Promise<T> {
+  if (!orgId || typeof orgId !== 'string' || orgId.trim() === '') {
+    throw new Error('Cannot initiate tenant RLS transaction without a valid orgId');
+  }
+
+  if (typeof prisma.$executeRawUnsafe === 'function' && typeof prisma.$transaction !== 'function') {
+    await prisma.$executeRawUnsafe("SELECT set_config('app.current_org_id', $1, true)", orgId);
+    return callback(prisma);
+  }
+
+  return prisma.$transaction(async (tx: any) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.current_org_id', $1, true)", orgId);
+    return callback(tx);
+  });
+}
+
+/**
+ * Executes a callback within a Prisma interactive transaction where
+ * app.bypass_rls = 'true' is configured with SET LOCAL (is_local = true)
+ * for privileged background workers, migrations, and cron tasks.
+ */
+export async function withBypassRlsTransaction<T>(
+  prisma: any,
+  callback: (tx: any) => Promise<T>,
+): Promise<T> {
+  if (typeof prisma.$executeRawUnsafe === 'function' && typeof prisma.$transaction !== 'function') {
+    await prisma.$executeRawUnsafe("SELECT set_config('app.bypass_rls', 'true', true)");
+    return callback(prisma);
+  }
+
+  return prisma.$transaction(async (tx: any) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.bypass_rls', 'true', true)");
+    return callback(tx);
+  });
+}
+
 export type TenantScopedPrismaClient = ReturnType<typeof createTenantScopedPrisma>;
 
 /**
@@ -56,7 +105,8 @@ export type TenantScopedPrismaClient = ReturnType<typeof createTenantScopedPrism
  */
 export function createTenantScopedPrisma(
   basePrisma: any = defaultPrisma,
-  orgId?: string | null
+  orgId?: string | null,
+  options?: TenantScopedPrismaOptions,
 ) {
   return basePrisma.$extends({
     name: 'tenant-scope-extension',
@@ -86,6 +136,21 @@ export function createTenantScopedPrisma(
           }
 
           const currentArgs = args ? { ...args } : {};
+
+          // Special handling for VaultDocument: Postgres RLS Pilot (Option A)
+          // Wraps in an interactive transaction with SET LOCAL app.current_org_id or app.bypass_rls
+          if (model === 'VaultDocument') {
+            if (options?.bypassRls) {
+              return withBypassRlsTransaction(basePrisma, async (tx: any) => {
+                return (tx[model] as any)[operation](currentArgs);
+              });
+            } else if (orgId) {
+              return withTenantRlsTransaction(basePrisma, orgId, async (tx: any) => {
+                return (tx[model] as any)[operation](currentArgs);
+              });
+            }
+          }
+
 
           // Read operations: inject orgId into where clause
           if (

@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, protectedProcedure, orgMemberProcedure } from '../trpc/trpc';
 import { BillingMetric } from '@prisma/client';
-import { rateLimited, withPlanContext, requirePlanFeature, resolveUsageLimit } from '../trpc/middleware';
+import { rateLimited, withPlanContext, requirePlanFeature, resolveUsageLimit, isAnyAdmin } from '../trpc/middleware';
 import {
   complianceQuerySchema,
   searchDocumentsSchema,
@@ -666,7 +666,7 @@ export const complianceRouter = router({
         // queries are read-only -- even the original author cannot follow up (null !== orgId).
         const userMismatch = originalQuery.userId !== userId;
         const orgMismatch = originalQuery.organizationId !== organizationId;
-        if (ctx.user!.role !== 'ADMIN' && (userMismatch || orgMismatch)) {
+        if (!isAnyAdmin(ctx.user?.role) && (userMismatch || orgMismatch)) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Access denied to this query',
@@ -999,7 +999,7 @@ export const complianceRouter = router({
         };
 
         // Filter by user unless admin (admins see all queries within the org context)
-        if (ctx.user!.role !== 'ADMIN') {
+        if (!isAnyAdmin(ctx.user?.role)) {
           where.userId = userId;
         }
 
@@ -1083,7 +1083,7 @@ export const complianceRouter = router({
         }
 
         // Check access
-        if (ctx.user!.role !== 'ADMIN') {
+        if (!isAnyAdmin(ctx.user?.role)) {
           const hasAccess = query.userId === ctx.user!.id;
 
           if (!hasAccess) {
@@ -1131,7 +1131,7 @@ export const complianceRouter = router({
       }
 
       if (
-        ctx.user!.role !== 'ADMIN' &&
+        !isAnyAdmin(ctx.user?.role) &&
         (originalQuery.userId !== userId || originalQuery.organizationId !== organizationId)
       ) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this query' });
@@ -1547,7 +1547,7 @@ export const complianceRouter = router({
         surface: input.surface,
       });
 
-      ctx.ctx.prisma.auditLog.create({
+      ctx.prisma.auditLog.create({
         data: {
           userId,
           action: 'SUGGESTED_QUERY_CLICKED',
@@ -1607,7 +1607,7 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Query not found' });
       }
 
-      if (ctx.user!.role !== 'ADMIN' && query.userId !== userId) {
+      if (!isAnyAdmin(ctx.user?.role) && query.userId !== userId) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this query' });
       }
 
@@ -1720,7 +1720,7 @@ export const complianceRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Query not found' });
       }
 
-      if (ctx.user!.role !== 'ADMIN' && query.userId !== userId) {
+      if (!isAnyAdmin(ctx.user?.role) && query.userId !== userId) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this query' });
       }
 
@@ -2170,7 +2170,7 @@ export const complianceRouter = router({
       }
 
       // 2. Access check - user owns the query or is admin
-      if (ctx.user!.role !== 'ADMIN' && queryRecord.userId !== userId) {
+      if (!isAnyAdmin(ctx.user?.role) && queryRecord.userId !== userId) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this query' });
       }
 

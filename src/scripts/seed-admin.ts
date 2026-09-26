@@ -62,7 +62,7 @@ async function seedAdmin(): Promise<void> {
     const { error } = await supabaseAdmin.auth.admin.updateUserById(supabaseUser.id, {
       email_confirm: true,
       password,
-      user_metadata: { ...(supabaseUser.user_metadata ?? {}), role: 'ADMIN', fullName },
+      user_metadata: { ...(supabaseUser.user_metadata ?? {}), role: 'SUPER_ADMIN', fullName },
     });
     if (error) throw new Error(`Supabase update failed: ${error.message}`);
     console.log(`  OK Supabase Auth user updated (${supabaseUser.id})`);
@@ -71,7 +71,7 @@ async function seedAdmin(): Promise<void> {
       email,
       password,
       email_confirm: true,
-      user_metadata: { role: 'ADMIN', fullName },
+      user_metadata: { role: 'SUPER_ADMIN', fullName },
     });
     if (error || !data.user) throw new Error(`Supabase create failed: ${error?.message ?? 'unknown'}`);
 
@@ -89,7 +89,7 @@ async function seedAdmin(): Promise<void> {
         supabaseAuthId: supabaseUser.id,
         password: hashedPw,
         fullName: existing.fullName || fullName,
-        role: 'ADMIN',
+        role: 'SUPER_ADMIN',
         status: 'ACTIVE',
         emailVerified: true,
         emailVerifiedAt: (existing as any).emailVerifiedAt ?? new Date(),
@@ -105,7 +105,7 @@ async function seedAdmin(): Promise<void> {
         email,
         password: hashedPw,
         fullName,
-        role: 'ADMIN',
+        role: 'SUPER_ADMIN',
         status: 'ACTIVE',
         emailVerified: true,
         emailVerifiedAt: new Date(),

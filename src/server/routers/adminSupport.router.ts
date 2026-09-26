@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { router, adminProcedure } from '../trpc/trpc';
+import { router, supportAdminProcedure } from '../trpc/trpc';
 import {
   getTicketByNumberSchema,
   adminListTicketsSchema,
@@ -26,7 +26,7 @@ export const adminSupportRouter = router({
    * List all tickets with filtering, search, and pagination
    * @admin
    */
-  list: adminProcedure
+  list: supportAdminProcedure
     .input(adminListTicketsSchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -42,7 +42,7 @@ export const adminSupportRouter = router({
    * Get full ticket detail including user info and all comments
    * @admin
    */
-  getByTicketNumber: adminProcedure
+  getByTicketNumber: supportAdminProcedure
     .input(getTicketByNumberSchema)
     .query(async ({ input, ctx }) => {
       try {
@@ -58,7 +58,7 @@ export const adminSupportRouter = router({
    * Update ticket status and notify the user
    * @admin
    */
-  updateStatus: adminProcedure
+  updateStatus: supportAdminProcedure
     .input(adminUpdateStatusSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -74,7 +74,7 @@ export const adminSupportRouter = router({
    * Add an admin response to a ticket, optionally updating the status
    * @admin
    */
-  addResponse: adminProcedure
+  addResponse: supportAdminProcedure
     .input(adminAddResponseSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -90,7 +90,7 @@ export const adminSupportRouter = router({
    * Get aggregate ticket stats for the admin dashboard
    * @admin
    */
-  stats: adminProcedure.query(async ({ ctx }) => {
+  stats: supportAdminProcedure.query(async ({ ctx }) => {
     try {
       return await getTicketStats(ctx.prisma);
     } catch (error: unknown) {

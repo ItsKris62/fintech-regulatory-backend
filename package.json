@@ -100,6 +100,7 @@
     "@upstash/redis": "^1.36.4",
     "bcryptjs": "^3.0.3",
     "cheerio": "^1.2.0",
+    "cockatiel": "^3.2.1",
     "dayjs": "^1.11.19",
     "docx": "^9.6.1",
     "dotenv": "^17.2.4",

@@ -2,7 +2,14 @@ import { TRPCError } from '@trpc/server';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { MemberRole, PaymentProvider, PaymentStatus, Prisma } from '@prisma/client';
-import { router, adminProcedure } from '../trpc/trpc';
+import {
+  router,
+  adminProcedure,
+  supportAdminProcedure,
+  billingAdminProcedure,
+  securityAdminProcedure,
+  superAdminProcedure,
+} from '../trpc/trpc';
 import { logger } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
 import { adminModule } from '@/modules/admin';

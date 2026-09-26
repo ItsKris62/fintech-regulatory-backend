@@ -1,3 +1,4 @@
+import { executeWithBreaker } from '@/lib/circuit-breaker/circuit-breaker.service';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { logger } from '@/utils/logger';
 import { appConfig } from '@/config/app.config';
@@ -96,21 +97,23 @@ async function withTimeout<T>(
   operation: string,
   timeoutMs = PINECONE_REQUEST_TIMEOUT_MS,
 ): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
+  return executeWithBreaker('pinecone', async () => {
+    let timeout: NodeJS.Timeout | undefined;
 
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  });
 }
 
 /**

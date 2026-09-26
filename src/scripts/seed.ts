@@ -29,7 +29,7 @@ async function seed(): Promise<void> {
       email: adminEmail,
       password: hashedPassword,
       fullName: 'System Admin',
-      role: 'ADMIN',
+      role: 'SUPER_ADMIN',
       status: 'ACTIVE',
       emailVerified: true,
     },

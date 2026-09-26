@@ -35,6 +35,7 @@ import { hashIp } from './utils/request-identifiers';
 import Stripe from 'stripe';
 import * as Sentry from '@sentry/node';
 import { isClientOrExpectedError, sanitizeHeadersForSentry } from './lib/sentry';
+import { formatCircuitBreakerPrometheusMetrics } from './lib/circuit-breaker/circuit-breaker.service';
 
 /**
  * Zod schema for IntaSend webhook payloads.
@@ -682,8 +683,9 @@ export async function buildApp(): Promise<FastifyInstance> {
       `sheriabot_auth_fallback_getuser_total ${contextMetrics.fallbackToGetUser}`,
     ];
 
+    const cbMetrics = formatCircuitBreakerPrometheusMetrics();
     reply.header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-    return lines.join('\n') + '\n';
+    return lines.join('\n') + '\n\n' + cbMetrics + '\n';
   });
 
   // -- Root endpoint --------------------------------------------------------

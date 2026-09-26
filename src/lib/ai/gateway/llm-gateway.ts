@@ -1,3 +1,4 @@
+import { executeWithBreaker } from '@/lib/circuit-breaker/circuit-breaker.service';
 import crypto from 'crypto';
 import { logger, logPerformance } from '@/utils/logger';
 import { redis } from '@/lib/redis/client';
@@ -432,7 +433,7 @@ export class LLMGateway {
           
           const reqWithSignal = { ...req, signal: controller.signal };
 
-          const result = await provider.complete(reqWithSignal);
+          const result = await executeWithBreaker(providerName, () => provider.complete(reqWithSignal));
           clearTimeout(timeoutId);
 
           const { cost } = calculateCost(providerName, model, result.usage.inputTokens, result.usage.outputTokens);
@@ -562,7 +563,7 @@ export class LLMGateway {
             if (origOnChunk) origOnChunk(chunk);
          };
 
-         result = await provider.stream(streamOptsWithSignal);
+         result = await executeWithBreaker(providerName, () => provider.stream(streamOptsWithSignal));
          if (chunkTimeoutId !== null) clearTimeout(chunkTimeoutId);
       } catch (error: any) {
          if (controller.signal.aborted) {

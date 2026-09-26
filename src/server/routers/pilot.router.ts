@@ -9,7 +9,7 @@
  *   pilot.listTesters     -  per-tester rows with engagement metrics
  */
 
-import { router, adminProcedure } from '../trpc/trpc';
+import { router, supportAdminProcedure } from '../trpc/trpc';
 import { logger } from '@/utils/logger';
 import { TRPCError } from '@trpc/server';
 import { randomBytes } from 'crypto';
@@ -126,7 +126,7 @@ async function sendPilotAccessEmail(input: {
 }
 
 export const pilotRouter = router({
-  createPilotTester: adminProcedure
+  createPilotTester: supportAdminProcedure
     .input(createPilotTesterSchema)
     .mutation(async ({ input, ctx }) => {
       const normalizedEmail = input.email.toLowerCase();
@@ -276,7 +276,7 @@ export const pilotRouter = router({
       }
     }),
 
-  reissueTemporaryPassword: adminProcedure
+  reissueTemporaryPassword: supportAdminProcedure
     .input(reissueTemporaryPasswordSchema)
     .mutation(async ({ input, ctx }) => {
       const user = await ctx.ctx.prisma.user.findUnique({
@@ -375,7 +375,7 @@ export const pilotRouter = router({
       };
     }),
 
-  extendPilotAccess: adminProcedure
+  extendPilotAccess: supportAdminProcedure
     .input(extendPilotAccessSchema)
     .mutation(async ({ input, ctx }) => {
       const user = await ctx.ctx.prisma.user.findUnique({
@@ -504,7 +504,7 @@ export const pilotRouter = router({
       };
     }),
 
-  revokePilotAccess: adminProcedure
+  revokePilotAccess: supportAdminProcedure
     .input(revokePilotAccessSchema)
     .mutation(async ({ input, ctx }) => {
       const user = await ctx.ctx.prisma.user.findUnique({
@@ -584,7 +584,7 @@ export const pilotRouter = router({
   /**
    * Aggregate stats for the pilot programme header cards.
    */
-  getStats: adminProcedure.query(async () => {
+  getStats: supportAdminProcedure.query(async () => {
     const now = new Date();
 
     const [total, expiredCount, convertedCount, totalEvents, cohortRows] = await Promise.all([
@@ -617,7 +617,7 @@ export const pilotRouter = router({
    * Per-tester rows with engagement metrics.
    * Sorted newest-first by pilotStartedAt.
    */
-  listTesters: adminProcedure.query(async () => {
+  listTesters: supportAdminProcedure.query(async () => {
     const now = new Date();
 
     const users = await ctx.prisma.user.findMany({

@@ -4,6 +4,8 @@ import { MemberRole } from '@prisma/client';
 import {
   isAuthenticated,
   isAdmin,
+  hasRole,
+  ALL_ADMIN_ROLES,
   isRegulator,
   isStartup,
   isEnterprise,
@@ -330,7 +332,7 @@ export async function executeAdminMfaEnforced({
   path,
   next,
 }: AdminMfaMiddlewareParams) {
-  if (!ctx.user || ctx.user.role !== 'ADMIN') {
+  if (!ctx.user || !ALL_ADMIN_ROLES.includes(ctx.user.role as any)) {
     return next();
   }
 
@@ -402,10 +404,32 @@ export const protectedProcedure = publicProcedure
 
 // --- Role-Specific Procedures ---
 
-export const adminProcedure = protectedProcedure
-  .use(isAdmin)
+export const superAdminProcedure = protectedProcedure
+  .use(hasRole('SUPER_ADMIN'))
   .use(adminMfaEnforced)
   .use(rateLimited('admin_action', 120, { window: 60, identifier: (ctx: { user?: { id: string } }) => ctx.user?.id || '' }));
+
+export const supportAdminProcedure = protectedProcedure
+  .use(hasRole('SUPPORT_ADMIN', 'SUPER_ADMIN'))
+  .use(adminMfaEnforced)
+  .use(rateLimited('admin_action', 120, { window: 60, identifier: (ctx: { user?: { id: string } }) => ctx.user?.id || '' }));
+
+export const billingAdminProcedure = protectedProcedure
+  .use(hasRole('BILLING_ADMIN', 'SUPER_ADMIN'))
+  .use(adminMfaEnforced)
+  .use(rateLimited('admin_action', 120, { window: 60, identifier: (ctx: { user?: { id: string } }) => ctx.user?.id || '' }));
+
+export const securityAdminProcedure = protectedProcedure
+  .use(hasRole('SECURITY_ADMIN', 'SUPER_ADMIN'))
+  .use(adminMfaEnforced)
+  .use(rateLimited('admin_action', 120, { window: 60, identifier: (ctx: { user?: { id: string } }) => ctx.user?.id || '' }));
+
+export const adminProcedure = protectedProcedure
+  .use(hasRole('SUPPORT_ADMIN', 'BILLING_ADMIN', 'SECURITY_ADMIN', 'SUPER_ADMIN'))
+  .use(adminMfaEnforced)
+  .use(rateLimited('admin_action', 120, { window: 60, identifier: (ctx: { user?: { id: string } }) => ctx.user?.id || '' }));
+
+export const allAdminProcedure = adminProcedure;
 export const regulatorProcedure = protectedProcedure.use(isRegulator);
 export const startupProcedure = protectedProcedure.use(isStartup);
 export const enterpriseProcedure = protectedProcedure.use(isEnterprise);

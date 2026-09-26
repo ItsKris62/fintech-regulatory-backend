@@ -117,12 +117,38 @@ export const isAuthenticated = middleware(async ({ ctx, next }) => {
 /**
  * Role-based Middlewares
  */
-export const isAdmin = middleware(async ({ ctx, next }) => {
-  if (!ctx.user || ctx.user.role !== 'ADMIN') {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Admin access required' });
-  }
-  return next({ ctx });
-});
+export const ALL_ADMIN_ROLES = [
+  'SUPER_ADMIN',
+  'SUPPORT_ADMIN',
+  'BILLING_ADMIN',
+  'SECURITY_ADMIN',
+  'ADMIN',
+] as const;
+export type AdminRole = typeof ALL_ADMIN_ROLES[number];
+
+export function isAnyAdmin(role?: string | null): boolean {
+  if (!role) return false;
+  return ALL_ADMIN_ROLES.includes(role as any);
+}
+
+export const hasRole = (...allowedRoles: string[]) =>
+  middleware(async ({ ctx, next }) => {
+    if (!ctx.user) {
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+    const role = ctx.user.role;
+    const isAllowed =
+      allowedRoles.includes(role) ||
+      role === 'SUPER_ADMIN' ||
+      role === 'ADMIN';
+
+    if (!isAllowed) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Insufficient role permissions' });
+    }
+    return next({ ctx });
+  });
+
+export const isAdmin = hasRole(...ALL_ADMIN_ROLES);
 
 export const isRegulator = middleware(async ({ ctx, next }) => {
   if (!ctx.user || ctx.user.role !== 'REGULATOR') {

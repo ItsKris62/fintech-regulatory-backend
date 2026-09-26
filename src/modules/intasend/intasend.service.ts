@@ -101,6 +101,8 @@ export function normalisePhoneNumber(raw: string): string | null {
 // Service methods
 // ---------------------------------------------------------------------------
 
+import { executeWithBreaker } from '@/lib/circuit-breaker/circuit-breaker.service';
+
 const OUTBOUND_TIMEOUT_MS = 10000;
 
 async function withTimeout<T>(
@@ -108,17 +110,19 @@ async function withTimeout<T>(
   timeoutMs: number = OUTBOUND_TIMEOUT_MS,
   operationName: string = 'Operation',
 ): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new AppError(504, 'GATEWAY_TIMEOUT', `${operationName} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+  return executeWithBreaker('intasend', async () => {
+    let timer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new AppError(504, 'GATEWAY_TIMEOUT', `${operationName} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   });
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 class IntaSendService {
