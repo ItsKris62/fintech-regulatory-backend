@@ -9,6 +9,13 @@ declare module 'fastify' {
      */
     rawBody?: Buffer;
   }
+
+  interface RouteShorthandOptions {
+    /**
+     * Request timeout in ms at the route level (e.g. 0 to disable for long-lived SSE streams).
+     */
+    requestTimeout?: number;
+  }
 }
 
-export {};
+export {};

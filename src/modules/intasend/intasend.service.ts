@@ -52,9 +52,9 @@ function getSDK(): IntaSendSDK {
     );
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const IntaSend = require('intasend-node') as IntaSendConstructor;
   _sdk = new IntaSend(publishableKey, secretKey, isTest);
+
   return _sdk;
 }
 
@@ -101,6 +101,26 @@ export function normalisePhoneNumber(raw: string): string | null {
 // Service methods
 // ---------------------------------------------------------------------------
 
+const OUTBOUND_TIMEOUT_MS = 10000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number = OUTBOUND_TIMEOUT_MS,
+  operationName: string = 'Operation',
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new AppError(504, 'GATEWAY_TIMEOUT', `${operationName} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 class IntaSendService {
   /**
    * Initiate an M-Pesa STK push.
@@ -125,13 +145,27 @@ class IntaSendService {
 
     let raw: Record<string, unknown>;
     try {
-      raw = await sdk.collection().mpesaStkPush({
-        phone_number:      input.phoneNumber,
-        amount:            input.amount,
-        narrative:         input.narrative,
-        account_reference: input.accountReference,
-      });
+      raw = await withTimeout(
+        sdk.collection().mpesaStkPush({
+          phone_number:      input.phoneNumber,
+          amount:            input.amount,
+          narrative:         input.narrative,
+          account_reference: input.accountReference,
+        }),
+        OUTBOUND_TIMEOUT_MS,
+        'M-Pesa payment initiation',
+      );
     } catch (err: unknown) {
+      if (err instanceof AppError && err.code === 'GATEWAY_TIMEOUT') {
+        logger.error({
+          type:             'intasend_stk_push_timeout',
+          phoneNumber:      maskedPhone,
+          amount:           input.amount,
+          accountReference: input.accountReference,
+          error:            err.message,
+        });
+        throw err;
+      }
       const message = err instanceof Error ? err.message : String(err);
       logger.error({
         type:             'intasend_stk_push_failed',
@@ -174,12 +208,21 @@ class IntaSendService {
 
     let raw: Record<string, unknown>;
     try {
-      raw = await sdk.collection().status(invoiceId);
+      raw = await withTimeout(
+        sdk.collection().status(invoiceId),
+        OUTBOUND_TIMEOUT_MS,
+        'M-Pesa payment status check',
+      );
     } catch (err: unknown) {
+      if (err instanceof AppError && err.code === 'GATEWAY_TIMEOUT') {
+        logger.error({ type: 'intasend_status_check_timeout', invoiceId, error: err.message });
+        throw err;
+      }
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ type: 'intasend_status_check_failed', invoiceId, error: message });
       throw new AppError(502, 'MPESA_STATUS_CHECK_FAILED', `Failed to check M-Pesa payment status: ${message}`);
     }
+
 
     // The SDK wraps the response body in an `invoice` key
     const invoice = (raw['invoice'] ?? raw) as Record<string, unknown>;

@@ -64,6 +64,7 @@ import {
 const RATE_LIMIT_MAX     = 100; // same window as tRPC rateLimited('complianceQuery')
 const RATE_LIMIT_WINDOW  = 900; // 15 min
 const HEARTBEAT_INTERVAL = 15_000; // 15 s, below Render's ~60 s idle timeout
+export const MAX_STREAM_DURATION_MS = 30 * 60 * 1000; // 30 min maximum stream lifetime watchdog
 const USAGE_TTL_SECONDS  = 35 * 24 * 60 * 60; // 35 days (matches middleware)
 const RAG_TOP_K = 20;
 const RAG_MIN_SCORE = 0.6;
@@ -631,6 +632,7 @@ export async function registerComplianceStreamRoute(
       request.raw.on('close', () => {
         streamController.abort();
         clearInterval(heartbeatTimer);
+        clearTimeout(streamWatchdogTimer);
         logger.info({ type: 'compliance_stream_client_disconnect', userId: auth.userId, queryId: query.id });
       });
 
@@ -640,6 +642,24 @@ export async function registerComplianceStreamRoute(
       const heartbeatTimer = setInterval(() => {
         if (!reply.raw.destroyed) reply.raw.write(sseComment('heartbeat'));
       }, HEARTBEAT_INTERVAL);
+
+      // Max stream lifetime watchdog (30 min)
+      const streamWatchdogTimer = setTimeout(() => {
+        logger.warn({
+          type: 'compliance_stream_watchdog_timeout',
+          userId: auth.userId,
+          queryId: query.id,
+          maxDurationMs: MAX_STREAM_DURATION_MS,
+        });
+        write({
+          type: 'error',
+          message: 'Stream exceeded maximum duration of 30 minutes',
+        });
+        streamController.abort();
+        if (!reply.raw.destroyed) {
+          reply.raw.end();
+        }
+      }, MAX_STREAM_DURATION_MS);
 
       write({
         type: 'connected',
@@ -701,6 +721,7 @@ export async function registerComplianceStreamRoute(
         });
 
         clearInterval(heartbeatTimer);
+        clearTimeout(streamWatchdogTimer);
         reply.raw.end();
 
         await usage.release().catch(() => {});
@@ -821,6 +842,7 @@ export async function registerComplianceStreamRoute(
         });
 
         clearInterval(heartbeatTimer);
+        clearTimeout(streamWatchdogTimer);
         reply.raw.end();
 
         await usage.release().catch(() => {});
@@ -1171,6 +1193,7 @@ export async function registerComplianceStreamRoute(
           await usage.release().catch(() => {});
         }
         clearInterval(heartbeatTimer);
+        clearTimeout(streamWatchdogTimer);
         if (!reply.raw.destroyed) reply.raw.end();
       }
     },

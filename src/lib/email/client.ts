@@ -295,8 +295,10 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
       throw new Error('Global email rate limit exceeded');
     }
 
-    // Send email via Resend
-    const response = await resend.emails.send({
+    const EMAIL_SEND_TIMEOUT_MS = 10000;
+
+    // Send email via Resend with 10s outbound timeout
+    const sendPromise = resend.emails.send({
       from: options.from ?? getSenderAddress(),
       to: effectiveTo,
       subject: options.subject,
@@ -311,6 +313,21 @@ export async function sendEmail(options: EmailOptions): Promise<EmailResult> {
         ? { headers: options.headers }
         : {}),
     });
+
+    let timeoutTimer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutTimer = setTimeout(() => {
+        reject(new Error(`Resend email send timed out after ${EMAIL_SEND_TIMEOUT_MS}ms`));
+      }, EMAIL_SEND_TIMEOUT_MS);
+    });
+
+    let response: Awaited<typeof sendPromise>;
+    try {
+      response = await Promise.race([sendPromise, timeoutPromise]);
+    } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+    }
+
 
     const duration = Date.now() - startTime;
 
