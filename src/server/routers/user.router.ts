@@ -295,7 +295,12 @@ export const userRouter = router({
           await redis.del(`user:session:${supabaseAuthId}`);
         }
 
-        await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch(() => {});
+        await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'user_router_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         // -- 7. Revoke other Prisma sessions -------------------------------
         if (ctx.user.sessionId) {
@@ -519,7 +524,12 @@ export const userRouter = router({
           sessionId: input.sessionId,
         });
 
-        await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch(() => {});
+        await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'user_router_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         return { success: true };
       } catch (error: any) {
@@ -586,7 +596,12 @@ export const userRouter = router({
         count: result.count,
       });
 
-      await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch(() => {});
+      await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'user_router_bg_op_3_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
       return { success: true, sessionsRevoked: result.count };
     } catch (error: any) {
@@ -850,7 +865,12 @@ export const userRouter = router({
       }
 
       // Reset attempt counter on success
-      await redis.del(stepUpAttemptKey).catch(() => {});
+      await redis.del(stepUpAttemptKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'user_router_bg_op_4_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
       await recordFreshMfaVerification(ctx.user.id);
 
@@ -1051,11 +1071,26 @@ export const userRouter = router({
 
         await userCache.delete(ctx.user.id);
         if ((user as any).supabaseAuthId) {
-          await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch(() => {});
+          await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'user_router_bg_op_5_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
         // No userId-keyed session cache exists; fingerprint keys are keyed by sessionId and become unreachable once DB rows are deleted.
-        await redis.del(disableAttemptKey).catch(() => {});
-        await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch(() => {});
+        await redis.del(disableAttemptKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'user_router_bg_op_6_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+        await redis.del(`sheriabot:admin:mfa_verified:${ctx.user.id}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'user_router_bg_op_7_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         logger.info({ type: 'user_totp_disabled', userId: ctx.user.id });
 

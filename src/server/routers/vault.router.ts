@@ -98,7 +98,12 @@ export const vaultRouter = router({
 
         // Track vault upload count for free trial users (fire-and-forget, non-fatal).
         if (ctx.plan === 'FREE_TRIAL') {
-          incrementTrialUsage(ctx.user!.id, 'vaultUploads').catch(() => {});
+          incrementTrialUsage(ctx.user!.id, 'vaultUploads').catch((err: unknown) => {
+      logger.warn({
+        type: 'vault_router_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
 
         return result;

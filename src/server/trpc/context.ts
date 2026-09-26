@@ -507,7 +507,12 @@ export async function createContext({
       if (isRevoked || isBearerRevoked) {
         user = null;
         evictInMemoryUserSession(supabaseUserId);
-        await redis.del(cacheKey).catch(() => {});
+        await redis.del(cacheKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         throw new Error('Token has been revoked');
       }
 
@@ -569,13 +574,23 @@ export async function createContext({
               await Promise.all([
                 redis.set(lastSeenKey(dbUser.id), String(loginNow), { ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS }),
                 redis.set(sessionStartKey(dbUser.id), String(loginNow), { ex: sessionTtlSeconds }),
-              ]).catch(() => {});
+              ]).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
               if (newSession.id) {
                 const fingerprint = buildSessionFingerprint(loginIp, rawUa);
                 await redis
                   .set(sessionFingerprintKey(newSession.id), fingerprint, { ex: sessionTtlSeconds })
-                  .catch(() => {});
+                  .catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_3_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
               }
 
               logger.info({ type: 'context_session_auto_healed', userId: dbUser.id, sessionId: newSession.id });
@@ -586,7 +601,12 @@ export async function createContext({
 
           if (!effectiveSession) {
             logger.warn({ type: 'context_no_active_local_session', userId: dbUser.id });
-            await redis.del(cacheKey).catch(() => {});
+            await redis.del(cacheKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_4_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
           } else {
             user = {
               id: dbUser.id,
@@ -603,8 +623,18 @@ export async function createContext({
 
             // Populate both Redis and in-memory caches
             setInMemoryUserSession(supabaseUserId, user);
-            await redis.set(cacheKey, JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS }).catch(() => {});
-            await redis.set(userSessionKey(dbUser.id), JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS }).catch(() => {});
+            await redis.set(cacheKey, JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS }).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_5_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+            await redis.set(userSessionKey(dbUser.id), JSON.stringify(user), { ex: USER_CACHE_TTL_SECONDS }).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_6_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
           }
         }
       }
@@ -614,7 +644,12 @@ export async function createContext({
         if (!user.sessionId) {
           logger.warn({ type: 'context_missing_local_session', userId: user.id });
           evictInMemoryUserSession(supabaseUserId);
-          await redis.del(cacheKey).catch(() => {});
+          await redis.del(cacheKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_7_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
           user = null;
         }
 
@@ -626,7 +661,12 @@ export async function createContext({
             expiredAt: new Date(user.sessionExpiresAt).toISOString(),
           });
           evictInMemoryUserSession(supabaseUserId);
-          await redis.del(cacheKey).catch(() => {});
+          await redis.del(cacheKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_8_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
           user = null;
         }
 
@@ -647,13 +687,23 @@ export async function createContext({
                 idleSeconds: Math.floor((now - lastSeen) / 1000),
               });
               evictInMemoryUserSession(user.supabaseAuthId);
-              await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+              await redis.del(`user:session:${user.supabaseAuthId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_9_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
               user = null;
             } else {
               // Slide the idle window asynchronously without blocking
               void redis.set(lastSeenKey(idleUserId), String(now), {
                 ex: SESSION_CONFIG.IDLE_TIMEOUT_SECONDS,
-              }).catch(() => {});
+              }).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_10_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
             }
           } catch (idleErr: unknown) {
             logger.warn({
@@ -735,7 +785,12 @@ export async function createContext({
                           });
                       }
                       evictInMemoryUserSession(user.supabaseAuthId);
-                      await redis.del(`user:session:${user.supabaseAuthId}`).catch(() => {});
+                      await redis.del(`user:session:${user.supabaseAuthId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'context_bg_op_11_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
                       user = null;
                     }
                   }

@@ -282,7 +282,12 @@ Extract structured regulatory intelligence adhering to the schema.`;
                 },
               },
             },
-          }).catch(() => {});
+          }).catch((err: unknown) => {
+      logger.warn({
+        type: 'regulatory_enrichment_service_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
       } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err);

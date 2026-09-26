@@ -1,3 +1,4 @@
+import { logger } from '@/utils/logger';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { adminProcedure, router } from '../trpc/trpc';
@@ -42,12 +43,22 @@ async function audit(ctx: any, action: string, entityType: string, entityId: str
       entityId,
       metadata,
     },
-  }).catch(() => {});
+  }).catch((err: unknown) => {
+      logger.warn({
+        type: 'enterprise_contract_router_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 }
 
 async function invalidatePlanCacheForOrg(ctx: any, organizationId: string, source: string) {
   const users = await ctx.prisma.user.findMany({ where: { organizationId }, select: { id: true } });
-  await Promise.all(users.map((user: { id: string }) => redis.del(planCtxCacheKey(user.id)).catch(() => {})));
+  await Promise.all(users.map((user: { id: string }) => redis.del(planCtxCacheKey(user.id)).catch((err: unknown) => {
+      logger.warn({
+        type: 'enterprise_contract_router_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    })));
   await audit(ctx, 'enterprise_contract.plan_cache_invalidated', 'Organization', organizationId, {
     source,
     userCount: users.length,

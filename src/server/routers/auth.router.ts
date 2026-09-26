@@ -410,7 +410,12 @@ export const authRouter = router({
         }
 
         if (invitation?.organizationId) {
-          await redis.del(`sheriabot:orgmem:${user.id}:${invitation.organizationId}`).catch(() => {});
+          await redis.del(`sheriabot:orgmem:${user.id}:${invitation.organizationId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
 
         // Provision organization and owner membership if user has no org yet
@@ -439,7 +444,12 @@ export const authRouter = router({
           }
         }
 
-        initializeNotificationPreferences(user.id).catch(() => {});
+        initializeNotificationPreferences(user.id).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         if (requireEmailVerification && verificationUrl) {
           reactMailer.sendVerificationEmail(user.email, {
@@ -621,7 +631,12 @@ export const authRouter = router({
         if ((user as any).mustChangePassword) {
           const temporaryPasswordExpiresAt = (user as any).temporaryPasswordExpiresAt as Date | null | undefined;
           if (temporaryPasswordExpiresAt && temporaryPasswordExpiresAt <= new Date()) {
-            await supabaseAdmin.auth.admin.signOut(authData.user.id).catch(() => {});
+            await supabaseAdmin.auth.admin.signOut(authData.user.id).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_3_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
             durableTaskRunner.enqueueAuditLog({
               userId: user.id,
               action: 'PILOT_TEMP_PASSWORD_EXPIRED_LOGIN_ATTEMPT',
@@ -696,7 +711,12 @@ export const authRouter = router({
           dbSessionId = session.id;
         } catch (err: any) {
           logger.error({ type: 'auth_login_session_create_failed', userId: user.id, error: err.message });
-          await supabaseAdmin.auth.admin.signOut(authData.user.id).catch(() => {});
+          await supabaseAdmin.auth.admin.signOut(authData.user.id).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_4_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
           throw new TRPCError({
             code: 'INTERNAL_SERVER_ERROR',
             message: 'Unable to create a secure session. Please try again.',
@@ -812,8 +832,18 @@ export const authRouter = router({
         }
 
         if (attempts > 5) {
-          await redis.del(challengeKey).catch(() => {});
-          await redis.del(attemptKey).catch(() => {});
+          await redis.del(challengeKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_5_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+          await redis.del(attemptKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_6_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
           await logSecurityEvent({
             eventType: SECURITY_EVENT_TYPES.MFA_RATE_LIMITED,
             ipAddress: ctx.req.ip,
@@ -845,7 +875,12 @@ export const authRouter = router({
           }
 
           if (userAttempts > 15) {
-            await redis.del(challengeKey).catch(() => {});
+            await redis.del(challengeKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_7_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
             await logSecurityEvent({
               eventType: SECURITY_EVENT_TYPES.MFA_RATE_LIMITED,
               userId: userIdPrefix,
@@ -873,7 +908,12 @@ export const authRouter = router({
             userAgent: ctx.req.headers['user-agent'] as string | undefined,
             metadata: { reason },
           });
-          await redis.del(challengeKey).catch(() => {});
+          await redis.del(challengeKey).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_8_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
           throw new TRPCError({ code: 'UNAUTHORIZED', message: 'MFA session expired. Please sign in again.' });
         }
 
@@ -1001,7 +1041,12 @@ export const authRouter = router({
           redis.del(challengeKey),
           redis.del(attemptKey),
           redis.del(userAttemptKey),
-        ]).catch(() => {});
+        ]).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_9_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         await logSecurityEvent({
           eventType: SECURITY_EVENT_TYPES.MFA_VERIFY_SUCCESS,
@@ -1103,7 +1148,12 @@ export const authRouter = router({
     try {
       await redis.del(userSessionKey(userId));
       if (supabaseAuthId) {
-        await redis.del(`user:session:${supabaseAuthId}`).catch(() => {});
+        await redis.del(`user:session:${supabaseAuthId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_10_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
       }
     } catch (error: unknown) {
       logger.warn({
@@ -1276,14 +1326,39 @@ export const authRouter = router({
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update password. Please try again.' });
         }
 
-        await redis.del(userSessionKey(user.id)).catch(() => {});
+        await redis.del(userSessionKey(user.id)).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_11_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         if ((user as any).supabaseAuthId) {
-          await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch(() => {});
+          await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_12_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
       }
-      await redis.del(lastSeenKey(user.id)).catch(() => {});
-      await redis.del(sessionStartKey(user.id)).catch(() => {});
-      await redis.del(`sheriabot:admin:mfa_verified:${user.id}`).catch(() => {});
+      await redis.del(lastSeenKey(user.id)).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_13_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+      await redis.del(sessionStartKey(user.id)).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_14_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+      await redis.del(`sheriabot:admin:mfa_verified:${user.id}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_15_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
       await ctx.prisma.auditLog.create({
         data: {
@@ -1295,12 +1370,22 @@ export const authRouter = router({
           userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
           metadata: { completedAt: new Date().toISOString() },
         },
-      }).catch(() => {});
+      }).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_16_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
       reactMailer.sendPasswordChangedEmail(user.email, {
         userName: user.fullName || user.email,
         loginUrl: `${appConfig.frontendUrl}/login`,
-      }).catch(() => {});
+      }).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_17_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
       logger.info({ type: 'pilot_temp_password_change_completed', userId: user.id });
       return { success: true, message: 'Password changed successfully.' };
@@ -1459,14 +1544,24 @@ export const authRouter = router({
             redis.del(sessionStartKey(user.id)),
             redis.del(`sheriabot:admin:mfa_verified:${user.id}`),
             ...(supabaseAuthId ? [redis.del(`user:session:${supabaseAuthId}`)] : []),
-          ]).catch(() => {});
+          ]).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_18_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
 
         // F4.6  -  notify the user that their password was changed
         reactMailer.sendPasswordChangedEmail(user.email, {
           userName: user.fullName || user.email,
           loginUrl: `${appConfig.frontendUrl}/login`,
-        }).catch(() => {});
+        }).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_19_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         logger.info({ type: 'auth_password_reset_success', userId: user.id });
 
@@ -1539,7 +1634,12 @@ export const authRouter = router({
             userName: user.fullName || user.email,
             role: user.role,
             dashboardUrl: `${appConfig.frontendUrl}/dashboard`,
-          }).catch(() => {});
+          }).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_20_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
 
         logger.info({ type: 'auth_email_verification_success', userId: user.id, accountStatus: newAccountStatus });
@@ -1700,7 +1800,12 @@ export const authRouter = router({
               userName: user.fullName || user.email,
               role: user.role,
               dashboardUrl: `${appConfig.frontendUrl}/dashboard`,
-            }).catch(() => {});
+            }).catch((err: unknown) => {
+      logger.warn({
+        type: 'auth_router_bg_op_21_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
           }
 
           logger.info({ type: 'auth_email_callback_verified', userId: user.id, accountStatus: newAccountStatus });

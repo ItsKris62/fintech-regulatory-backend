@@ -638,7 +638,12 @@ class IntaSendFinalizationService {
               paymentId: payment.id,
             },
           },
-        }).catch(() => {});
+        }).catch((err: unknown) => {
+      logger.warn({
+        type: 'intasend_finalization_service_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
       }
 
       if (tx.user?.updateMany) {
@@ -648,7 +653,12 @@ class IntaSendFinalizationService {
             pilotAccessStatus: 'CONVERTED',
             pilotConvertedAt: now,
           } as any,
-        }).catch(() => {});
+        }).catch((err: unknown) => {
+      logger.warn({
+        type: 'intasend_finalization_service_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
       }
 
       await tx.auditLog.create({

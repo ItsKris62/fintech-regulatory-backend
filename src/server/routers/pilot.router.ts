@@ -89,7 +89,12 @@ async function invalidatePilotUserCaches(input: {
     ...(input.supabaseAuthId ? [`user:session:${input.supabaseAuthId}`] : []),
     ...(input.organizationId ? [`sheriabot:orgmem:${input.userId}:${input.organizationId}`] : []),
   ];
-  await Promise.all(keys.map((key) => redis.del(key).catch(() => {})));
+  await Promise.all(keys.map((key) => redis.del(key).catch((err: unknown) => {
+      logger.warn({
+        type: 'pilot_router_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    })));
 }
 
 async function sendPilotAccessEmail(input: {
@@ -256,7 +261,12 @@ export const pilotRouter = router({
           emailDeliveryStatus: deliveryStatus,
         };
       } catch (error: unknown) {
-        await supabaseAdmin.auth.admin.deleteUser(authData.user.id).catch(() => {});
+        await supabaseAdmin.auth.admin.deleteUser(authData.user.id).catch((err: unknown) => {
+      logger.warn({
+        type: 'pilot_router_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
@@ -301,7 +311,12 @@ export const pilotRouter = router({
         if (error) {
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update auth password.' });
         }
-        await supabaseAdmin.auth.admin.signOut((user as any).supabaseAuthId).catch(() => {});
+        await supabaseAdmin.auth.admin.signOut((user as any).supabaseAuthId).catch((err: unknown) => {
+      logger.warn({
+        type: 'pilot_router_bg_op_3_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
       }
 
       await ctx.ctx.prisma.user.update({
@@ -536,7 +551,12 @@ export const pilotRouter = router({
 
       await ctx.ctx.prisma.session.deleteMany({ where: { userId: user.id } });
       if (user.supabaseAuthId) {
-        await supabaseAdmin.auth.admin.signOut(user.supabaseAuthId).catch(() => {});
+        await supabaseAdmin.auth.admin.signOut(user.supabaseAuthId).catch((err: unknown) => {
+      logger.warn({
+        type: 'pilot_router_bg_op_4_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
       }
 
       await invalidatePilotUserCaches({

@@ -318,7 +318,12 @@ export async function createUserWithOrganization(
     if (result.organization) {
       await redis
         .del(`sheriabot:orgmem:${result.user.id}:${result.organization.id}`)
-        .catch(() => {});
+        .catch((err: unknown) => {
+      logger.warn({
+        type: 'userProvisioning_service_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     }
 
     createUserWithOrganizationOutputSchema.parse({

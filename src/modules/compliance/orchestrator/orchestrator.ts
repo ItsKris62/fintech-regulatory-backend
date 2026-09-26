@@ -320,6 +320,11 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         wallMs,
         errorMessage:      String(err?.message ?? err),
       },
-    }).catch(() => {}); // double-guard: ignore DB write failure in error path
+    }).catch((err: unknown) => {
+      logger.warn({
+        type: 'orchestrator_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }); // double-guard: ignore DB write failure in error path
   }
 }

@@ -600,7 +600,12 @@ export async function resolveEffectivePlan(input: {
     await (input.prisma as any).pilotAccess.update({
       where: { id: pilotAccessId },
       data: { status: 'EXPIRED' },
-    }).catch(() => {});
+    }).catch((err: unknown) => {
+      logger.warn({
+        type: 'resolve_effective_plan_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     try { await input.redis.del(cacheKey); } catch { /* non-fatal */ }
     logger.info({
       type: 'pilot_access_expired',
@@ -620,7 +625,12 @@ export async function resolveEffectivePlan(input: {
     await input.prisma.user.update({
       where: { id: input.userId },
       data: { pilotAccessStatus: 'EXPIRED' } as any,
-    }).catch(() => {});
+    }).catch((err: unknown) => {
+      logger.warn({
+        type: 'resolve_effective_plan_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     try { await input.redis.del(cacheKey); } catch { /* non-fatal */ }
   }
 

@@ -319,7 +319,12 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
         ipAddress:  ipAddr,
         userAgent:  ua,
       },
-    }).catch(() => {});
+    }).catch((err: unknown) => {
+      logger.warn({
+        type: 'authorization_denied_no_org_audit_write_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     throw new TRPCError({
       code:    'FORBIDDEN',
       message: 'You do not belong to an organization.',
@@ -348,7 +353,12 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
     if (member) {
       entry = member;
       if (member.status === MemberStatus.ACTIVE) {
-        await redis.set(cacheKey, JSON.stringify(member), { ex: 60 }).catch(() => {});
+        await redis.set(cacheKey, JSON.stringify(member), { ex: 60 }).catch((err: unknown) => {
+          logger.warn({
+            type: 'org_membership_cache_write_failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
       }
     }
   }
@@ -370,7 +380,12 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
           ipAddress:  ipAddr,
           userAgent:  ua,
         },
-      }).catch(() => {});
+      }).catch((err: unknown) => {
+        logger.warn({
+          type: 'authorization_denied_rate_limit_audit_write_failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
       throw new TRPCError({
         code:    'TOO_MANY_REQUESTS',
         message: 'Too many authorization failures. Please try again later.',
@@ -389,7 +404,12 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
         ipAddress:  ipAddr,
         userAgent:  ua,
       },
-    }).catch(() => {});
+    }).catch((err: unknown) => {
+      logger.warn({
+        type: 'authorization_denied_audit_write_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
     throw new TRPCError({
       code:    'FORBIDDEN',
@@ -408,7 +428,12 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
       ipAddress:  ipAddr,
       userAgent:  ua,
     },
-  }).catch(() => {});
+  }).catch((err: unknown) => {
+    logger.warn({
+      type: 'authorization_granted_audit_write_failed',
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 
   return next({ ctx: { ...ctx, orgMembership: entry } });
 });

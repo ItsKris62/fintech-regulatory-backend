@@ -67,7 +67,12 @@ async function audit(ctx: any, action: string, entityId: string, metadata: Recor
       entityId,
       metadata,
     },
-  }).catch(() => {});
+  }).catch((err: unknown) => {
+      logger.warn({
+        type: 'custom_framework_router_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 }
 
 async function getFrameworkOrThrow(ctx: any, id: string, organizationId: string) {

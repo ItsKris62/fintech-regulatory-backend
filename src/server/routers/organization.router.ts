@@ -165,7 +165,12 @@ async function revokeMemberAccess(ctx: Context, userId: string, organizationId: 
     logger.warn({ type: 'organization_member_access_revoke_cache_warn', userId, organizationId, error: error.message });
   });
 
-  await revokeAllUserTokens(userId, 'admin_revoke').catch(() => {});
+  await revokeAllUserTokens(userId, 'admin_revoke').catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_1_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   if (supabaseAuthId) {
     await supabaseAdmin.auth.admin.signOut(supabaseAuthId).catch((error: any) => {
       logger.warn({ type: 'organization_member_supabase_signout_warn', userId, organizationId, error: error.message });
@@ -389,8 +394,18 @@ export const organizationRouter = router({
         });
 
         if (ctx.user.role !== 'ADMIN') {
-          await redis.del(`sheriabot:orgmem:${ctx.user.id}:${organization.id}`).catch(() => {});
-          await userCache.delete(ctx.user.id).catch(() => {});
+          await redis.del(`sheriabot:orgmem:${ctx.user.id}:${organization.id}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_2_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+          await userCache.delete(ctx.user.id).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_3_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         }
 
         logger.info({
@@ -629,7 +644,12 @@ export const organizationRouter = router({
         });
 
         // Invalidate cached membership so requireOrgMembership sees the new row
-        await redis.del(`sheriabot:orgmem:${userId}:${organizationId}`).catch(() => {});
+        await redis.del(`sheriabot:orgmem:${userId}:${organizationId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_4_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         logger.info({
           type:          'organization_member_added',
@@ -915,7 +935,12 @@ export const organizationRouter = router({
           },
         });
 
-        await redis.del(`sheriabot:orgmem:${input.userId}:${callerOrgId}`).catch(() => {});
+        await redis.del(`sheriabot:orgmem:${input.userId}:${callerOrgId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_5_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
         await ctx.prisma.auditLog.create({
           data: {
             userId: ctx.user!.id,
@@ -930,7 +955,12 @@ export const organizationRouter = router({
             ipAddress: ctx.req.ip || undefined,
             userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
           },
-        }).catch(() => {});
+        }).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_6_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         logger.info({
           type: 'org_member_role_updated',
@@ -1074,8 +1104,18 @@ export const organizationRouter = router({
         return updated;
       });
 
-      await redis.del(`sheriabot:orgmem:${input.userId}:${organizationId}`).catch(() => {});
-      await userCache.delete(input.userId).catch(() => {});
+      await redis.del(`sheriabot:orgmem:${input.userId}:${organizationId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_7_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+      await userCache.delete(input.userId).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_8_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
       return { success: true, member, message: `${member.user.fullName || member.user.email} has been reactivated.` };
     }),
 
@@ -1874,7 +1914,12 @@ export const organizationRouter = router({
             ipAddress: ctx.req.ip || undefined,
             userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
           },
-        }).catch(() => {});
+        }).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_9_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         if (
           data.homeJurisdictionCode !== undefined &&
@@ -1897,7 +1942,12 @@ export const organizationRouter = router({
               ipAddress: ctx.req.ip || undefined,
               userAgent: ctx.req.headers['user-agent']?.substring(0, 500),
             },
-          }).catch(() => {});
+          }).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_10_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
           logger.info({
             type: 'organization_home_jurisdiction_changed',
@@ -1990,8 +2040,18 @@ export const organizationRouter = router({
           },
         });
 
-        await userCache.delete(ctx.user.id).catch(() => {});
-        await redis.del(`sheriabot:orgmem:${ctx.user.id}:${organizationId}`).catch(() => {});
+        await userCache.delete(ctx.user.id).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_11_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+        await redis.del(`sheriabot:orgmem:${ctx.user.id}:${organizationId}`).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_12_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         logger.info({
           type: 'organization_country_confirmed',
@@ -2072,7 +2132,12 @@ export const organizationRouter = router({
           },
         });
 
-        await userCache.delete(ctx.user.id).catch(() => {});
+        await userCache.delete(ctx.user.id).catch((err: unknown) => {
+      logger.warn({
+        type: 'organization_router_bg_op_13_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
         logger.info({
           type: 'organization_enabled_jurisdictions_updated',

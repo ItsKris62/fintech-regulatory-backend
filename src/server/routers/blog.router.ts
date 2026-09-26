@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { router, publicProcedure, adminProcedure } from '../trpc/trpc';
 import {
   publicListBlogPostsSchema,
@@ -179,23 +180,47 @@ export const blogRouter = router({
       });
     }),
 
-  publicSlugs: publicProcedure.query(async ({ ctx }) => {
-    return ctx.prisma.blogPost.findMany({
-      where: publicBlogWhere(),
-      orderBy: publicBlogOrderBy(),
-      select: { slug: true, updatedAt: true, publishedAt: true },
-    });
-  }),
+  publicSlugs: publicProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(100).optional().default(50),
+          cursor: z.string().optional(),
+        })
+        .optional(),
+    )
+    .query(async ({ input, ctx }) => {
+      const limit = Math.min(input?.limit ?? 50, 100);
+      return ctx.prisma.blogPost.findMany({
+        where: publicBlogWhere(),
+        orderBy: publicBlogOrderBy(),
+        take: limit,
+        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        select: { slug: true, updatedAt: true, publishedAt: true },
+      });
+    }),
 
-  publicTaxonomy: publicProcedure.query(async ({ ctx }) => {
-    const posts = await ctx.prisma.blogPost.findMany({
-      where: publicBlogWhere(),
-      orderBy: publicBlogOrderBy(),
-      select: {
-        category: true,
-        tags: true,
-      },
-    });
+  publicTaxonomy: publicProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(100).optional().default(50),
+          cursor: z.string().optional(),
+        })
+        .optional(),
+    )
+    .query(async ({ input, ctx }) => {
+      const limit = Math.min(input?.limit ?? 50, 100);
+      const posts = await ctx.prisma.blogPost.findMany({
+        where: publicBlogWhere(),
+        orderBy: publicBlogOrderBy(),
+        take: limit,
+        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        select: {
+          category: true,
+          tags: true,
+        },
+      });
 
     const categoryCounts = new Map<string, number>();
     const tagCounts = new Map<string, number>();
