@@ -14,6 +14,7 @@
 import 'dotenv/config';
 import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { prisma } from '@/lib/prisma/client';
+import { withBypassRlsTransaction } from '@/lib/prisma/tenant-scope.extension';
 import { vaultS3Client, vaultStorageConfig } from '@/lib/storage/client';
 import { logger } from '@/utils/logger';
 import { sanitizeErrorMessage } from '@/utils/error-sanitizer';
@@ -40,21 +41,23 @@ export async function cleanupDeletedVaultDocuments(options: VaultCleanupOptions 
 
   const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
 
-  const rows = await prisma.vaultDocument.findMany({
-    where: {
-      deletedAt: { not: null, lte: cutoff },
-      uploadStatus: 'DELETED',
-    },
-    select: {
-      id: true,
-      storageKey: true,
-      r2Bucket: true,
-      organizationId: true,
-      uploadedById: true,
-      deletedAt: true,
-    },
-    take: 500,
-    orderBy: { deletedAt: 'asc' },
+  const rows = await withBypassRlsTransaction(prisma, async (tx) => {
+    return tx.vaultDocument.findMany({
+      where: {
+        deletedAt: { not: null, lte: cutoff },
+        uploadStatus: 'DELETED',
+      },
+      select: {
+        id: true,
+        storageKey: true,
+        r2Bucket: true,
+        organizationId: true,
+        uploadedById: true,
+        deletedAt: true,
+      },
+      take: 500,
+      orderBy: { deletedAt: 'asc' },
+    });
   });
 
   let purged = 0;
@@ -69,8 +72,8 @@ export async function cleanupDeletedVaultDocuments(options: VaultCleanupOptions 
         }),
       );
 
-      await prisma.$transaction([
-        prisma.auditLog.create({
+      await withBypassRlsTransaction(prisma, async (tx) => {
+        await tx.auditLog.create({
           data: {
             userId: row.uploadedById,
             action: 'vault_document_retention_purged',
@@ -83,9 +86,9 @@ export async function cleanupDeletedVaultDocuments(options: VaultCleanupOptions 
               retentionDays,
             },
           },
-        }),
-        prisma.vaultDocument.delete({ where: { id: row.id } }),
-      ]);
+        });
+        await tx.vaultDocument.delete({ where: { id: row.id } });
+      });
 
       purged++;
       logger.info({

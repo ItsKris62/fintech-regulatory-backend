@@ -71,7 +71,9 @@ export async function withTenantRlsTransaction<T>(
   }
 
   return prisma.$transaction(async (tx: any) => {
-    await tx.$executeRawUnsafe("SELECT set_config('app.current_org_id', $1, true)", orgId);
+    if (typeof tx?.$executeRawUnsafe === 'function') {
+      await tx.$executeRawUnsafe("SELECT set_config('app.current_org_id', $1, true)", orgId);
+    }
     return callback(tx);
   });
 }
@@ -91,8 +93,29 @@ export async function withBypassRlsTransaction<T>(
   }
 
   return prisma.$transaction(async (tx: any) => {
-    await tx.$executeRawUnsafe("SELECT set_config('app.bypass_rls', 'true', true)");
-    return callback(tx);
+    if (typeof tx?.$executeRawUnsafe === 'function') {
+      await tx.$executeRawUnsafe("SELECT set_config('app.bypass_rls', 'true', true)");
+    }
+    const proxyTx = new Proxy(tx, {
+      get(target, prop, receiver) {
+        if (prop in target) {
+          const val = Reflect.get(target, prop, receiver);
+          if (typeof val === 'object' && val !== null && prop in prisma) {
+            return new Proxy(val, {
+              get(subTarget, subProp, subReceiver) {
+                if (subProp in subTarget) {
+                  return Reflect.get(subTarget, subProp, subReceiver);
+                }
+                return (prisma as any)[prop]?.[subProp];
+              },
+            });
+          }
+          return val;
+        }
+        return (prisma as any)[prop];
+      },
+    });
+    return callback(proxyTx);
   });
 }
 
@@ -108,6 +131,10 @@ export function createTenantScopedPrisma(
   orgId?: string | null,
   options?: TenantScopedPrismaOptions,
 ) {
+  if (typeof basePrisma?.$extends !== 'function') {
+    return basePrisma;
+  }
+
   return basePrisma.$extends({
     name: 'tenant-scope-extension',
     query: {
@@ -128,13 +155,6 @@ export function createTenantScopedPrisma(
             return query(args);
           }
 
-          // Strict tenancy validation: orgId must be present
-          if (!orgId || typeof orgId !== 'string' || orgId.trim() === '') {
-            throw new Error(
-              `Tenant context error: orgId is missing from context for tenant-scoped model "${model}"`
-            );
-          }
-
           const currentArgs = args ? { ...args } : {};
 
           // Special handling for VaultDocument: Postgres RLS Pilot (Option A)
@@ -149,6 +169,17 @@ export function createTenantScopedPrisma(
                 return (tx[model] as any)[operation](currentArgs);
               });
             }
+          }
+
+          if (options?.bypassRls) {
+            return query(currentArgs);
+          }
+
+          // Strict tenancy validation: orgId must be present
+          if (!orgId || typeof orgId !== 'string' || orgId.trim() === '') {
+            throw new Error(
+              `Tenant context error: orgId is missing from context for tenant-scoped model "${model}"`
+            );
           }
 
 

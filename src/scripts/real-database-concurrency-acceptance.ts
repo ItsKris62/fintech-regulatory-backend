@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { prisma } from '../lib/prisma/client';
+import { withBypassRlsTransaction } from '../lib/prisma/tenant-scope.extension';
 import { redis } from '../lib/redis/client';
 import { PLAN_ENTITLEMENTS } from '../config/entitlements.config';
 import { usageReservationService } from '../services/usage-reservation.service';
@@ -559,21 +560,23 @@ async function runRealDatabaseConcurrencyTests() {
     console.log('\n[7/8] Running Check 7: Upload Limits & Quarantine Download Protection...');
     
     // Create an unverified / quarantined document record in DB
-    const quarantinedDoc = await prisma.vaultDocument.create({
-      data: {
-        organizationId: org1.id,
-        uploadedById: owner1.id,
-        name: 'suspicious_file.pdf',
-        fileName: 'suspicious_file.pdf',
-        fileType: 'application/pdf',
-        fileExtension: '.pdf',
-        fileSize: 2 * 1024 * 1024,
-        storageKey: `${org1.id}/suspicious_file.pdf`,
-        category: 'OTHER',
-        r2Bucket: 'sheriabot-storage',
-        uploadStatus: 'QUARANTINED',
-        status: 'PENDING',
-      },
+    const quarantinedDoc = await withBypassRlsTransaction(prisma, async (tx) => {
+      return tx.vaultDocument.create({
+        data: {
+          organizationId: org1.id,
+          uploadedById: owner1.id,
+          name: 'suspicious_file.pdf',
+          fileName: 'suspicious_file.pdf',
+          fileType: 'application/pdf',
+          fileExtension: '.pdf',
+          fileSize: 2 * 1024 * 1024,
+          storageKey: `${org1.id}/suspicious_file.pdf`,
+          category: 'OTHER',
+          r2Bucket: 'sheriabot-storage',
+          uploadStatus: 'QUARANTINED',
+          status: 'PENDING',
+        },
+      });
     });
 
     // Attempt to download quarantined document via vault service logic
@@ -662,8 +665,10 @@ async function runRealDatabaseConcurrencyTests() {
         await prisma.usageRecord.deleteMany({
           where: { organizationId: { in: createdOrgIds } },
         });
-        await prisma.vaultDocument.deleteMany({
-          where: { organizationId: { in: createdOrgIds } },
+        await withBypassRlsTransaction(prisma, async (tx) => {
+          return tx.vaultDocument.deleteMany({
+            where: { organizationId: { in: createdOrgIds } },
+          });
         });
         await prisma.invitation.deleteMany({
           where: { organizationId: { in: createdOrgIds } },

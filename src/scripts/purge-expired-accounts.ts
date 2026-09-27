@@ -26,6 +26,7 @@
 import 'dotenv/config';
 import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { prisma } from '@/lib/prisma/client';
+import { withBypassRlsTransaction, createTenantScopedPrisma } from '@/lib/prisma/tenant-scope.extension';
 import { supabaseAdmin } from '@/lib/supabase';
 import { redis } from '@/lib/redis/client';
 import { appConfig } from '@/config/app.config';
@@ -262,7 +263,8 @@ export async function purgeExpiredAccounts(options: PurgeOptions = {}): Promise<
     }
 
     // 6. Collect vault documents from sheriabot-storage (all soft-deleted and active)
-    const userVaultDocs = await prisma.vaultDocument.findMany({
+    const scopedPrisma = createTenantScopedPrisma(prisma, undefined, { bypassRls: true });
+    const userVaultDocs = await scopedPrisma.vaultDocument.findMany({
       where: user.organizationId
         ? { OR: [{ uploadedById: user.id }, { organizationId: user.organizationId }] }
         : { uploadedById: user.id },
@@ -395,7 +397,7 @@ export async function purgeExpiredAccounts(options: PurgeOptions = {}): Promise<
       }
 
       // 4. Execute Relational Disassociation & Complete PII Erasure in a Database Transaction
-      await prisma.$transaction(async (tx) => {
+      await withBypassRlsTransaction(prisma, async (tx) => {
         // Disassociate user from licenses
         await tx.license.updateMany({
           where: { assignedOwnerId: user.id },

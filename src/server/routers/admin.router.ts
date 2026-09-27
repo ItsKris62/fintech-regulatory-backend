@@ -11,6 +11,7 @@ import {
   superAdminProcedure,
 } from '../trpc/trpc';
 import { logger } from '@/utils/logger';
+import { withBypassRlsTransaction } from '@/lib/prisma/tenant-scope.extension';
 import { redis } from '@/lib/redis/client';
 import { adminModule } from '@/modules/admin';
 import { appConfig } from '@/config/app.config';
@@ -1530,14 +1531,16 @@ export const adminRouter = router({
       failed,
       missingContentHash,
       recentlyUploadedLast7d
-    ] = await Promise.all([
-      ctx.prisma.vaultDocument.count(),
-      ctx.prisma.vaultDocument.count({ where: { uploadStatus: 'VERIFIED' } }),
-      ctx.prisma.vaultDocument.count({ where: { uploadStatus: 'PENDING' } }),
-      ctx.prisma.vaultDocument.count({ where: { uploadStatus: 'FAILED' } }),
-      ctx.prisma.vaultDocument.count({ where: { contentHash: null } }),
-      ctx.prisma.vaultDocument.count({ where: { createdAt: { gte: sevenDaysAgo } } })
-    ]);
+    ] = await withBypassRlsTransaction(ctx.prisma, async (tx) => {
+      return Promise.all([
+        tx.vaultDocument.count(),
+        tx.vaultDocument.count({ where: { uploadStatus: 'VERIFIED' } }),
+        tx.vaultDocument.count({ where: { uploadStatus: 'PENDING' } }),
+        tx.vaultDocument.count({ where: { uploadStatus: 'FAILED' } }),
+        tx.vaultDocument.count({ where: { contentHash: null } }),
+        tx.vaultDocument.count({ where: { createdAt: { gte: sevenDaysAgo } } })
+      ]);
+    });
 
     const malwareEnabled = appConfig.malwareScanEnabled;
     const malwareConfigured = !!appConfig.clamav.host;

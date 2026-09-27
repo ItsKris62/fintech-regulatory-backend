@@ -19,6 +19,7 @@
 
 import { BillingMetric, SubscriptionPlan, type UsagePeriod } from '@prisma/client';
 import { prisma } from '@/lib/prisma/client';
+import { withBypassRlsTransaction } from '@/lib/prisma/tenant-scope.extension';
 import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
@@ -319,9 +320,11 @@ class UsageTrackingService {
 
     const readAuthoritativeStorage = async (): Promise<number> => {
       try {
-        const agg = await prisma.vaultDocument.aggregate({
-          where: { organizationId: orgId, isArchived: false, deletedAt: null },
-          _sum: { fileSize: true },
+        const agg = await withBypassRlsTransaction(prisma, async (tx) => {
+          return tx.vaultDocument.aggregate({
+            where: { organizationId: orgId, isArchived: false, deletedAt: null },
+            _sum: { fileSize: true },
+          });
         });
         const bytes = agg._sum.fileSize ?? 0;
         return Math.round((bytes / (1024 * 1024)) * 100) / 100;
