@@ -7,6 +7,7 @@ import { rateLimiter } from '@/lib/redis/rate-limiter';
 import { logger } from '@/utils/logger';
 import { prisma } from '@/lib/prisma/client';
 import { redis } from '@/lib/redis/client';
+import { auditMetrics } from '@/lib/metrics/audit-metrics';
 import {
   getQuota,
   getQuotaFromEntitlements,
@@ -177,7 +178,7 @@ export const isEnterprise = middleware(async ({ ctx, next }) => {
 export const rateLimited = (
   action: string,
   maxRequests?: number,
-  opts?: { window?: number; identifier?: (ctx: { req: { ip: string } }) => string },
+  opts?: { window?: number; identifier?: (ctx: any) => string },
 ) =>
   middleware(async ({ ctx, next }) => {
     // For public (unauthenticated) procedures pass opts.identifier to use
@@ -346,6 +347,7 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
         userAgent:  ua,
       },
     }).catch((err: unknown) => {
+      auditMetrics.incrementFailure('authorization_denied_no_org_audit_write_failed');
       logger.warn({
         type: 'authorization_denied_no_org_audit_write_failed',
         error: err instanceof Error ? err.message : String(err),
@@ -407,6 +409,7 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
           userAgent:  ua,
         },
       }).catch((err: unknown) => {
+        auditMetrics.incrementFailure('authorization_denied_rate_limit_audit_write_failed');
         logger.warn({
           type: 'authorization_denied_rate_limit_audit_write_failed',
           error: err instanceof Error ? err.message : String(err),
@@ -431,6 +434,7 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
         userAgent:  ua,
       },
     }).catch((err: unknown) => {
+      auditMetrics.incrementFailure('authorization_denied_audit_write_failed');
       logger.warn({
         type: 'authorization_denied_audit_write_failed',
         error: err instanceof Error ? err.message : String(err),
@@ -455,6 +459,7 @@ export const requireOrgMembership = middleware(async ({ ctx, next }) => {
       userAgent:  ua,
     },
   }).catch((err: unknown) => {
+    auditMetrics.incrementFailure('authorization_granted_audit_write_failed');
     logger.warn({
       type: 'authorization_granted_audit_write_failed',
       error: err instanceof Error ? err.message : String(err),

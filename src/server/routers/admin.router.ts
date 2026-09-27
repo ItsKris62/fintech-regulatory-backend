@@ -2262,21 +2262,6 @@ export const adminRouter = router({
       }
     }),
 
-  // --- IMPERSONATION --------------------------------------------------------
-
-  impersonateUser: adminProcedure
-    .input(z.object({ userId: z.string() }))
-    .mutation(async ({ input, ctx }) => {
-      try {
-        const token = await adminModule.impersonateUser(ctx.user!.id, input.userId);
-        logger.info({ type: 'admin_impersonate_user', adminId: ctx.user!.id, targetUserId: input.userId });
-        return token;
-      } catch (error: any) {
-        if (error instanceof TRPCError) throw error;
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create impersonation token', cause: error });
-      }
-    }),
-
   // --- ORGANIZATION UPDATE --------------------------------------------------
 
   updateOrganization: adminProcedure

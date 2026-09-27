@@ -3,7 +3,6 @@ import { router, baseProcedure, middleware } from './init';
 import { MemberRole } from '@prisma/client';
 import {
   isAuthenticated,
-  isAdmin,
   hasRole,
   ALL_ADMIN_ROLES,
   isRegulator,
@@ -325,7 +324,16 @@ export async function recordFreshMfaVerification(userId: string): Promise<void> 
  *    (disableTotp, regenerateBackupCodes, passkey modifications, admin.auth.* mutations)
  *    strictly require a verified fresh MFA challenge within the last 15 minutes.
  */
-export type AdminMfaMiddlewareParams = Parameters<Parameters<typeof middleware>[0]>[0];
+export interface AdminMfaMiddlewareParams {
+  ctx: {
+    user?: any;
+    req?: any;
+    [key: string]: any;
+  };
+  path: string;
+  next: (opts?: any) => Promise<any>;
+  [key: string]: any;
+}
 
 export async function executeAdminMfaEnforced({
   ctx,

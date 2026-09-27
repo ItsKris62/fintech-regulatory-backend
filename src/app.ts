@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import { z } from 'zod';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { createContext, contextMetrics } from './server/trpc/context';
+import { auditMetrics } from './lib/metrics/audit-metrics';
 import { appRouter } from './server/trpc/router';
 import { logger } from './utils/logger';
 import { sanitizeErrorMessage } from './utils/error-sanitizer';
@@ -684,8 +685,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     ];
 
     const cbMetrics = formatCircuitBreakerPrometheusMetrics();
+    const audMetrics = auditMetrics.formatPrometheus();
     reply.header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-    return lines.join('\n') + '\n\n' + cbMetrics + '\n';
+    return lines.join('\n') + '\n\n' + cbMetrics + '\n\n' + audMetrics + '\n';
   });
 
   // -- Root endpoint --------------------------------------------------------

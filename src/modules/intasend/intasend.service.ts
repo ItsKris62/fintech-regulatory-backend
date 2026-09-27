@@ -52,10 +52,15 @@ function getSDK(): IntaSendSDK {
     );
   }
 
-  const IntaSend = require('intasend-node') as IntaSendConstructor;
+  const IntaSendPkg = require('intasend-node');
+  const IntaSend = (IntaSendPkg.default ?? IntaSendPkg) as IntaSendConstructor;
   _sdk = new IntaSend(publishableKey, secretKey, isTest);
 
   return _sdk;
+}
+
+export function _resetSDK(): void {
+  _sdk = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,21 +111,40 @@ import { executeWithBreaker } from '@/lib/circuit-breaker/circuit-breaker.servic
 const OUTBOUND_TIMEOUT_MS = 10000;
 
 async function withTimeout<T>(
-  promise: Promise<T>,
+  promiseOrFn: Promise<T> | (() => Promise<T>),
   timeoutMs: number = OUTBOUND_TIMEOUT_MS,
   operationName: string = 'Operation',
+  signal?: AbortSignal,
 ): Promise<T> {
+  if (signal?.aborted) {
+    throw new AppError(499, 'REQUEST_ABORTED', `${operationName} aborted by caller`);
+  }
+
   return executeWithBreaker('intasend', async () => {
     let timer: NodeJS.Timeout | undefined;
+    let abortListener: (() => void) | undefined;
+
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         reject(new AppError(504, 'GATEWAY_TIMEOUT', `${operationName} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
+
+      if (signal) {
+        abortListener = () => {
+          reject(new AppError(499, 'REQUEST_ABORTED', `${operationName} aborted by caller`));
+        };
+        signal.addEventListener('abort', abortListener, { once: true });
+      }
     });
+
     try {
+      const promise = typeof promiseOrFn === 'function' ? promiseOrFn() : promiseOrFn;
       return await Promise.race([promise, timeoutPromise]);
     } finally {
       if (timer) clearTimeout(timer);
+      if (signal && abortListener) {
+        signal.removeEventListener('abort', abortListener);
+      }
     }
   });
 }
@@ -130,10 +154,16 @@ class IntaSendService {
    * Initiate an M-Pesa STK push.
    *
    * @param input - phoneNumber (254XXXXXXXXX), amount in KES (whole number,
-   *                NOT cents), accountReference, and narrative.
+   *                NOT cents), accountReference, narrative, and optional signal.
+   * @param signal - optional AbortSignal for cancellation.
    * @returns invoiceId for status polling + raw response for metadata storage.
    */
-  async initiateSTKPush(input: STKPushInput): Promise<STKPushResponse> {
+  async initiateSTKPush(input: STKPushInput, signal?: AbortSignal): Promise<STKPushResponse> {
+    const effectiveSignal = signal ?? input.signal;
+    if (effectiveSignal?.aborted) {
+      throw new AppError(499, 'REQUEST_ABORTED', 'M-Pesa payment initiation aborted by caller');
+    }
+
     const sdk = getSDK();
 
     // Mask phone for logging  -  show only last 4 digits
@@ -150,7 +180,7 @@ class IntaSendService {
     let raw: Record<string, unknown>;
     try {
       raw = await withTimeout(
-        sdk.collection().mpesaStkPush({
+        () => sdk.collection().mpesaStkPush({
           phone_number:      input.phoneNumber,
           amount:            input.amount,
           narrative:         input.narrative,
@@ -158,11 +188,12 @@ class IntaSendService {
         }),
         OUTBOUND_TIMEOUT_MS,
         'M-Pesa payment initiation',
+        effectiveSignal,
       );
     } catch (err: unknown) {
-      if (err instanceof AppError && err.code === 'GATEWAY_TIMEOUT') {
+      if (err instanceof AppError && (err.code === 'GATEWAY_TIMEOUT' || err.code === 'REQUEST_ABORTED')) {
         logger.error({
-          type:             'intasend_stk_push_timeout',
+          type:             err.code === 'GATEWAY_TIMEOUT' ? 'intasend_stk_push_timeout' : 'intasend_stk_push_aborted',
           phoneNumber:      maskedPhone,
           amount:           input.amount,
           accountReference: input.accountReference,
@@ -207,19 +238,28 @@ class IntaSendService {
    * Called both by the frontend polling endpoint and by the webhook handler
    * to re-verify the reported state before acting on it.
    */
-  async getPaymentStatus(invoiceId: string): Promise<PaymentStatusResponse> {
+  async getPaymentStatus(invoiceId: string, signal?: AbortSignal): Promise<PaymentStatusResponse> {
+    if (signal?.aborted) {
+      throw new AppError(499, 'REQUEST_ABORTED', 'M-Pesa payment status check aborted by caller');
+    }
+
     const sdk = getSDK();
 
     let raw: Record<string, unknown>;
     try {
       raw = await withTimeout(
-        sdk.collection().status(invoiceId),
+        () => sdk.collection().status(invoiceId),
         OUTBOUND_TIMEOUT_MS,
         'M-Pesa payment status check',
+        signal,
       );
     } catch (err: unknown) {
-      if (err instanceof AppError && err.code === 'GATEWAY_TIMEOUT') {
-        logger.error({ type: 'intasend_status_check_timeout', invoiceId, error: err.message });
+      if (err instanceof AppError && (err.code === 'GATEWAY_TIMEOUT' || err.code === 'REQUEST_ABORTED')) {
+        logger.error({
+          type: err.code === 'GATEWAY_TIMEOUT' ? 'intasend_status_check_timeout' : 'intasend_status_check_aborted',
+          invoiceId,
+          error: err.message,
+        });
         throw err;
       }
       const message = err instanceof Error ? err.message : String(err);

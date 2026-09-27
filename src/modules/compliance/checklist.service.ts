@@ -1062,9 +1062,12 @@ class ChecklistService {
     orgId:   string,
     input:   UpdateChecklistItemInput
   ): Promise<UpdateItemResult> {
-    // 1. Fetch the item.
-    const item = await prisma.checklistItem.findUnique({
-      where: { id: input.itemId },
+    // 1. Fetch the item with Policy B: scope through parent checklist relation
+    const item = await prisma.checklistItem.findFirst({
+      where: {
+        id: input.itemId,
+        checklist: { organizationId: orgId, deletedAt: null },
+      },
     });
 
     if (!item) {

@@ -20,6 +20,7 @@ import { logger } from '@/utils/logger';
 import { config } from '@/config';
 import { verifyPassword } from '@/modules/auth/auth.utils';
 import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
+import { auditMetrics } from '@/lib/metrics/audit-metrics';
 import {
   toUserProfile,
   parsePreferences,
@@ -764,6 +765,7 @@ class UserModule {
           resourceId: user.id,
         },
       }).catch((err: unknown) => {
+        auditMetrics.incrementFailure('data_deletion_requested_audit_write_failed');
         logger.warn({
           type: 'data_deletion_requested_audit_write_failed',
           error: err instanceof Error ? err.message : String(err),
@@ -955,6 +957,7 @@ class UserModule {
           resourceId: user.id,
         },
       }).catch((err: unknown) => {
+        auditMetrics.incrementFailure('data_export_requested_audit_write_failed');
         logger.warn({
           type: 'data_export_requested_audit_write_failed',
           error: err instanceof Error ? err.message : String(err),

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { prisma } from '@/lib/prisma/client';
 import { logSecurityEvent, SECURITY_EVENT_TYPES } from './audit.service';
 import { logger } from '@/utils/logger';
+import { auditMetrics } from '@/lib/metrics/audit-metrics';
 
 export interface CreateApiKeyInput {
   userId: string;
@@ -44,6 +45,7 @@ export class ApiKeyService {
         name: apiKey.name,
       },
     }).catch((err: unknown) => {
+      auditMetrics.incrementFailure('api_key_created_audit_write_failed');
       logger.warn({
         type: 'api_key_created_audit_write_failed',
         error: err instanceof Error ? err.message : String(err),
@@ -75,6 +77,7 @@ export class ApiKeyService {
         resourceId: updated.id,
       },
     }).catch((err: unknown) => {
+      auditMetrics.incrementFailure('api_key_revoked_audit_write_failed');
       logger.warn({
         type: 'api_key_revoked_audit_write_failed',
         error: err instanceof Error ? err.message : String(err),

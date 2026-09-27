@@ -13,6 +13,7 @@ import { logger } from '@/utils/logger';
 import { intaSendService } from '@/modules/intasend/intasend.service';
 import { normaliseIntaSendState, type IntaSendWebhookPayload } from '@/modules/intasend/intasend.types';
 import { intaSendFinalizationService } from '@/modules/billing/intasend-finalization.service';
+import { auditMetrics } from '@/lib/metrics/audit-metrics';
 
 async function writeWebhookAudit(
   action: string,
@@ -29,6 +30,7 @@ async function writeWebhookAudit(
       },
     });
   } catch (err: unknown) {
+    auditMetrics.incrementFailure('intasend_webhook_audit_write_failed');
     logger.error({
       type: 'intasend_webhook_audit_write_failed',
       action,

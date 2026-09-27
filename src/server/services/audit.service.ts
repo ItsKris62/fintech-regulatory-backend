@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
+import { auditMetrics } from '@/lib/metrics/audit-metrics';
 
 export const SECURITY_EVENT_TYPES = {
   MFA_CHALLENGE_ISSUED: 'MFA_CHALLENGE_ISSUED',
@@ -141,6 +142,7 @@ export async function logSecurityEvent(params: LogSecurityEventParams): Promise<
       organizationId: params.organizationId,
     });
   } catch (error: any) {
+    auditMetrics.incrementFailure('security_audit_log_failed');
     logger.error({
       type: 'security_audit_log_failed',
       eventType: params.eventType,

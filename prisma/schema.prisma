@@ -4740,3 +4740,16 @@ model BlogRevisionRequest {
   @@index([status, priority])
   @@index([createdAt])
 }
+
+// Stripe webhook event persistence for durable idempotency (Phase 2 deferred)
+model StripeWebhookEvent {
+  id          String    @id @default(cuid())
+  eventId     String    @unique
+  eventType   String
+  status      String    @default("PROCESSING") // PROCESSING, PROCESSED, FAILED
+  error       String?   @db.Text
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([status, createdAt])
+}

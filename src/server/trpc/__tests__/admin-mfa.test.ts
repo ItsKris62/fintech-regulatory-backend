@@ -1,12 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
   executeAdminMfaEnforced,
-  ADMIN_ZERO_FACTOR_ALLOWED_PATHS,
-  ADMIN_STEP_UP_MUTATION_PATHS,
   recordFreshMfaVerification,
-  isFreshMfaChallengeVerified,
 } from '../trpc';
-import { TRPCError } from '@trpc/server';
 import { redis } from '@/lib/redis/client';
 
 vi.mock('@/lib/redis/client', () => {

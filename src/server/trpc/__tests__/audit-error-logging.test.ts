@@ -71,4 +71,36 @@ describe('F-10: Audit log error swallowing', () => {
       }),
     );
   });
+
+  it('increments audit failure metrics counter when audit write fails (F-10)', async () => {
+    const { auditMetrics } = await import('@/lib/metrics/audit-metrics');
+    auditMetrics.reset();
+
+    mockAuditCreate.mockRejectedValue(new Error('Database unavailable'));
+
+    const ctx: any = {
+      user: { id: 'usr_456', organizationId: 'org_456' },
+      req: { ip: '127.0.0.1', headers: { 'user-agent': 'test-agent' } },
+    };
+
+    const { prisma } = await import('@/lib/prisma/client');
+    (prisma.organizationMember.findUnique as any).mockResolvedValueOnce({
+      userId: 'usr_456',
+      organizationId: 'org_456',
+      role: 'MEMBER',
+      status: 'ACTIVE',
+    });
+
+    const testRouter = router({
+      testProc: baseProcedure.use(requireOrgMembership).query(() => ({ ok: true })),
+    });
+
+    const caller = testRouter.createCaller(ctx);
+    await caller.testProc();
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(auditMetrics.getMetrics().failures).toBe(1);
+    expect(auditMetrics.getMetrics().byType['authorization_granted_audit_write_failed']).toBe(1);
+  });
 });

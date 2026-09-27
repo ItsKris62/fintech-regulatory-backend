@@ -117,6 +117,22 @@ class StripeWebhookService {
       appConfig.stripe.webhookSecret,
     );
 
+    // Persistent DB Idempotency Check (Phase 2 deferred)
+    if ((prisma as any).stripeWebhookEvent) {
+      const existing = await (prisma as any).stripeWebhookEvent.findUnique({
+        where: { eventId: event.id },
+      });
+      if (existing && (existing.status === 'PROCESSED' || existing.status === 'PROCESSING')) {
+        logger.info({
+          type: 'webhook_duplicate_skipped',
+          eventId: event.id,
+          eventType: event.type,
+          source: 'db',
+        });
+        return;
+      }
+    }
+
     // Idempotency guard  -  Stripe retries webhooks for up to 3 days.
     // SET NX is atomic: only one concurrent delivery wins; retries see the key and skip.
     const alreadyProcessed = await this.markProcessed(event.id);
@@ -125,8 +141,27 @@ class StripeWebhookService {
         type: 'webhook_duplicate_skipped',
         eventId: event.id,
         eventType: event.type,
+        source: 'redis',
       });
       return;
+    }
+
+    if ((prisma as any).stripeWebhookEvent) {
+      try {
+        await (prisma as any).stripeWebhookEvent.create({
+          data: {
+            eventId: event.id,
+            eventType: event.type,
+            status: 'PROCESSING',
+          },
+        });
+      } catch (dbErr: unknown) {
+        logger.warn({
+          type: 'webhook_db_record_create_failed',
+          eventId: event.id,
+          error: dbErr instanceof Error ? dbErr.message : String(dbErr),
+        });
+      }
     }
 
     try {
@@ -155,7 +190,30 @@ class StripeWebhookService {
           // Ignore unhandled event types  -  Stripe sends many others
           logger.debug({ type: 'stripe_webhook_unhandled', eventType: event.type });
       }
+
+      if ((prisma as any).stripeWebhookEvent) {
+        await (prisma as any).stripeWebhookEvent.update({
+          where: { eventId: event.id },
+          data: {
+            status: 'PROCESSED',
+            processedAt: new Date(),
+          },
+        });
+      }
     } catch (error) {
+      if ((prisma as any).stripeWebhookEvent) {
+        try {
+          await (prisma as any).stripeWebhookEvent.update({
+            where: { eventId: event.id },
+            data: {
+              status: 'FAILED',
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        } catch {
+          // non-fatal
+        }
+      }
       await this.releaseLock(event.id);
       throw error;
     }
