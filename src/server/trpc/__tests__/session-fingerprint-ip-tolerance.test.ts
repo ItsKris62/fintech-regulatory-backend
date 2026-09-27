@@ -304,6 +304,7 @@ describe('Session Fingerprint & IP Tolerance (Incident Remediation)', () => {
     const loginCaller = authRouter.createCaller({
       user: null,
       prisma: mockPrisma as any,
+      tenantPrisma: mockPrisma as any,
       req: {
         ip: loginIp,
         headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
@@ -356,6 +357,7 @@ describe('Session Fingerprint & IP Tolerance (Incident Remediation)', () => {
     const loginCaller = authRouter.createCaller({
       user: null,
       prisma: mockPrisma as any,
+      tenantPrisma: mockPrisma as any,
       req: {
         ip: '198.51.100.20',
         headers: { 'user-agent': 'Mozilla/5.0' },

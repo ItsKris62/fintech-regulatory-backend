@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
-  createTenantScopedPrisma,
   withTenantRlsTransaction,
   withBypassRlsTransaction,
 } from '../tenant-scope.extension';
@@ -14,7 +13,7 @@ describe('Postgres RLS Pilot on VaultDocument (SEC-12 / Option A)', () => {
   it('sets app.current_org_id locally inside interactive transaction and isolates tenant', async () => {
     const executedQueries: string[] = [];
     const mockTx = {
-      $executeRawUnsafe: vi.fn(async (sql: string, ...args: any[]) => {
+      $executeRawUnsafe: vi.fn(async (sql: string) => {
         executedQueries.push(sql);
         return 1;
       }),

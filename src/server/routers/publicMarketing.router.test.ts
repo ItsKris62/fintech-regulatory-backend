@@ -80,7 +80,7 @@ describe('publicMarketing.subscribeBlogNewsletter', () => {
   });
 
   it('normalises email, records consent, and adds only the configured Blog newsletter list', async () => {
-    const caller = publicMarketingRouter.createCaller({ req: { ip: '127.0.0.1' } } as any);
+    const caller = publicMarketingRouter.createCaller({ req: { ip: '127.0.0.1' }, prisma: mocks.prismaMock } as any);
 
     await expect(caller.subscribeBlogNewsletter({
       email: ' Reader@Example.COM ',
@@ -118,7 +118,7 @@ describe('publicMarketing.subscribeBlogNewsletter', () => {
 
   it('returns generic success for duplicate email submissions without re-running writes', async () => {
     mocks.redisSet.mockResolvedValue(null);
-    const caller = publicMarketingRouter.createCaller({ req: { ip: '127.0.0.1' } } as any);
+    const caller = publicMarketingRouter.createCaller({ req: { ip: '127.0.0.1' }, prisma: mocks.prismaMock } as any);
 
     await expect(caller.subscribeBlogNewsletter({ email: 'reader@example.com' })).resolves.toEqual({ success: true });
 
@@ -127,7 +127,7 @@ describe('publicMarketing.subscribeBlogNewsletter', () => {
 
   it('returns generic success for suppressed contacts without re-subscribing them', async () => {
     mocks.isSuppressed.mockResolvedValue(true);
-    const caller = publicMarketingRouter.createCaller({ req: { ip: '127.0.0.1' } } as any);
+    const caller = publicMarketingRouter.createCaller({ req: { ip: '127.0.0.1' }, prisma: mocks.prismaMock } as any);
 
     await expect(caller.subscribeBlogNewsletter({ email: 'reader@example.com' })).resolves.toEqual({ success: true });
 

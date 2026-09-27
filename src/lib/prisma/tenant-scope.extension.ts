@@ -1,4 +1,3 @@
-import { PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from './client';
 
 /**

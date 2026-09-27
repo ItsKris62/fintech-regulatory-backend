@@ -10,8 +10,8 @@ describe('Organization Router - getMembers role map', () => {
   const routerSrc = src('organization.router.ts');
 
   it('queries from organizationMember directly instead of user table', () => {
-    expect(routerSrc).toContain('ctx.prisma.organizationMember.findMany');
-    expect(routerSrc).toContain('ctx.prisma.organizationMember.count');
+    expect(routerSrc).toMatch(/ctx\.(?:tenantPrisma|prisma)\.organizationMember\.findMany/);
+    expect(routerSrc).toMatch(/ctx\.(?:tenantPrisma|prisma)\.organizationMember\.count/);
   });
 
   it('correctly aliases platformRole and maps the org role', () => {

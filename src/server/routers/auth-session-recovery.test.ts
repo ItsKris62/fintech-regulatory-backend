@@ -101,6 +101,7 @@ describe('Auth Session Recovery & Email Callback Pipeline', () => {
     const caller = authRouter.createCaller({
       user: null,
       prisma: mockPrisma as any,
+      tenantPrisma: mockPrisma as any,
       req: {
         ip: '127.0.0.1',
         headers: { 'user-agent': 'Mozilla/5.0' },
@@ -172,6 +173,7 @@ describe('Auth Session Recovery & Email Callback Pipeline', () => {
     const caller = authRouter.createCaller({
       user: null,
       prisma: mockPrisma as any,
+      tenantPrisma: mockPrisma as any,
       req: {
         ip: '127.0.0.1',
         headers: { 'user-agent': 'Mozilla/5.0' },

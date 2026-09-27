@@ -81,7 +81,7 @@ export const frameworkRouter = router({
         select: frameworkSelect,
       });
 
-      const documentCounts = frameworks.length === 0 ? [] : await ctx.tenantPrisma.legalDocument.groupBy({
+      const documentCounts = frameworks.length === 0 ? [] : await (ctx.tenantPrisma.legalDocument as any).groupBy({
         by: ['category'],
         where: {
           category: { in: frameworks.map((framework) => framework.slug) },
@@ -89,7 +89,7 @@ export const frameworkRouter = router({
         },
         _count: { _all: true },
       });
-      const countBySlug = new Map(documentCounts.map((row) => [row.category, row._count._all]));
+      const countBySlug = new Map<string, number>((documentCounts as any[]).map((row: any) => [row.category, typeof row._count === 'object' ? (row._count?._all ?? 0) : (row._count ?? 0)]));
 
       const platformFrameworks = frameworks.map((framework) =>
         toFrameworkMetadata({

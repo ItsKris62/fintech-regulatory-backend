@@ -50,7 +50,7 @@ describe('F-09: REST Idempotency-Key Middleware', () => {
     app = Fastify();
 
     // Hook to simulate verified session on request.user
-    app.addHook('onRequest', async (req) => {
+    app.addHook('onRequest', async (req: any) => {
       const orgHeader = req.headers['test-session-org-id'];
       if (typeof orgHeader === 'string') {
         req.user = {
@@ -63,7 +63,7 @@ describe('F-09: REST Idempotency-Key Middleware', () => {
     await app.register(idempotencyPlugin);
 
     // Mock payment/checkout route
-    app.post('/api/checkout', async (request, reply) => {
+    app.post('/api/checkout', async (request: any, reply: any) => {
       paymentCallCount++;
       const body = request.body as any;
       if (body?.statusCode) {

@@ -4,7 +4,7 @@ import { redis } from '../client';
 describe('F-13: Upstash Redis client hardening', () => {
   it('exported redis client aborts hanging responses and does not hang indefinitely', async () => {
     const hangingFetch = vi.fn().mockImplementation((_url, init) => {
-      return new Promise((resolve, reject) => {
+      return new Promise((_resolve, reject) => {
         if (init?.signal) {
           if (init.signal.aborted) {
             return reject(new Error('Aborted'));

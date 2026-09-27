@@ -105,6 +105,7 @@ describe('Auth Logout Unified Redis Key Purge Test', () => {
         sessionId: testSessionId,
       } as any,
       prisma: mockPrisma as any,
+      tenantPrisma: mockPrisma as any,
       req: {
         ip: '127.0.0.1',
         headers: {

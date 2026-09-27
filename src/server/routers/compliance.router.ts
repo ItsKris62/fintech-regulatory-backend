@@ -1547,7 +1547,7 @@ export const complianceRouter = router({
         surface: input.surface,
       });
 
-      ctx.prisma.auditLog.create({
+      ctx.tenantPrisma.auditLog.create({
         data: {
           userId,
           action: 'SUGGESTED_QUERY_CLICKED',
@@ -2043,12 +2043,12 @@ export const complianceRouter = router({
       }
 
       const categories = Array.from(categoryMap.entries()).map(([name, items]) => {
-        const completedCount = items.filter((i) => i.status === 'COMPLETED').length;
+        const completedCount = (items as any[]).filter((i: any) => i.status === 'COMPLETED').length;
         return {
           name,
           completedCount,
           totalCount: items.length,
-          items: items.map((i) => ({
+          items: (items as any[]).map((i: any) => ({
             id: i.id,
             itemCode: i.itemCode ?? null,
             category: i.category ?? 'General',
@@ -2078,7 +2078,7 @@ export const complianceRouter = router({
         : null;
 
       // 8. Compute progress
-      const completedItems = checklistItemRows.filter((i) => i.status === 'COMPLETED').length;
+      const completedItems = (checklistItemRows as any[]).filter((i: any) => i.status === 'COMPLETED').length;
       const progress = itemCount > 0 ? Math.round((completedItems / itemCount) * 100) : 0;
 
       // 9. Build DOCX buffer

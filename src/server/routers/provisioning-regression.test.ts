@@ -44,8 +44,8 @@ describe('Organization Router - getMembers platformRole regression fix', () => {
   const routerSrc = src('organization.router.ts');
 
   it('queries organizationMember.findMany', () => {
-    expect(routerSrc).toContain('ctx.prisma.organizationMember.findMany');
-    expect(routerSrc).toContain('ctx.prisma.organizationMember.count');
+    expect(routerSrc).toMatch(/ctx\.(?:tenantPrisma|prisma)\.organizationMember\.findMany/);
+    expect(routerSrc).toMatch(/ctx\.(?:tenantPrisma|prisma)\.organizationMember\.count/);
   });
 
   it('returns both orgRole (mapped to org role) and platformRole (mapped from user)', () => {

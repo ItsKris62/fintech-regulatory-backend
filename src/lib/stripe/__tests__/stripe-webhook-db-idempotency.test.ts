@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type Stripe from 'stripe';
 import { stripeWebhookService } from '../webhook.service';
 import { prisma } from '@/lib/prisma/client';
-import { redis } from '@/lib/redis/client';
 import { getStripeClient } from '../client';
 
 vi.mock('@/config/app.config', async (importOriginal) => {
@@ -146,7 +145,7 @@ describe('Stripe Webhook DB Table Idempotency Migration (Phase 2 Deferred)', () 
     // 1. Initial processing: should persist in DB table and succeed
     await stripeWebhookService.handleEvent(payload, signature);
 
-    expect(prisma.stripeWebhookEvent.create).toHaveBeenCalledWith({
+    expect((prisma as any).stripeWebhookEvent.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         eventId,
         eventType: 'customer.subscription.updated',
@@ -154,7 +153,7 @@ describe('Stripe Webhook DB Table Idempotency Migration (Phase 2 Deferred)', () 
       }),
     });
 
-    expect(prisma.stripeWebhookEvent.update).toHaveBeenCalledWith({
+    expect((prisma as any).stripeWebhookEvent.update).toHaveBeenCalledWith({
       where: { eventId },
       data: expect.objectContaining({
         status: 'PROCESSED',

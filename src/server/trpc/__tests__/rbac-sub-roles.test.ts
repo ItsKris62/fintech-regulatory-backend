@@ -1,5 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
-import { TRPCError } from '@trpc/server';
+import { describe, it, expect } from 'vitest';
 import { hasRole } from '../middleware';
 import {
   publicProcedure,

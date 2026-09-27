@@ -151,7 +151,7 @@ describe('F-14: Missing audit events', () => {
 
     // Mock verifyPassword
     vi.spyOn(await import('@/modules/auth/auth.utils'), 'verifyPassword').mockResolvedValueOnce(true);
-    vi.spyOn(userModule, 'exportUserData').mockResolvedValueOnce({ success: true, downloadUrl: 'http://test' });
+    vi.spyOn(userModule, 'exportUserData').mockResolvedValueOnce({ success: true, downloadUrl: 'http://test', expiresAt: new Date(), fileSizeBytes: 1024 });
 
     await userModule.deleteAccount('usr_delete_1', {
       password: 'CorrectPassword123!',

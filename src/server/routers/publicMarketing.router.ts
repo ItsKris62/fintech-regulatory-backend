@@ -192,7 +192,7 @@ export const publicMarketingRouter = router({
       phone:       z.string().optional(),
       message:     z.string().max(1000).optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       try {
         const { firstName, lastName, email, companyName, jobTitle, phone } = input;
         const normalizedEmail = email.trim().toLowerCase();

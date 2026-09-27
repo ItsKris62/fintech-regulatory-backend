@@ -42,7 +42,7 @@ import {
 import type { Context } from '../trpc/context';
 
 async function assertActiveOrganizationMember(
-  ctx: Pick<Context, 'prisma' | 'user'> & { user: NonNullable<Context['user']> },
+  ctx: Pick<Context, 'prisma' | 'tenantPrisma' | 'user'> & { user: NonNullable<Context['user']> },
   organizationId: string,
 ) {
   if (isAnyAdmin(ctx.user.role)) return;
@@ -61,7 +61,7 @@ async function assertActiveOrganizationMember(
 }
 
 async function assertOrganizationManager(
-  ctx: Pick<Context, 'prisma' | 'user'> & { user: NonNullable<Context['user']> },
+  ctx: Pick<Context, 'prisma' | 'tenantPrisma' | 'user'> & { user: NonNullable<Context['user']> },
   organizationId: string,
 ) {
   if (isAnyAdmin(ctx.user.role)) return null;
@@ -819,7 +819,7 @@ export const organizationRouter = router({
           }),
         ]);
 
-        const members = membersResult.map((m) => ({
+        const members = (membersResult as any[]).map((m: any) => ({
           ...m.user,
           role: m.role, // KEEP LEGACY: Prevents breaking current frontend RBAC.
           platformRole: m.user.role, // NEW: Explicit Platform Role.
@@ -1324,7 +1324,7 @@ export const organizationRouter = router({
       }
 
       const counts = statusCounts.reduce(
-        (acc, row) => {
+        (acc: any, row: any) => {
           acc[row.status] = row._count._all;
           return acc;
         },
@@ -1344,7 +1344,7 @@ export const organizationRouter = router({
           capacity: seatUsage.seatLimit,
         },
         owner: owner?.user ?? null,
-        members: members.map((m) => ({
+        members: (members as any[]).map((m: any) => ({
           id: m.user.id,
           membershipId: m.id,
           name: m.user.fullName,
@@ -1418,7 +1418,7 @@ export const organizationRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this organization' });
       }
 
-      const enabled = members.filter((m) => m.user.totpEnabled).length;
+      const enabled = (members as any[]).filter((m: any) => m.user.totpEnabled).length;
       const total = members.length;
       const percentage = total === 0 ? 0 : Math.round((enabled / total) * 100);
       const callerOrgRole = member.role as MemberRole;
@@ -1438,7 +1438,7 @@ export const organizationRouter = router({
         },
         canManageSecurity: canManageOrganization(callerOrgRole, ctx.user.role),
         currentUserMfaEnabled: Boolean(ctx.user.totpEnabled),
-        members: members.map((m) => ({
+        members: (members as any[]).map((m: any) => ({
           id: m.user.id,
           name: m.user.fullName,
           email: m.user.email,

@@ -490,7 +490,7 @@ export async function withElevatedStatementTimeout<T>(
     });
   }
 
-  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+  return (prisma as any).$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${boundedTimeoutMs}`);
     return callback(tx);
   });

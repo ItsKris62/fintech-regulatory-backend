@@ -5,10 +5,6 @@ import { MemberRole, PaymentProvider, PaymentStatus, Prisma } from '@prisma/clie
 import {
   router,
   adminProcedure,
-  supportAdminProcedure,
-  billingAdminProcedure,
-  securityAdminProcedure,
-  superAdminProcedure,
 } from '../trpc/trpc';
 import { logger } from '@/utils/logger';
 import { withBypassRlsTransaction } from '@/lib/prisma/tenant-scope.extension';

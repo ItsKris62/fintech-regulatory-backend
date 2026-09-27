@@ -50,6 +50,7 @@ describe('Checklist Child Model Policy B Isolation (Phase 1.1)', () => {
 
     await expect(
       checklistService.updateItemStatus('user_attacker', 'org_attacker', {
+        checklistId: 'checklist_123',
         itemId: 'item_victim_999',
         status: 'COMPLETED',
       })

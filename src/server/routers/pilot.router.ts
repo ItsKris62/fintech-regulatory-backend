@@ -136,7 +136,7 @@ export const pilotRouter = router({
       const temporaryPasswordExpiresAt = new Date(now.getTime() + TEMP_PASSWORD_TTL_MS);
       const pilotExpiresAt = new Date(now.getTime() + input.pilotDurationDays * MS_PER_DAY);
 
-      const existing = await ctx.ctx.prisma.user.findUnique({
+      const existing = await ctx.prisma.user.findUnique({
         where: { email: normalizedEmail },
         select: { id: true },
       });
@@ -178,7 +178,7 @@ export const pilotRouter = router({
           temporaryPasswordDeliveryStatus: 'PENDING',
         });
 
-        await ctx.ctx.prisma.user.update({
+        await ctx.prisma.user.update({
           where: { id: user.id },
           data: {
             phone: input.phone,
@@ -217,12 +217,12 @@ export const pilotRouter = router({
           pilotExpiresAt,
         });
 
-        await ctx.ctx.prisma.user.update({
+        await ctx.prisma.user.update({
           where: { id: user.id },
           data: { temporaryPasswordDeliveryStatus: deliveryStatus } as any,
         });
 
-        await ctx.ctx.prisma.auditLog.create({
+        await ctx.prisma.auditLog.create({
           data: {
             userId: ctx.user!.id,
             action: 'PILOT_TESTER_CREATED',
@@ -279,7 +279,7 @@ export const pilotRouter = router({
   reissueTemporaryPassword: supportAdminProcedure
     .input(reissueTemporaryPasswordSchema)
     .mutation(async ({ input, ctx }) => {
-      const user = await ctx.ctx.prisma.user.findUnique({
+      const user = await ctx.prisma.user.findUnique({
         where: { id: input.userId },
         select: {
           id: true,
@@ -319,7 +319,7 @@ export const pilotRouter = router({
     });
       }
 
-      await ctx.ctx.prisma.user.update({
+      await ctx.prisma.user.update({
         where: { id: user.id },
         data: {
           password: passwordHash,
@@ -342,19 +342,19 @@ export const pilotRouter = router({
         pilotExpiresAt: user.pilotExpiresAt ?? new Date(Date.now() + DEFAULT_PILOT_DAYS * MS_PER_DAY),
       });
 
-      await ctx.ctx.prisma.user.update({
+      await ctx.prisma.user.update({
         where: { id: user.id },
         data: { temporaryPasswordDeliveryStatus: deliveryStatus } as any,
       });
 
-      await ctx.ctx.prisma.session.deleteMany({ where: { userId: user.id } });
+      await ctx.prisma.session.deleteMany({ where: { userId: user.id } });
       await invalidatePilotUserCaches({
         userId: user.id,
         supabaseAuthId: (user as any).supabaseAuthId,
         organizationId: user.organizationId,
       });
 
-      await ctx.ctx.prisma.auditLog.create({
+      await ctx.prisma.auditLog.create({
         data: {
           userId: ctx.user!.id,
           action: 'PILOT_TEMP_PASSWORD_REISSUED',
@@ -378,7 +378,7 @@ export const pilotRouter = router({
   extendPilotAccess: supportAdminProcedure
     .input(extendPilotAccessSchema)
     .mutation(async ({ input, ctx }) => {
-      const user = await ctx.ctx.prisma.user.findUnique({
+      const user = await ctx.prisma.user.findUnique({
         where: { id: input.userId },
         select: {
           id: true,
@@ -419,7 +419,7 @@ export const pilotRouter = router({
       const nextExpiresAt = new Date(base.getTime() + input.extensionDays * MS_PER_DAY);
       const nextExtensionCount = extensionCount + 1;
 
-      await ctx.ctx.prisma.user.update({
+      await ctx.prisma.user.update({
         where: { id: user.id },
         data: {
           pilotAccessStatus: 'ACTIVE',
@@ -481,7 +481,7 @@ export const pilotRouter = router({
         organizationId: user.organizationId,
       });
 
-      await ctx.ctx.prisma.auditLog.create({
+      await ctx.prisma.auditLog.create({
         data: {
           userId: ctx.user!.id,
           action: 'PILOT_ACCESS_EXTENDED',
@@ -507,7 +507,7 @@ export const pilotRouter = router({
   revokePilotAccess: supportAdminProcedure
     .input(revokePilotAccessSchema)
     .mutation(async ({ input, ctx }) => {
-      const user = await ctx.ctx.prisma.user.findUnique({
+      const user = await ctx.prisma.user.findUnique({
         where: { id: input.userId },
         select: {
           id: true,
@@ -521,7 +521,7 @@ export const pilotRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Pilot user not found.' });
       }
 
-      await ctx.ctx.prisma.user.update({
+      await ctx.prisma.user.update({
         where: { id: user.id },
         data: {
           pilotAccessStatus: 'REVOKED',
@@ -549,7 +549,7 @@ export const pilotRouter = router({
         });
       }
 
-      await ctx.ctx.prisma.session.deleteMany({ where: { userId: user.id } });
+      await ctx.prisma.session.deleteMany({ where: { userId: user.id } });
       if (user.supabaseAuthId) {
         await supabaseAdmin.auth.admin.signOut(user.supabaseAuthId).catch((err: unknown) => {
       logger.warn({
@@ -565,7 +565,7 @@ export const pilotRouter = router({
         organizationId: user.organizationId,
       });
 
-      await ctx.ctx.prisma.auditLog.create({
+      await ctx.prisma.auditLog.create({
         data: {
           userId: ctx.user!.id,
           action: 'PILOT_ACCESS_REVOKED',
@@ -584,7 +584,7 @@ export const pilotRouter = router({
   /**
    * Aggregate stats for the pilot programme header cards.
    */
-  getStats: supportAdminProcedure.query(async () => {
+  getStats: supportAdminProcedure.query(async ({ ctx }) => {
     const now = new Date();
 
     const [total, expiredCount, convertedCount, totalEvents, cohortRows] = await Promise.all([
@@ -609,7 +609,7 @@ export const pilotRouter = router({
       expired:     expiredCount,
       converted:   convertedCount,
       totalEvents,
-      cohorts:     cohortRows.map((r) => r.pilotCohort ?? '').filter(Boolean),
+      cohorts:     (cohortRows as any[]).map((r: any) => r.pilotCohort ?? '').filter(Boolean),
     };
   }),
 
@@ -617,7 +617,7 @@ export const pilotRouter = router({
    * Per-tester rows with engagement metrics.
    * Sorted newest-first by pilotStartedAt.
    */
-  listTesters: supportAdminProcedure.query(async () => {
+  listTesters: supportAdminProcedure.query(async ({ ctx }) => {
     const now = new Date();
 
     const users = await ctx.prisma.user.findMany({
@@ -642,7 +642,7 @@ export const pilotRouter = router({
 
     logger.info({ type: 'PILOT_ADMIN_LIST_TESTERS', count: users.length });
 
-    return users.map((user) => {
+    return (users as any[]).map((user: any) => {
       const isExpired   = (user as any).pilotAccessStatus === 'EXPIRED' || (user.pilotExpiresAt !== null && user.pilotExpiresAt <= now);
       const isConverted = user.pilotConvertedAt !== null;
       const isRevoked   = (user as any).pilotAccessStatus === 'REVOKED';
@@ -657,13 +657,13 @@ export const pilotRouter = router({
         : 0;
 
       // Engagement score = count of distinct action types used (max 10)
-      const distinctActions  = new Set(user.pilotEvents.map((e) => e.action));
+      const distinctActions  = new Set((user.pilotEvents as any[]).map((e: any) => e.action));
       const engagementScore  = distinctActions.size;
       const engagementPercent = Math.round((engagementScore / MAX_ACTIONS) * 100);
 
       // Events grouped by action
       const eventsByAction: Record<string, number> = {};
-      for (const event of user.pilotEvents) {
+      for (const event of (user.pilotEvents as any[])) {
         eventsByAction[event.action] = (eventsByAction[event.action] ?? 0) + 1;
       }
 

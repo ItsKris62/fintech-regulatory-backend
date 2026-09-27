@@ -94,6 +94,7 @@ describe('Tenant Isolation Integration Test', () => {
     const caller = checklistRouter.createCaller({
       user: userOrgA as any,
       prisma: mockPrisma as any,
+      tenantPrisma: mockPrisma as any,
       req: { ip: '127.0.0.1', headers: {} } as any,
       res: {} as any,
       aiService: {} as any,
@@ -122,6 +123,7 @@ describe('Tenant Isolation Integration Test', () => {
     const caller = checklistRouter.createCaller({
       user: orphanedUser as any,
       prisma: mockPrisma as any,
+      tenantPrisma: mockPrisma as any,
       req: { ip: '127.0.0.1', headers: {} } as any,
       res: {} as any,
       aiService: {} as any,

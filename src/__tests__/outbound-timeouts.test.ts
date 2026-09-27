@@ -165,6 +165,7 @@ describe('F-08: Outbound Timeouts and SSE Lifetime Enforcement', () => {
         to: 'user@example.com',
         subject: 'Test Outbound Timeout',
         text: 'Checking 10s timeout',
+        html: '<p>Checking 10s timeout</p>',
       });
 
       // Advance timers past 10s

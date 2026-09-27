@@ -339,7 +339,7 @@ export const contentRouter = router({
         ]);
 
         return {
-          items: documents.map((document) => ({
+          items: (documents as any[]).map((document: any) => ({
             id: document.id,
             title: document.title,
             slug: document.slug!,

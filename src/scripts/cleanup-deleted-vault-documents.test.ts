@@ -106,7 +106,7 @@ describe('cleanupDeletedVaultDocuments', () => {
     });
 
     // Default raw prisma.vaultDocument without bypass returns 0 rows (RLS blocks)
-    vi.mocked(prisma.vaultDocument.findMany).mockImplementation(async () => {
+    vi.mocked(prisma.vaultDocument.findMany as any).mockImplementation(async () => {
       if (!bypassRlsActive) return [];
       return [
         { id: 'doc-1', organizationId: 'org-a', storageKey: 'k1', uploadedById: 'u1', deletedAt: pastCutoffDate },

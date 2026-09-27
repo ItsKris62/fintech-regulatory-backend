@@ -1145,8 +1145,8 @@ export const policyRouter = router({
           throw error;
         }
 
-        const citationTargets = policy.citations
-          .map((citation) => {
+        const citationTargets = (policy.citations as any[])
+          .map((citation: any) => {
             const rawSource = rawCitationRecord(citation.rawSource);
             const text = typeof citation.textSnippet === 'string' && citation.textSnippet.trim().length > 0
               ? citation.textSnippet
@@ -1162,10 +1162,10 @@ export const policyRouter = router({
               documentId: citation.documentId ?? (typeof rawSource.documentId === 'string' ? rawSource.documentId : undefined),
             };
           })
-          .filter((target): target is NonNullable<typeof target> => target !== null);
+          .filter((target: any): target is NonNullable<typeof target> => target !== null);
 
         const checks = await Promise.all(
-          citationTargets.map(async (target, index) => {
+          citationTargets.map(async (target: any, index: number) => {
             const evidence = await regulatoryIntelligenceService.retrieveAndGrade({
               question: target.text,
               feature: 'POLICY_CITATION_VERIFICATION',
