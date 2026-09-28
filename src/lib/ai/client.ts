@@ -35,6 +35,9 @@ export interface AICompletionResult {
   cached?: boolean;
   /** Anthropic stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | null */
   stopReason?: string | null;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  providerCacheStatus?: 'hit' | 'miss' | 'write' | 'unsupported' | 'disabled';
 }
 
 /**
@@ -93,7 +96,10 @@ export async function complete(
 
   try {
     const res = await llmGateway.complete(req, cacheTTL);
-    const { cost } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens);
+    const { cost } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens, {
+      cacheReadTokens: res.usage.cacheReadTokens,
+      cacheWriteTokens: res.usage.cacheWriteTokens,
+    });
     
     return {
       content: res.content,
@@ -103,6 +109,9 @@ export async function complete(
       cost,
       cached: res.cached,
       stopReason: res.stopReason,
+      cacheReadTokens: res.usage.cacheReadTokens,
+      cacheWriteTokens: res.usage.cacheWriteTokens,
+      providerCacheStatus: res.providerCacheStatus,
     };
   } catch (error: any) {
     if (error.name === 'LLMCostLimitError') {
@@ -129,7 +138,10 @@ export async function stream(
     useCase,
     onChunk: options.onChunk,
     onComplete: options.onComplete ? (res) => {
-      const { cost } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens);
+      const { cost } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens, {
+        cacheReadTokens: res.usage.cacheReadTokens,
+        cacheWriteTokens: res.usage.cacheWriteTokens,
+      });
       options.onComplete!({
         content: res.content,
         model: res.model,
@@ -138,6 +150,9 @@ export async function stream(
         cost,
         cached: res.cached,
         stopReason: res.stopReason,
+        cacheReadTokens: res.usage.cacheReadTokens,
+        cacheWriteTokens: res.usage.cacheWriteTokens,
+        providerCacheStatus: res.providerCacheStatus,
       });
     } : undefined,
     onError: options.onError,
@@ -145,7 +160,10 @@ export async function stream(
 
   try {
     const res = await llmGateway.stream(opts);
-    const { cost } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens);
+    const { cost } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens, {
+      cacheReadTokens: res.usage.cacheReadTokens,
+      cacheWriteTokens: res.usage.cacheWriteTokens,
+    });
     
     return {
       content: res.content,
@@ -155,6 +173,9 @@ export async function stream(
       cost,
       cached: res.cached,
       stopReason: res.stopReason,
+      cacheReadTokens: res.usage.cacheReadTokens,
+      cacheWriteTokens: res.usage.cacheWriteTokens,
+      providerCacheStatus: res.providerCacheStatus,
     };
   } catch (error: any) {
     if (error.name === 'LLMCostLimitError') {

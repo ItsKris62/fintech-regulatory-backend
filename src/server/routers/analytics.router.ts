@@ -662,4 +662,46 @@ export const analyticsRouter = router({
         },
       };
     }),
+
+  /**
+   * Retrieves tenant AI cost breakdown (USD and KES) for analytics dashboards.
+   *
+   * @protected
+   */
+  getTenantCostSummary: protectedProcedure
+    .input(
+      z.object({
+        periodStart: z.string().datetime().optional(),
+        periodEnd: z.string().datetime().optional(),
+      }).optional()
+    )
+    .query(async ({ input, ctx }) => {
+      const organizationId = ctx.user!.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'User does not belong to an organization',
+        });
+      }
+
+      try {
+        const { usageTrackingService } = await import('@/services/usage-tracking.service');
+        const start = input?.periodStart ? new Date(input.periodStart) : undefined;
+        const end = input?.periodEnd ? new Date(input.periodEnd) : undefined;
+
+        const summary = await usageTrackingService.getTenantCostSummary(organizationId, start, end);
+
+        logger.info({
+          type: 'analytics_tenant_cost_summary_viewed',
+          userId: ctx.user!.id,
+          orgId: organizationId,
+        });
+
+        return summary;
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        logger.error({ type: 'analytics_tenant_cost_summary_error', error: error.message });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to retrieve cost summary' });
+      }
+    }),
 });

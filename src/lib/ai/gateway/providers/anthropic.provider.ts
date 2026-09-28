@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { appConfig } from '@/config/app.config';
+import { aiConfig } from '@/config/ai.config';
 import { logger } from '@/utils/logger';
 import { ILLMProvider, LLMCompletionRequest, LLMCompletionResult, LLMStreamOptions, LLMProviderError, LLMProviderNotConfiguredError } from '../types';
 
@@ -23,6 +24,32 @@ function assertUsableAnthropicModel(model: string | undefined): string {
   }
 
   return normalized;
+}
+
+function buildAnthropicSystemParam(systemPrompt?: string): string | Anthropic.TextBlockParam[] | undefined {
+  if (!systemPrompt) return undefined;
+  const isCachingEnabled = aiConfig.caching?.providerPromptCaching?.anthropic?.enabled ?? false;
+  if (isCachingEnabled) {
+    return [
+      {
+        type: 'text',
+        text: systemPrompt,
+        cache_control: { type: 'ephemeral' },
+      },
+    ];
+  }
+  return systemPrompt;
+}
+
+function determineAnthropicCacheStatus(
+  cacheReadTokens: number, 
+  cacheWriteTokens: number, 
+  isEnabled: boolean
+): 'hit' | 'miss' | 'write' | 'disabled' {
+  if (!isEnabled) return 'disabled';
+  if (cacheReadTokens > 0) return 'hit';
+  if (cacheWriteTokens > 0) return 'write';
+  return 'miss';
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -133,7 +160,7 @@ export class AnthropicProvider implements ILLMProvider {
           model,
           max_tokens: req.maxTokens!,
           ...(noTemp ? {} : { temperature: req.temperature }),
-          system: req.systemPrompt,
+          system: buildAnthropicSystemParam(req.systemPrompt) as any,
           messages,
           stop_sequences: req.stopSequences,
           ...(metadata ? { metadata } : {}),
@@ -146,6 +173,11 @@ export class AnthropicProvider implements ILLMProvider {
         .map(block => (block as Anthropic.TextBlock).text)
         .join('\n');
 
+      const isCachingEnabled = aiConfig.caching?.providerPromptCaching?.anthropic?.enabled ?? false;
+      const cacheReadTokens = (response.usage as any).cache_read_input_tokens || 0;
+      const cacheWriteTokens = (response.usage as any).cache_creation_input_tokens || 0;
+      const providerCacheStatus = determineAnthropicCacheStatus(cacheReadTokens, cacheWriteTokens, isCachingEnabled);
+
       return {
         content,
         provider: this.name,
@@ -153,8 +185,11 @@ export class AnthropicProvider implements ILLMProvider {
         usage: {
           inputTokens: response.usage.input_tokens,
           outputTokens: response.usage.output_tokens,
+          cacheReadTokens,
+          cacheWriteTokens,
         },
         stopReason: response.stop_reason,
+        providerCacheStatus,
       };
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -187,7 +222,7 @@ export class AnthropicProvider implements ILLMProvider {
           model,
           max_tokens: opts.maxTokens!,
           ...(noTemp ? {} : { temperature: opts.temperature }),
-          system: opts.systemPrompt,
+          system: buildAnthropicSystemParam(opts.systemPrompt) as any,
           messages,
           stop_sequences: opts.stopSequences,
           stream: true,
@@ -198,6 +233,8 @@ export class AnthropicProvider implements ILLMProvider {
       let fullContent = '';
       let inputTokens = 0;
       let outputTokens = 0;
+      let cacheReadTokens = 0;
+      let cacheWriteTokens = 0;
       let stopReason: string | null = null;
 
       for await (const event of streamResponse) {
@@ -211,6 +248,8 @@ export class AnthropicProvider implements ILLMProvider {
           }
         } else if (event.type === 'message_start') {
           inputTokens = event.message.usage.input_tokens;
+          cacheReadTokens = (event.message.usage as any).cache_read_input_tokens || 0;
+          cacheWriteTokens = (event.message.usage as any).cache_creation_input_tokens || 0;
         } else if (event.type === 'message_delta') {
           outputTokens = event.usage.output_tokens;
           if (event.delta.stop_reason) {
@@ -219,6 +258,9 @@ export class AnthropicProvider implements ILLMProvider {
         }
       }
 
+      const isCachingEnabled = aiConfig.caching?.providerPromptCaching?.anthropic?.enabled ?? false;
+      const providerCacheStatus = determineAnthropicCacheStatus(cacheReadTokens, cacheWriteTokens, isCachingEnabled);
+
       return {
         content: fullContent,
         provider: this.name,
@@ -226,8 +268,11 @@ export class AnthropicProvider implements ILLMProvider {
         usage: {
           inputTokens,
           outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
         },
         stopReason,
+        providerCacheStatus,
       };
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -241,3 +286,4 @@ export class AnthropicProvider implements ILLMProvider {
     }
   }
 }
+

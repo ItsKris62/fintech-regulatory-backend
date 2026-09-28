@@ -371,7 +371,31 @@ class UsageTrackingService {
   private async syncRedisToDb(
     periodId: string,
     counters: PeriodCounters,
+    organizationId?: string,
+    periodStart?: Date
   ): Promise<void> {
+    let periodCostUsd: number | undefined = undefined;
+    let periodCostKes: number | undefined = undefined;
+
+    if (organizationId && periodStart) {
+      try {
+        const records = await prisma.usageRecord.findMany({
+          where: { organizationId, periodStart },
+          select: { costUsd: true, costKes: true },
+        });
+        let sumUsd = 0;
+        let sumKes = 0;
+        for (const r of records) {
+          if (r.costUsd) sumUsd += parseFloat(r.costUsd.toString());
+          if (r.costKes) sumKes += parseFloat(r.costKes.toString());
+        }
+        periodCostUsd = sumUsd;
+        periodCostKes = sumKes;
+      } catch {
+        // non-fatal
+      }
+    }
+
     await prisma.usagePeriod.update({
       where: { id: periodId },
       data:  {
@@ -381,6 +405,8 @@ class UsageTrackingService {
         documentStorageMb:    counters.documentStorageMb,
         gapAnalyses:          counters.gapAnalyses,
         policyGenerations:    counters.policyGenerations,
+        ...(periodCostUsd !== undefined ? { costUsd: periodCostUsd } : {}),
+        ...(periodCostKes !== undefined ? { costKes: periodCostKes } : {}),
         syncedFromRedisAt:    new Date(),
       },
     });
@@ -444,7 +470,7 @@ class UsageTrackingService {
     ]);
 
     // Non-blocking lazy sync to DB  -  failures are logged but never propagated
-    void this.syncRedisToDb(period.id, counters).catch((err: unknown) => {
+    void this.syncRedisToDb(period.id, counters, organizationId, period.periodStart).catch((err: unknown) => {
       logger.warn({
         type:           'usage_redis_sync_failed',
         organizationId,
@@ -635,9 +661,65 @@ class UsageTrackingService {
 
     return { current: currentSummary, previous: previousSummary, changes };
   }
+
+  /**
+   * Summarizes per-tenant AI spend in USD and KES over a billing period.
+   */
+  async getTenantCostSummary(
+    organizationId: string,
+    periodStart?: Date,
+    periodEnd?: Date
+  ): Promise<TenantCostSummary> {
+    const defaultStart = periodStart ?? new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+    const defaultEnd = periodEnd ?? new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1));
+
+    const records = await prisma.usageRecord.findMany({
+      where: {
+        organizationId,
+        periodStart: { gte: defaultStart },
+        periodEnd: { lte: defaultEnd },
+      },
+    });
+
+    let totalCostUsd = 0;
+    let totalCostKes = 0;
+    const byMetric: Record<string, { count: number; costUsd: number; costKes: number }> = {};
+
+    for (const r of records) {
+      const metricCostUsd = r.costUsd ? parseFloat(r.costUsd.toString()) : 0;
+      const metricCostKes = r.costKes ? parseFloat(r.costKes.toString()) : 0;
+      totalCostUsd += metricCostUsd;
+      totalCostKes += metricCostKes;
+
+      byMetric[r.metric] = {
+        count: r.count,
+        costUsd: metricCostUsd,
+        costKes: metricCostKes,
+      };
+    }
+
+    return {
+      organizationId,
+      totalCostUsd: parseFloat(totalCostUsd.toFixed(8)),
+      totalCostKes: parseFloat(totalCostKes.toFixed(4)),
+      periodStart: defaultStart,
+      periodEnd: defaultEnd,
+      byMetric,
+    };
+  }
+}
+
+export interface TenantCostSummary {
+  organizationId: string;
+  totalCostUsd: number;
+  totalCostKes: number;
+  periodStart: Date;
+  periodEnd: Date;
+  byMetric: Record<string, { count: number; costUsd: number; costKes: number }>;
 }
 
 // -- Singleton export -----------------------------------------------------------
 
 export const usageTrackingService = new UsageTrackingService();
 export { UsageTrackingService };
+

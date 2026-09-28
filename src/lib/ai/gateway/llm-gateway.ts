@@ -436,7 +436,10 @@ export class LLMGateway {
           const result = await executeWithBreaker(providerName, () => provider.complete(reqWithSignal));
           clearTimeout(timeoutId);
 
-          const { cost } = calculateCost(providerName, model, result.usage.inputTokens, result.usage.outputTokens);
+          const { cost } = calculateCost(providerName, model, result.usage.inputTokens, result.usage.outputTokens, {
+            cacheReadTokens: result.usage.cacheReadTokens,
+            cacheWriteTokens: result.usage.cacheWriteTokens,
+          });
           actualCost = cost;
 
           if (cacheTTL > 0) {
@@ -448,7 +451,22 @@ export class LLMGateway {
             await this.cacheCompletion(cacheKey, result, cacheTTL);
           }
 
-          logPerformance('llm_completion_success', startTime, { provider: providerName, model, useCase: req.useCase, inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, cost, attempt });
+          logPerformance('llm_completion_success', startTime, { 
+            provider: providerName, 
+            model, 
+            useCase: req.useCase, 
+            inputTokens: result.usage.inputTokens, 
+            outputTokens: result.usage.outputTokens, 
+            cacheReadTokens: result.usage.cacheReadTokens,
+            cacheWriteTokens: result.usage.cacheWriteTokens,
+            providerCacheStatus: result.providerCacheStatus,
+            cost, 
+            attempt 
+          });
+
+          const tenantOrgId = req.orgId ?? req.metadata?.orgId ?? req.metadata?.organizationId;
+          void this.persistTenantCost(tenantOrgId, req.useCase, cost);
+
           return result;
 
         } catch (error: any) {
@@ -574,12 +592,29 @@ export class LLMGateway {
          clearTimeout(overallTimeoutId);
       }
 
-      const { cost } = calculateCost(providerName, model, result.usage.inputTokens, result.usage.outputTokens);
+      const { cost } = calculateCost(providerName, model, result.usage.inputTokens, result.usage.outputTokens, {
+        cacheReadTokens: result.usage.cacheReadTokens,
+        cacheWriteTokens: result.usage.cacheWriteTokens,
+      });
       actualCost = cost;
 
       if (opts.onComplete) opts.onComplete(result);
 
-      logPerformance('llm_streaming_success', startTime, { provider: providerName, model, useCase: opts.useCase, inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, cost });
+      logPerformance('llm_streaming_success', startTime, { 
+        provider: providerName, 
+        model, 
+        useCase: opts.useCase, 
+        inputTokens: result.usage.inputTokens, 
+        outputTokens: result.usage.outputTokens, 
+        cacheReadTokens: result.usage.cacheReadTokens,
+        cacheWriteTokens: result.usage.cacheWriteTokens,
+        providerCacheStatus: result.providerCacheStatus,
+        cost 
+      });
+
+      const tenantOrgId = opts.orgId ?? opts.metadata?.orgId ?? opts.metadata?.organizationId;
+      void this.persistTenantCost(tenantOrgId, opts.useCase, cost);
+
       return result;
 
     } catch (error: any) {
@@ -594,6 +629,80 @@ export class LLMGateway {
       }
     }
   }
+
+  /**
+   * Best-effort, non-blocking persistence of per-tenant AI costs in KES and USD in SQL.
+   */
+  async persistTenantCost(
+    orgId: string | undefined,
+    useCase: string | undefined,
+    costUsd: number
+  ): Promise<void> {
+    if (!orgId || costUsd <= 0) return;
+    try {
+      const { getUsdToKesFxRate } = await import('./fx.service');
+      const { CURRENT_PRICING_VERSION } = await import('./pricing');
+      const fx = await getUsdToKesFxRate();
+      const costKes = costUsd * fx.rate;
+      const { getMonthlyQuotaPeriod } = await import('@/utils/billing-dates');
+      const { periodStart, periodEnd } = getMonthlyQuotaPeriod();
+      const { prisma } = await import('@/lib/prisma/client');
+      const { BillingMetric } = await import('@prisma/client');
+
+      const metric =
+        useCase === 'policy' ? BillingMetric.POLICY_GENERATIONS :
+        useCase === 'checklist' ? BillingMetric.CHECKLIST_GENERATIONS :
+        useCase === 'analysis' ? BillingMetric.GAP_ANALYSES :
+        BillingMetric.COMPLIANCE_QUERIES;
+
+      await prisma.usageRecord.upsert({
+        where: {
+          organizationId_metric_periodStart: {
+            organizationId: orgId,
+            metric,
+            periodStart,
+          },
+        },
+        create: {
+          organizationId: orgId,
+          metric,
+          count: 1,
+          periodStart,
+          periodEnd,
+          costUsd,
+          costKes,
+          fxRateUsdToKes: fx.rate,
+          fxRateCapturedAt: fx.capturedAt,
+          pricingVersion: CURRENT_PRICING_VERSION,
+        },
+        update: {
+          count: { increment: 1 },
+          costUsd: { increment: costUsd },
+          costKes: { increment: costKes },
+          fxRateUsdToKes: fx.rate,
+          fxRateCapturedAt: fx.capturedAt,
+          pricingVersion: CURRENT_PRICING_VERSION,
+          periodEnd,
+        },
+      });
+
+      logger.info({
+        type: 'tenant_cost_persisted',
+        orgId,
+        metric,
+        costUsd,
+        costKes,
+        fxRateUsdToKes: fx.rate,
+      });
+    } catch (err: unknown) {
+      logger.warn({
+        type: 'tenant_cost_persist_warning',
+        orgId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 }
 
 export const llmGateway = new LLMGateway();
+

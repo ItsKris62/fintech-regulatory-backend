@@ -73,6 +73,7 @@ export const appRouter = router({
   auth: authRouter,
   user: userRouter,
   organization: organizationRouter,
+  org: organizationRouter,
   policy: policyRouter,
   compliance: complianceRouter,
   document: documentRouter,

@@ -1646,11 +1646,20 @@ model UsageRecord {
   count          Int           @default(0)
   periodStart    DateTime
   periodEnd      DateTime
+
+  // Financial spend tracking (KES & USD)
+  costUsd          Decimal?  @db.Decimal(18, 8)
+  costKes          Decimal?  @db.Decimal(18, 4)
+  fxRateUsdToKes   Decimal?  @db.Decimal(18, 8)
+  fxRateCapturedAt DateTime?
+  pricingVersion   String?
+
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
   @@unique([organizationId, metric, periodStart])
   @@index([organizationId, metric])
+  @@index([organizationId, periodStart])
 }
 
 model PilotAccess {
@@ -1858,6 +1867,10 @@ model UsagePeriod {
   documentStorageMb    Float @default(0)
   gapAnalyses          Int   @default(0)
   policyGenerations    Int   @default(0)
+
+  // ---- Financial spend rollups (summed from UsageRecord in period) ---------
+  costUsd              Decimal? @db.Decimal(18, 8)
+  costKes              Decimal? @db.Decimal(18, 4)
 
   // ---- Plan snapshot (captured at period creation / plan upgrade) ----------
   // Limits use the same convention as PLAN_ENTITLEMENTS:

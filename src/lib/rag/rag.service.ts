@@ -11,6 +11,10 @@ import {
   type JurisdictionContext,
 } from '@/types/jurisdiction';
 import { getCorpusVersionSnapshot, type CorpusVersionSnapshot } from '@/lib/rag/corpus-version';
+import { rerankChunks } from './reranker.service';
+
+export { rerankChunks, type RerankOutcome } from './reranker.service';
+export { compressContextChunks, type CompressionOutcome } from './compression.service';
 
 const RAG_CTX_CACHE_TTL = 1800; // 30 minutes — caches Pinecone lookup, not AI answer
 
@@ -486,50 +490,16 @@ export class RAGService {
     query: string,
     options: SearchOptions = {}
   ): Promise<SearchResult[]> {
-    // Get more results initially
+    const topK = options.topK || 10;
+    // Get more results initially for reranking
     const extendedOptions = {
       ...options,
-      topK: (options.topK || 10) * 2,
+      topK: topK * 2,
     };
 
     const results = await this.search(query, extendedOptions);
-
-    // Rerank based on multiple factors
-    const reranked = results.map(result => {
-      let rerankScore = result.score;
-
-      // Boost if query terms appear in chunk text
-      const queryTerms = query.toLowerCase().split(/\s+/);
-      const chunkText = result.chunkText.toLowerCase();
-      const termMatches = queryTerms.filter(term => chunkText.includes(term)).length;
-      rerankScore += (termMatches / queryTerms.length) * 0.1;
-
-      // Boost if chunk has citations (indicates more authoritative)
-      if (result.citation) {
-        rerankScore += 0.05;
-      }
-
-      // Boost if section name is relevant
-      if (result.section) {
-        const sectionRelevant = queryTerms.some(term =>
-          result.section!.toLowerCase().includes(term)
-        );
-        if (sectionRelevant) {
-          rerankScore += 0.05;
-        }
-      }
-
-      return { ...result, score: rerankScore };
-    });
-
-    // Sort by reranked score and limit to topK
-    reranked.sort((a, b) => b.score - a.score);
-    const topK = options.topK || 10;
-    
-    return reranked.slice(0, topK).map((result, index) => ({
-      ...result,
-      rank: index + 1,
-    }));
+    const outcome = await rerankChunks(query, results, { topN: topK });
+    return outcome.results;
   }
 
   async searchRegulatoryEvidence(

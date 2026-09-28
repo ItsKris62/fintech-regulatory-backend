@@ -5,6 +5,8 @@ import { runGraderAgent } from './grader.agent';
 import { runVerifierAgent } from './verifier.agent';
 import { TOKEN_BUDGETS, type ControlTokens, type QueryRunTrace, type AcceptedChunkRef } from './types';
 import type { SearchResult } from '@/lib/rag/rag.service';
+import { rerankChunks } from '@/lib/rag/reranker.service';
+import { compressContextChunks } from '@/lib/rag/compression.service';
 import type { CorpusVersionSnapshot } from '@/lib/rag/corpus-version';
 import { resolveJurisdictionContext, type JurisdictionContext } from '@/types/jurisdiction';
 
@@ -107,10 +109,17 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       return;
     }
 
-    // ── 2. Grader ──────────────────────────────────────────────────────────────
-    const graderResult = await runGraderAgent(
+    // ── 2. Reranker ────────────────────────────────────────────────────────────
+    const rerankOutcome = await rerankChunks(
       input.question,
       input.ragResults,
+      { topN: budget.maxGradeChunks }
+    );
+
+    // ── 3. Grader ──────────────────────────────────────────────────────────────
+    const graderResult = await runGraderAgent(
+      input.question,
+      rerankOutcome.results,
       jurisdictionContext,
       budget.maxGradeChunks
     );
@@ -129,8 +138,19 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       rank:          r.rank,
     }));
 
-    // ── 3. Verifier ────────────────────────────────────────────────────────────
-    const verifierResult = await runVerifierAgent(input.answer, graderResult.accepted, jurisdictionContext);
+    // ── 4. Context Compression ────────────────────────────────────────────────
+    const compressionOutcome = await compressContextChunks(
+      input.question,
+      graderResult.accepted,
+      { currentPipelineLatencyMs: Date.now() - t0 }
+    );
+
+    // ── 5. Verifier ────────────────────────────────────────────────────────────
+    const verifierResult = await runVerifierAgent(
+      input.answer,
+      compressionOutcome.compressedResults,
+      jurisdictionContext
+    );
     controlTokens.verifier = verifierResult.tokens;
 
     // ── 4. Token accounting ────────────────────────────────────────────────────
@@ -237,6 +257,24 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         errorMessage:         trace.errorMessage,
         wallMs:               trace.wallMs,
       },
+    });
+
+    // ── 7. Offline Evaluation Hook ─────────────────────────────────────────────
+    logger.info({
+      type: 'rag_eval_event',
+      complianceQueryId: input.complianceQueryId,
+      rerankerProvider: rerankOutcome.provider,
+      rerankerFallback: rerankOutcome.fallbackTriggered,
+      rerankerLatencyMs: rerankOutcome.latencyMs,
+      topChunkIds: rerankOutcome.results.slice(0, 5).map((r) => r.chunkId || r.vectorId),
+      compressionEnabled: compressionOutcome.enabled,
+      compressionStrategy: compressionOutcome.strategy,
+      compressionRatio: compressionOutcome.compressionRatio,
+      originalTokens: compressionOutcome.originalTokens,
+      compressedTokens: compressionOutcome.compressedTokens,
+      verifierVerdict: verifierResult.verdict,
+      answerLength: input.answer.length,
+      wallMs: Date.now() - t0,
     });
 
     if (input.complianceQueryId) {

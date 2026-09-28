@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { appConfig } from '@/config/app.config';
+import { aiConfig } from '@/config/ai.config';
 import { ILLMProvider, LLMCompletionRequest, LLMCompletionResult, LLMStreamOptions, LLMProviderError, LLMProviderNotConfiguredError } from '../types';
 
 export class GeminiProvider implements ILLMProvider {
@@ -54,6 +55,12 @@ export class GeminiProvider implements ILLMProvider {
         })
       ]);
 
+      const isCachingEnabled = aiConfig.caching?.providerPromptCaching?.gemini?.enabled ?? false;
+      const cachedTokens = (response.usageMetadata as any)?.cachedContentTokenCount || 0;
+      const providerCacheStatus = isCachingEnabled 
+        ? (cachedTokens > 0 ? 'hit' : 'miss')
+        : 'disabled';
+
       return {
         content: response.text || '',
         provider: this.name,
@@ -61,8 +68,11 @@ export class GeminiProvider implements ILLMProvider {
         usage: {
           inputTokens: response.usageMetadata?.promptTokenCount || 0,
           outputTokens: response.usageMetadata?.candidatesTokenCount || 0,
+          cacheReadTokens: cachedTokens,
+          cacheWriteTokens: 0,
         },
         stopReason: response.candidates?.[0]?.finishReason || null,
+        providerCacheStatus,
       };
     } catch (error: any) {
       if (error.name === 'AbortError') {
@@ -118,6 +128,12 @@ export class GeminiProvider implements ILLMProvider {
         }
       }
 
+      const isCachingEnabled = aiConfig.caching?.providerPromptCaching?.gemini?.enabled ?? false;
+      const cachedTokens = (lastResponse?.usageMetadata as any)?.cachedContentTokenCount || 0;
+      const providerCacheStatus = isCachingEnabled 
+        ? (cachedTokens > 0 ? 'hit' : 'miss')
+        : 'disabled';
+
       return {
         content: fullContent,
         provider: this.name,
@@ -125,8 +141,11 @@ export class GeminiProvider implements ILLMProvider {
         usage: {
           inputTokens: lastResponse?.usageMetadata?.promptTokenCount || 0,
           outputTokens: lastResponse?.usageMetadata?.candidatesTokenCount || 0,
+          cacheReadTokens: cachedTokens,
+          cacheWriteTokens: 0,
         },
         stopReason: lastResponse?.candidates?.[0]?.finishReason || null,
+        providerCacheStatus,
       };
     } catch (error: any) {
       if (error.name === 'AbortError') {
@@ -137,3 +156,4 @@ export class GeminiProvider implements ILLMProvider {
     }
   }
 }
+

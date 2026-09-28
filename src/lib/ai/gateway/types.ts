@@ -33,9 +33,12 @@ export interface LLMCompletionResult {
   usage: {
     inputTokens: number;
     outputTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
   };
   stopReason: string | null;
   cached?: boolean;
+  providerCacheStatus?: 'hit' | 'miss' | 'write' | 'unsupported' | 'disabled';
 }
 
 export interface LLMStreamOptions extends LLMCompletionRequest {

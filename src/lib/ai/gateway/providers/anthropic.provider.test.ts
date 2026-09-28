@@ -111,4 +111,102 @@ describe('AnthropicProvider metadata sanitization', () => {
     expect(JSON.stringify(loggedPayload)).not.toContain('secret prompt body');
     expect(JSON.stringify(loggedPayload)).not.toContain('W-CONTENT-02');
   });
+
+  it('injects cache_control when anthropic prompt caching is enabled', async () => {
+    const { aiConfig } = await import('@/config/ai.config');
+    (aiConfig.caching as any).providerPromptCaching = {
+      anthropic: { enabled: true, minTokens: 1024 },
+    };
+
+    createMock.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'response with prompt caching' }],
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_creation_input_tokens: 1200,
+        cache_read_input_tokens: 0,
+      },
+      stop_reason: 'end_turn',
+    });
+
+    const provider = new AnthropicProvider();
+    const result = await provider.complete({
+      model: 'claude-haiku-4-5-20251001',
+      prompt: 'hello',
+      systemPrompt: 'You are a Kenyan regulatory assistant.',
+      maxTokens: 100,
+    });
+
+    const request = createMock.mock.calls[0][0];
+    expect(request.system).toEqual([
+      {
+        type: 'text',
+        text: 'You are a Kenyan regulatory assistant.',
+        cache_control: { type: 'ephemeral' },
+      },
+    ]);
+    expect(result.usage.cacheWriteTokens).toBe(1200);
+    expect(result.usage.cacheReadTokens).toBe(0);
+    expect(result.providerCacheStatus).toBe('write');
+  });
+
+  it('sends plain system prompt string when prompt caching is disabled', async () => {
+    const { aiConfig } = await import('@/config/ai.config');
+    (aiConfig.caching as any).providerPromptCaching = {
+      anthropic: { enabled: false, minTokens: 1024 },
+    };
+
+    createMock.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'standard response' }],
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+      },
+      stop_reason: 'end_turn',
+    });
+
+    const provider = new AnthropicProvider();
+    const result = await provider.complete({
+      model: 'claude-haiku-4-5-20251001',
+      prompt: 'hello',
+      systemPrompt: 'You are a Kenyan regulatory assistant.',
+      maxTokens: 100,
+    });
+
+    const request = createMock.mock.calls[0][0];
+    expect(request.system).toBe('You are a Kenyan regulatory assistant.');
+    expect(result.usage.cacheWriteTokens).toBe(0);
+    expect(result.usage.cacheReadTokens).toBe(0);
+    expect(result.providerCacheStatus).toBe('disabled');
+  });
+
+  it('accurately identifies cache hit when cache_read_input_tokens > 0', async () => {
+    const { aiConfig } = await import('@/config/ai.config');
+    (aiConfig.caching as any).providerPromptCaching = {
+      anthropic: { enabled: true, minTokens: 1024 },
+    };
+
+    createMock.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'cached read response' }],
+      usage: {
+        input_tokens: 20,
+        output_tokens: 50,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 1200,
+      },
+      stop_reason: 'end_turn',
+    });
+
+    const provider = new AnthropicProvider();
+    const result = await provider.complete({
+      model: 'claude-haiku-4-5-20251001',
+      prompt: 'hello again',
+      systemPrompt: 'You are a Kenyan regulatory assistant.',
+      maxTokens: 100,
+    });
+
+    expect(result.usage.cacheReadTokens).toBe(1200);
+    expect(result.providerCacheStatus).toBe('hit');
+  });
 });
+

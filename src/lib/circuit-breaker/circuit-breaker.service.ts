@@ -25,6 +25,7 @@ export const SUPPORTED_PROVIDERS = [
   'anthropic',
   'openai',
   'gemini',
+  'cohere',
 ] as const;
 
 export type CircuitBreakerProvider = (typeof SUPPORTED_PROVIDERS)[number];

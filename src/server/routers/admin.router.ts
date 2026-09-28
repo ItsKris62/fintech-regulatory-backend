@@ -3451,4 +3451,206 @@ export const adminRouter = router({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to export audit logs', cause: error });
       }
     }),
+
+  /**
+   * Platform-wide AI usage, financial spend, health, and circuit breaker telemetry.
+   *
+   * @admin
+   */
+  getAIPlatformStats: adminProcedure
+    .input(
+      z.object({
+        period: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+      }).optional()
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const { llmGateway } = await import('@/lib/ai/gateway/llm-gateway');
+        const { getUsdToKesFxRate } = await import('@/lib/ai/gateway/fx.service');
+        const { getCircuitBreakerMetrics } = await import('@/lib/circuit-breaker/circuit-breaker.service');
+        const { getMonthlyQuotaPeriod } = await import('@/utils/billing-dates');
+
+        const period = input?.period ?? getMonthlyQuotaPeriod().periodKey;
+        const [gatewayStatus, fx, breakerMetrics] = await Promise.all([
+          llmGateway.getMonthlyBudgetStatus(period),
+          getUsdToKesFxRate(),
+          Promise.resolve(getCircuitBreakerMetrics()),
+        ]);
+
+        const gatewayKes = {
+          budgetKes: parseFloat((gatewayStatus.budgetUsd * fx.rate).toFixed(2)),
+          spentKes: parseFloat((gatewayStatus.spentUsd * fx.rate).toFixed(2)),
+          reservedKes: parseFloat((gatewayStatus.reservedUsd * fx.rate).toFixed(2)),
+          remainingKes: parseFloat((gatewayStatus.remainingUsd * fx.rate).toFixed(2)),
+          providers: {
+            anthropic: parseFloat((gatewayStatus.providers.anthropic * fx.rate).toFixed(2)),
+            openai: parseFloat((gatewayStatus.providers.openai * fx.rate).toFixed(2)),
+            gemini: parseFloat((gatewayStatus.providers.gemini * fx.rate).toFixed(2)),
+          },
+        };
+
+        // Query top tenants by cost for this period
+        const dateFrom = new Date(`${period}-01T00:00:00Z`);
+        const dateTo = new Date(Date.UTC(dateFrom.getUTCFullYear(), dateFrom.getUTCMonth() + 1, 1));
+
+        const records = await ctx.prisma.usageRecord.findMany({
+          where: {
+            periodStart: { gte: dateFrom, lt: dateTo },
+          },
+          include: {
+            organization: {
+              select: { id: true, name: true, plan: true },
+            },
+          },
+        });
+
+        const tenantMap = new Map<string, { orgId: string; orgName: string; plan: string; costUsd: number; costKes: number; requests: number }>();
+
+        for (const r of records) {
+          const orgId = r.organizationId;
+          const orgName = r.organization?.name || 'Unknown';
+          const plan = r.organization?.plan || 'STARTUP';
+          const costUsd = r.costUsd ? parseFloat(r.costUsd.toString()) : 0;
+          const costKes = r.costKes ? parseFloat(r.costKes.toString()) : (costUsd * fx.rate);
+
+          const existing = tenantMap.get(orgId) ?? {
+            orgId,
+            orgName,
+            plan,
+            costUsd: 0,
+            costKes: 0,
+            requests: 0,
+          };
+
+          existing.costUsd += costUsd;
+          existing.costKes += costKes;
+          existing.requests += r.count;
+          tenantMap.set(orgId, existing);
+        }
+
+        const topTenants = Array.from(tenantMap.values())
+          .sort((a, b) => b.costKes - a.costKes)
+          .slice(0, 10)
+          .map(t => ({
+            ...t,
+            costUsd: parseFloat(t.costUsd.toFixed(6)),
+            costKes: parseFloat(t.costKes.toFixed(2)),
+          }));
+
+        const aiBreakers = breakerMetrics.filter(b => ['anthropic', 'openai', 'gemini', 'pinecone'].includes(b.provider));
+
+        logger.info({
+          type: 'admin_ai_platform_stats_viewed',
+          adminId: ctx.user!.id,
+          period,
+        });
+
+        return {
+          period,
+          fxRate: fx,
+          budgetUsd: gatewayStatus,
+          budgetKes: gatewayKes,
+          circuitBreakers: aiBreakers,
+          topTenants,
+        };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        logger.error({ type: 'admin_ai_platform_stats_error', error: error.message });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to retrieve AI platform statistics' });
+      }
+    }),
+
+  /**
+   * Paginated per-tenant AI usage & cost report with filters.
+   *
+   * @admin
+   */
+  getAIPlatformStatsByTenant: adminProcedure
+    .input(
+      z.object({
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(100).default(20),
+        organizationId: z.string().optional(),
+        plan: z.string().optional(),
+        period: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const { getUsdToKesFxRate } = await import('@/lib/ai/gateway/fx.service');
+        const { getMonthlyQuotaPeriod } = await import('@/utils/billing-dates');
+
+        const period = input.period ?? getMonthlyQuotaPeriod().periodKey;
+        const fx = await getUsdToKesFxRate();
+        const dateFrom = new Date(`${period}-01T00:00:00Z`);
+        const dateTo = new Date(Date.UTC(dateFrom.getUTCFullYear(), dateFrom.getUTCMonth() + 1, 1));
+
+        const whereOrg: any = {};
+        if (input.organizationId) whereOrg.id = input.organizationId;
+        if (input.plan) whereOrg.plan = input.plan;
+
+        const [totalOrgs, orgs] = await Promise.all([
+          ctx.prisma.organization.count({ where: whereOrg }),
+          ctx.prisma.organization.findMany({
+            where: whereOrg,
+            select: { id: true, name: true, plan: true, createdAt: true },
+            skip: (input.page - 1) * input.pageSize,
+            take: input.pageSize,
+            orderBy: { name: 'asc' },
+          }),
+        ]);
+
+        const orgIds = orgs.map(o => o.id);
+        const usageRecords = await ctx.prisma.usageRecord.findMany({
+          where: {
+            organizationId: { in: orgIds },
+            periodStart: { gte: dateFrom, lt: dateTo },
+          },
+        });
+
+        const tenantRows = orgs.map(org => {
+          const recs = usageRecords.filter(r => r.organizationId === org.id);
+          let costUsd = 0;
+          let costKes = 0;
+          let totalRequests = 0;
+          const byMetric: Record<string, { count: number; costUsd: number; costKes: number }> = {};
+
+          for (const r of recs) {
+            const u = r.costUsd ? parseFloat(r.costUsd.toString()) : 0;
+            const k = r.costKes ? parseFloat(r.costKes.toString()) : (u * fx.rate);
+            costUsd += u;
+            costKes += k;
+            totalRequests += r.count;
+            byMetric[r.metric] = {
+              count: r.count,
+              costUsd: parseFloat(u.toFixed(6)),
+              costKes: parseFloat(k.toFixed(2)),
+            };
+          }
+
+          return {
+            organizationId: org.id,
+            organizationName: org.name,
+            plan: org.plan,
+            totalRequests,
+            totalCostUsd: parseFloat(costUsd.toFixed(6)),
+            totalCostKes: parseFloat(costKes.toFixed(2)),
+            byMetric,
+          };
+        });
+
+        return {
+          period,
+          page: input.page,
+          pageSize: input.pageSize,
+          total: totalOrgs,
+          totalPages: Math.ceil(totalOrgs / input.pageSize),
+          tenants: tenantRows,
+        };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        logger.error({ type: 'admin_ai_stats_by_tenant_error', error: error.message });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to retrieve per-tenant AI statistics' });
+      }
+    }),
 });

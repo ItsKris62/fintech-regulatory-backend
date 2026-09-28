@@ -2250,4 +2250,98 @@ export const organizationRouter = router({
 
       return { success, message: success ? 'Scheduled replacement cancelled' : 'No active scheduled replacement found' };
     }),
+
+  /**
+   * Retrieves organization-scoped AI usage, cost in KES/USD, and quota status.
+   * Scoped strictly to the session's organization (never accepts orgId from client).
+   *
+   * @protected
+   */
+  getAIUsageStats: protectedProcedure
+    .input(
+      z.object({
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(50).default(10),
+      }).optional()
+    )
+    .query(async ({ input, ctx }) => {
+      const organizationId = ctx.user.organizationId;
+      if (!organizationId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You are not associated with any organization',
+        });
+      }
+
+      await assertActiveOrganizationMember(ctx, organizationId);
+
+      try {
+        const { usageTrackingService } = await import('@/services/usage-tracking.service');
+        const [usageSummary, costSummary, org] = await Promise.all([
+          usageTrackingService.getCurrentUsageSummary(organizationId),
+          usageTrackingService.getTenantCostSummary(organizationId),
+          ctx.tenantPrisma.organization.findUnique({
+            where: { id: organizationId },
+            select: { id: true, name: true, plan: true },
+          }),
+        ]);
+
+        const page = input?.page ?? 1;
+        const pageSize = input?.pageSize ?? 10;
+
+        // Fetch recent compliance queries (redacted: no raw prompt/response)
+        const [totalQueries, recentQueries] = await Promise.all([
+          ctx.tenantPrisma.complianceQuery.count({ where: { organizationId } }),
+          ctx.tenantPrisma.complianceQuery.findMany({
+            where: { organizationId },
+            select: {
+              id: true,
+              queryType: true,
+              jurisdiction: true,
+              status: true,
+              confidenceScore: true,
+              createdAt: true,
+            },
+            orderBy: { createdAt: 'desc' },
+            skip: (page - 1) * pageSize,
+            take: pageSize,
+          }),
+        ]);
+
+        logger.info({
+          type: 'org_ai_usage_stats_viewed',
+          userId: ctx.user.id,
+          orgId: organizationId,
+        });
+
+        return {
+          organization: org,
+          period: usageSummary.period,
+          planTier: org?.plan || usageSummary.planTier,
+          categories: usageSummary.categories,
+          costs: {
+            totalCostUsd: costSummary.totalCostUsd,
+            totalCostKes: costSummary.totalCostKes,
+            byMetric: costSummary.byMetric,
+          },
+          recentActivity: {
+            total: totalQueries,
+            page,
+            pageSize,
+            items: recentQueries,
+          },
+        };
+      } catch (error: any) {
+        if (error instanceof TRPCError) throw error;
+        logger.error({
+          type: 'org_ai_usage_stats_error',
+          orgId: organizationId,
+          error: error.message,
+        });
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to retrieve AI usage statistics',
+        });
+      }
+    }),
 });

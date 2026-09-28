@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { appConfig } from '@/config/app.config';
+import { aiConfig } from '@/config/ai.config';
 import { ILLMProvider, LLMCompletionRequest, LLMCompletionResult, LLMStreamOptions, LLMProviderError, LLMProviderNotConfiguredError } from '../types';
 
 export class OpenAIProvider implements ILLMProvider {
@@ -50,6 +51,11 @@ export class OpenAIProvider implements ILLMProvider {
       );
 
       const choice = response.choices[0];
+      const isCachingEnabled = aiConfig.caching?.providerPromptCaching?.openai?.enabled ?? false;
+      const cachedTokens = (response.usage as any)?.prompt_tokens_details?.cached_tokens || 0;
+      const providerCacheStatus = isCachingEnabled 
+        ? (cachedTokens > 0 ? 'hit' : 'miss')
+        : 'disabled';
       
       return {
         content: choice?.message?.content || '',
@@ -58,8 +64,11 @@ export class OpenAIProvider implements ILLMProvider {
         usage: {
           inputTokens: response.usage?.prompt_tokens || 0,
           outputTokens: response.usage?.completion_tokens || 0,
+          cacheReadTokens: cachedTokens,
+          cacheWriteTokens: 0,
         },
         stopReason: choice?.finish_reason || null,
+        providerCacheStatus,
       };
     } catch (error: any) {
       if (error.name === 'AbortError') {
@@ -101,6 +110,7 @@ export class OpenAIProvider implements ILLMProvider {
       let fullContent = '';
       let inputTokens = 0;
       let outputTokens = 0;
+      let cacheReadTokens = 0;
       let stopReason: string | null = null;
 
       for await (const chunk of streamResponse) {
@@ -117,8 +127,14 @@ export class OpenAIProvider implements ILLMProvider {
         if (chunk.usage) {
           inputTokens = chunk.usage.prompt_tokens;
           outputTokens = chunk.usage.completion_tokens;
+          cacheReadTokens = (chunk.usage as any)?.prompt_tokens_details?.cached_tokens || 0;
         }
       }
+
+      const isCachingEnabled = aiConfig.caching?.providerPromptCaching?.openai?.enabled ?? false;
+      const providerCacheStatus = isCachingEnabled 
+        ? (cacheReadTokens > 0 ? 'hit' : 'miss')
+        : 'disabled';
 
       return {
         content: fullContent,
@@ -127,8 +143,11 @@ export class OpenAIProvider implements ILLMProvider {
         usage: {
           inputTokens,
           outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens: 0,
         },
         stopReason,
+        providerCacheStatus,
       };
     } catch (error: any) {
       if (error.name === 'AbortError') {
@@ -139,3 +158,4 @@ export class OpenAIProvider implements ILLMProvider {
     }
   }
 }
+

@@ -172,6 +172,23 @@ export const aiConfig = {
 
     // Cache key prefix
     keyPrefix: 'claude:cache:',
+
+    /**
+     * Provider-native prompt caching settings
+     * Reduces input token cost on repetitive static instruction headers
+     */
+    providerPromptCaching: {
+      anthropic: {
+        enabled: process.env.AI_PROMPT_CACHING_ANTHROPIC === 'true',
+        minTokens: 1024,
+      },
+      openai: {
+        enabled: process.env.AI_PROMPT_CACHING_OPENAI === 'true',
+      },
+      gemini: {
+        enabled: process.env.AI_PROMPT_CACHING_GEMINI === 'true',
+      },
+    },
   },
 
   /**
@@ -231,6 +248,27 @@ export const aiConfig = {
 
     // Log only errors in production
     logErrorsOnly: appConfig.isProduction,
+  },
+
+  /**
+   * RAG Advanced Pipeline Settings: Neural Reranking & Context Compression
+   */
+  rag: {
+    reranker: {
+      provider: (process.env.RAG_RERANKER_PROVIDER as 'heuristic' | 'cohere' | 'local') || 'heuristic',
+      apiKey: process.env.COHERE_API_KEY || '',
+      model: process.env.COHERE_RERANK_MODEL || 'rerank-v3.5',
+      timeoutMs: Number(process.env.RAG_RERANKER_TIMEOUT_MS) || 1500, // 1.5s hard timeout
+      topK: Number(process.env.RAG_RERANKER_TOP_K) || 20, // Initial chunks to fetch for reranking
+      topN: Number(process.env.RAG_RERANKER_TOP_N) || 8, // Chunks to retain after reranking
+    },
+    compression: {
+      enabled: process.env.RAG_COMPRESSION_ENABLED === 'true',
+      strategy: (process.env.RAG_COMPRESSION_STRATEGY as 'rule-based' | 'extractive') || 'rule-based',
+      maxOutputTokensPerChunk: Number(process.env.RAG_COMPRESSION_MAX_TOKENS_PER_CHUNK) || 300,
+      timeoutMs: Number(process.env.RAG_COMPRESSION_TIMEOUT_MS) || 1500,
+    },
+    latencyBudgetMs: Number(process.env.RAG_PIPELINE_MAX_ADDED_LATENCY_MS) || 2500, // 2.5s cap for added latency
   },
 } as const;
 
