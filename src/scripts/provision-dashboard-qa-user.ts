@@ -264,6 +264,7 @@ async function normalizeQaUser(
       subscriptionTier: 'STARTUP',
       isPilot: true,
       organizationName: input.mode === 'primary' ? QA_ORGANIZATION_NAME : QA_LIMITED_ORGANIZATION_NAME,
+      homeJurisdictionCode: 'KE',
       orgRole: 'OWNER',
       supabaseAuthId: authUserId,
       adminId,
