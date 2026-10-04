@@ -100,6 +100,12 @@ describe('recordFreshMfaVerification Runtime & Integration Proof (Blocker 2)', (
     }
   });
 
+  it('evicts the in-memory auth snapshot after TOTP enrollment', () => {
+    const code = readFileSync(resolve(__dirname, '..', 'user.router.ts'), 'utf8');
+
+    expect(code).toContain('evictInMemoryUserSession(ctx.user.supabaseAuthId)');
+  });
+
   it('proves step-up TOTP verification writes sheriabot:admin:mfa_verified:${userId} into Redis', async () => {
     const userId = 'admin_totp_verified_user';
     // Direct execution of the exact logic inside verifyStepUp / confirmTotpSetup

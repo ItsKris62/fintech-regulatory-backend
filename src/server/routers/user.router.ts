@@ -27,6 +27,7 @@ import { logger } from '@/utils/logger';
 import { getSystemConfigNumber } from '@/lib/system-config';
 import { validatePassword } from '@/shared/validation/password.schema';
 import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
+import { evictInMemoryUserSession } from '@/server/trpc/context';
 
 const TOTP_PENDING_PREFIX = 'totp:pending:';
 const TOTP_PENDING_TTL = 600; // 10 minutes
@@ -744,6 +745,7 @@ export const userRouter = router({
 
         await redis.del(`${TOTP_PENDING_PREFIX}${ctx.user.id}`);
         await userCache.delete(ctx.user.id);
+        evictInMemoryUserSession(ctx.user.supabaseAuthId);
 
         await recordFreshMfaVerification(ctx.user.id);
         logger.info({ type: 'user_totp_enabled', userId: ctx.user.id });
