@@ -14,6 +14,7 @@ const { mockPrisma } = vi.hoisted(() => ({
     },
     organizationMember: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
     },
     complianceQuery: {
       count: vi.fn(),
@@ -128,7 +129,7 @@ describe('AI Stats Authorization & Scoping Boundaries', () => {
   });
 
   it('allows tenant org member to retrieve only their own org AI usage stats', async () => {
-    mockPrisma.organizationMember.findUnique.mockResolvedValueOnce({
+    mockPrisma.organizationMember.findFirst.mockResolvedValueOnce({
       status: MemberStatus.ACTIVE,
     });
     mockPrisma.organization.findUnique.mockResolvedValueOnce({
@@ -156,6 +157,10 @@ describe('AI Stats Authorization & Scoping Boundaries', () => {
     });
 
     const stats = await tenantCaller.organization.getAIUsageStats();
+    expect(mockPrisma.organizationMember.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'user-1', organizationId: 'org-1' },
+      select: { status: true },
+    });
     expect(stats.planTier).toBe('STARTUP');
     expect(stats.costs.totalCostKes).toBe(195.0);
     expect(stats.recentActivity.total).toBe(5);

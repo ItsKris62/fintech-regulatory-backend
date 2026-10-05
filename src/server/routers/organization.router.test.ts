@@ -68,12 +68,35 @@ describe('Business organization portal router contract', () => {
     expect(authSrc).toContain('requireMfa: true');
   });
 
+  it('uses a flat tenant-scoped membership lookup for Security Center', () => {
+    const securityCenter = routerSrc.slice(
+      routerSrc.indexOf('getSecurityCenter: protectedProcedure'),
+      routerSrc.indexOf('updateSecurityPolicy: protectedProcedure'),
+    );
+    expect(securityCenter).toContain('ctx.tenantPrisma.organizationMember.findFirst({');
+    expect(securityCenter).toContain('where: { userId: ctx.user.id, organizationId }');
+    expect(securityCenter).not.toContain('userId_organizationId');
+    expect(securityCenter).toContain('member.status !== MemberStatus.ACTIVE');
+    expect(securityCenter).toContain("code: 'FORBIDDEN', message: 'Access denied to this organization'");
+  });
+
   it('scopes organization activity log through organization entity or metadata organizationId', () => {
     expect(routerSrc).toContain('getActivityLog: protectedProcedure');
     expect(routerSrc).toContain('await assertOrganizationManager(ctx, organizationId)');
     expect(routerSrc).toContain("{ entityType: 'Organization', entityId: organizationId }");
     expect(routerSrc).toContain("metadata: { path: ['organizationId'], equals: organizationId }");
     expect(routerSrc).not.toContain('targetToken');
+  });
+
+  it('uses flat tenant-scoped membership checks in organization access helpers', () => {
+    const helpers = routerSrc.slice(
+      routerSrc.indexOf('async function assertActiveOrganizationMember'),
+      routerSrc.indexOf('async function assertNotLastActiveOwner'),
+    );
+
+    expect(helpers).toContain('ctx.tenantPrisma.organizationMember.findFirst({');
+    expect(helpers).toContain('where: { userId: ctx.user.id, organizationId }');
+    expect(helpers).not.toContain('userId_organizationId');
   });
 
   it('supports owner/admin home jurisdiction recovery through organization settings', () => {

@@ -39,8 +39,24 @@ describe('F-03: Prisma Automatic Tenant Scoping Extension', () => {
     let capturedLegalDocArgs: any = null;
     let capturedPaymentArgs: any = null;
     let capturedVaultDocArgs: any = null;
+    let vaultRlsOrgId: string | null = null;
 
     const mockPrisma: any = {
+      $transaction: vi.fn(async (callback: (tx: any) => Promise<unknown>) => callback({
+        $executeRawUnsafe: vi.fn(async (_sql: string, orgId: string) => {
+          vaultRlsOrgId = orgId;
+        }),
+        VaultDocument: {
+          findMany: vi.fn(async (finalArgs: any) => {
+            capturedVaultDocArgs = finalArgs;
+            const allRows = [
+              { id: 'vault-1', name: 'Org A License Vault', organizationId: 'org-A' },
+              { id: 'vault-2', name: 'Org B Proprietary Vault', organizationId: 'org-B' },
+            ];
+            return allRows.filter((row) => row.organizationId === vaultRlsOrgId);
+          }),
+        },
+      })),
       $extends: vi.fn().mockImplementation((config) => {
         const handler = config.query.$allModels.$allOperations;
         return {
@@ -85,11 +101,7 @@ describe('F-03: Prisma Automatic Tenant Scoping Extension', () => {
                 args,
                 query: async (finalArgs: any) => {
                   capturedVaultDocArgs = finalArgs;
-                  const allRows = [
-                    { id: 'vault-1', name: 'Org A License Vault', organizationId: 'org-A' },
-                    { id: 'vault-2', name: 'Org B Proprietary Vault', organizationId: 'org-B' },
-                  ];
-                  return allRows.filter((r) => r.organizationId === finalArgs.where.organizationId);
+                  return [];
                 },
               }),
           },
@@ -115,7 +127,8 @@ describe('F-03: Prisma Automatic Tenant Scoping Extension', () => {
 
     // 3. VaultDocument query omits where: { organizationId }
     const vaultResults = await clientOrgA.vaultDocument.findMany({});
-    expect(capturedVaultDocArgs.where).toEqual({ organizationId: 'org-A' });
+    expect(capturedVaultDocArgs).toEqual({});
+    expect(vaultRlsOrgId).toBe('org-A');
     expect(vaultResults).toEqual([
       { id: 'vault-1', name: 'Org A License Vault', organizationId: 'org-A' },
     ]);

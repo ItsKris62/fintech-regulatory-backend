@@ -47,8 +47,8 @@ async function assertActiveOrganizationMember(
 ) {
   if (isAnyAdmin(ctx.user.role)) return;
 
-  const member = await ctx.tenantPrisma.organizationMember.findUnique({
-    where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
+  const member = await ctx.tenantPrisma.organizationMember.findFirst({
+    where: { userId: ctx.user.id, organizationId },
     select: { status: true },
   });
 
@@ -66,8 +66,8 @@ async function assertOrganizationManager(
 ) {
   if (isAnyAdmin(ctx.user.role)) return null;
 
-  const member = await ctx.tenantPrisma.organizationMember.findUnique({
-    where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
+  const member = await ctx.tenantPrisma.organizationMember.findFirst({
+    where: { userId: ctx.user.id, organizationId },
     select: { status: true, role: true },
   });
 
@@ -1372,8 +1372,11 @@ export const organizationRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of any organization' });
       }
 
-      const member = await ctx.tenantPrisma.organizationMember.findUnique({
-        where: { userId_organizationId: { userId: ctx.user.id, organizationId } },
+      // The tenant client already injects the organization boundary. Keep this
+      // as a flat findFirst predicate because its findUnique adapter translates
+      // compound selectors to findFirst, where nested unique inputs are invalid.
+      const member = await ctx.tenantPrisma.organizationMember.findFirst({
+        where: { userId: ctx.user.id, organizationId },
         select: { status: true, role: true },
       });
       if (!member || member.status !== MemberStatus.ACTIVE) {
