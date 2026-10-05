@@ -17,9 +17,9 @@ describe('vault storage capacity accounting & concurrency reservation', () => {
     expect(vaultCode).toContain('_sum: { fileSize: true }');
 
     expect(usageTrackingCode).toContain('readAuthoritativeStorage');
-    expect(usageTrackingCode).toContain('prisma.vaultDocument.aggregate');
+    expect(usageTrackingCode).toMatch(/vaultDocument\.aggregate/);
 
-    expect(billingRouterCode).toContain('prisma.vaultDocument.aggregate');
+    expect(billingRouterCode).toMatch(/vaultDocument\.aggregate/);
   });
 
   it('atomically reserves incoming upload bytes and enforces concurrency limits to prevent parallel race conditions', () => {

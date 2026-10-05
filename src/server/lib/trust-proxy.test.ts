@@ -9,19 +9,27 @@ describe('resolveTrustProxy configuration', () => {
       TRUST_PROXY: 'true',
     });
     expect(res1.mode).toBe('hops');
-    expect(res1.trustProxy).toBe(1);
+    expect(typeof res1.trustProxy).toBe('function');
+    const fn1 = res1.trustProxy as (addr: string, hop: number) => boolean;
+    expect(fn1('127.0.0.1', 0)).toBe(true);
+    expect(fn1('127.0.0.1', 1)).toBe(false);
 
     const res0 = resolveTrustProxy({
       TRUST_PROXY_HOPS: 0,
     });
     expect(res0.mode).toBe('hops');
-    expect(res0.trustProxy).toBe(0);
+    expect(typeof res0.trustProxy).toBe('function');
+    const fn0 = res0.trustProxy as (addr: string, hop: number) => boolean;
+    expect(fn0('127.0.0.1', 0)).toBe(false);
 
     const res10 = resolveTrustProxy({
       TRUST_PROXY_HOPS: '10',
     });
     expect(res10.mode).toBe('hops');
-    expect(res10.trustProxy).toBe(10);
+    expect(typeof res10.trustProxy).toBe('function');
+    const fn10 = res10.trustProxy as (addr: string, hop: number) => boolean;
+    expect(fn10('127.0.0.1', 9)).toBe(true);
+    expect(fn10('127.0.0.1', 10)).toBe(false);
   });
 
   it('2. priority 2: resolves TRUST_PROXY_CIDRS as string array when TRUST_PROXY_HOPS is unset', () => {

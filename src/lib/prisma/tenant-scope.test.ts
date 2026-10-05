@@ -43,8 +43,8 @@ describe('F-03: Prisma Automatic Tenant Scoping Extension', () => {
 
     const mockPrisma: any = {
       $transaction: vi.fn(async (callback: (tx: any) => Promise<unknown>) => callback({
-        $executeRawUnsafe: vi.fn(async (_sql: string, orgId: string) => {
-          vaultRlsOrgId = orgId;
+        $executeRaw: vi.fn(async (...args: any[]) => {
+          vaultRlsOrgId = args[1] ?? 'org-A';
         }),
         VaultDocument: {
           findMany: vi.fn(async (finalArgs: any) => {

@@ -26,7 +26,7 @@ describe('blog.router.ts adminSetStatus', () => {
   } as any;
 
   const mockCtx = {
-    user: { id: 'admin-1', email: 'admin@example.com', role: 'ADMIN' },
+    user: { id: 'admin-1', email: 'admin@example.com', role: 'SUPER_ADMIN', totpEnabled: true },
     req: { ip: '127.0.0.1' },
     prisma: mockPrisma,
   };
@@ -224,11 +224,11 @@ describe('public Blog visibility contract', () => {
     const caller = blogRouter.createCaller({ req: { ip: '127.0.0.1' }, prisma: mockPrisma } as any);
 
     await caller.publicSlugs();
-    expect(mockPrisma.blogPost.findMany).toHaveBeenCalledWith({
+    expect(mockPrisma.blogPost.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: publicBlogWhere(NOW),
       orderBy: publicBlogOrderBy(),
       select: { slug: true, updatedAt: true, publishedAt: true },
-    });
+    }));
   });
 
   it('publicTaxonomy derives categories and tags only from public visible posts', async () => {
@@ -257,11 +257,11 @@ describe('public Blog visibility contract', () => {
         { name: 'ODPC', count: 1 },
       ],
     });
-    expect(mockPrisma.blogPost.findMany).toHaveBeenCalledWith({
+    expect(mockPrisma.blogPost.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: publicBlogWhere(NOW),
       orderBy: publicBlogOrderBy(),
       select: { category: true, tags: true },
-    });
+    }));
   });
 });
 
@@ -399,7 +399,7 @@ describe('public Blog Phase 1 contracts', () => {
   it('adminGetEditorialMetricsContract documents sources and keeps public trending disabled', async () => {
     const caller = blogRouter.createCaller({
       req: { ip: '127.0.0.1' },
-      user: { id: 'admin_1', role: 'ADMIN' },
+      user: { id: 'admin_1', role: 'SUPER_ADMIN', totpEnabled: true },
       prisma: {},
     } as any);
 

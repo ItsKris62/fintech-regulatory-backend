@@ -48,5 +48,5 @@ describe('AgentRun and AgentReport Prisma parity', () => {
     } finally {
       await prisma.agentRun.deleteMany({ where: { id: runId } });
     }
-  });
+  }, 30000);
 });

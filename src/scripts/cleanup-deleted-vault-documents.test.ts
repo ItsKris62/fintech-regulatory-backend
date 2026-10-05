@@ -83,6 +83,9 @@ describe('cleanupDeletedVaultDocuments', () => {
     vi.mocked(prisma.$transaction).mockImplementation(async (arg: any) => {
       if (typeof arg === 'function') {
         const tx = {
+          $executeRaw: vi.fn(async (..._args: any[]) => {
+            bypassRlsActive = true;
+          }),
           $executeRawUnsafe: vi.fn(async (sql: string) => {
             if (sql.includes("app.bypass_rls', 'true'")) {
               bypassRlsActive = true;

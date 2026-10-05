@@ -5,6 +5,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     exclude: ['**/node_modules/**', '**/dist/**'],
+    maxWorkers: 3,
   },
   resolve: {
     alias: {

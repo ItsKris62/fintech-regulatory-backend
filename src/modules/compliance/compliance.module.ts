@@ -47,7 +47,6 @@ import {
 import { buildCitationsFromChunks, hasUsableCitations } from '@/lib/source-grounding/citations';
 import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
 import { runVerifierAgent } from '@/modules/compliance/orchestrator/verifier.agent';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
 import {
   toComplianceQueryResult,

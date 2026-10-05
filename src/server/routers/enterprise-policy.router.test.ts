@@ -81,7 +81,7 @@ describe('Enterprise Policy Router Security Invariants', () => {
   it('preserves DOCX export logging and functionality', () => {
     const exportBody = routerSrc.slice(routerSrc.indexOf('exportPolicy:'), routerSrc.length);
     expect(exportBody).toContain('generatedPolicyExportService.generateDocx');
-    expect(exportBody).toContain('prisma.generatedPolicyExportLog.create');
+    expect(exportBody).toContain('generatedPolicyExportLog.create');
     expect(exportBody).toContain("format: input.format,");
   });
 
@@ -92,8 +92,8 @@ describe('Enterprise Policy Router Security Invariants', () => {
     
     // The rejection is before the actual export logging and before the date/format update
     const pdfRejectionIdx = exportBody.indexOf("if (input.format === 'PDF')");
-    const exportLogIdx = exportBody.indexOf('prisma.generatedPolicyExportLog.create');
-    const dbUpdateIdx = exportBody.indexOf('prisma.generatedPolicy.update');
+    const exportLogIdx = exportBody.indexOf('generatedPolicyExportLog.create');
+    const dbUpdateIdx = exportBody.indexOf('generatedPolicy.update');
     
     expect(pdfRejectionIdx).toBeLessThan(exportLogIdx);
     expect(pdfRejectionIdx).toBeLessThan(dbUpdateIdx);

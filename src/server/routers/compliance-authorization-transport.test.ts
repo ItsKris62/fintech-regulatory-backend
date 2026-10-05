@@ -206,6 +206,8 @@ describe('compliance authorization transport isolation', () => {
             supabaseAuthId: 'supabase-user-ke',
           },
           prisma: fakePrisma,
+          tenantPrisma: fakePrisma as any,
+          getTenantPrisma: () => fakePrisma as any,
           redis: fakeRedis,
           aiService: {
             answerComplianceQuery,

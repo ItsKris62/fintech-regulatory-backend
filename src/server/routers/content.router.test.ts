@@ -22,6 +22,7 @@ describe('content.router.ts listPublishedKnowledgeBase', () => {
   const mockCtx = {
     req: { ip: '127.0.0.1' },
     prisma: mockPrisma,
+    tenantPrisma: mockPrisma,
   };
 
   const caller = contentRouter.createCaller(mockCtx as any);
@@ -176,14 +177,16 @@ describe('content.router.ts legacy BLOG_POST controls', () => {
   } as any;
 
   const nonAdminCtx = {
-    user: { id: 'user-1', email: 'editor@example.com', role: 'STARTUP', organizationId: 'org-1', isTotpEnabled: true, mfaEnabled: true },
+    user: { id: 'user-1', email: 'editor@example.com', role: 'STARTUP', organizationId: 'org-1', isTotpEnabled: true, mfaEnabled: true, totpEnabled: true },
     req: { ip: '127.0.0.1' },
     prisma: mockPrisma,
+    tenantPrisma: mockPrisma,
   };
   const adminCtx = {
-    user: { id: 'admin-1', email: 'admin@example.com', role: 'ADMIN', organizationId: 'org-1', isTotpEnabled: true, mfaEnabled: true },
+    user: { id: 'admin-1', email: 'admin@example.com', role: 'SUPER_ADMIN', organizationId: 'org-1', isTotpEnabled: true, mfaEnabled: true, totpEnabled: true },
     req: { ip: '127.0.0.1' },
     prisma: mockPrisma,
+    tenantPrisma: mockPrisma,
   };
 
   beforeEach(() => {
@@ -311,6 +314,7 @@ describe('content.router.ts public slug scope', () => {
   const caller = contentRouter.createCaller({
     req: { ip: '127.0.0.1' },
     prisma: mockPrisma,
+    tenantPrisma: mockPrisma,
   } as any);
 
   beforeEach(() => {

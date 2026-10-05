@@ -14,6 +14,7 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { intaSendFinalizationService } from './intasend-finalization.service';
 import { prisma as appPrisma } from '@/lib/prisma/client';
+import { addCalendarMonths } from '@/utils/billing-dates';
 
 vi.mock('@/lib/redis/client', () => ({
   redis: {
@@ -62,20 +63,37 @@ function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
+async function withDbRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      if (attempt < retries && (err?.message?.includes('EMAXCONNSESSION') || err?.code === 'XX000')) {
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  return fn();
+}
+
 async function cleanup(marker: string): Promise<void> {
   if (!prisma) return;
-  await prisma.auditLog.deleteMany({
-    where: {
-      OR: [
-        { entityId: { contains: marker } },
-        { metadata: { path: ['testMarker'], equals: marker } },
-      ],
-    },
+  await withDbRetry(async () => {
+    await prisma!.auditLog.deleteMany({
+      where: {
+        OR: [
+          { entityId: { contains: marker } },
+          { metadata: { path: ['testMarker'], equals: marker } },
+        ],
+      },
+    });
+    await prisma!.payment.deleteMany({ where: { metadata: { path: ['testMarker'], equals: marker } } });
+    await prisma!.organizationMember.deleteMany({ where: { organization: { name: { contains: marker } } } });
+    await prisma!.user.deleteMany({ where: { email: { contains: marker } } });
+    await prisma!.organization.deleteMany({ where: { name: { contains: marker } } });
   });
-  await prisma.payment.deleteMany({ where: { metadata: { path: ['testMarker'], equals: marker } } });
-  await prisma.organizationMember.deleteMany({ where: { organization: { name: { contains: marker } } } });
-  await prisma.user.deleteMany({ where: { email: { contains: marker } } });
-  await prisma.organization.deleteMany({ where: { name: { contains: marker } } });
 }
 
 async function createFixture(options: {
@@ -287,7 +305,8 @@ describeIfSafeDb('IntaSend finalization DB-backed staging gates', () => {
   }, 60_000);
 
   it('starts an early renewal from the existing paid-through boundary', async () => {
-    const paidThrough = new Date('2026-09-30T00:00:00.000Z');
+    const paidThrough = new Date('2027-01-15T00:00:00.000Z');
+    const expectedEnd = addCalendarMonths(paidThrough, 1);
     const fixture = await createFixture({
       plan: SubscriptionPlan.STARTUP,
       orgPlan: SubscriptionPlan.STARTUP,
@@ -306,9 +325,9 @@ describeIfSafeDb('IntaSend finalization DB-backed staging gates', () => {
     const payment = await prisma!.payment.findUniqueOrThrow({ where: { id: fixture.paymentId } });
     const organization = await prisma!.organization.findUniqueOrThrow({ where: { id: fixture.orgId } });
 
-    expect(payment.billingPeriodStart?.toISOString()).toBe('2026-09-30T00:00:00.000Z');
-    expect(payment.billingPeriodEnd?.toISOString()).toBe('2026-10-30T00:00:00.000Z');
-    expect(organization.planEndDate?.toISOString()).toBe('2026-10-30T00:00:00.000Z');
+    expect(payment.billingPeriodStart?.toISOString()).toBe(paidThrough.toISOString());
+    expect(payment.billingPeriodEnd?.toISOString()).toBe(expectedEnd.toISOString());
+    expect(organization.planEndDate?.toISOString()).toBe(expectedEnd.toISOString());
   }, 60_000);
 
   it('starts an expired renewal from the finalization time instead of a stale paid-through date', async () => {
@@ -333,11 +352,12 @@ describeIfSafeDb('IntaSend finalization DB-backed staging gates', () => {
     const payment = await prisma!.payment.findUniqueOrThrow({ where: { id: fixture.paymentId } });
     expect(payment.billingPeriodStart!.getTime()).toBeGreaterThanOrEqual(before.getTime());
     expect(payment.billingPeriodStart!.getTime()).toBeLessThanOrEqual(after.getTime() + 1_000);
-    expect(payment.billingPeriodEnd!.getTime()).toBe(payment.billingPeriodStart!.getTime() + 30 * 24 * 60 * 60 * 1000);
+    expect(payment.billingPeriodEnd!.getTime()).toBe(addCalendarMonths(payment.billingPeriodStart!, 1).getTime());
   }, 60_000);
 
   it('does not double-extend a renewal payment under repeated concurrent completion', async () => {
-    const paidThrough = new Date('2026-09-30T00:00:00.000Z');
+    const paidThrough = new Date('2027-01-15T00:00:00.000Z');
+    const expectedEnd = addCalendarMonths(paidThrough, 1);
     const fixture = await createFixture({
       plan: SubscriptionPlan.BUSINESS,
       orgPlan: SubscriptionPlan.BUSINESS,
@@ -357,7 +377,7 @@ describeIfSafeDb('IntaSend finalization DB-backed staging gates', () => {
     const subscriptionActivatedAudits = await prisma!.auditLog.count({ where: { action: 'subscription_activated', entityId: fixture.orgId } });
 
     expect(results.filter((result) => result.newlyFinalized)).toHaveLength(1);
-    expect(organization.planEndDate?.toISOString()).toBe('2026-10-30T00:00:00.000Z');
+    expect(organization.planEndDate?.toISOString()).toBe(expectedEnd.toISOString());
     expect(subscriptionActivatedAudits).toBe(1);
   }, 60_000);
 

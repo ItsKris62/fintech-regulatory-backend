@@ -35,6 +35,8 @@ import { nanoid } from 'nanoid';
 import { supabaseAdmin } from '@/lib/supabase';
 import { getIndexStats } from '@/lib/rag/client';
 import { storageService } from '@/lib/storage/storage.service';
+import { buildAuditSeverityWhere } from '@/utils/audit-redaction';
+import { AUDIT_LOG_ORDER_BY, resolveAuditLogPage } from './audit-log-pagination';
 import {
   loadSystemConfig,
   normalizeSystemConfigPatch,
@@ -1299,10 +1301,6 @@ class AdminModule {
   }
 
   async getAuditLog(filters: AuditLogFilters): Promise<PaginatedAuditLog> {
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 50;
-    const skip = (page - 1) * limit;
-
     const where: Record<string, unknown> = {
       ...(filters.userId && { userId: filters.userId }),
       ...(filters.entityType && { entityType: filters.entityType }),
@@ -1338,51 +1336,32 @@ class AdminModule {
         ]
       });
     }
+    if (filters.severity) {
+      andConditions.push(buildAuditSeverityWhere(filters.severity));
+    }
 
     if (andConditions.length > 0) {
       where.AND = andConditions;
     }
 
-    let items: AuditLogEntry[];
-    let total: number;
-
-    if (filters.severity) {
-      // Memory pagination: fetch candidate logs and filter by derived severity.
-      // Note: Pagination limited to first 2000 candidate records.
-      const candidateLogs = await prisma.auditLog.findMany({
-        where: where as any,
-        include: { user: { include: { organization: true } } },
-        orderBy: { createdAt: 'desc' },
-        take: 2000,
-      });
-      const mapped = candidateLogs.map((l) => toAuditLogEntry(l as unknown as Record<string, unknown>));
-      const filtered = mapped.filter((l) => l.severity === filters.severity);
-      total = filtered.length;
-      items = filtered.slice(skip, skip + limit);
-    } else {
-      // Standard DB pagination
-      const [dbLogs, dbTotal] = await Promise.all([
-        prisma.auditLog.findMany({
-          where: where as any,
-          include: { user: { include: { organization: true } } },
-          orderBy: { createdAt: 'desc' },
-          skip,
-          take: limit,
-        }),
-        prisma.auditLog.count({
-          where: where as any,
-        }),
-      ]);
-      items = dbLogs.map((l) => toAuditLogEntry(l as unknown as Record<string, unknown>));
-      total = dbTotal;
-    }
+    const total = await prisma.auditLog.count({ where: where as any });
+    const { page, limit, skip, totalPages } = resolveAuditLogPage(filters.page, filters.limit, total);
+    const dbLogs = await prisma.auditLog.findMany({
+      where: where as any,
+      include: { user: { include: { organization: true } } },
+      orderBy: [...AUDIT_LOG_ORDER_BY],
+      skip,
+      take: limit,
+    });
+    const items = dbLogs.map((l) => toAuditLogEntry(l as unknown as Record<string, unknown>));
 
     return {
       items,
-      nextCursor: items.length === limit ? String(page + 1) : null,
+      nextCursor: page < totalPages ? String(page + 1) : null,
       total,
       page,
       limit,
+      totalPages,
     };
   }
 

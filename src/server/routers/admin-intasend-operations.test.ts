@@ -45,7 +45,7 @@ function payment(overrides: Record<string, unknown> = {}) {
 
 function caller(prisma: Record<string, unknown>) {
   return adminRouter.createCaller({
-    user: { id: 'admin_1', role: 'ADMIN', email: 'admin@sheriabot.test' },
+    user: { id: 'admin_1', role: 'SUPER_ADMIN', email: 'admin@sheriabot.test', totpEnabled: true },
     req: { ip: '127.0.0.1', headers: {} },
     prisma,
   } as any);

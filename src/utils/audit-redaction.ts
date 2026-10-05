@@ -4,6 +4,13 @@
 
 const REDACTED = "[REDACTED]";
 
+export const AUDIT_HIGH_SEVERITY_TERMS = [
+  "delete", "role", "admin_role", "payment_override", "revoke", "security", "maintenance", "export",
+] as const;
+export const AUDIT_MEDIUM_SEVERITY_TERMS = [
+  "fail", "error", "anomaly", "suspend", "plan", "reject",
+] as const;
+
 const SENSITIVE_KEYS = new Set([
   "password",
   "token",
@@ -107,31 +114,26 @@ export function deriveSeverity(action: string): "HIGH" | "MEDIUM" | "LOW" | "INF
   const normalizedAction = action.toLowerCase();
 
   // Critical events
-  if (
-    normalizedAction.includes("delete") ||
-    normalizedAction.includes("role") ||
-    normalizedAction.includes("admin_role") ||
-    normalizedAction.includes("payment_override") ||
-    normalizedAction.includes("revoke") ||
-    normalizedAction.includes("security") ||
-    normalizedAction.includes("maintenance") ||
-    normalizedAction.includes("export")
-  ) {
+  if (AUDIT_HIGH_SEVERITY_TERMS.some((term) => normalizedAction.includes(term))) {
     return "HIGH";
   }
 
   // Warning events
-  if (
-    normalizedAction.includes("fail") ||
-    normalizedAction.includes("error") ||
-    normalizedAction.includes("anomaly") ||
-    normalizedAction.includes("suspend") ||
-    normalizedAction.includes("plan") ||
-    normalizedAction.includes("reject")
-  ) {
+  if (AUDIT_MEDIUM_SEVERITY_TERMS.some((term) => normalizedAction.includes(term))) {
     return "MEDIUM";
   }
 
   // Info events (default)
   return "INFO";
+}
+
+/** Prisma-compatible filter that mirrors deriveSeverity without loading rows into memory. */
+export function buildAuditSeverityWhere(severity: "HIGH" | "MEDIUM" | "LOW" | "INFO"): Record<string, unknown> {
+  const high = AUDIT_HIGH_SEVERITY_TERMS.map((term) => ({ action: { contains: term, mode: "insensitive" } }));
+  const medium = AUDIT_MEDIUM_SEVERITY_TERMS.map((term) => ({ action: { contains: term, mode: "insensitive" } }));
+
+  if (severity === "HIGH") return { OR: high };
+  if (severity === "MEDIUM") return { AND: [{ OR: medium }, { NOT: { OR: high } }] };
+  if (severity === "LOW") return { AND: [{ id: { equals: "" } }, { id: { not: "" } }] };
+  return { NOT: { OR: [...high, ...medium] } };
 }

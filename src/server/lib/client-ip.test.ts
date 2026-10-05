@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { getClientIp, normalizeIp } from './client-ip';
+import { resolveTrustProxy } from './trust-proxy';
 
 describe('client-ip utility', () => {
   describe('normalizeIp', () => {
@@ -77,11 +78,13 @@ describe('client-ip utility', () => {
     });
 
     it('resolves a real public client IP for CF -> Render -> Fastify when TRUST_PROXY_HOPS=2', async () => {
-      const app = Fastify({ trustProxy: 2 });
+      const app = Fastify({ trustProxy: resolveTrustProxy({ TRUST_PROXY_HOPS: 2 }).trustProxy });
       let capturedIp: string | null = null;
+      let rawReqIp: string | null = null;
 
       app.get('/test-ip', async (req) => {
         capturedIp = getClientIp(req);
+        rawReqIp = req.ip;
         return { ip: capturedIp };
       });
 
@@ -95,11 +98,12 @@ describe('client-ip utility', () => {
       });
 
       expect(capturedIp).toBe('198.51.100.44');
+      expect(rawReqIp).toBe('198.51.100.44');
       await app.close();
-    });
+    }, 15000);
 
     it('resolves a Cloudflare proxy IP when hops are undercounted (TRUST_PROXY_HOPS=1)', async () => {
-      const app = Fastify({ trustProxy: 1 });
+      const app = Fastify({ trustProxy: resolveTrustProxy({ TRUST_PROXY_HOPS: 1 }).trustProxy });
       let capturedIp: string | null = null;
 
       app.get('/test-ip', async (req) => {
@@ -118,7 +122,103 @@ describe('client-ip utility', () => {
 
       expect(capturedIp).toBe('172.70.242.164');
       await app.close();
-    });
+    }, 15000);
+
+    it('blocks direct-origin attacker from spoofing client IP by calling Render directly', async () => {
+      const app = Fastify({ trustProxy: resolveTrustProxy({ TRUST_PROXY_HOPS: 2 }).trustProxy });
+      let capturedIp: string | null = null;
+      let rawReqIp: string | null = null;
+
+      app.get('/test-ip', async (req) => {
+        capturedIp = getClientIp(req);
+        rawReqIp = req.ip;
+        return { ip: capturedIp };
+      });
+
+      // Simulation: Direct call to Render origin by attacker (203.0.113.195) sending spoofed header
+      // Render appends attacker's IP to X-Forwarded-For:
+      await app.inject({
+        method: 'GET',
+        url: '/test-ip',
+        headers: {
+          'x-forwarded-for': '1.1.1.1, 203.0.113.195',
+          'cf-connecting-ip': '1.1.1.1', // Attacker also tries spoofing CF-Connecting-IP
+        },
+      });
+
+      // Address-aware trust rejects 203.0.113.195 as a proxy (not in Cloudflare or Render CIDRs)
+      // and stops at the attacker's actual IP, completely blocking the spoofed 1.1.1.1!
+      expect(capturedIp).toBe('203.0.113.195');
+      expect(rawReqIp).toBe('203.0.113.195');
+      await app.close();
+    }, 15000);
+
+    it('prevents extra-hop injection from altering client identity through Cloudflare', async () => {
+      const app = Fastify({ trustProxy: resolveTrustProxy({ TRUST_PROXY_HOPS: 2 }).trustProxy });
+      let capturedIp: string | null = null;
+
+      app.get('/test-ip', async (req) => {
+        capturedIp = getClientIp(req);
+        return { ip: capturedIp };
+      });
+
+      // Simulation: Attacker (203.0.113.195) sends extra spoofed IP "8.8.8.8" to Cloudflare
+      // Cloudflare adds connecting IP (203.0.113.195) and Render adds CF egress (172.70.242.164)
+      await app.inject({
+        method: 'GET',
+        url: '/test-ip',
+        headers: {
+          'x-forwarded-for': '8.8.8.8, 203.0.113.195, 172.70.242.164',
+        },
+      });
+
+      // Fastify traverses Render (hop 0) and Cloudflare (hop 1), but stops at 203.0.113.195 (hop 2 limit and non-proxy address)
+      expect(capturedIp).toBe('203.0.113.195');
+      await app.close();
+    }, 15000);
+
+    it('correctly resolves client IPv6 addresses traversing Cloudflare IPv6 network', async () => {
+      const app = Fastify({ trustProxy: resolveTrustProxy({ TRUST_PROXY_HOPS: 2 }).trustProxy });
+      let capturedIp: string | null = null;
+
+      app.get('/test-ip', async (req) => {
+        capturedIp = getClientIp(req);
+        return { ip: capturedIp };
+      });
+
+      // Simulation: IPv6 client (2001:db8:85a3::8a2e:370:7334) -> Cloudflare IPv6 (2606:4700:4700::1111) -> Render -> Fastify
+      await app.inject({
+        method: 'GET',
+        url: '/test-ip',
+        headers: {
+          'x-forwarded-for': '2001:db8:85a3::8a2e:370:7334, 2606:4700:4700::1111',
+        },
+      });
+
+      expect(capturedIp).toBe('2001:db8:85a3::8a2e:370:7334');
+      await app.close();
+    }, 15000);
+
+    it('safely rejects malformed X-Forwarded-For headers', async () => {
+      const app = Fastify({ trustProxy: resolveTrustProxy({ TRUST_PROXY_HOPS: 2 }).trustProxy });
+      let capturedIp: string | null = null;
+
+      app.get('/test-ip', async (req) => {
+        capturedIp = getClientIp(req);
+        return { ip: capturedIp };
+      });
+
+      await app.inject({
+        method: 'GET',
+        url: '/test-ip',
+        headers: {
+          'x-forwarded-for': 'garbage-data, 999.999.999.999',
+        },
+      });
+
+      expect(capturedIp).toBeNull();
+      await app.close();
+    }, 15000);
   });
 });
 

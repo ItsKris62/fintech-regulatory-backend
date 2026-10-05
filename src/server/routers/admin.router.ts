@@ -552,8 +552,8 @@ export const adminRouter = router({
   getLogs: adminProcedure
     .input(
       z.object({
-        page: z.number().min(1).default(1),
-        limit: z.number().min(1).max(200).default(50),
+        page: z.number().int().min(1).default(1),
+        limit: z.number().int().min(1).max(200).default(50),
         userId: z.string().optional(),
         actorEmail: z.string().optional(),
         organizationId: z.string().optional(),

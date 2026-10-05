@@ -64,14 +64,14 @@ export async function withTenantRlsTransaction<T>(
     throw new Error('Cannot initiate tenant RLS transaction without a valid orgId');
   }
 
-  if (typeof prisma.$executeRawUnsafe === 'function' && typeof prisma.$transaction !== 'function') {
-    await prisma.$executeRawUnsafe("SELECT set_config('app.current_org_id', $1, true)", orgId);
+  if (typeof prisma.$executeRaw === 'function' && typeof prisma.$transaction !== 'function') {
+    await prisma.$executeRaw`SELECT set_config('app.current_org_id', ${orgId}, true)`;
     return callback(prisma);
   }
 
   return prisma.$transaction(async (tx: any) => {
-    if (typeof tx?.$executeRawUnsafe === 'function') {
-      await tx.$executeRawUnsafe("SELECT set_config('app.current_org_id', $1, true)", orgId);
+    if (typeof tx?.$executeRaw === 'function') {
+      await tx.$executeRaw`SELECT set_config('app.current_org_id', ${orgId}, true)`;
     }
     return callback(tx);
   });
@@ -86,14 +86,14 @@ export async function withBypassRlsTransaction<T>(
   prisma: any,
   callback: (tx: any) => Promise<T>,
 ): Promise<T> {
-  if (typeof prisma.$executeRawUnsafe === 'function' && typeof prisma.$transaction !== 'function') {
-    await prisma.$executeRawUnsafe("SELECT set_config('app.bypass_rls', 'true', true)");
+  if (typeof prisma.$executeRaw === 'function' && typeof prisma.$transaction !== 'function') {
+    await prisma.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`;
     return callback(prisma);
   }
 
   return prisma.$transaction(async (tx: any) => {
-    if (typeof tx?.$executeRawUnsafe === 'function') {
-      await tx.$executeRawUnsafe("SELECT set_config('app.bypass_rls', 'true', true)");
+    if (typeof tx?.$executeRaw === 'function') {
+      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`;
     }
     const proxyTx = new Proxy(tx, {
       get(target, prop, receiver) {

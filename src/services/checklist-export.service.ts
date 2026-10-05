@@ -537,7 +537,6 @@ class ChecklistExportService {
         },
         headers: { default: buildHeader(params) },
         footers: { default: buildFooter() },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         children: allChildren as unknown as any[],
       }],
     });

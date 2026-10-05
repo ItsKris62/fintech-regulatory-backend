@@ -13,13 +13,13 @@ describe('Circuit Breaker Service', () => {
     circuitBreakerRegistry.resetAll();
   });
 
-  it('initializes all 7 required external providers', () => {
-    const expected = ['stripe', 'intasend', 'resend', 'pinecone', 'anthropic', 'openai', 'gemini'];
+  it('initializes all 8 required external providers', () => {
+    const expected = ['stripe', 'intasend', 'resend', 'pinecone', 'anthropic', 'openai', 'gemini', 'cohere'];
     expect(SUPPORTED_PROVIDERS).toEqual(expect.arrayContaining(expected));
-    expect(SUPPORTED_PROVIDERS.length).toBe(7);
+    expect(SUPPORTED_PROVIDERS.length).toBe(8);
 
     const metrics = getCircuitBreakerMetrics();
-    expect(metrics.length).toBe(7);
+    expect(metrics.length).toBe(8);
     metrics.forEach((m) => {
       expect(m.state).toBe(0); // CLOSED
       expect(m.tripCount).toBe(0);

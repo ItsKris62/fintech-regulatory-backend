@@ -56,7 +56,7 @@ describe('active organization member flow map', () => {
     const start = organizationRouter.indexOf('updateMemberRole: protectedProcedure');
     const body = organizationRouter.slice(start, start + 3600);
 
-    expect(body).toContain('ctx.prisma.organizationMember.update');
+    expect(body).toMatch(/organizationMember\.update/);
     expect(body).toContain('data: { role: input.role as MemberRole }');
     expect(body).not.toContain('ctx.prisma.user.update');
   });

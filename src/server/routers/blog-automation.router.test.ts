@@ -16,7 +16,7 @@ describe('blogAutomationRouter.adminListSuggestions', () => {
   } as any;
 
   const adminCtx = {
-    user: { id: 'admin-1', email: 'admin@sheriabot.com', role: 'ADMIN' },
+    user: { id: 'admin-1', email: 'admin@sheriabot.com', role: 'SUPER_ADMIN', totpEnabled: true },
     req: { ip: '127.0.0.1' },
     prisma: mockPrisma,
   };
@@ -216,7 +216,7 @@ describe('blogAutomationRouter.adminGenerateAiDraft', () => {
   } as any;
 
   const adminCtx = {
-    user: { id: 'admin-1', email: 'admin@sheriabot.com', role: 'ADMIN' },
+    user: { id: 'admin-1', email: 'admin@sheriabot.com', role: 'SUPER_ADMIN', totpEnabled: true },
     req: { ip: '127.0.0.1' },
     prisma: mockPrisma,
   };

@@ -6,24 +6,24 @@ async function main() {
   
   // 1. Extend SubscriptionPlan enum values
   try {
-    await prisma.$executeRawUnsafe(`ALTER TYPE "SubscriptionPlan" ADD VALUE IF NOT EXISTS 'FREE';`);
-    await prisma.$executeRawUnsafe(`ALTER TYPE "SubscriptionPlan" ADD VALUE IF NOT EXISTS 'STARTER';`);
-    await prisma.$executeRawUnsafe(`ALTER TYPE "SubscriptionPlan" ADD VALUE IF NOT EXISTS 'GROWTH';`);
+    await prisma.$executeRaw`ALTER TYPE "SubscriptionPlan" ADD VALUE IF NOT EXISTS 'FREE';`;
+    await prisma.$executeRaw`ALTER TYPE "SubscriptionPlan" ADD VALUE IF NOT EXISTS 'STARTER';`;
+    await prisma.$executeRaw`ALTER TYPE "SubscriptionPlan" ADD VALUE IF NOT EXISTS 'GROWTH';`;
   } catch (e: any) {
     console.log('Enum check note:', e.message);
   }
 
   // 2. Add additive columns to Organization
-  await prisma.$executeRawUnsafe(`
+  await prisma.$executeRaw`
     ALTER TABLE "Organization" 
       ADD COLUMN IF NOT EXISTS "enabledJurisdictions" TEXT[] DEFAULT ARRAY[]::TEXT[],
       ADD COLUMN IF NOT EXISTS "needsCountryConfirmation" BOOLEAN DEFAULT FALSE;
-  `);
+  `;
 
   // 3. Add index
-  await prisma.$executeRawUnsafe(`
+  await prisma.$executeRaw`
     CREATE INDEX IF NOT EXISTS "Organization_needsCountryConfirmation_idx" ON "Organization"("needsCountryConfirmation");
-  `);
+  `;
 
   console.log('Additive migration applied successfully to isolated database.');
 }

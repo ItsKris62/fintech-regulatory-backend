@@ -100,7 +100,6 @@ const KenyanComplianceBriefVarsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export interface TemplateRegistryEntry {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   component: React.ComponentType<any>;
   validateVars: (vars: unknown) => Record<string, unknown>;
 }

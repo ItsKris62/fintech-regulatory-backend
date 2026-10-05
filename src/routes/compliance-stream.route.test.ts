@@ -19,6 +19,7 @@ vi.mock('@/lib/redis/client', () => ({
   redis: {
     get: vi.fn(),
     incrby: vi.fn(),
+    decrby: vi.fn(),
     expire: vi.fn(),
   },
 }));
@@ -244,20 +245,20 @@ describe('Compliance Stream Routing & Billing Logic', () => {
     };
 
     it('5. allows standard query if quota allows (1 credit)', async () => {
-      vi.mocked(redis.get).mockResolvedValue(5);
+      vi.mocked(redis.incrby).mockResolvedValue(5);
       const result = await checkAndPrepareUsage(defaultAuth as any, 1);
       expect(result.allowed).toBe(true);
       expect(result.statusCode).toBe(429);
     });
 
     it('6. allows detailed query if quota allows (2 credits)', async () => {
-      vi.mocked(redis.get).mockResolvedValue(498);
+      vi.mocked(redis.incrby).mockResolvedValue(498);
       const result = await checkAndPrepareUsage(defaultAuth as any, 2);
       expect(result.allowed).toBe(true);
     });
 
     it('7. rejects detailed query if only 1 credit remaining', async () => {
-      vi.mocked(redis.get).mockResolvedValue(499);
+      vi.mocked(redis.incrby).mockResolvedValue(501);
       const result = await checkAndPrepareUsage(defaultAuth as any, 2);
       expect(result.allowed).toBe(false);
       expect(result.statusCode).toBe(429);
@@ -265,7 +266,7 @@ describe('Compliance Stream Routing & Billing Logic', () => {
     });
 
     it('8. rejects standard query if 0 credits remaining', async () => {
-      vi.mocked(redis.get).mockResolvedValue(500);
+      vi.mocked(redis.incrby).mockResolvedValue(501);
       const result = await checkAndPrepareUsage(defaultAuth as any, 1);
       expect(result.allowed).toBe(false);
       expect(result.statusCode).toBe(429);

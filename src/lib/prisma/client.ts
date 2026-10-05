@@ -62,9 +62,10 @@ function createPrismaClient() {
   });
 
   // Guard against managed Postgres / PgBouncer poolers that strip startup parameter options
-  pool.on('connect', (client) => {
-    client.query('SET statement_timeout = 15000; SET idle_in_transaction_session_timeout = 10000;').catch((err) => {
-      logger.warn({ type: 'pg_pool_session_timeout_init_failed', error: err?.message });
+  pool.on('connect', (client: pg.PoolClient) => {
+    client.query('SET statement_timeout = 15000; SET idle_in_transaction_session_timeout = 10000;').catch((err: unknown) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.warn({ type: 'pg_pool_session_timeout_init_failed', error: errorMessage });
     });
   });
 
@@ -491,7 +492,7 @@ export async function withElevatedStatementTimeout<T>(
   }
 
   return (prisma as any).$transaction(async (tx: Prisma.TransactionClient) => {
-    await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${boundedTimeoutMs}`);
+    await tx.$executeRaw`SET LOCAL statement_timeout = ${Prisma.raw(String(boundedTimeoutMs))}`;
     return callback(tx);
   });
 }

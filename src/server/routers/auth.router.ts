@@ -1012,7 +1012,6 @@ export const authRouter = router({
               message: 'Two-factor authentication is not configured for this account.',
             });
           }
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
           const otplib = require('otplib');
           const verified = await otplib.verify({
             secret: user.totpSecret,

@@ -105,6 +105,8 @@ function baseCtx(organizationId = 'org-a', role = 'STARTUP') {
       supabaseAuthId: `auth-${organizationId}`,
     },
     prisma: mocks.prisma,
+    tenantPrisma: mocks.prisma,
+    getTenantPrisma: () => mocks.prisma,
     req: { ip: '127.0.0.1', headers: { 'user-agent': 'vitest' } },
     res: {},
   } as any;
