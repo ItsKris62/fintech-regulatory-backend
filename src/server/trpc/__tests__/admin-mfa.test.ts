@@ -42,6 +42,7 @@ describe('adminMfaEnforced state-gated & step-up behavioral enforcement (F-01)',
       const ctx = {
         user: { id: 'admin-1', role: 'ADMIN', totpEnabled: false, hasPasskey: false },
         req: { headers: {} },
+        prisma: { user: { findUnique: vi.fn().mockResolvedValue({ totpEnabled: false, passkeys: [] }) } },
       } as any;
 
       await expect(
@@ -65,6 +66,7 @@ describe('adminMfaEnforced state-gated & step-up behavioral enforcement (F-01)',
       const ctx = {
         user: { id: 'admin-1', role: 'ADMIN', totpEnabled: false, hasPasskey: false },
         req: { headers: {} },
+        prisma: { user: { findUnique: vi.fn().mockResolvedValue({ totpEnabled: false, passkeys: [] }) } },
       } as any;
 
       await expect(
@@ -91,6 +93,7 @@ describe('adminMfaEnforced state-gated & step-up behavioral enforcement (F-01)',
         const ctx = {
           user: { id: 'admin-1', role: 'ADMIN', totpEnabled: false, hasPasskey: false },
           req: { headers: {} },
+          prisma: { user: { findUnique: vi.fn().mockResolvedValue({ totpEnabled: false, passkeys: [] }) } },
         } as any;
 
         const result = await executeAdminMfaEnforced({
@@ -106,6 +109,28 @@ describe('adminMfaEnforced state-gated & step-up behavioral enforcement (F-01)',
   });
 
   describe('Enrolled Admin (1+ factors enrolled) & Step-up Enforcement', () => {
+    it('uses authoritative database state when the cached auth snapshot is stale', async () => {
+      const next = vi.fn().mockResolvedValue({ ok: true });
+      const findUnique = vi.fn().mockResolvedValue({ totpEnabled: true, passkeys: [] });
+      const ctx = {
+        user: { id: 'admin-newly-enrolled', role: 'ADMIN', totpEnabled: false, hasPasskey: false },
+        req: { headers: {} },
+        prisma: { user: { findUnique } },
+      } as any;
+
+      const result = await executeAdminMfaEnforced({
+        ctx,
+        path: 'admin.getDashboardStats',
+        next,
+      });
+
+      expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'admin-newly-enrolled' },
+      }));
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ ok: true });
+    });
+
     it('allows standard admin procedures for enrolled admin without step-up', async () => {
       const next = vi.fn().mockResolvedValue({ ok: true });
       const ctx = {

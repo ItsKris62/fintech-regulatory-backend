@@ -105,6 +105,21 @@ export function isPathAllowed(path: string): boolean {
   return MFA_ENROLLMENT_ALLOWED_PATHS.has(path);
 }
 
+async function hasAuthoritativeMfaFactor(ctx: any): Promise<boolean> {
+  if (!ctx.user) return false;
+  if (userSatisfiesMfa(ctx.user)) return true;
+
+  const freshUser = await ctx.prisma.user.findUnique({
+    where: { id: ctx.user.id },
+    select: {
+      totpEnabled: true,
+      passkeys: { select: { id: true }, take: 1 },
+    },
+  });
+
+  return Boolean(freshUser?.totpEnabled || freshUser?.passkeys.length);
+}
+
 export const organizationMfaEnforced = middleware(async ({ ctx, path, next }) => {
   const mfaCompliant = ctx.user ? userSatisfiesMfa(ctx.user) : false;
   if (!ctx.user || ctx.user.role === 'ADMIN' || mfaCompliant || isPathAllowed(path)) {
@@ -123,6 +138,12 @@ export const organizationMfaEnforced = middleware(async ({ ctx, path, next }) =>
     });
 
     if (org?.requireMfa) {
+      // A cached negative can survive briefly in another application instance.
+      // Re-check Postgres before enforcing so successful enrollment takes effect immediately.
+      if (await hasAuthoritativeMfaFactor(ctx)) {
+        return next();
+      }
+
       let firstEnabledAt = org.mfaPolicyFirstEnabledAt ?? org.mfaPolicyEnabledAt;
       let isLazyBackfill = false;
 
@@ -344,7 +365,9 @@ export async function executeAdminMfaEnforced({
     return next();
   }
 
-  const hasFactors = userSatisfiesMfa(ctx.user);
+  // Positive snapshots can proceed; cached negatives are confirmed against the
+  // authoritative factor records before an admin is blocked.
+  const hasFactors = await hasAuthoritativeMfaFactor(ctx);
 
   // 1. Unenrolled admin (0 factors enrolled)
   if (!hasFactors) {

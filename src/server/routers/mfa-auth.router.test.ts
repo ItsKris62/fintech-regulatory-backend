@@ -201,6 +201,28 @@ describe('MFA User Router Hardening Contract (Setup & 2FA Disable)', () => {
     expect(userRouterSrc).toContain("MFA_ENROLLED");
   });
 
+  it('projects the authoritative TOTP field and SheriaBot identity in status', () => {
+    expect(userRouterSrc).toContain('totpEnabled: true');
+    expect(userRouterSrc).toContain('enabled: user.totpEnabled');
+    expect(userRouterSrc).toContain("issuer: 'SheriaBot'");
+    expect(userRouterSrc).toContain('accountLabel: `SheriaBot:${user.email}`');
+  });
+
+  it('uses a standards-compatible SheriaBot TOTP URI and rejects duplicate enrollment', () => {
+    expect(userRouterSrc).toContain("issuer: 'SheriaBot'");
+    expect(userRouterSrc).toContain('label: ctx.user.email');
+    expect(userRouterSrc).toContain("algorithm: 'sha1'");
+    expect(userRouterSrc).toContain('digits: 6');
+    expect(userRouterSrc).toContain('period: 30');
+    expect(userRouterSrc).toContain("code: 'CONFLICT'");
+  });
+
+  it('evicts both authenticated session cache identities after enrollment', () => {
+    expect(userRouterSrc).toContain('userSessionKey(ctx.user.id)');
+    expect(userRouterSrc).toContain('userSessionKey(ctx.user.supabaseAuthId)');
+    expect(userRouterSrc).toContain('evictInMemoryUserSession(ctx.user.supabaseAuthId)');
+  });
+
   it('disableTotp verifies 2nd factor, rate-limits attempts, and logs MFA_DISABLED', () => {
     expect(userRouterSrc).toContain("disableTotp: protectedProcedure");
     expect(userRouterSrc).toContain("sheriabot:auth:mfa_disable_attempts:");
@@ -209,11 +231,27 @@ describe('MFA User Router Hardening Contract (Setup & 2FA Disable)', () => {
     expect(userRouterSrc).toContain("MFA_DISABLED");
   });
 
+  it('treats invalid disable proofs as recoverable validation failures, not dead sessions', () => {
+    expect(userRouterSrc).toContain("const MFA_DISABLE_PROOF_ERROR_MESSAGE =");
+    expect(userRouterSrc).toContain("'Unable to verify your credentials. Check your password and authentication code and try again.'");
+    expect(userRouterSrc.match(/message: MFA_DISABLE_PROOF_ERROR_MESSAGE/g)).toHaveLength(3);
+
+    const disableProcedure = userRouterSrc.slice(
+      userRouterSrc.indexOf('disableTotp: protectedProcedure'),
+    );
+    expect(disableProcedure).not.toContain("code: 'UNAUTHORIZED'");
+    expect(disableProcedure.match(/code: 'BAD_REQUEST'/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    expect(disableProcedure.indexOf('MFA_DISABLE_PROOF_ERROR_MESSAGE')).toBeLessThan(
+      disableProcedure.indexOf('ctx.prisma.$transaction'),
+    );
+  });
+
   it('disableTotp explicitly revokes DB sessions and Redis session caches', () => {
     expect(userRouterSrc).toContain("ctx.prisma.session.deleteMany({");
     expect(userRouterSrc).toContain("userCache.delete(ctx.user.id)");
-    expect(userRouterSrc).toContain("redis.del(`user:session:");
-    expect(userRouterSrc).toContain("// No userId-keyed session cache exists; fingerprint keys are keyed by sessionId and become unreachable once DB rows are deleted.");
+    expect(userRouterSrc).toContain('redis.del(userSessionKey(ctx.user.id))');
+    expect(userRouterSrc).toContain('redis.del(userSessionKey(ctx.user.supabaseAuthId))');
+    expect(userRouterSrc).toContain('evictInMemoryUserSession(ctx.user.supabaseAuthId)');
   });
 });
 
@@ -270,6 +308,9 @@ describe('MFA Organization Enforcement Middleware & Grace Period', () => {
   it('handles requireMfa = true with null mfaPolicyEnabledAt via lazy backfill grace period', async () => {
     let persistedTimestamp: Date | null = null;
     const mockPrisma = {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({ totpEnabled: false, passkeys: [] }),
+      },
       organization: {
         findUnique: vi.fn().mockImplementation(async () => ({
           requireMfa: true,
@@ -332,6 +373,9 @@ describe('MFA Organization Enforcement Middleware & Grace Period', () => {
         organizationId: 'org_test_2',
       },
       prisma: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({ totpEnabled: false, passkeys: [] }),
+        },
         organization: {
           findUnique: vi.fn().mockResolvedValue({
             requireMfa: true,
@@ -367,6 +411,9 @@ describe('MFA Organization Enforcement Middleware & Grace Period', () => {
         organizationId: 'org_test_3',
       },
       prisma: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({ totpEnabled: false, passkeys: [] }),
+        },
         organization: {
           findUnique: vi.fn().mockResolvedValue({
             requireMfa: true,
@@ -485,6 +532,9 @@ describe('F-03: Immutable mfaPolicyFirstEnabledAt & Grace Period Invariants', ()
         organizationId: 'org_fail_close',
       },
       prisma: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({ totpEnabled: false, passkeys: [] }),
+        },
         organization: {
           findUnique: vi.fn().mockResolvedValue({
             requireMfa: true,
@@ -521,6 +571,9 @@ describe('F-03: Immutable mfaPolicyFirstEnabledAt & Grace Period Invariants', ()
         organizationId: 'org_race',
       },
       prisma: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({ totpEnabled: false, passkeys: [] }),
+        },
         organization: {
           findUnique: vi
             .fn()
@@ -575,4 +628,3 @@ describe('Fix 4: AuditLog Foreign Key onDelete SetNull', () => {
     expect(migrationSql).toContain('REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;');
   });
 });
-

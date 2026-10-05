@@ -27,10 +27,13 @@ import { logger } from '@/utils/logger';
 import { getSystemConfigNumber } from '@/lib/system-config';
 import { validatePassword } from '@/shared/validation/password.schema';
 import { logSecurityEvent, SECURITY_EVENT_TYPES } from '@/server/services/audit.service';
-import { evictInMemoryUserSession } from '@/server/trpc/context';
+import { evictInMemoryUserSession } from '../trpc/context';
+import { userSessionKey } from '@/config/session';
 
 const TOTP_PENDING_PREFIX = 'totp:pending:';
 const TOTP_PENDING_TTL = 600; // 10 minutes
+const MFA_DISABLE_PROOF_ERROR_MESSAGE =
+  'Unable to verify your credentials. Check your password and authentication code and try again.';
 
 function generateBackupCodes(count = 8): string[] {
   const codes: string[] = [];
@@ -631,15 +634,28 @@ export const userRouter = router({
     try {
       const user = await ctx.prisma.user.findUnique({
         where: { id: ctx.user.id },
-        select: { id: true },
+        select: {
+          email: true,
+          totpEnabled: true,
+          backupCodes: {
+            where: { usedAt: null },
+            select: { id: true },
+            take: 1,
+          },
+        },
       });
 
       if (!user) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
       }
 
-      const enabled: boolean = (user as any).totpEnabled ?? false;
-      return { enabled };
+      return {
+        enabled: user.totpEnabled,
+        issuer: 'SheriaBot',
+        accountEmail: user.email,
+        accountLabel: `SheriaBot:${user.email}`,
+        recoveryCodesAvailable: user.backupCodes.length > 0,
+      };
     } catch (error: any) {
       if (error instanceof TRPCError) throw error;
 
@@ -656,7 +672,22 @@ export const userRouter = router({
    */
   setupTotp: protectedProcedure.input(setupTotpSchema).mutation(async ({ ctx }) => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: ctx.user.id },
+        select: { totpEnabled: true },
+      });
+
+      if (!user) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'User not found' });
+      }
+
+      if (user.totpEnabled) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'An authenticator app is already enabled for this account.',
+        });
+      }
+
       const otplib = require('otplib');
 
       const secret: string = otplib.generateSecret();
@@ -664,6 +695,9 @@ export const userRouter = router({
         issuer: 'SheriaBot',
         label: ctx.user.email,
         secret,
+        algorithm: 'sha1',
+        digits: 6,
+        period: 30,
       });
 
       // Store pending secret in Redis for 10 minutes
@@ -677,6 +711,8 @@ export const userRouter = router({
 
       return { secret, otpauth };
     } catch (error: any) {
+      if (error instanceof TRPCError) throw error;
+
       logger.error({
         type: 'user_totp_setup_error',
         userId: ctx.user.id,
@@ -698,7 +734,6 @@ export const userRouter = router({
     .input(confirmTotpSchema)
     .mutation(async ({ input, ctx }) => {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const otplib = require('otplib');
 
         const secret = await redis.get<string>(`${TOTP_PENDING_PREFIX}${ctx.user.id}`);
@@ -746,6 +781,10 @@ export const userRouter = router({
         await redis.del(`${TOTP_PENDING_PREFIX}${ctx.user.id}`);
         await userCache.delete(ctx.user.id);
         evictInMemoryUserSession(ctx.user.supabaseAuthId);
+        await redis.del(
+          userSessionKey(ctx.user.id),
+          userSessionKey(ctx.user.supabaseAuthId),
+        );
 
         await recordFreshMfaVerification(ctx.user.id);
         logger.info({ type: 'user_totp_enabled', userId: ctx.user.id });
@@ -845,7 +884,6 @@ export const userRouter = router({
           }
         }
       } else if (user.totpSecret) {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const otplib = require('otplib');
         const result = await otplib.verify({ secret: user.totpSecret, token: input.code });
         verified = result === true || (result as any)?.valid === true;
@@ -964,8 +1002,8 @@ export const userRouter = router({
             metadata: { action: 'disableTotp', failedFactor: 'password' },
           });
           throw new TRPCError({
-            code: 'UNAUTHORIZED',
-            message: 'Incorrect password. Please try again.',
+            code: 'BAD_REQUEST',
+            message: MFA_DISABLE_PROOF_ERROR_MESSAGE,
           });
         }
 
@@ -1017,8 +1055,8 @@ export const userRouter = router({
               metadata: { action: 'disableTotp', failedFactor: 'backup_code' },
             });
             throw new TRPCError({
-              code: 'UNAUTHORIZED',
-              message: 'Invalid backup code. Please check and try again.',
+              code: 'BAD_REQUEST',
+              message: MFA_DISABLE_PROOF_ERROR_MESSAGE,
             });
           }
         } else {
@@ -1028,7 +1066,6 @@ export const userRouter = router({
               message: 'Two-factor secret is missing on account.',
             });
           }
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
           const otplib = require('otplib');
           const verified = await otplib.verify({
             secret: user.totpSecret,
@@ -1044,8 +1081,8 @@ export const userRouter = router({
               metadata: { action: 'disableTotp', failedFactor: 'totp' },
             });
             throw new TRPCError({
-              code: 'UNAUTHORIZED',
-              message: 'Invalid authentication code. Please check your authenticator app.',
+              code: 'BAD_REQUEST',
+              message: MFA_DISABLE_PROOF_ERROR_MESSAGE,
             });
           }
           isValidSecondFactor = true;
@@ -1072,15 +1109,17 @@ export const userRouter = router({
         });
 
         await userCache.delete(ctx.user.id);
-        if ((user as any).supabaseAuthId) {
-          await redis.del(`user:session:${(user as any).supabaseAuthId}`).catch((err: unknown) => {
+        evictInMemoryUserSession(ctx.user.supabaseAuthId);
+        await redis.del(userSessionKey(ctx.user.id));
+        if (ctx.user.supabaseAuthId) {
+          await redis.del(userSessionKey(ctx.user.supabaseAuthId)).catch((err: unknown) => {
       logger.warn({
         type: 'user_router_bg_op_5_failed',
         error: err instanceof Error ? err.message : String(err),
       });
     });
         }
-        // No userId-keyed session cache exists; fingerprint keys are keyed by sessionId and become unreachable once DB rows are deleted.
+        // Fingerprint keys are keyed by sessionId and become unreachable once DB rows are deleted.
         await redis.del(disableAttemptKey).catch((err: unknown) => {
       logger.warn({
         type: 'user_router_bg_op_6_failed',
