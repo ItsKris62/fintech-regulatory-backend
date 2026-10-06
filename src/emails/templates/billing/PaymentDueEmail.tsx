@@ -55,7 +55,7 @@ export function PaymentDueEmail({
 }
 
 export function getPaymentDueSubject(planName: string): string {
-  return `Payment Due — SheriaBot ${planName} Subscription`;
+  return `Payment Due SheriaBot ${planName} Subscription`;
 }
 
 const styles: Record<string, React.CSSProperties> = {
