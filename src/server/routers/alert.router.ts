@@ -59,6 +59,26 @@ export const alertRouter = router({
     .use(withPlanContext)
     .input(getAlertsSchema)
     .query(async ({ input, ctx }) => {
+      if (input.jurisdictionCode) {
+        const orgId = ctx.orgMembership!.organizationId;
+        const org = await ctx.tenantPrisma.organization.findUnique({
+          where: { id: orgId },
+          select: { homeJurisdictionCode: true, enabledJurisdictions: true },
+        });
+
+        const permitted = new Set([
+          (org?.homeJurisdictionCode ?? '').toUpperCase(),
+          ...(org?.enabledJurisdictions ?? []).map((c: string) => c.toUpperCase()),
+        ]);
+
+        if (!permitted.has(input.jurisdictionCode.toUpperCase())) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: `Jurisdiction "${input.jurisdictionCode}" is not enabled under your organization's subscription plan.`,
+          });
+        }
+      }
+
       return alertService.getAlerts(
         ctx.user!.id,
         ctx.orgMembership!.organizationId,

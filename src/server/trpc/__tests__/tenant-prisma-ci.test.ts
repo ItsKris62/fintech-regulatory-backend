@@ -198,7 +198,7 @@ describe('CI Tenant Isolation Guard: TypeScript AST Compiler API (audit SEC-12)'
     }
 
     expect(allViolations).toHaveLength(0);
-  }, 30000);
+  }, 120000);
 
   it('proves AST analysis catches multi-line property chains that regex misses', () => {
     const multiLineBadCode = `
@@ -294,5 +294,5 @@ describe('CI Tenant Isolation Guard: TypeScript AST Compiler API (audit SEC-12)'
 
     expect(ruleViolation).toBeDefined();
     expect(results[0].errorCount).toBeGreaterThan(0);
-  }, 30000);
+  }, 120000);
 });

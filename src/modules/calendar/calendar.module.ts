@@ -331,6 +331,45 @@ class CalendarModule {
     return events;
   }
 
+  // --- getUpcomingDeadlinesSummary ------------------------------------------
+
+  async getUpcomingDeadlinesSummary(params: UpcomingEventsParams): Promise<{
+    total: number;
+    urgentCount: number;
+    windowDays: number;
+  }> {
+    const { organizationId, daysAhead } = params;
+
+    const now          = new Date();
+    const cutoff       = new Date(now.getTime() + daysAhead * 24 * 60 * 60 * 1000);
+    const urgentCutoff = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    const baseWhere = {
+      organizationId,
+      dueDate: { gte: now, lte: cutoff },
+      status:  { in: ['UPCOMING', 'IN_PROGRESS'] },
+    };
+
+    const [total, urgentCount] = await Promise.all([
+      prisma.complianceEvent.count({ where: baseWhere }),
+      prisma.complianceEvent.count({
+        where: {
+          ...baseWhere,
+          OR: [
+            { priority: { in: ['CRITICAL', 'HIGH'] } },
+            { dueDate: { lte: urgentCutoff } },
+          ],
+        },
+      }),
+    ]);
+
+    return {
+      total,
+      urgentCount,
+      windowDays: daysAhead,
+    };
+  }
+
   // --- evaluateAndGenerateReminders (Task 5) --------------------------------
   //
   // Lazy evaluation: called fire-and-forget from the upcoming query router.

@@ -11,6 +11,7 @@ vi.mock('@/lib/prisma/client', () => ({
     complianceEvent: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
+      count: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
@@ -252,5 +253,21 @@ describe('CalendarModule hardening', () => {
         take: 10,
       }),
     );
+  });
+
+  it('queries upcoming deadlines summary returning authoritative counts independently from preview items', async () => {
+    vi.mocked(prisma.complianceEvent.count)
+      .mockResolvedValueOnce(25) // Total
+      .mockResolvedValueOnce(4); // Urgent
+
+    const summary = await module.getUpcomingDeadlinesSummary({
+      organizationId: 'org_1',
+      daysAhead: 30,
+    });
+
+    expect(summary.total).toBe(25);
+    expect(summary.urgentCount).toBe(4);
+    expect(summary.windowDays).toBe(30);
+    expect((summary as any).items).toBeUndefined(); // Guarantees no preview items are returned in summary
   });
 });

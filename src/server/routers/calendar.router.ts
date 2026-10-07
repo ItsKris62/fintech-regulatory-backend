@@ -169,4 +169,26 @@ export const calendarRouter = router({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to load upcoming events.' });
       }
     }),
+
+  /**
+   * Authoritative summary of upcoming deadlines (total, urgent count, window days).
+   * Used by high-level dashboard KPIs without array truncation.
+   */
+  upcomingSummary: orgMemberProcedure
+    .use(withPlanContext)
+    .use(requirePlanFeature('complianceCalendar'))
+    .input(upcomingEventsSchema)
+    .query(async ({ input, ctx }) => {
+      const organizationId = ctx.orgMembership!.organizationId;
+      try {
+        return await calendarModule.getUpcomingDeadlinesSummary({
+          organizationId,
+          daysAhead: input.daysAhead,
+        });
+      } catch (error: unknown) {
+        if (error instanceof TRPCError) throw error;
+        logger.error({ type: 'calendar_upcoming_summary_error', userId: ctx.user!.id, error: String(error) });
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to load upcoming deadlines summary.' });
+      }
+    }),
 });

@@ -3016,6 +3016,7 @@ Follow-up Question: ${followUp}
         title: item.title,
         description: item.description,
       })),
+      skipDuplicates: true,
     });
 
     logger.info({ type: 'compliance_checklist_seeded', orgId, count: validItems.length });
@@ -3244,6 +3245,7 @@ Follow-up Question: ${followUp}
       data: {
         isCompleted,
         completedAt: isCompleted ? new Date() : null,
+        assessedAt: isCompleted ? new Date() : null,
       },
       select: { id: true, isCompleted: true, completedAt: true },
     });
