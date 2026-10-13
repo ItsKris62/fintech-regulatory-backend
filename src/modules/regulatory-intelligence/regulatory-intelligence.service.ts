@@ -56,6 +56,8 @@ export interface RegulatoryIntelligenceRequest {
     minScore?: number;
     filter?: Record<string, unknown>;
     sourceIndexMode?: 'v1' | 'v2' | 'prefer-v2';
+    frameworkScope?: 'DOMESTIC' | 'INTERNATIONAL' | 'CROSS_BORDER';
+    namespace?: string;
   };
   generationProfile?: string;
   runId?: string;
@@ -74,11 +76,17 @@ export interface RegulatoryIntelligenceResult {
   abstained: boolean;
   failureReason?: RegulatoryFailureClassification;
   retrievedCount: number;
+  /**
+   * Count of grader-accepted, citation-verified regulatory chunks accepted into evidence.
+   * Semantic invariant: When grounded=true, acceptedCount === evidence.length > 0.
+   * Telemetry invariant: retrievedCount >= acceptedCount.
+   */
   acceptedCount: number;
   rejectedCount: number;
   corpusVersionSnapshot: Record<string, string | undefined>;
   retrievalVersion: string;
   acceptedContext: string;
+  graderTokens: { input: number; output: number };
   diagnostics?: Record<string, unknown>;
 }
 
@@ -102,6 +110,7 @@ export class RegulatoryIntelligenceService {
       effectivePlan: input.effectivePlan,
       requestedJurisdictions: [...input.jurisdictionContext.jurisdictions],
       mode: input.jurisdictionContext.mode,
+      retrievalNamespace: input.retrievalProfile?.namespace,
     });
 
     const ragContext = await searchAndGetRegulatoryEvidenceContext({
@@ -110,8 +119,10 @@ export class RegulatoryIntelligenceService {
       topK,
       minScore,
       filter: input.retrievalProfile?.filter,
+      namespace: input.retrievalProfile?.namespace,
       preferActiveSources: true,
       sourceIndexMode: input.retrievalProfile?.sourceIndexMode,
+      frameworkScope: input.retrievalProfile?.frameworkScope,
     });
 
     const approvalPartition = await partitionEvidenceBySourceApproval(
@@ -137,6 +148,7 @@ export class RegulatoryIntelligenceService {
         corpusVersionSnapshot: ragContext.corpusVersions,
         retrievalVersion: ragContext.retrievalVersion,
         acceptedContext: '',
+        graderTokens: { input: 0, output: 0 },
         diagnostics: {
           sourceApprovalEnforced: approvalPartition.enforcementApplied,
           sourceApprovalRejectedCount: approvalPartition.ineligible.length,
@@ -172,6 +184,7 @@ export class RegulatoryIntelligenceService {
       corpusVersionSnapshot: ragContext.corpusVersions,
       retrievalVersion: ragContext.retrievalVersion,
       acceptedContext: grounded ? acceptedContext : '',
+      graderTokens: grade.tokens,
       diagnostics: {
         sourceApprovalEnforced: approvalPartition.enforcementApplied,
         sourceApprovalRejectedCount: approvalPartition.ineligible.length,

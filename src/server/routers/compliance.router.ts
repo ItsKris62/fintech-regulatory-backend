@@ -1819,13 +1819,20 @@ export const complianceRouter = router({
    *
    * @protected
    */
-  logExport: protectedProcedure
+  logExport: orgMemberProcedure
     .input(z.object({
       analysisId: z.string().min(1),
       format: z.enum(['pdf', 'docx']),
     }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
+      const analysis = await ctx.tenantPrisma.gapAnalysis.findUnique({
+        where: { id: input.analysisId },
+        select: { id: true },
+      });
+      if (!analysis) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
+      }
 
       // Fire-and-forget audit log -- never block the response
       ctx.prisma.auditLog.create({
@@ -1919,6 +1926,7 @@ export const complianceRouter = router({
         createdAt: analysis.createdAt,
         organizationName: orgName ?? undefined,
         userName: userName ?? undefined,
+        jurisdictionCode: analysis.jurisdictionCode,
         selectedBenchmarkDocuments: parsed.data.metadata.selectedBenchmarkDocuments ?? [],
       });
 
@@ -1931,6 +1939,7 @@ export const complianceRouter = router({
       const uploadResult = await storageService.uploadGapAnalysisExport(
         docxBuffer,
         filename,
+        orgId,
         input.analysisId,
         userId,
       );

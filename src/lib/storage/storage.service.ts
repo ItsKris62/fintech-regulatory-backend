@@ -50,7 +50,7 @@ export class StorageService {
   private async validateFile(
     fileBuffer: Buffer,
     filename: string,
-    category: 'documents' | 'images' | 'exports'
+    category: 'documents' | 'gapAnalysis' | 'images' | 'exports'
   ): Promise<void> {
     // Get file extension and content type
     const extension = filename.split('.').pop()?.toLowerCase() || '';
@@ -123,7 +123,9 @@ export class StorageService {
     fileBuffer: Buffer,
     filename: string,
     userId: string,
-    metadata?: Record<string, string>
+    metadata?: Record<string, string>,
+    validationCategory: 'documents' | 'gapAnalysis' = 'documents',
+    explicitKey?: string,
   ): Promise<FileUploadResult> {
     logger.info({
       type: 'document_upload_started',
@@ -134,7 +136,7 @@ export class StorageService {
 
     try {
       // Validate file
-      await this.validateFile(fileBuffer, filename, 'documents');
+      await this.validateFile(fileBuffer, filename, validationCategory);
 
       // Scan for malware (if enabled)
       if (storageConfig.security.malwareScan) {
@@ -146,7 +148,10 @@ export class StorageService {
 
       // Generate unique filename
       const uniqueFilename = generateUniqueFilename(filename);
-      const key = `${storageConfig.paths.legalDocuments}${uniqueFilename}`;
+      const defaultPrefix = validationCategory === 'gapAnalysis'
+        ? storageConfig.paths.gapAnalysis
+        : storageConfig.paths.legalDocuments;
+      const key = explicitKey ?? `${defaultPrefix}${uniqueFilename}`;
 
       // Get content type
       const extension = filename.split('.').pop()?.toLowerCase() || '';
@@ -699,16 +704,18 @@ export class StorageService {
    * Skips file-type validation since the buffer is generated server-side.
    * @param fileBuffer DOCX buffer
    * @param filename   Desired filename (e.g. SheriaBot_Gap_Analysis_Acme_2026-03-20.docx)
+   * @param organizationId Owning tenant ID - used as the leading R2 partition
    * @param analysisId GapAnalysis record ID  -  used as the R2 path segment
    * @param userId     Uploader user ID  -  stored as metadata
    */
   async uploadGapAnalysisExport(
     fileBuffer: Buffer,
     filename: string,
+    organizationId: string,
     analysisId: string,
     userId: string,
   ): Promise<FileUploadResult> {
-    const key = `gap-analysis-exports/${analysisId}/${filename}`;
+    const key = `gap-analysis-exports/${organizationId}/${analysisId}/${filename}`;
     const contentType =
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
@@ -717,7 +724,7 @@ export class StorageService {
     try {
       const fileMetadata = await storageClient.uploadBuffer(key, fileBuffer, {
         contentType,
-        metadata: { analysisId, userId, exportedAt: new Date().toISOString() },
+        metadata: { organizationId, analysisId, userId, exportedAt: new Date().toISOString() },
       });
 
       logger.info({ type: 'gap_analysis_export_upload_success', key });

@@ -40,6 +40,7 @@ export const storageConfig = {
     // Maximum file size (bytes)
     maxFileSize: {
       documents: 50 * 1024 * 1024, // 50 MB for legal/regulatory documents
+      gapAnalysis: 10 * 1024 * 1024, // Safe ceiling while requests/jobs carry base64
       images: 5 * 1024 * 1024, // 5 MB for images
       exports: 50 * 1024 * 1024, // 50 MB for exports
       vault: 25 * 1024 * 1024, // 25 MB for user vault documents
@@ -68,6 +69,15 @@ export const storageConfig = {
       ],
       extensions: ['.pdf', '.doc', '.docx'],
       description: 'PDF, Word documents',
+    },
+    gapAnalysis: {
+      mimeTypes: [
+        'application/pdf',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/plain',
+      ],
+      extensions: ['.pdf', '.docx', '.txt'],
+      description: 'PDF, DOCX, plain text',
     },
     images: {
       mimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
@@ -126,6 +136,7 @@ export const storageConfig = {
 
     // Organisation-scoped vault documents (org compliance document storage)
     vault: 'vault/',
+    gapAnalysis: 'gap-analysis/',
   },
 
   /**

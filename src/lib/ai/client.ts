@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { llmGateway } from './gateway/llm-gateway';
 import { LLMCompletionRequest, LLMStreamOptions } from './gateway/types';
+import type { LLMProviderName } from './gateway/types';
 import { calculateCost } from './gateway/pricing';
 import { AIServiceError } from '@/utils/error';
 
@@ -21,6 +22,8 @@ export interface AICompletionOptions {
    * Use this for tier-specific timeouts in the three-tier checklist generation pipeline.
    */
   overrideTimeoutMs?: number;
+  /** Optional caller cancellation propagated to the selected provider. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -28,10 +31,14 @@ export interface AICompletionOptions {
  */
 export interface AICompletionResult {
   content: string;
+  /** Provider that actually served the request, including gateway fallbacks. */
+  provider?: LLMProviderName;
   model: string;
   inputTokens: number;
   outputTokens: number;
   cost: number;
+  /** False when cost used the conservative unknown-model fallback price. */
+  pricingVerified?: boolean;
   cached?: boolean;
   /** Anthropic stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | null */
   stopReason?: string | null;
@@ -96,17 +103,19 @@ export async function complete(
 
   try {
     const res = await llmGateway.complete(req, cacheTTL);
-    const { cost } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens, {
+    const { cost, isMissing } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens, {
       cacheReadTokens: res.usage.cacheReadTokens,
       cacheWriteTokens: res.usage.cacheWriteTokens,
     });
     
     return {
       content: res.content,
+      provider: res.provider,
       model: res.model,
       inputTokens: res.usage.inputTokens,
       outputTokens: res.usage.outputTokens,
       cost,
+      pricingVerified: !isMissing,
       cached: res.cached,
       stopReason: res.stopReason,
       cacheReadTokens: res.usage.cacheReadTokens,
@@ -138,16 +147,18 @@ export async function stream(
     useCase,
     onChunk: options.onChunk,
     onComplete: options.onComplete ? (res) => {
-      const { cost } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens, {
+      const { cost, isMissing } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens, {
         cacheReadTokens: res.usage.cacheReadTokens,
         cacheWriteTokens: res.usage.cacheWriteTokens,
       });
       options.onComplete!({
         content: res.content,
+        provider: res.provider,
         model: res.model,
         inputTokens: res.usage.inputTokens,
         outputTokens: res.usage.outputTokens,
         cost,
+        pricingVerified: !isMissing,
         cached: res.cached,
         stopReason: res.stopReason,
         cacheReadTokens: res.usage.cacheReadTokens,
@@ -160,17 +171,19 @@ export async function stream(
 
   try {
     const res = await llmGateway.stream(opts);
-    const { cost } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens, {
+    const { cost, isMissing } = calculateCost(res.provider, res.model, res.usage.inputTokens, res.usage.outputTokens, {
       cacheReadTokens: res.usage.cacheReadTokens,
       cacheWriteTokens: res.usage.cacheWriteTokens,
     });
     
     return {
       content: res.content,
+      provider: res.provider,
       model: res.model,
       inputTokens: res.usage.inputTokens,
       outputTokens: res.usage.outputTokens,
       cost,
+      pricingVerified: !isMissing,
       cached: res.cached,
       stopReason: res.stopReason,
       cacheReadTokens: res.usage.cacheReadTokens,

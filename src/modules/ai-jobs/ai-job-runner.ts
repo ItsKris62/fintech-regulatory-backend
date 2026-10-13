@@ -4,6 +4,11 @@ import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
 import { runEnterprisePolicyJob } from '@/modules/enterprise-policy/enterprise-policy.pipeline';
 import { runPolicyGenerationJob } from '@/modules/policy/policy-generation.pipeline';
+import {
+  legacyDocumentFields,
+  scrubLegacyDocumentFields,
+} from './gap-analysis-payload-cleanup';
+import { isGapAnalysisCancelledError } from '@/modules/compliance/gap-analysis-cancellation';
 
 type ClaimedJob = {
   id: string;
@@ -166,13 +171,13 @@ class AiJobRunner {
         );
       } else if (job.type === 'GAP_ANALYSIS_PIPELINE') {
         const { executeGapAnalysisPipeline } = await import('@/modules/compliance/compliance.module');
-        await executeGapAnalysisPipeline(job.payload as never);
+        await executeGapAnalysisPipeline(job.payload as never, { jobId: job.id });
       } else {
         throw new Error(`No handler registered for AI job type: ${job.type}`);
       }
 
-      await prisma.aiJob.update({
-        where: { id: job.id },
+      const completed = await prisma.aiJob.updateMany({
+        where: { id: job.id, status: 'RUNNING' },
         data: {
           status: 'COMPLETED',
           progress: 100,
@@ -182,14 +187,36 @@ class AiJobRunner {
           lastError: null,
         },
       });
+      if (completed.count !== 1) {
+        const { GapAnalysisCancelledError } = await import('@/modules/compliance/gap-analysis-cancellation');
+        throw new GapAnalysisCancelledError();
+      }
+      await scrubAiJobPayload(job.id);
       await this.recordEvent(job.id, 'COMPLETED', 'Job completed successfully.', 100);
     } catch (error) {
+      if (isGapAnalysisCancelledError(error)) {
+        await prisma.aiJob.updateMany({
+          where: { id: job.id, status: { in: ['QUEUED', 'RUNNING', 'RETRYING'] } },
+          data: {
+            status: 'CANCELLED',
+            lockedAt: null,
+            lockedBy: null,
+            lastError: null,
+          },
+        });
+        await scrubAiJobPayload(job.id);
+        await this.recordEvent(job.id, 'CANCELLED', 'Job cancelled before completion.');
+        logger.info({ type: 'ai_job_cancelled', jobId: job.id, jobType: job.type });
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
-      const exhausted = job.attempts >= job.maxAttempts;
+      const explicitlyNonRetryable =
+        typeof error === 'object' && error !== null && 'retryable' in error && error.retryable === false;
+      const exhausted = explicitlyNonRetryable || job.attempts >= job.maxAttempts;
       const retryDelayMs = Math.min(60 * 60 * 1000, 30_000 * Math.pow(2, Math.max(job.attempts - 1, 0)));
 
-      await prisma.aiJob.update({
-        where: { id: job.id },
+      const failureTransition = await prisma.aiJob.updateMany({
+        where: { id: job.id, status: 'RUNNING' },
         data: {
           status: exhausted ? 'DEAD_LETTERED' : 'RETRYING',
           runAfter: exhausted ? new Date() : new Date(Date.now() + retryDelayMs),
@@ -200,6 +227,15 @@ class AiJobRunner {
           lastError: message,
         },
       });
+      if (failureTransition.count !== 1) {
+        await scrubAiJobPayload(job.id);
+        await this.recordEvent(job.id, 'CANCELLED', 'Job cancellation won the failure transition race.');
+        logger.info({ type: 'ai_job_cancelled', jobId: job.id, jobType: job.type });
+        return;
+      }
+      if (exhausted) {
+        await scrubAiJobPayload(job.id);
+      }
 
       if (job.targetEntityType === 'GeneratedPolicy') {
         await prisma.generatedPolicy.update({
@@ -325,3 +361,55 @@ class AiJobRunner {
 }
 
 export const aiJobRunner = new AiJobRunner();
+
+/**
+ * Scrubs raw document bytes and base64 from an AiJob payload once it reaches a terminal state.
+ */
+export async function scrubAiJobPayload(jobId: string): Promise<void> {
+  try {
+    const job = await prisma.aiJob.findUnique({
+      where: { id: jobId },
+      select: { id: true, payload: true },
+    });
+    if (!job) return;
+
+    const payload = job.payload as Record<string, unknown> | null;
+    if (payload && legacyDocumentFields(payload as Prisma.JsonValue).length > 0) {
+      await prisma.aiJob.update({
+        where: { id: jobId },
+        data: {
+          payload: scrubLegacyDocumentFields(payload as Prisma.JsonValue, new Date().toISOString()),
+        },
+      });
+      logger.info({ type: 'ai_job_payload_scrubbed', jobId });
+    }
+  } catch (error: unknown) {
+    logger.warn({
+      type: 'ai_job_payload_scrub_failed',
+      jobId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Scrubs all AiJob payloads associated with a specific entity (e.g. upon GapAnalysis deletion).
+ */
+export async function scrubAiJobPayloadForEntity(entityType: string, entityId: string): Promise<void> {
+  try {
+    const jobs = await prisma.aiJob.findMany({
+      where: { targetEntityType: entityType, targetEntityId: entityId },
+      select: { id: true },
+    });
+    for (const job of jobs) {
+      await scrubAiJobPayload(job.id);
+    }
+  } catch (error: unknown) {
+    logger.warn({
+      type: 'ai_job_payload_entity_scrub_failed',
+      entityType,
+      entityId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}

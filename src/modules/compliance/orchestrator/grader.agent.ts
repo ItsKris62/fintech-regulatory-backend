@@ -88,7 +88,7 @@ Mark relevant=true when the chunk provides any of:
 A chunk does not need to contain the complete answer by itself. Reject chunks that are only topically similar, non-legal, stale, or from another jurisdiction.
 
 Respond with a single JSON object:
-{"grades":[{"index":0,"relevant":true},{"index":1,"relevant":false},...]}
+{"grades":[{"index":0,"relevant":true},{"index":1,"relevant":false}]}
 One entry per chunk in order. No markdown, no other text.`;
 }
 
@@ -164,7 +164,10 @@ export async function runGraderAgent(
     .join('\n\n');
 
   const prompt = `Question: ${question}\n\nChunks:\n${chunkList}`;
-  const maxTokens = Math.max(2048, 64 + toGrade.length * 35);
+  // Some providers account for internal reasoning within the output-token
+  // ceiling. Keep enough headroom for the small, fail-closed grading JSON so
+  // valid evidence is not discarded solely because the response was cut off.
+  const maxTokens = Math.max(4096, 64 + toGrade.length * 35);
 
   try {
     const systemPrompt = buildSystemPrompt(jurisdictionContext);

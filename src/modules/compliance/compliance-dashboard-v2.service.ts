@@ -3,16 +3,13 @@ import { redis } from '@/lib/redis/client';
 import { logger } from '@/utils/logger';
 import { TRPCError } from '@trpc/server';
 import { ComplianceCategory } from '@prisma/client';
-import { resolveEffectivePlan } from '@/modules/billing/resolve-effective-plan';
 import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import {
   isSupportedJurisdiction,
   hasComplianceBaseline,
   getJurisdictionCapability,
-  AUDITED_JURISDICTIONS,
 } from '@/config/jurisdictions.config';
 import {
-  KENYA_BASELINE_REQUIREMENTS,
   CATEGORY_WEIGHTS,
   CATEGORY_LABELS,
   getBaselineRequirementsForJurisdiction,

@@ -6,6 +6,13 @@
 
 import { z } from 'zod';
 import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
+import {
+  calculateComplianceAlignmentScore,
+  SCORING_VERSION_V2,
+  type RequirementAssessment,
+  type DocumentCoverage,
+} from '@/modules/compliance/scoring/gap-analysis-scoring';
+
 export type { JurisdictionContext };
 
 // --- Input Types -------------------------------------------------------------
@@ -18,8 +25,16 @@ export interface GapAnalysisParams {
   benchmarkDocumentIds?: string[];
   analysisDepth: 'quick' | 'standard' | 'deep';
   focusAreas?: string[];
-  ragContext?: string; // Retrieved regulatory passages from Pinecone
+  ragContext?: string; // Retrieved regulatory passages from Pinecone with EVIDENCE_ID
   jurisdictionContext?: JurisdictionContext;
+  signal?: AbortSignal;
+  beforeAiOperation?: (plan?: GapAnalysisModelCallPlan) => Promise<void>;
+}
+
+export interface GapAnalysisModelCallPlan {
+  stage: 'analysis' | 'merge' | 'enhanced_review' | 'verification';
+  estimatedInputTokens: number;
+  maxOutputTokens: number;
 }
 
 export interface BenchmarkDocumentSummary {
@@ -29,22 +44,106 @@ export interface BenchmarkDocumentSummary {
   regulatoryBody?: string | null;
 }
 
+// ─── STABLE EVIDENCE REFERENCE SCHEMAS ───────────────────────────────────────
+
+export const RegulatoryEvidenceRefSchema = z.object({
+  evidenceId: z.string(),
+  vectorId: z.string(),
+  documentId: z.string().nullable().optional(),
+  documentTitle: z.string(),
+  jurisdiction: z.union([z.enum(['KE', 'RW', 'MW', 'NG']), z.literal('GLOBAL'), z.literal('INTERNATIONAL')]),
+  frameworkSlug: z.string(),
+  sourceAuthority: z.string().optional(),
+  section: z.string().optional(),
+  page: z.number().optional(),
+  effectiveDate: z.string().optional(),
+  sourceStatus: z.string().optional(),
+  excerpt: z.string(),
+  similarityScore: z.number().optional(),
+  rerankScore: z.number().optional(),
+});
+
+export const PolicyEvidenceRefSchema = z.object({
+  policyEvidenceId: z.string(),
+  chunkIndex: z.number().optional(),
+  page: z.number().optional(),
+  sectionHeading: z.string().optional(),
+  excerpt: z.string(),
+  startOffset: z.number().optional(),
+  endOffset: z.number().optional(),
+});
+
+export const FindingVerificationSchema = z.object({
+  verdict: z.enum(['SUPPORTED', 'PARTIALLY_SUPPORTED', 'UNSUPPORTED', 'NOT_VERIFIABLE']),
+  confidence: z.number().optional(),
+  unsupportedClaims: z.array(z.string()).optional(),
+  reason: z.string().optional(),
+});
+
+export const FindingCoverageSchema = z.object({
+  regulatoryEvidenceAvailable: z.boolean().default(true),
+  policySectionAssessed: z.boolean().default(true),
+  extractionComplete: z.boolean().default(true),
+});
+
+export const DocumentCoverageSchema = z.object({
+  totalChunks: z.number().int().min(0),
+  processedChunks: z.number().int().min(0),
+  failedChunks: z.number().int().min(0),
+  skippedChunks: z.number().int().min(0),
+  extractionComplete: z.boolean(),
+});
+
+export const FrameworkCoverageSchema = z.object({
+  frameworkSlug: z.string(),
+  evidenceStatus: z.enum(['COMPLETE', 'PARTIAL', 'INSUFFICIENT', 'UNAVAILABLE']),
+  assessedRequirementCount: z.number().int().min(0),
+  totalKnownRequirementCount: z.number().int().min(0).optional(),
+  unassessedRequirementCount: z.number().int().min(0).optional(),
+  notes: z.array(z.string()).optional(),
+});
+
 // --- Zod Validation Schemas + Inferred Types ---------------------------------
-//
-// These are the canonical output types for gap analysis.  All types are derived
-// directly from their Zod schemas so the runtime validator and TypeScript type
-// are always in sync.
 
 export const GapItemSchema = z.object({
   id: z.string(),
   title: z.string(),
-  severity: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']),
+  requirement: z.string().optional().default(''),
+  frameworkSlug: z.string().optional(),
+  jurisdiction: z.enum(['KE', 'RW', 'MW', 'NG']).optional(),
+  status: z.enum(['COMPLIANT', 'PARTIAL', 'GAP', 'NOT_ASSESSED', 'INSUFFICIENT_EVIDENCE']).default('GAP'),
+  severity: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']),
+  severityRationale: z.string().optional().default(''),
   regulatoryBasis: z.string(),
   description: z.string(),
   policyCurrentState: z.string(),
   recommendation: z.string(),
   effort: z.enum(['LOW', 'MEDIUM', 'HIGH']),
   priority: z.number().int().min(1),
+  /** Evidence IDs cited by LLM from retrieved regulatory context */
+  evidenceIds: z.array(z.string()).default([]),
+  /** Requested regulatory evidence IDs from model output */
+  requestedEvidenceIds: z.array(z.string()).default([]),
+  /** Resolved verified regulatory evidence IDs */
+  resolvedEvidenceIds: z.array(z.string()).default([]),
+  /** Rejected / unresolvable / invalid regulatory evidence IDs */
+  invalidEvidenceIds: z.array(z.string()).default([]),
+  /** Policy chunk/section IDs cited by LLM from uploaded policy */
+  policyEvidenceIds: z.array(z.string()).default([]),
+  /** Requested customer policy chunk IDs from model output */
+  requestedPolicyEvidenceIds: z.array(z.string()).default([]),
+  /** Resolved customer policy chunk IDs */
+  resolvedPolicyEvidenceIds: z.array(z.string()).default([]),
+  /** Rejected / unresolvable / invalid customer policy chunk IDs */
+  invalidPolicyEvidenceIds: z.array(z.string()).default([]),
+  /** Deterministic joined regulatory evidence */
+  regulatoryEvidence: z.array(RegulatoryEvidenceRefSchema).default([]),
+  /** Deterministic joined customer policy evidence */
+  policyEvidence: z.array(PolicyEvidenceRefSchema).default([]),
+  /** Claim-level verification results */
+  verification: FindingVerificationSchema.default({ verdict: 'NOT_VERIFIABLE' }),
+  /** Finding coverage metrics */
+  coverage: FindingCoverageSchema.default({ regulatoryEvidenceAvailable: true, policySectionAssessed: true, extractionComplete: true }),
   /** Documents/artefacts that must be produced to close this gap. */
   evidenceRequired: z.array(z.string()).default([]),
   /** Role accountable for resolving this gap. */
@@ -84,6 +183,7 @@ export const ActionPlanItemSchema = z.object({
 
 export const GapAnalysisResultSchema = z.object({
   overallScore: z.number().min(0).max(100),
+  assessmentCoverage: z.number().min(0).max(100).default(100),
   executiveSummary: z.string(),
   frameworks: z.array(FrameworkResultSchema).min(1),
   crossCuttingStrengths: z.array(z.string()),
@@ -99,8 +199,13 @@ export const GapAnalysisResultSchema = z.object({
     lowGaps: z.number().int().min(0).optional(),
     analysisDate: z.string(),
     calculatedScore: z.number().min(0).max(100).optional(),
+    complianceAlignmentScore: z.number().min(0).max(100).optional(),
+    assessmentCoverageScore: z.number().min(0).max(100).optional(),
+    coverageStatus: z.enum(['COMPLETE', 'PARTIAL', 'INSUFFICIENT']).default('COMPLETE'),
     scoringVersion: z.string().optional(),
     modelSuggestedScore: z.number().min(0).max(100).optional(),
+    documentCoverage: DocumentCoverageSchema.optional(),
+    frameworkCoverage: z.record(z.string(), FrameworkCoverageSchema).optional(),
     selectedBenchmarkDocuments: z.array(
       z.union([
         z.string().transform((title) => ({ id: title, title, documentType: null, regulatoryBody: null })),
@@ -114,14 +219,92 @@ export const GapAnalysisResultSchema = z.object({
     ).default([]),
     chunksProcessed: z.number().int().positive().optional(),
     tokenCost: z.object({
+      provider: z.string().optional(),
+      model: z.string().optional(),
+      callCount: z.number().int().min(0).optional(),
       inputTokens: z.number().int().min(0),
       outputTokens: z.number().int().min(0),
-      estimatedCostUsd: z.number().min(0),
+      estimatedCostUsd: z.number().min(0).optional(),
+      costType: z.enum(['MEASURED', 'ESTIMATED', 'NOT_VERIFIED']).optional(),
+    }).optional(),
+    costAccounting: z.object({
+      provider: z.string(),
+      model: z.string(),
+      callCount: z.number().int().min(0).optional(),
+      inputTokens: z.number().int().min(0),
+      outputTokens: z.number().int().min(0),
+      durationMs: z.number().int().min(0),
+      costType: z.enum(['MEASURED', 'ESTIMATED', 'NOT_VERIFIED']),
+      estimatedCostUsd: z.number().min(0).optional(),
+      providerCalls: z.array(z.object({
+        provider: z.string(),
+        model: z.string(),
+        callCount: z.number().int().min(1).optional(),
+        inputTokens: z.number().int().min(0),
+        outputTokens: z.number().int().min(0),
+        costType: z.enum(['ESTIMATED', 'NOT_VERIFIED']),
+        estimatedCostUsd: z.number().min(0).optional(),
+        pricingVersion: z.string().optional(),
+        ratesUsdPerMillion: z.object({
+          input: z.number().min(0),
+          output: z.number().min(0),
+          cacheRead: z.number().min(0),
+          cacheWrite: z.number().min(0),
+        }).optional(),
+      })).default([]),
     }).optional(),
     jurisdictionCode: z.enum(['KE', 'RW', 'MW', 'NG']).nullable().optional(),
     verifierStatus: z.enum(['PASS', 'PARTIAL', 'FAIL']).optional(),
     unsupportedClaims: z.array(z.string()).optional(),
     retrievalVersion: z.string().optional(),
+    depthEngineVersion: z.string().optional(),
+    depthProfileVersion: z.string().optional(),
+    executionProfileVersion: z.string().optional(),
+    executionStages: z.object({
+      retrieval: z.string(),
+      documentTraversal: z.string(),
+      enhancedReview: z.string(),
+      verification: z.string(),
+    }).optional(),
+    executionMetrics: z.object({
+      retrievalQueryCount: z.number().int().min(0),
+      retrievalCandidateCount: z.number().int().min(0),
+      acceptedEvidenceCount: z.number().int().min(0),
+      weakEvidenceRetryCount: z.number().int().min(0),
+      documentChunks: z.number().int().min(0),
+      processedChunks: z.number().int().min(0),
+      analysisCallCount: z.number().int().min(0),
+      verificationCallCount: z.number().int().min(0),
+      inputTokens: z.number().int().min(0),
+      outputTokens: z.number().int().min(0),
+      durationMs: z.number().int().min(0),
+    }).optional(),
+    lifecycleTelemetry: z.object({
+      requestedAt: z.string().optional(),
+      queuedAt: z.string().optional(),
+      startedAt: z.string(),
+      completedAt: z.string().optional(),
+      failedAt: z.string().optional(),
+      queueWaitMs: z.number().int().min(0).optional(),
+      retrievalDurationMs: z.number().int().min(0).optional(),
+      analysisDurationMs: z.number().int().min(0).optional(),
+      verificationDurationMs: z.number().int().min(0).optional(),
+      workerDurationMs: z.number().int().min(0).optional(),
+      totalDurationMs: z.number().int().min(0).optional(),
+    }).optional(),
+    retrievalTelemetry: z.object({
+      rawRetrieved: z.number().int().min(0),
+      metadataCompatible: z.number().int().min(0).optional(),
+      similarityQualified: z.number().int().min(0).optional(),
+      reranked: z.number().int().min(0).optional(),
+      gradedAccepted: z.number().int().min(0).optional(),
+      finalEvidence: z.number().int().min(0),
+      pineconeIndex: z.string().optional(),
+      pineconeNamespace: z.string().optional(),
+      corpusVersion: z.string().optional(),
+      corpusReadiness: z.enum(['UNAVAILABLE', 'INDEXED_PARTIAL', 'VALIDATED_FOR_GAP_ANALYSIS', 'STALE_OR_UNKNOWN']).optional(),
+    }).optional(),
+    executionLimitations: z.array(z.string()).optional(),
   }),
 });
 
@@ -138,6 +321,10 @@ export const RawChunkGapItemSchema = GapItemSchema.extend({
 export const ChunkOutputSchema = z.array(RawChunkGapItemSchema);
 
 // Inferred types  -  use these throughout the codebase instead of manual interfaces.
+export type RegulatoryEvidenceRef = z.infer<typeof RegulatoryEvidenceRefSchema>;
+export type PolicyEvidenceRef = z.infer<typeof PolicyEvidenceRefSchema>;
+export type FindingVerification = z.infer<typeof FindingVerificationSchema>;
+export type FindingCoverage = z.infer<typeof FindingCoverageSchema>;
 export type GapItem = z.infer<typeof GapItemSchema>;
 export type FrameworkResult = z.infer<typeof FrameworkResultSchema>;
 export type ActionPlanItem = z.infer<typeof ActionPlanItemSchema>;
@@ -155,19 +342,9 @@ export interface PolicyChunk {
   charEnd: number;
 }
 
-/**
- * Chunk size and overlap constants.
- * A chunk of ~6,000 characters fits comfortably within Claude's context
- * alongside the system prompt, RAG context, and JSON response buffer.
- */
 export const CHUNK_SIZE = 6000;
 export const CHUNK_OVERLAP = 800;
 
-/**
- * Split policy text into overlapping chunks that respect paragraph boundaries.
- * If the text fits within CHUNK_SIZE the result is a single-element array  - 
- * callers should check length === 1 to skip the multi-pass path.
- */
 export function chunkPolicyText(
   text: string,
   chunkSize = CHUNK_SIZE,
@@ -192,12 +369,10 @@ export function chunkPolicyText(
       if (current) {
         const charEnd = charStart + current.length;
         chunks.push({ index: chunks.length, total: 0, text: current, charStart, charEnd });
-        // Overlap: carry the last `overlap` chars into the next chunk
         const tail = current.length > overlap ? current.slice(-overlap) : current;
         charStart = charEnd - tail.length;
         current = `${tail}\n\n${para}`;
       } else {
-        // Single paragraph larger than chunkSize  -  split at nearest word boundary
         let pos = 0;
         while (pos < para.length) {
           let end = pos + chunkSize;
@@ -222,7 +397,7 @@ export function chunkPolicyText(
         charStart = absolutePos + para.length;
       }
     }
-    absolutePos += para.length + 2; // +2 for the \n\n separator
+    absolutePos += para.length + 2;
   }
 
   if (current.trim()) {
@@ -235,7 +410,6 @@ export function chunkPolicyText(
     });
   }
 
-  // Back-fill total count now that we know how many chunks there are
   const total = chunks.length;
   for (const c of chunks) c.total = total;
   return chunks;
@@ -243,14 +417,6 @@ export function chunkPolicyText(
 
 // --- Prompt Injection Sanitization -------------------------------------------
 
-/**
- * Patterns that are characteristic of prompt injection attacks embedded inside
- * a policy document.  Each pattern is replaced with '[REDACTED]' so the
- * surrounding text remains readable but the instruction cannot be executed.
- *
- * Returns the sanitized text and a flag indicating whether any substitution
- * was made (so callers can log the event).
- */
 export function sanitizePolicyText(text: string): { sanitized: string; wasModified: boolean } {
   const patterns: RegExp[] = [
     /ignore\s+(all\s+)?previous\s+instructions?/gi,
@@ -282,10 +448,6 @@ export function sanitizePolicyText(text: string): { sanitized: string; wasModifi
 
 // --- Shared Schema Example ----------------------------------------------------
 
-/**
- * Returns the required JSON schema example string embedded in prompts.
- * Shared between single-pass and merge prompts to keep them in sync.
- */
 function buildRequiredJsonSchema(params: {
   documentName: string;
   analysisDepth: string;
@@ -293,6 +455,7 @@ function buildRequiredJsonSchema(params: {
 }): string {
   return `{
   "overallScore": 65,
+  "assessmentCoverage": 100,
   "executiveSummary": "This policy demonstrates foundational compliance awareness but has significant gaps in data subject rights procedures (DPA 2019) and transaction monitoring thresholds (POCAMLA). Immediate action is required on 2 CRITICAL gaps before the policy can be considered regulatory-grade.",
   "frameworks": [
     {
@@ -304,16 +467,21 @@ function buildRequiredJsonSchema(params: {
         {
           "id": "DPA-G001",
           "title": "No Data Subject Rights Procedure",
+          "requirement": "Establish formal written procedures for handling data subject access requests, rectification, and erasure within 21 statutory days",
+          "status": "GAP",
           "severity": "HIGH",
-          "regulatoryBasis": "Data Protection Act 2019, Section 26  -  Right of access; Section 30  -  Right to erasure",
+          "severityRationale": "Statutory non-compliance with statutory 21-day timeline creates direct ODPC enforcement and civil penalty risk",
+          "regulatoryBasis": "Data Protection Act 2019, Section 26 - Right of access; Section 30 - Right to erasure",
           "description": "The policy does not define procedures for handling data subject requests (access, rectification, erasure, objection). The DPA requires responses within 21 days.",
           "policyCurrentState": "Policy mentions 'we respect privacy' but contains no operational procedure for handling subject rights requests.",
           "recommendation": "Draft and implement a Data Subject Rights Procedure covering: request intake form, 21-day response SLA, escalation process, and rejection grounds as per DPA Section 26-32.",
           "effort": "MEDIUM",
           "priority": 1,
+          "evidenceIds": ["<EXACT_EVIDENCE_ID_FROM_RETRIEVED_CONTEXT>"],
+          "policyEvidenceIds": ["<EXACT_POLICY_CHUNK_ID_FROM_POLICY_OR_EMPTY_IF_ABSENT>"],
           "evidenceRequired": ["Data Subject Rights Request Form", "Procedure SOP document", "Staff training records on DPA rights"],
           "responsibleRole": "Data Protection Officer",
-          "regulatoryDeadline": "Immediate  -  DPA 2019 is in force; non-compliance risks ODPC enforcement"
+          "regulatoryDeadline": "Immediate - DPA 2019 is in force; non-compliance risks ODPC enforcement"
         }
       ],
       "strengths": [
@@ -346,6 +514,7 @@ function buildRequiredJsonSchema(params: {
     "criticalGaps": 0,
     "highGaps": 0,
     "selectedBenchmarkDocuments": [],
+    "scoringVersion": "${SCORING_VERSION_V2}",
     "analysisDate": "${new Date().toISOString()}"
   }
 }`;
@@ -353,9 +522,6 @@ function buildRequiredJsonSchema(params: {
 
 // --- Prompt Builders ---------------------------------------------------------
 
-/**
- * System prompt for gap analysis (T4: expanded regulation list).
- */
 export function generateGapAnalysisSystemPrompt(jurisdictionContext?: JurisdictionContext): string {
   if (jurisdictionContext) {
     const jurisdictionName = jurisdictionContext.mode === 'SINGLE'
@@ -374,76 +540,18 @@ Your task is to compare the uploaded organization policy against retrieved regul
 
 MANDATORY RULES:
 1. Use only retrieved regulatory context for legal obligations, penalties, deadlines, thresholds, licences, filings, and citations.
-2. Do not rely on model memory as a source of law.
-3. Do not import Kenya, CBK, ODPC, KES, or other country-specific assumptions unless that country is the authorized jurisdiction and the retrieved evidence supports it.
-4. Every gap must cite a source document and section/clause when present in the retrieved evidence.
-5. If evidence is insufficient, abstain from legal conclusions and state that verified regulatory sources are required.
-6. Return only valid JSON that matches the requested schema.`;
+2. Every gap or compliant finding MUST cite the exact [EVIDENCE_ID: ...] from the retrieved regulatory context in the 'evidenceIds' array. Never fabricate or invent evidence IDs.
+3. Every finding MUST cite the corresponding policy chunk in 'policyEvidenceIds' (e.g. ['pol-chunk-1']) if policy text mentions the topic, or empty [] if absent from the policy.
+4. Rate 'status' truthfully: 'COMPLIANT' if fully satisfied, 'PARTIAL' if partially satisfied, or 'GAP' if missing or non-compliant.
+5. Provide a deterministic 'severityRationale' explaining the operational and regulatory risk.
+6. Do not import country-specific assumptions unless that country is the authorized jurisdiction and the retrieved evidence supports it.
+7. If evidence is insufficient, abstain from legal conclusions and state that verified regulatory sources are required.
+8. Return only valid JSON that matches the requested schema.`;
   }
 
   throw new Error('HOME_JURISDICTION_REQUIRED');
-
-  return `You are a senior Kenyan financial regulatory compliance auditor with 15+ years of experience. You specialise in reviewing internal compliance policies and procedures against Kenyan regulatory requirements.
-
-Your expertise covers:
-- Data Protection Act 2019 (DPA) and ODPC General Regulations 2021
-- CBK Prudential Guidelines and Banking Act (Cap 488)
-- National Payment System Act 2011 and NPS Regulations 2014
-- Proceeds of Crime and Anti-Money Laundering Act (POCAMLA) and AML/CFT Guidelines
-- CBK Cybersecurity Guidance Note 2023 (CBS/PG/82)
-- Consumer Protection Act 2012 and CBK consumer protection guidelines
-- Capital Markets Authority (CMA) Act and CMA Regulations
-- Digital Credit Providers Regulations 2022
-- Computer Misuse and Cybercrimes Act 2018
-- Kenya Information and Communications Act (KICA) and ICT regulations
-
-Your task is to conduct a rigorous gap analysis of the provided policy document(s) against the specified regulatory frameworks. You must:
-1. Identify specific gaps where the policy fails to meet regulatory requirements
-2. Cite the exact Kenyan law section that creates each obligation
-3. Rate severity accurately: CRITICAL = legal exposure/licence risk; HIGH = likely regulatory finding; MEDIUM = best-practice gap; LOW = minor improvement
-4. For each gap, you MUST populate ALL of these fields: evidenceRequired (artefacts needed to close the gap), responsibleRole (accountable role/department), and regulatoryDeadline (statutory timeline or "Ongoing obligation")
-5. Identify genuine strengths to give a balanced assessment
-6. Calculate a realistic compliance score (0-100) per framework and overall
-
-EXECUTIVE SUMMARY REQUIREMENTS:
-The executiveSummary field must be written at a level suitable for presentation to a Board of Directors or C-suite audience. It should:
-- Open with a single-sentence compliance posture statement (e.g., "The organisation's AML/KYC policy framework is partially compliant, scoring 52/100 against five Kenyan regulatory frameworks.")
-- Identify the top 2-3 material risks with references only to retrieved source titles/sections present in the regulatory context
-- Do not invent citation labels, section numbers, source URLs, page numbers, regulators, or legal instruments that are absent from the retrieved context
-- Quantify the risk exposure (e.g., "3 CRITICAL gaps expose the organisation to potential licence suspension under CBK Prudential Guidelines")
-- Close with a clear strategic recommendation (e.g., "Immediate Board attention is required on DPA 2019 compliance, with a 90-day remediation sprint recommended")
-- Be 3-5 sentences total  -  concise but comprehensive
-
-CRITICAL OUTPUT RULES:
-1. Respond ONLY with valid JSON. No markdown fences, no preamble, no explanation outside JSON.
-2. Every gap must cite a real, specific Kenyan regulatory provision (e.g., "DPA 2019, Section 32(1)(b)").
-3. Do not fabricate gaps that do not exist based on the policy text provided.
-4. Be specific about WHAT is missing in the policy, not generic statements.
-5. Overall score must reflect actual gap severity  -  a policy with CRITICAL gaps cannot score above 50.
-6. Every gap MUST have a non-empty evidenceRequired array, a non-empty responsibleRole string, and a non-empty regulatoryDeadline string. Do not leave these fields empty or omit them.
-
-ADDITIONAL OUTPUT REQUIREMENTS:
-
-For each gap identified, you MUST provide:
-- evidenceRequired: An array of specific documents or artefacts the organisation must produce or maintain to close this gap. Be specific  -  not "update policies" but "Draft: Data Subject Access Request (DSAR) Procedure Document aligned to DPA 2019 Section 26" or "Obtain: Signed Data Processing Agreement with each third-party processor per DPA 2019 Section 31". Each item should start with a verb: Draft, Obtain, Implement, Review, Update, Establish, Document, Register.
-- responsibleRole: The specific organisational role responsible for leading the remediation. Use standard titles: "Data Protection Officer (DPO)", "Chief Information Security Officer (CISO)", "Chief Compliance Officer (CCO)", "Chief Financial Officer (CFO)", "Head of Legal", "Head of IT/Engineering", "Board of Directors", "Head of Risk Management", "Head of Human Resources".
-- regulatoryDeadline: If the regulation specifies a compliance deadline or timeline, state it explicitly with the source reference (e.g., "DPA 2019 Section 18  -  DPO registration with ODPC required before processing personal data", "Digital Credit Providers Regulations 2022  -  Licence application required per Regulation 4"). If no specific deadline exists, state "Ongoing obligation  -  continuous compliance required."
-
-For each action plan item, you MUST include:
-- responsibleRole: Same role assignment as above.
-- dependsOn: An array of action titles (from other items in this action plan) that must be completed before this action can begin. Use an empty array [] if there are no dependencies. Example: "Implement DSAR response workflow" depends on "Draft DSAR Procedure Document".
-
-KENYAN REGULATORY CONTEXT UPDATES:
-Pay special attention to:
-- ODPC Data Protection (General) Regulations 2021 (SI No. 3 of 2021)  -  implementing regulations under DPA 2019, covering data controller/processor registration, DPIA requirements, and breach notification timelines (72 hours to ODPC).
-- Kenya Information and Communications Act (KICA)  -  cybersecurity obligations on providers of electronic communications services.
-- CBK Guidance Note on Cybersecurity (CBS/PG/82)  -  specific cybersecurity requirements for banks and payment service providers regulated by CBK.`;
 }
 
-/**
- * User prompt for the first-pass per-chunk phase.
- * Only identifies gaps in the given chunk  -  no scoring or consolidation.
- */
 export function generateChunkAnalysisUserPrompt(
   params: Omit<GapAnalysisParams, 'policyText'> & { chunkText: string },
   chunkIndex: number,
@@ -451,33 +559,38 @@ export function generateChunkAnalysisUserPrompt(
 ): string {
   const ragSection = params.ragContext
     ? `\n## RETRIEVED REGULATORY CONTEXT\n${params.ragContext}\n`
-    : `\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context was provided. Do not identify legal gaps, legal obligations, penalties, deadlines, or compliance conclusions. Return an empty gaps array and state that verified source documents are required.\n`;
+    : '';
 
-  const focusSection =
-    params.focusAreas && params.focusAreas.length > 0
-      ? `\n## PRIORITY FOCUS AREAS\nPay particular attention to: ${params.focusAreas.join(', ')}\n`
-      : '';
-
-  return `You are analysing CHUNK ${chunkIndex + 1} of ${totalChunks} of the document "${params.documentName}".
-Identify ALL compliance gaps visible in this chunk against: ${params.regulatoryFrameworks.join(', ')}.
-${ragSection}${focusSection}
-## DOCUMENT CHUNK ${chunkIndex + 1} / ${totalChunks}
+  return `You are performing Phase 1 (chunk-level analysis) of a multi-chunk gap analysis.
+This is chunk ${chunkIndex + 1} of ${totalChunks} for document "${params.documentName}".
+Frameworks: ${params.regulatoryFrameworks.join(', ')}
+${ragSection}
+## POLICY CHUNK ${chunkIndex + 1}/${totalChunks} (ID: pol-chunk-${chunkIndex + 1})
 \`\`\`
 ${params.chunkText}
 \`\`\`
 
-Return a JSON array of gap objects found ONLY in this chunk. Each object:
+## INSTRUCTIONS
+1. Identify specific gaps where this chunk fails to meet regulatory obligations.
+2. For each finding, cite the exact [EVIDENCE_ID: ...] in 'evidenceIds' and set 'policyEvidenceIds' to ['pol-chunk-${chunkIndex + 1}'].
+3. Rate severity: CRITICAL = immediate licence/regulatory risk; HIGH = likely finding/fine; MEDIUM = procedural deficiency; LOW = minor wording issue.
+4. Output a JSON array of findings with schema:
 {
-  "framework": "<framework id e.g. DPA_2019>",
+  "framework": "<framework id>",
   "id": "<e.g. DPA-G001-C${chunkIndex + 1}>",
   "title": "...",
+  "requirement": "...",
+  "status": "GAP|COMPLIANT|PARTIAL",
   "severity": "CRITICAL|HIGH|MEDIUM|LOW",
+  "severityRationale": "...",
   "regulatoryBasis": "...",
   "description": "...",
   "policyCurrentState": "...",
   "recommendation": "...",
   "effort": "LOW|MEDIUM|HIGH",
   "priority": 1,
+  "evidenceIds": ["<EXACT_EVIDENCE_ID>"],
+  "policyEvidenceIds": ["pol-chunk-${chunkIndex + 1}"],
   "evidenceRequired": ["..."],
   "responsibleRole": "...",
   "regulatoryDeadline": "..."
@@ -486,10 +599,6 @@ Return a JSON array of gap objects found ONLY in this chunk. Each object:
 Return [] if no gaps are found. Return ONLY a valid JSON array.`;
 }
 
-/**
- * User prompt for the second-pass consolidation merge.
- * Receives all raw per-chunk gaps and produces the full GapAnalysisResult.
- */
 export function generateMergeUserPrompt(
   rawGaps: unknown[],
   params: Omit<GapAnalysisParams, 'policyText'> & { chunkCount: number }
@@ -507,35 +616,30 @@ export function generateMergeUserPrompt(
   return `You have received pre-identified compliance gaps from a ${params.chunkCount}-chunk analysis of "${params.documentName}".
 Your task: consolidate, de-duplicate, score, and produce the final GapAnalysisResult JSON.
 
-Analysis depth: ${params.analysisDepth}  -  ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
+Analysis depth: ${params.analysisDepth} - ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
 Frameworks: ${params.regulatoryFrameworks.join(', ')}
 ${ragSection}
-## RAW GAPS FROM ALL CHUNKS (${(rawGaps as unknown[]).length} total  -  some may be duplicates)
+## RAW GAPS FROM ALL CHUNKS (${(rawGaps as unknown[]).length} total - some may be duplicates)
 \`\`\`json
 ${JSON.stringify(rawGaps, null, 2)}
 \`\`\`
 
 ## CONSOLIDATION INSTRUCTIONS
-1. De-duplicate gaps describing the same issue  -  keep the most detailed entry, reassign sequential priority numbers. If a gap was identified in multiple sections of the document, this STRENGTHENS the finding  -  do not discard it. Merge with the most complete description and the highest severity.
-2. When merging duplicate gaps: combine their evidenceRequired arrays (deduplicate identical items), take the most specific regulatoryDeadline (prefer a concrete section citation over a generic statement), and use the most senior responsibleRole if chunks disagree.
-3. Group final gaps by framework into the frameworks array.
-4. Score each framework (0-100) based on severity/count of retained gaps.
-5. Write a concise executiveSummary (2-4 sentences).
-6. Build a prioritised actionPlan with dependsOn referencing other action titles or empty []. Every action plan item must include responsibleRole.
-7. Set metadata.chunksProcessed = ${params.chunkCount}.
-8. Recompute totalGaps, criticalGaps, highGaps from the final deduplicated list.
+1. De-duplicate gaps describing the same issue - keep the most detailed entry, reassign sequential priority numbers. Combine their evidenceIds and policyEvidenceIds.
+2. Group final gaps by framework into the frameworks array.
+3. Write a concise executiveSummary (2-4 sentences).
+4. Build a prioritised actionPlan.
+5. Set metadata.chunksProcessed = ${params.chunkCount}.
+6. Set metadata.scoringVersion = "${SCORING_VERSION_V2}".
 
 ## REQUIRED JSON SCHEMA
 \`\`\`json
 ${buildRequiredJsonSchema({ documentName: params.documentName, analysisDepth: params.analysisDepth, regulatoryFrameworks: params.regulatoryFrameworks })}
 \`\`\`
 
-Analyse EVERY specified framework  -  include frameworks with no gaps (score them high). Return ONLY valid JSON.`;
+Return ONLY valid JSON.`;
 }
 
-/**
- * User prompt for gap analysis  -  used for single-pass (document <= CHUNK_SIZE).
- */
 export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string {
   if (!params.jurisdictionContext) throw new Error('HOME_JURISDICTION_REQUIRED');
   const jurisdictionName = params.jurisdictionContext
@@ -549,11 +653,11 @@ export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string
   const depthInstructions: Record<string, string> = {
     quick: 'Focus on CRITICAL and HIGH severity gaps only. Generate 2-3 gaps per framework maximum. Provide a high-level executive summary.',
     standard: 'Cover all severity levels. Generate 3-7 gaps per framework. Provide detailed analysis of each gap.',
-    deep: 'Comprehensive analysis. Cover all severity levels thoroughly. Generate as many gaps as genuinely found (no limit). Provide granular analysis with specific policy excerpt references where possible.',
+    deep: 'Comprehensive analysis. Cover all severity levels thoroughly. Generate as many gaps as genuinely found (no limit).',
   };
 
   const ragSection = params.ragContext
-    ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from the SheriaBot regulatory corpus for ${jurisdictionName} (${jurisdictionCodes}). Use these to ground your gap identification:\n\n${params.ragContext}\n`
+    ? `\n\n## RETRIEVED REGULATORY CONTEXT\nThe following passages were retrieved from the SheriaBot regulatory corpus for ${jurisdictionName} (${jurisdictionCodes}). Every regulatory claim must cite the corresponding [EVIDENCE_ID: ...]:\n\n${params.ragContext}\n`
     : `\n\n## SOURCE INSUFFICIENCY\nNo retrieved regulatory source context was provided. Do not identify legal gaps, legal obligations, penalties, deadlines, or compliance conclusions. State that verified source documents are required and do not rely on model memory.\n`;
 
   const focusSection =
@@ -567,7 +671,7 @@ export function generateGapAnalysisUserPrompt(params: GapAnalysisParams): string
 - **Authorized Jurisdiction:** ${jurisdictionName} (${jurisdictionCodes})
 - **Document:** ${params.documentName} (${params.documentType.toUpperCase()})
 - **Regulatory Frameworks:** ${params.regulatoryFrameworks.join(', ')}
-- **Analysis Depth:** ${params.analysisDepth}  -  ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
+- **Analysis Depth:** ${params.analysisDepth} - ${depthInstructions[params.analysisDepth] ?? depthInstructions.standard}
 ${focusSection}${ragSection}
 
 ## POLICY DOCUMENT TO ANALYSE
@@ -575,17 +679,20 @@ ${focusSection}${ragSection}
 ${params.policyText}
 \`\`\`
 
-## REQUIRED JSON SCHEMA
-Return EXACTLY this structure. Populate ALL fields accurately:
+## EVIDENCE GROUNDING MANDATE
+1. Every gap or compliant finding MUST cite the exact [EVIDENCE_ID: ...] in 'evidenceIds' from the retrieved regulatory context. Never invent IDs.
+2. If the policy mentions the requirement, cite the relevant policy chunk in 'policyEvidenceIds' (e.g. ['pol-chunk-1']). If absent, use [].
+3. Provide an explicit 'requirement' and 'severityRationale'.
 
+## REQUIRED JSON SCHEMA
 \`\`\`json
 ${buildRequiredJsonSchema(params)}
 \`\`\`
 
-Analyse EVERY specified framework. Compute metadata counts from your actual gaps after writing all frameworks. Overall score = weighted average of framework scores, with CRITICAL gaps reducing it proportionally. Return ONLY valid JSON.`;
+Return ONLY valid JSON.`;
 }
 
-// --- Deterministic Gap Scoring Service -----------------------------------------
+// --- Deterministic Gap Scoring Service (Legacy Compatibility) ----------------
 
 export const GAP_SCORING_VERSION = 'v1.0-deterministic';
 
@@ -609,10 +716,6 @@ export interface DeterministicScoreBreakdown {
   };
 }
 
-/**
- * Authoritative deterministic score calculation for policy gap analysis.
- * Formula: 100 - (25 * CRITICAL) - (15 * HIGH) - (8 * MEDIUM) - (3 * LOW), clamped to [0, 100].
- */
 export function calculateDeterministicGapScore(
   gaps: Array<{ severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' }>,
   modelSuggestedScore?: number
@@ -659,14 +762,9 @@ export function calculateDeterministicGapScore(
 
 // --- Output Parser ------------------------------------------------------------
 
-/**
- * Parse and validate AI gap analysis output using Zod (T3).
- * Falls back to regex JSON extraction if the response contains surrounding text.
- */
 export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
   let content = rawContent.trim();
 
-  // Strip markdown code fences if present
   if (content.startsWith('```')) {
     content = content
       .replace(/^```(?:json)?\s*/i, '')
@@ -685,7 +783,6 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
     try {
       parsed = JSON.parse(jsonMatch[0]);
     } catch {
-      // Attempt brace/bracket balancing for truncated responses
       let braces = 0;
       let brackets = 0;
       for (const char of jsonMatch[0]) {
@@ -707,13 +804,11 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
     }
   }
 
-  // Zod validation  -  coerces defaults (evidenceRequired: [], dependsOn: [])
   const result = GapAnalysisResultSchema.safeParse(parsed);
   if (!result.success) {
-    // Surface the first Zod error to help with debugging
     const firstError = result.error.issues[0];
     throw new Error(
-      `Invalid gap analysis structure: ${firstError.path.join('.')}  -  ${firstError.message}`
+      `Invalid gap analysis structure: ${firstError.path.join('.')} - ${firstError.message}`
     );
   }
 
@@ -726,21 +821,31 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
   let mediumGaps = 0;
   let lowGaps = 0;
 
-  const allGaps: Array<{ severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' }> = [];
+  const assessments: RequirementAssessment[] = [];
 
   for (const framework of validated.frameworks) {
     totalGaps += framework.gaps.length;
     for (const gap of framework.gaps) {
-      allGaps.push({ severity: gap.severity });
       if (gap.severity === 'CRITICAL') criticalGaps++;
       else if (gap.severity === 'HIGH') highGaps++;
       else if (gap.severity === 'MEDIUM') mediumGaps++;
       else if (gap.severity === 'LOW') lowGaps++;
+
+      assessments.push({
+        id: gap.id,
+        frameworkSlug: gap.frameworkSlug ?? framework.id,
+        jurisdiction: gap.jurisdiction ?? 'KE',
+        requirement: gap.requirement || gap.title,
+        status: gap.status,
+        severity: gap.severity,
+        severityRationale: gap.severityRationale || gap.description,
+        policyEvidence: gap.policyEvidence ?? [],
+        regulatoryEvidence: gap.regulatoryEvidence ?? [],
+        verification: gap.verification ?? { verdict: 'NOT_VERIFIABLE' },
+        coverage: gap.coverage ?? { regulatoryEvidenceAvailable: true, policySectionAssessed: true, extractionComplete: true },
+      });
     }
   }
-
-  // Calculate authoritative deterministic score
-  const scoreResult = calculateDeterministicGapScore(allGaps, validated.overallScore);
 
   validated.metadata.totalGaps = totalGaps;
   validated.metadata.criticalGaps = criticalGaps;
@@ -749,25 +854,63 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
   validated.metadata.lowGaps = lowGaps;
   validated.metadata.analysisDate = new Date().toISOString();
   validated.metadata.modelSuggestedScore = validated.overallScore;
-  validated.metadata.scoringVersion = scoreResult.scoringVersion;
-  validated.metadata.calculatedScore = scoreResult.calculatedScore;
 
-  // Authoritative overallScore is assigned deterministically
-  validated.overallScore = scoreResult.calculatedScore;
+  const hasV2EvidenceOrVerification = validated.frameworks.some((f) =>
+    f.gaps.some(
+      (g) =>
+        (g.regulatoryEvidence && g.regulatoryEvidence.length > 0) ||
+        (g.policyEvidence && g.policyEvidence.length > 0) ||
+        (g.evidenceIds && g.evidenceIds.length > 0) ||
+        (g.policyEvidenceIds && g.policyEvidenceIds.length > 0) ||
+        (g.verification && g.verification.verdict !== 'NOT_VERIFIABLE')
+    )
+  );
+
+  // Determine scoring engine: use v2 if explicitly requested as v2 or if findings have v2 evidence/verification, unless explicitly v1
+  if (
+    validated.metadata.scoringVersion !== 'v1.0-deterministic' &&
+    (validated.metadata.scoringVersion === SCORING_VERSION_V2 || hasV2EvidenceOrVerification)
+  ) {
+    const docCoverage: DocumentCoverage = validated.metadata.documentCoverage ?? {
+      totalChunks: validated.metadata.chunksProcessed ?? 1,
+      processedChunks: validated.metadata.chunksProcessed ?? 1,
+      failedChunks: 0,
+      skippedChunks: 0,
+      extractionComplete: true,
+    };
+
+    const scoringResult = calculateComplianceAlignmentScore({
+      assessments,
+      documentCoverage: docCoverage,
+    });
+
+    validated.metadata.scoringVersion = SCORING_VERSION_V2;
+    validated.metadata.calculatedScore = scoringResult.complianceAlignmentScore;
+    validated.metadata.complianceAlignmentScore = scoringResult.complianceAlignmentScore;
+    validated.metadata.assessmentCoverageScore = scoringResult.assessmentCoverageScore;
+    validated.metadata.coverageStatus = scoringResult.coverageStatus;
+    (validated as any).scoringVersion = SCORING_VERSION_V2;
+    (validated as any).complianceAlignmentScore = scoringResult.complianceAlignmentScore;
+    (validated as any).assessmentCoverageScore = scoringResult.assessmentCoverageScore;
+    (validated as any).coverageStatus = scoringResult.coverageStatus;
+    validated.overallScore = scoringResult.complianceAlignmentScore;
+    validated.assessmentCoverage = scoringResult.assessmentCoverageScore;
+  } else {
+    // Legacy scoring
+    const legacyGaps = assessments.map((a) => ({ severity: a.severity as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' }));
+    const legacyResult = calculateDeterministicGapScore(legacyGaps, validated.overallScore);
+    validated.metadata.scoringVersion = legacyResult.scoringVersion;
+    validated.metadata.calculatedScore = legacyResult.calculatedScore;
+    validated.overallScore = legacyResult.calculatedScore;
+    validated.assessmentCoverage = 100;
+  }
 
   return validated as GapAnalysisResult;
 }
 
-/**
- * Parse and validate the JSON array output from a single chunk analysis.
- * Each chunk prompt returns `[]` or an array of raw gap objects with an extra
- * `framework` field. Returns an empty array on an empty/null AI response rather
- * than throwing, so a single bad chunk does not abort the whole analysis.
- */
 export function parseChunkAnalysisOutput(rawContent: string, chunkIndex: number): RawChunkGapItem[] {
   let content = rawContent.trim();
 
-  // Strip markdown code fences if present
   if (content.startsWith('```')) {
     content = content
       .replace(/^```(?:json)?\s*/i, '')
@@ -775,14 +918,12 @@ export function parseChunkAnalysisOutput(rawContent: string, chunkIndex: number)
       .trim();
   }
 
-  // An empty or "no gaps" response is valid
   if (!content || content === '[]') return [];
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
   } catch {
-    // Try to extract a JSON array from surrounding text
     const arrayMatch = content.match(/\[[\s\S]*\]/);
     if (!arrayMatch) {
       throw new Error(`Chunk ${chunkIndex}: AI response contains no valid JSON array`);
@@ -790,7 +931,6 @@ export function parseChunkAnalysisOutput(rawContent: string, chunkIndex: number)
     try {
       parsed = JSON.parse(arrayMatch[0]);
     } catch {
-      // Attempt brace/bracket balancing for truncated responses
       let braces = 0;
       let brackets = 0;
       for (const char of arrayMatch[0]) {
@@ -816,7 +956,7 @@ export function parseChunkAnalysisOutput(rawContent: string, chunkIndex: number)
   if (!result.success) {
     const firstError = result.error.issues[0];
     throw new Error(
-      `Chunk ${chunkIndex} validation failed: ${firstError.path.join('.')}  -  ${firstError.message}`
+      `Chunk ${chunkIndex} validation failed: ${firstError.path.join('.')} - ${firstError.message}`
     );
   }
 

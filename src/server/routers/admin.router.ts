@@ -11,6 +11,7 @@ import { withBypassRlsTransaction } from '@/lib/prisma/tenant-scope.extension';
 import { redis } from '@/lib/redis/client';
 import { adminModule } from '@/modules/admin';
 import { appConfig } from '@/config/app.config';
+import { probeGapAnalysisMalwareScanner } from '@/lib/security/gap-analysis-malware';
 import { intaSendService, normaliseIntaSendState } from '@/modules/intasend';
 import { intaSendFinalizationService } from '@/modules/billing/intasend-finalization.service';
 import { getStats as getChecklistStats } from '@/lib/metrics/checklist-metrics';
@@ -1538,19 +1539,7 @@ export const adminRouter = router({
       ]);
     });
 
-    const malwareEnabled = appConfig.malwareScanEnabled;
-    const malwareConfigured = !!appConfig.clamav.host;
-    
-    let malwareStatus: 'healthy' | 'degraded' | 'not_configured' = 'not_configured';
-    let malwareMessage = 'Malware scanning is not configured or disabled.';
-    
-    if (malwareEnabled && malwareConfigured) {
-      malwareStatus = 'healthy';
-      malwareMessage = 'Malware scanning is enabled and configured.';
-    } else if (malwareEnabled && !malwareConfigured) {
-      malwareStatus = 'degraded';
-      malwareMessage = 'Malware scanning is enabled but no scanner (CLAMAV_HOST) is configured.';
-    }
+    const malwareHealth = await probeGapAnalysisMalwareScanner();
 
     const baseHealth = await adminModule.getSystemHealth().catch(() => ({
       status: 'degraded' as const,
@@ -1561,13 +1550,15 @@ export const adminRouter = router({
       generatedAt: now.toISOString(),
       overallStatus: baseHealth.status,
       malwareScanning: {
-        status: malwareStatus,
-        enabled: malwareEnabled,
-        configured: malwareConfigured,
-        message: malwareMessage,
+        status: malwareHealth.status,
+        enabled: malwareHealth.enabled,
+        configured: malwareHealth.configured,
+        reachable: malwareHealth.reachable,
+        latencyMs: malwareHealth.latencyMs,
+        message: malwareHealth.message,
         skippedScanCountLast7d: null,
         failedScanCountLast7d: null,
-        evidence: malwareEnabled && !malwareConfigured ? ['CLAMAV_HOST is missing'] : [],
+        evidence: malwareHealth.status === 'READY' ? [] : ['Scanner readiness is not READY'],
       },
       vaultDocuments: {
         total,

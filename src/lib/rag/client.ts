@@ -123,6 +123,10 @@ function getIndexName(): string {
   return process.env.PINECONE_INDEX_NAME || 'sheriabot-legal-docs';
 }
 
+export function resolvePineconeNamespace(namespace?: string): string {
+  return namespace || appConfig.pinecone.namespace;
+}
+
 export function getPineconeDiagnostics(namespace?: string): {
   indexName: string;
   namespace: string;
@@ -130,7 +134,7 @@ export function getPineconeDiagnostics(namespace?: string): {
 } {
   return {
     indexName: getIndexName(),
-    namespace: namespace || '__default__',
+    namespace: resolvePineconeNamespace(namespace),
     environment: process.env.PINECONE_ENVIRONMENT || null,
   };
 }
@@ -173,13 +177,13 @@ export async function upsertVectors(
     logger.info({
       type: 'pinecone_upserting_integrated',
       count: records.length,
-      namespace,
+      namespace: resolvePineconeNamespace(namespace),
     });
 
     await withTimeout(
       index.upsertRecords({
         records: records as any[],
-        namespace: namespace || '__default__',
+        namespace: resolvePineconeNamespace(namespace),
       }),
       'pinecone_upsert_records',
     );
@@ -215,7 +219,7 @@ export async function queryVectors(
       indexName: getIndexName(),
       environment: process.env.PINECONE_ENVIRONMENT || null,
       topK,
-      namespace: namespace || '__default__',
+      namespace: resolvePineconeNamespace(namespace),
       hasFilter: !!filter,
     });
 
@@ -225,7 +229,7 @@ export async function queryVectors(
         topK,
         filter,
       },
-      namespace: namespace || '__default__',
+      namespace: resolvePineconeNamespace(namespace),
     });
 
     return (response.result.hits || []).map(hit => ({
@@ -250,7 +254,7 @@ export async function deleteVectors(
   namespace?: string
 ): Promise<void> {
   const index = await getIndex();
-  await index.namespace(namespace || '__default__').deleteMany(ids);
+  await index.namespace(resolvePineconeNamespace(namespace)).deleteMany(ids);
 }
 
 /**
@@ -261,7 +265,7 @@ export async function deleteByFilter(
   namespace?: string
 ): Promise<void> {
   const index = await getIndex();
-  await index.namespace(namespace || '__default__').deleteMany({ filter });
+  await index.namespace(resolvePineconeNamespace(namespace)).deleteMany({ filter });
 }
 
 /**

@@ -8,11 +8,11 @@ import { logger } from './utils/logger';
 import { connectionManager } from './lib/connection-manager';
 import { errorTracker } from './lib/error-tracker';
 import { warmCaches } from './lib/cache-warming';
-import { storageConfig } from './config/storage.config';
 import { appConfig } from './config/app.config';
 import { aiJobRunner } from './modules/ai-jobs/ai-job-runner';
 import { assertPreviewDatabaseIsolation, classifyDatabaseEnvironment, isPreviewDatabaseClassificationAllowed } from './utils/database-identity';
 import type { FastifyInstance } from 'fastify';
+import { probeGapAnalysisMalwareScanner } from './lib/security/gap-analysis-malware';
 
 // -- Process-level error traps ------------------------------------------------
 // Registered before start() so they catch failures during initialisation too.
@@ -127,13 +127,11 @@ const start = async () => {
     const port = parseInt(process.env.PORT || '4000', 10);
     const host = process.env.HOST || '0.0.0.0';
 
+    const malwareReadiness = await probeGapAnalysisMalwareScanner();
     logger.warn({
       type: 'malware_scan_startup_state',
-      enabled: storageConfig.security.malwareScan,
-      scannerWired: Boolean(appConfig.clamav.host),
-      effectivePolicy: storageConfig.security.malwareScan
-        ? 'enabled_vault_uploads_scan_with_clamav'
-        : 'disabled_uploads_will_skip_scanning',
+      ...malwareReadiness,
+      effectivePolicy: appConfig.isProduction ? 'uploads_fail_closed_unless_ready' : 'non_production_degraded_mode_allowed',
     });
 
     await app.listen({ port, host });

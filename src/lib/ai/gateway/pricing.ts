@@ -13,6 +13,7 @@ export const MODEL_PRICING: Record<string, ModelPricingRates> = {
   // Cache write = 1.25x base input, Cache read = 0.10x base input
   'anthropic:claude-opus-4-6': { input: 15.0, output: 75.0, cacheWrite: 18.75, cacheRead: 1.5 },
   'anthropic:claude-sonnet-4-6': { input: 3.0, output: 15.0, cacheWrite: 3.75, cacheRead: 0.3 },
+  'anthropic:claude-sonnet-5': { input: 3.0, output: 15.0, cacheWrite: 3.75, cacheRead: 0.3 },
   'anthropic:claude-haiku-4-5-20251001': { input: 0.8, output: 4.0, cacheWrite: 1.0, cacheRead: 0.08 },
   
   // OpenAI pricing (USD per 1M tokens)

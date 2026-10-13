@@ -30,6 +30,7 @@ import {
   prepareV2ChunkMetadata,
 } from '@/lib/source-grounding/source-metadata'
 import { jurisdictionCodeFromLabel } from '@/types/jurisdiction'
+import { buildSourceDocumentVersionId } from '@/lib/source-grounding/approved-sources'
 
 // ============================================================================
 // Types
@@ -54,6 +55,7 @@ export interface DocumentIngestionInput {
   effectiveEndDate?: Date;
   sourceRegistryId?: string;
   sourceDocumentVersionId?: string;
+  frameworkSlug?: string;
   forceReprocessExisting?: boolean;
 }
 
@@ -382,6 +384,7 @@ async function processDocument(
           ? new Date(doc.effectiveDate).getFullYear()
           : undefined,
         regulatoryArea: doc.category,
+        frameworkSlug: doc.metadata?.frameworkSlug ?? undefined,
         authorityStatus: doc.authorityStatus ?? 'IN_FORCE',
         isBinding: doc.isBinding ?? true,
         source: doc.source,
@@ -504,6 +507,7 @@ export class DocumentIngestionService {
         status: 'PROCESSING',
         checksum,
         indexVersion: 'v1',
+        metadata: pruneUndefined({ frameworkSlug: input.frameworkSlug }),
         errorMessage: null,
       }
 
@@ -563,7 +567,7 @@ export class DocumentIngestionService {
           orderBy: { updatedAt: 'desc' },
         })
 
-    const doc = reprocessExisting ?? (failedExisting
+    let doc = reprocessExisting ?? (failedExisting
       ? await (prisma as any).regulatoryDocument.update({
           where: { id: failedExisting.id },
           data: baseDocumentData,
@@ -571,6 +575,38 @@ export class DocumentIngestionService {
       : await (prisma as any).regulatoryDocument.create({
           data: baseDocumentData,
         }))
+
+    if (input.sourceRegistryId && input.officialUrl) {
+      const sourceDocumentVersionId = input.sourceDocumentVersionId ?? buildSourceDocumentVersionId({
+        regulatoryDocumentId: doc.id,
+        officialUrl: input.officialUrl,
+        checksumSha256: checksum,
+        versionLabel: input.version,
+      })
+      await (prisma as any).sourceDocumentVersion.upsert({
+        where: { id: sourceDocumentVersionId },
+        create: {
+          id: sourceDocumentVersionId,
+          regulatoryDocumentId: doc.id,
+          approvedSourceId: input.sourceRegistryId,
+          officialUrl: input.officialUrl,
+          publicationDate: input.publicationDate,
+          retrievedAt: input.retrievedAt,
+          effectiveDate: input.effectiveDate,
+          effectiveEndDate: input.effectiveEndDate,
+          versionLabel: input.version,
+          checksumSha256: checksum,
+          authorityStatus: input.authorityStatus ?? 'IN_FORCE',
+          isBinding: input.isBinding ?? defaultBindingForAuthority(input.authorityStatus),
+          status: 'ACTIVE',
+        },
+        update: {},
+      })
+      doc = await (prisma as any).regulatoryDocument.update({
+        where: { id: doc.id },
+        data: { sourceDocumentVersionId },
+      })
+    }
 
     try {
       const processing = await processDocument(doc, buffer, fileExt)
@@ -607,6 +643,7 @@ export class DocumentIngestionService {
             processedAt: new Date(),
             metadata: pruneUndefined({
               extraction: processing.extractionMetadata,
+              frameworkSlug: input.frameworkSlug,
             }),
           },
         })
@@ -705,6 +742,7 @@ export class DocumentIngestionService {
       category: doc.category,
       year: doc.effectiveDate ? new Date(doc.effectiveDate).getFullYear() : undefined,
       regulatoryArea: doc.category,
+      frameworkSlug: doc.metadata?.frameworkSlug ?? undefined,
       authorityStatus: doc.authorityStatus,
       isBinding: doc.isBinding,
       source: doc.source,

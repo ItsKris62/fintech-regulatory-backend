@@ -14,7 +14,7 @@
 import { prisma } from '@/lib/prisma/client';
 import { logPilotEvent } from '@/modules/pilot';
 import { redis } from '@/lib/redis/client';
-import { aiService } from '@/lib/ai/ai.service';
+import { aiService, type GapAnalysisProviderUsage } from '@/lib/ai/ai.service';
 import { ragService } from '@/lib/rag/rag.service';
 import { regulatoryIntelligenceService } from '@/modules/regulatory-intelligence/regulatory-intelligence.service';
 import { mailer as _mailer } from '@/lib/email/mailer.service';
@@ -23,7 +23,7 @@ import { storageService } from '@/lib/storage/storage.service';
 import { getSystemConfigNumber } from '@/lib/system-config';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError } from '@/utils/error';
-import { MemberRole, MemberStatus, OrganizationMember, Prisma, UserRole } from '@prisma/client';
+import { MemberRole, MemberStatus, OrganizationMember, Prisma } from '@prisma/client';
 import { notificationModule } from '@/modules/notification';
 import { incrementTrialUsage } from '@/modules/trial';
 import { aiJobRunner } from '@/modules/ai-jobs/ai-job-runner';
@@ -32,9 +32,30 @@ import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
 import type { GeneratedChecklist } from '@/lib/ai/prompts/checklist-generation';
 import type { BenchmarkDocumentSummary, GapAnalysisResult } from '@/lib/ai/prompts/gap-analysis';
+import { randomUUID } from 'crypto';
+import {
+  GAP_ANALYSIS_MAX_FILE_BYTES,
+  GAP_ANALYSIS_STORAGE_PATH_PREFIX,
+  getGapAnalysisFileExtension,
+  isGapAnalysisFileType,
+  type GapAnalysisFileType,
+} from '@/config/gap-analysis.config';
+import {
+  GAP_ANALYSIS_DEPTH_ENGINE_VERSION,
+  GAP_ANALYSIS_EXECUTION_PROFILE_VERSION,
+  getDepthProfileVersion,
+  getGapAnalysisDepthProfile,
+} from '@/config/gap-analysis-depth-profiles';
 import type { SearchResult } from '@/lib/rag/rag.service';
 import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
+import { resolvePineconeNamespace } from '@/lib/rag/client';
 import { sanitizePolicyText, chunkPolicyText } from '@/lib/ai/prompts/gap-analysis';
+import {
+  assertGapAnalysisStillActive,
+  GapAnalysisCancelledError,
+  isGapAnalysisCancelledError,
+  monitorGapAnalysisCancellation,
+} from './gap-analysis-cancellation';
 import { extractPdfText } from '@/lib/pdf/extract-text';
 import {
   buildComplianceSourceInsufficiencyAnswer,
@@ -46,7 +67,20 @@ import {
 } from '@/lib/source-grounding/source-insufficiency';
 import { buildCitationsFromChunks, hasUsableCitations } from '@/lib/source-grounding/citations';
 import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
-import { runVerifierAgent } from '@/modules/compliance/orchestrator/verifier.agent';
+import { runVerifierAgent, verifyFindingClaims, resolveFindingEvidence, type FindingVerificationInput } from '@/modules/compliance/orchestrator/verifier.agent';
+import { calculateComplianceAlignmentScore, SCORING_VERSION_V2, type RegulatoryEvidenceRef, type PolicyEvidenceRef, type DocumentCoverage, type FrameworkCoverage, type FrameworkEvidenceStatus, type RequirementAssessment } from '@/modules/compliance/scoring/gap-analysis-scoring';
+import {
+  buildDepthRetrievalQueries,
+  buildWeakEvidenceRetryQuery,
+  estimatePromptTokens,
+  GapAnalysisExecutionBudget,
+  mapWithConcurrency,
+  selectPolicyChunksForDepth,
+  type DepthExecutionTelemetry,
+} from './gap-analysis-depth-engine';
+import { buildGapAnalysisRetrievalRequest } from './gap-analysis-retrieval-contract';
+import { GAP_ANALYSIS_REUSABLE_EXECUTION_STATUSES } from './gap-analysis-execution-identity';
+import { classifyGapAnalysisFailure } from './gap-analysis-observability';
 const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
 import {
   toComplianceQueryResult,
@@ -105,15 +139,17 @@ async function updateAnalysisStatus(
   update: { status: string; progress: number; errorMessage?: string },
 ): Promise<void> {
   try {
-    await prisma.gapAnalysis.update({
-      where: { id: analysisId },
+    const result = await prisma.gapAnalysis.updateMany({
+      where: { id: analysisId, deletedAt: null, status: { not: 'CANCELLED' } },
       data: {
         status: update.status,
         progress: update.progress,
         ...(update.errorMessage !== undefined ? { errorMessage: update.errorMessage } : {}),
       },
     });
-    logger.info({ type: 'gap_analysis_status_updated', analysisId, ...update });
+    if (result.count === 1) {
+      logger.info({ type: 'gap_analysis_status_updated', analysisId, ...update });
+    }
   } catch (err) {
     logger.error({ type: 'gap_analysis_status_update_failed', analysisId, error: (err as Error).message });
   }
@@ -286,28 +322,30 @@ async function _legacyVerifyCitationsAgainstCorpus(gapResults: GapAnalysisResult
 /* c8 ignore stop */
 void _legacyVerifyCitationsAgainstCorpus;
 
-interface GapAnalysisPipelineParams {
+export interface GapAnalysisPipelineParams {
   analysisId: string;
   userId: string;
   organizationId?: string;
   trialUserId?: string;
   fileName: string;
-  fileContent: string;  // base64-encoded
-  fileType: string;     // extension without dot: pdf | docx | doc | txt
+  fileContent?: string;  // optional legacy fallback only
+  storageKey?: string;   // opaque / internal R2 key reference
+  fileSize?: number;
+  fileType: GapAnalysisFileType;
   regulatoryFrameworks: string[];
   regulatoryFrameworkSlugs?: string[];
   benchmarkDocumentIds?: string[];
   benchmarkDocuments?: BenchmarkDocumentSummary[];
   jurisdictionContext: JurisdictionContext;
+  retrievalNamespace?: string;
   analysisDepth: 'quick' | 'standard' | 'deep';
   focusAreas?: string[];
   ipAddress?: string;
   userAgent?: string;
-}
-
-function pineconeInFilter(values: string[]): string | { $in: string[] } | undefined {
-  if (values.length === 0) return undefined;
-  return values.length === 1 ? values[0] : { $in: values };
+  consentVersion?: string;
+  documentChecksum?: string;
+  executionIdentity?: string;
+  executionIdentityMetadata?: Record<string, unknown>;
 }
 
 /**
@@ -315,119 +353,277 @@ function pineconeInFilter(values: string[]): string | { $in: string[] } | undefi
  * Runs after the HTTP response is sent. Manages its own lifecycle via DB status
  * updates. The top-level try/catch guarantees FAILED is set on any unhandled error.
  */
-export async function executeGapAnalysisPipeline(params: GapAnalysisPipelineParams): Promise<void> {
+export async function executeGapAnalysisPipeline(
+  params: GapAnalysisPipelineParams,
+  execution: { jobId?: string } = {},
+): Promise<void> {
   const {
-    analysisId, userId, organizationId, trialUserId, fileName, fileContent, fileType,
+    analysisId, userId, organizationId, trialUserId, fileName, fileContent, storageKey, fileType,
     regulatoryFrameworks, regulatoryFrameworkSlugs = [], benchmarkDocumentIds = [],
-    benchmarkDocuments = [], jurisdictionContext, analysisDepth, focusAreas, ipAddress, userAgent,
+    benchmarkDocuments = [], jurisdictionContext, retrievalNamespace, analysisDepth, focusAreas, ipAddress, userAgent,
   } = params;
 
   const startTime = Date.now();
+  const startedAt = new Date(startTime);
+  let retrievalStartedAt: Date | null = null;
+  let retrievalCompletedAt: Date | null = null;
+  let analysisStartedAt: Date | null = null;
+  let analysisCompletedAt: Date | null = null;
+  let verificationStartedAt: Date | null = null;
+  let verificationCompletedAt: Date | null = null;
+  logger.info({
+    type: 'gap_analysis_started',
+    analysisId,
+    organizationId,
+    jobId: execution.jobId,
+    jurisdictionCode: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : undefined,
+    frameworkSlugs: regulatoryFrameworkSlugs,
+    analysisDepth,
+    retrievalNamespace: resolvePineconeNamespace(retrievalNamespace),
+  });
   let currentProgress = 5;
+  const cancellation = monitorGapAnalysisCancellation(analysisId, execution.jobId);
+  const depthProfile = getGapAnalysisDepthProfile(analysisDepth);
+  const deadlineController = new AbortController();
+  const deadlineTimer = setTimeout(
+    () => deadlineController.abort(new Error('Gap Analysis execution deadline reached.')),
+    depthProfile.budget.maxWallClockMs,
+  );
+  const relayCancellation = () => deadlineController.abort(cancellation.signal.reason);
+  cancellation.signal.addEventListener('abort', relayCancellation, { once: true });
+  const assertActive = async () => {
+    if (deadlineController.signal.aborted) throw deadlineController.signal.reason;
+    await assertGapAnalysisStillActive(analysisId, execution.jobId);
+  };
+  const executionBudget = new GapAnalysisExecutionBudget(depthProfile, startTime, assertActive);
+  const executionTelemetry: DepthExecutionTelemetry = {
+    retrievalQueryCount: 0,
+    retrievalCandidateCount: 0,
+    acceptedEvidenceCount: 0,
+    weakEvidenceRetryCount: 0,
+    documentChunks: 0,
+    processedChunks: 0,
+    analysisCallCount: 0,
+    verificationCallCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    durationMs: 0,
+    limitations: [],
+  };
+  const beforeAiOperation = async (plan?: {
+    stage: 'analysis' | 'merge' | 'enhanced_review' | 'verification';
+    estimatedInputTokens: number;
+    maxOutputTokens: number;
+  }) => {
+    if (!plan) return assertActive();
+    if (plan.stage === 'verification') executionTelemetry.verificationCallCount++;
+    else executionTelemetry.analysisCallCount++;
+    await executionBudget.beforeModelCall(plan.estimatedInputTokens, plan.maxOutputTokens);
+  };
 
   try {
+    // -- WORKER AUTHORIZATION & STORAGE RESOLUTION ---------------------------
+    const analysisRecord = await prisma.gapAnalysis.findUnique?.({
+      where: { id: analysisId },
+      select: { id: true, userId: true, organizationId: true, documentUrl: true, deletedAt: true, createdAt: true },
+    });
+    if (analysisRecord) {
+      if (analysisRecord.deletedAt !== null) {
+        throw new GapAnalysisCancelledError();
+      }
+      if (analysisRecord.userId !== userId) {
+        throw new Error('Worker authorization failed: analysis owner mismatch.');
+      }
+      if (organizationId && analysisRecord.organizationId && analysisRecord.organizationId !== organizationId) {
+        throw new Error('Worker authorization failed: analysis organization mismatch.');
+      }
+    }
+
+    await assertActive(); // before R2 retrieval / legacy payload decode
+    let fileBuffer: Buffer;
+    const effectiveStorageKey = storageKey || (analysisRecord?.documentUrl?.startsWith(GAP_ANALYSIS_STORAGE_PATH_PREFIX) ? analysisRecord.documentUrl : undefined);
+    if (effectiveStorageKey) {
+      if (analysisRecord && analysisRecord.documentUrl && effectiveStorageKey !== analysisRecord.documentUrl) {
+        throw new Error('Worker authorization failed: storage reference mismatch.');
+      }
+      if (!effectiveStorageKey.startsWith(GAP_ANALYSIS_STORAGE_PATH_PREFIX) || effectiveStorageKey.includes('..')) {
+        throw new Error('Worker authorization failed: invalid storage key location.');
+      }
+      fileBuffer = await storageService.downloadFile(effectiveStorageKey);
+    } else if (fileContent) {
+      // Legacy compatibility path for in-flight historical payloads
+      fileBuffer = Buffer.from(fileContent, 'base64');
+    } else {
+      throw new Error(`No document storage reference or content available for analysis ${analysisId}.`);
+    }
+    await assertActive(); // after R2 retrieval
+
     // -- EXTRACTING (progress: 10) -----------------------------------------
+    await assertActive(); // before extraction
     await updateAnalysisStatus(analysisId, { status: 'EXTRACTING', progress: 10 });
     currentProgress = 10;
 
-    const fileBuffer = Buffer.from(fileContent, 'base64');
     const ext = fileType.toLowerCase().replace('.', '');
 
     let policyText: string;
     if (ext === 'pdf') {
       policyText = await extractPdfText(fileBuffer);
-    } else if (ext === 'docx' || ext === 'doc') {
+    } else if (ext === 'docx') {
       const r = await mammoth.extractRawText({ buffer: fileBuffer });
       policyText = r.value;
     } else {
       policyText = fileBuffer.toString('utf8');
     }
+    await assertActive(); // after extraction
 
     if (!policyText || policyText.trim().length < 50) {
-      throw new Error('Could not extract meaningful text from the document. Please ensure it is not encrypted or image-only.');
+      throw new Error('Could not extract meaningful text from the document. This PDF appears to contain little or no extractable text. OCR is not currently available for Gap Analysis. Please upload a text-searchable PDF or DOCX.');
     }
 
     // -- RAG RETRIEVAL (progress: 15 \u2192 30) ----------------------------------
+    retrievalStartedAt = new Date();
+    logger.info({ type: 'gap_analysis_retrieval_started', analysisId, organizationId });
     await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 15 });
     currentProgress = 15;
 
-    // Extract 3-5 key compliance themes from the policy text for targeted RAG queries
+    // Extract bounded compliance themes for the configured depth query strategy.
     const policyKeywords = extractPolicyKeywords(policyText);
-    const keywordSuffix = policyKeywords.length > 0 ? ` ${policyKeywords.join(' ')}` : '';
 
     const jurisdictionNames = jurisdictionContext.mode === 'SINGLE'
       ? jurisdictionLabel(jurisdictionContext.primaryJurisdiction)
       : jurisdictionContext.jurisdictions.map(jurisdictionLabel).join(', ');
 
-    const ragPromises = regulatoryFrameworks.map((framework, index) => {
+    await assertActive();
+    const ragResultsByFramework = await mapWithConcurrency(
+      regulatoryFrameworks,
+      depthProfile.retrieval.concurrency,
+      async (framework, index) => {
       const frameworkSlug = regulatoryFrameworkSlugs[index];
-      const strictFilter = {
-        ...(frameworkSlug ? { frameworkSlug } : {}),
-        ...(benchmarkDocumentIds.length > 0
-          ? { documentId: pineconeInFilter(benchmarkDocumentIds) }
-          : {}),
-      };
-      const benchmarkOnlyFilter = benchmarkDocumentIds.length > 0
-        ? { documentId: pineconeInFilter(benchmarkDocumentIds) }
-        : undefined;
-      const request = (filter: Record<string, unknown> | undefined, question: string) => regulatoryIntelligenceService.retrieveAndGrade({
+      const request = async (question: string) => {
+        await executionBudget.beforeRetrieval(
+          Math.ceil((question.length + depthProfile.retrieval.topK * 900) / 4),
+        );
+        executionTelemetry.retrievalQueryCount++;
+        const result = await regulatoryIntelligenceService.retrieveAndGrade(buildGapAnalysisRetrievalRequest({
           question,
-          feature: 'GAP_ANALYSIS',
+          frameworkDisplay: framework,
+          frameworkSlug,
           jurisdictionContext,
-          organizationContext: organizationId ? { organizationId } : undefined,
-          retrievalProfile: {
-            topK: 8,
-            minScore: 0.6,
-            filter,
-          },
-        });
+          depthProfile,
+          benchmarkDocumentIds,
+          namespace: retrievalNamespace,
+          organizationId,
+        }));
+        executionTelemetry.retrievalCandidateCount += result.retrievedCount;
+        executionTelemetry.inputTokens += result.graderTokens?.input ?? 0;
+        executionTelemetry.outputTokens += result.graderTokens?.output ?? 0;
+        return result.evidence;
+      };
 
-      return request(
-        Object.keys(strictFilter).length > 0 ? strictFilter : benchmarkOnlyFilter,
-        `${framework} regulatory compliance obligations ${jurisdictionNames}${keywordSuffix}`,
-      )
-        .then(async (result) => {
-          if (result.evidence.length > 0 || !frameworkSlug) return result.evidence;
-          logger.info({
-            type: 'gap_analysis_framework_slug_fallback',
-            userId,
-            analysisId,
-            frameworkSlug,
-            jurisdictionCodes: jurisdictionContext.jurisdictions,
-            benchmarkRestricted: benchmarkDocumentIds.length > 0,
-          });
-          const fallback = await request(
-            benchmarkOnlyFilter,
-            `regulatory compliance obligations ${jurisdictionNames}${keywordSuffix}`,
-          );
-          return fallback.evidence;
-        })
-        .catch((err: unknown) => {
-          logger.warn({ type: 'gap_analysis_rag_framework_failed', userId, analysisId, framework, error: (err as Error).message });
-          return [] as SearchResult[];
-        });
+      const queries = buildDepthRetrievalQueries({
+        framework,
+        jurisdictionNames,
+        policyKeywords,
+        profile: depthProfile,
+      });
+      const evidence: SearchResult[] = [];
+      const evidenceIds = new Set<string>();
+      const collect = (rows: SearchResult[]) => {
+        for (const row of rows) {
+          const id = row.vectorId ?? row.chunkId ?? `${row.documentId}:${row.section ?? ''}`;
+          if (!evidenceIds.has(id)) {
+            evidenceIds.add(id);
+            evidence.push(row);
+          }
+        }
+      };
+
+      for (const question of queries) {
+        try {
+          collect(await request(question));
+        } catch (err: unknown) {
+          if (deadlineController.signal.aborted) throw deadlineController.signal.reason;
+          executionTelemetry.limitations.push(`Retrieval query failed for framework ${frameworkSlug ?? framework}.`);
+          logger.warn({ type: 'gap_analysis_rag_query_failed', userId, analysisId, framework, error: (err as Error).message });
+        }
+      }
+
+      if (
+        evidence.length < 2 &&
+        depthProfile.retrieval.weakEvidenceRetryLimit > 0 &&
+        executionTelemetry.weakEvidenceRetryCount < depthProfile.retrieval.maxWeakEvidenceRetriesTotal
+      ) {
+        executionTelemetry.weakEvidenceRetryCount++;
+        try {
+          collect(await request(buildWeakEvidenceRetryQuery({ framework, jurisdictionNames, policyKeywords })));
+        } catch (err: unknown) {
+          if (deadlineController.signal.aborted) throw deadlineController.signal.reason;
+          executionTelemetry.limitations.push(`Weak-evidence retry failed for framework ${frameworkSlug ?? framework}.`);
+          logger.warn({ type: 'gap_analysis_rag_retry_failed', userId, analysisId, framework, error: (err as Error).message });
+        }
+      }
+
+      return evidence.slice(0, depthProfile.retrieval.maxAcceptedEvidencePerFramework);
     });
-
-    const ragResultsByFramework = await Promise.all(ragPromises);
 
     const seenEvidenceIds = new Set<string>();
     const acceptedEvidence: SearchResult[] = [];
+    const acceptedEvidenceMap = new Map<string, RegulatoryEvidenceRef>();
     const labeledResults: Array<{ text: string; framework: string }> = [];
     let groundedFrameworkCount = 0;
+    const analysisJurisdiction = jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : 'KE';
 
     for (let fIdx = 0; fIdx < regulatoryFrameworks.length; fIdx++) {
       const framework = regulatoryFrameworks[fIdx];
+      const frameworkSlug = regulatoryFrameworkSlugs[fIdx];
       const results = ragResultsByFramework[fIdx] ?? [];
-      if (results.length > 0) groundedFrameworkCount++;
-      for (const r of results) {
+
+      const validResults = results.filter((r) => {
+        if (!frameworkSlug) return true;
+        const chunkSlug = (r as any).frameworkSlug ?? (r as any).metadata?.frameworkSlug;
+        const chunkFramework = (r as any).framework ?? (r as any).metadata?.framework;
+        if (chunkSlug && chunkSlug !== frameworkSlug) return false;
+        if (chunkFramework && chunkFramework !== framework && !chunkSlug) return false;
+        return true;
+      });
+
+      if (validResults.length > 0) groundedFrameworkCount++;
+      for (const r of validResults) {
         const evidenceId = r.vectorId ?? r.chunkId ?? `${r.documentId}:${r.section ?? ''}`;
         if (!seenEvidenceIds.has(evidenceId)) {
           seenEvidenceIds.add(evidenceId);
+          if (acceptedEvidence.length >= depthProfile.budget.maxEvidenceRecords) continue;
           acceptedEvidence.push(r);
-          labeledResults.push({ text: r.chunkText, framework });
+          const ref: RegulatoryEvidenceRef = {
+            evidenceId,
+            vectorId: r.vectorId ?? evidenceId,
+            documentId: r.documentId ?? null,
+            documentTitle: r.documentTitle || 'Regulatory Instrument',
+            jurisdiction: (r.jurisdictionCode as any) ?? analysisJurisdiction,
+            frameworkSlug: frameworkSlug || '',
+            section: r.section,
+            sourceAuthority: r.source ?? r.authorityStatus,
+            sourceStatus: r.authorityStatus,
+            excerpt: r.chunkText,
+            similarityScore: r.score,
+          };
+          acceptedEvidenceMap.set(evidenceId, ref);
+          labeledResults.push({
+            text: `[EVIDENCE_ID: ${evidenceId}] [FRAMEWORK: ${framework}] [SOURCE: ${r.documentTitle}${r.section ? ` § ${r.section}` : ''}]\n${r.chunkText}`,
+            framework,
+          });
         }
       }
     }
+
+    executionTelemetry.acceptedEvidenceCount = acceptedEvidence.length;
+    retrievalCompletedAt = new Date();
+    logger.info({
+      type: 'gap_analysis_retrieval_completed', analysisId, organizationId,
+      rawRetrieved: executionTelemetry.retrievalCandidateCount,
+      finalEvidence: executionTelemetry.acceptedEvidenceCount,
+      durationMs: retrievalCompletedAt.getTime() - retrievalStartedAt.getTime(),
+    });
 
     const ragGrounded =
       regulatoryFrameworks.length === 0
@@ -455,7 +651,7 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
       ragContext = Object.entries(grouped)
         .map(([fw, texts]) =>
           texts
-            .map((t, i) => `[REGULATORY CONTEXT \u2014 ${fw} (${i + 1} of ${texts.length})]\n${t}`)
+            .map((t, i) => `[REGULATORY CONTEXT — ${fw} (${i + 1} of ${texts.length})]\n${t}`)
             .join('\n\n---\n\n')
         )
         .join('\n\n---\n\n');
@@ -472,14 +668,46 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
       logger.warn({ type: 'gap_analysis_prompt_injection_detected', userId, analysisId, fileName });
     }
 
-    // -- AI ANALYSIS (progress: 30 \u2192 85) ------------------------------------
-    const SINGLE_PASS_THRESHOLD = analysisDepth === 'deep' ? 15000 : 8000;
-    const useMultiChunk = analysisDepth !== 'quick' && safePolicyText.length > SINGLE_PASS_THRESHOLD;
+    const allPolicyChunks = chunkPolicyText(
+      safePolicyText,
+      depthProfile.document.chunkSize,
+      depthProfile.document.chunkOverlap,
+    );
+    const traversal = selectPolicyChunksForDepth(allPolicyChunks, depthProfile);
+    const policyChunks = traversal.selected;
+    executionTelemetry.documentChunks = allPolicyChunks.length;
+    if (!traversal.completeConfiguredTraversal) {
+      executionTelemetry.limitations.push(
+        depthProfile.depth === 'quick'
+          ? 'Quick screening sampled the configured policy structure; assessment coverage is limited.'
+          : `Document exceeded the configured ${depthProfile.document.maxChunks}-chunk traversal ceiling.`,
+      );
+    }
+    const policyEvidenceMap = new Map<string, PolicyEvidenceRef>();
+    policyChunks.forEach((c) => {
+      const pId = `pol-chunk-${c.index + 1}`;
+      policyEvidenceMap.set(pId, {
+        policyEvidenceId: pId,
+        chunkIndex: c.index,
+        startOffset: c.charStart,
+        endOffset: c.charEnd,
+        excerpt: c.text.slice(0, 400),
+      });
+    });
+
+    // -- AI ANALYSIS (progress: 30 → 85) ------------------------------------
+    analysisStartedAt = new Date();
+    const useMultiChunk = analysisDepth === 'deep' || policyChunks.length > 1;
 
     let gapResults: GapAnalysisResult;
-    let chunksProcessed = 1;
+    let chunksProcessed = policyChunks.length;
+    let failedChunks = 0;
+    let skippedChunks = traversal.skipped;
+    let extractionComplete = true;
     let gapInputTokens = 0;
     let gapOutputTokens = 0;
+    let gapProviderUsage: GapAnalysisProviderUsage[] = [];
+    let gapEstimatedCostUsd = 0;
 
     if (!useMultiChunk) {
       const gapAiResult = await aiService.performGapAnalysis({
@@ -491,15 +719,25 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
         focusAreas,
         ragContext,
         jurisdictionContext,
+        signal: deadlineController.signal,
+        beforeAiOperation,
       });
       gapResults = gapAiResult.result;
       gapResults.metadata.selectedBenchmarkDocuments = benchmarkDocuments;
       gapInputTokens = gapAiResult.inputTokens;
       gapOutputTokens = gapAiResult.outputTokens;
+      gapProviderUsage = gapAiResult.providerUsage ?? [];
+      gapEstimatedCostUsd = gapAiResult.totalCost;
+      chunksProcessed = policyChunks.length;
+      if (gapAiResult.truncated) {
+        failedChunks = 1;
+        extractionComplete = false;
+        chunksProcessed = Math.max(0, policyChunks.length - 1);
+      }
       await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 80 });
       currentProgress = 80;
     } else {
-      const chunks = chunkPolicyText(safePolicyText);
+      const chunks = policyChunks;
       logger.info({ type: 'gap_analysis_chunking', userId, analysisId, textLength: safePolicyText.length, totalChunks: chunks.length });
       const multiResult = await aiService.performMultiChunkGapAnalysis({
         chunks,
@@ -507,67 +745,402 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
         documentType: ext,
         regulatoryFrameworks,
         analysisDepth,
-          focusAreas,
-          ragContext,
-          jurisdictionContext,
-        });
+        focusAreas,
+        ragContext,
+        jurisdictionContext,
+        signal: deadlineController.signal,
+        beforeAiOperation,
+      });
       gapResults = multiResult.result;
       gapResults.metadata.selectedBenchmarkDocuments = benchmarkDocuments;
       gapInputTokens = multiResult.totalInputTokens;
       gapOutputTokens = multiResult.totalOutputTokens;
+      gapProviderUsage = multiResult.providerUsage ?? [];
+      gapEstimatedCostUsd = multiResult.totalCost;
       chunksProcessed = multiResult.chunksProcessed;
-      // Attach token cost into metadata for storage + audit
-      gapResults.metadata.tokenCost = {
-        inputTokens: multiResult.totalInputTokens,
-        outputTokens: multiResult.totalOutputTokens,
-        estimatedCostUsd: multiResult.totalCost,
-      };
+      failedChunks = multiResult.failedChunks;
+      skippedChunks += multiResult.skippedChunks;
+      extractionComplete = multiResult.extractionComplete && traversal.completeConfiguredTraversal;
+      executionTelemetry.limitations.push(...multiResult.executionLimitations);
       await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 85 });
       currentProgress = 85;
     }
 
-    // Track token usage for free trial users (fire-and-forget, non-fatal).
+    analysisCompletedAt = new Date();
+    logger.info({
+      type: 'gap_analysis_ai_stage_completed', analysisId, organizationId,
+      callCount: executionTelemetry.analysisCallCount,
+      inputTokens: gapInputTokens, outputTokens: gapOutputTokens,
+      durationMs: analysisCompletedAt.getTime() - analysisStartedAt.getTime(),
+    });
+
+    const allGapProviderCostsVerified = gapProviderUsage.length > 0
+      && gapProviderUsage.every((usage) => usage.costType === 'ESTIMATED');
+    const gapProviderCallCount = gapProviderUsage.reduce((total, usage) => total + usage.callCount, 0);
+    const providerLabel = gapProviderUsage.length === 1 ? gapProviderUsage[0].provider : 'mixed';
+    const modelLabel = gapProviderUsage.length === 1 ? gapProviderUsage[0].model : 'mixed';
+    gapResults.metadata.tokenCost = {
+      provider: providerLabel,
+      model: modelLabel,
+      callCount: gapProviderCallCount,
+      inputTokens: gapInputTokens,
+      outputTokens: gapOutputTokens,
+      ...(allGapProviderCostsVerified ? { estimatedCostUsd: gapEstimatedCostUsd } : {}),
+      costType: allGapProviderCostsVerified ? 'ESTIMATED' : 'NOT_VERIFIED',
+    };
+
+    executionTelemetry.processedChunks = chunksProcessed;
+    executionTelemetry.inputTokens += gapInputTokens;
+    executionTelemetry.outputTokens += gapOutputTokens;
+
     if (trialUserId) {
       incrementTrialUsage(trialUserId, 'totalTokensUsed', gapInputTokens + gapOutputTokens).catch(() => { });
     }
 
     // -- CLAIM + CITATION VERIFICATION (progress: 88) ------------------------
+    verificationStartedAt = new Date();
+    await assertActive();
     await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 88 });
     currentProgress = 88;
 
-    const verifier = await runVerifierAgent(JSON.stringify(gapResults), acceptedEvidence, jurisdictionContext);
-    if (verifier.verdict !== 'PASS' || verifier.parseFailed || verifier.unsupportedClaims.length > 0) {
-      throw new Error('VERIFICATION_FAILURE');
+    // Join evidence references deterministically on every finding
+    const allFindingInputs: FindingVerificationInput[] = [];
+
+    for (const fw of gapResults.frameworks) {
+      for (const gap of fw.gaps) {
+        gap.frameworkSlug = fw.id || regulatoryFrameworkSlugs[0] || '';
+        gap.jurisdiction = analysisJurisdiction;
+        gap.requirement = gap.requirement || gap.title;
+
+        // Deterministically resolve cited regulatory and policy evidence via strict validation
+        const resolution = resolveFindingEvidence({
+          citedEvidenceIds: (gap as any).evidenceIds,
+          citedPolicyEvidenceIds: (gap as any).policyEvidenceIds,
+          frameworkSlug: gap.frameworkSlug,
+          frameworkName: fw.name,
+          analysisJurisdiction,
+          acceptedEvidenceMap,
+          policyEvidenceMap,
+        });
+
+        gap.regulatoryEvidence = resolution.regulatoryEvidence;
+        (gap as any).requestedEvidenceIds = resolution.requestedEvidenceIds;
+        (gap as any).resolvedEvidenceIds = resolution.resolvedEvidenceIds;
+        (gap as any).invalidEvidenceIds = resolution.invalidEvidenceIds;
+
+        gap.policyEvidence = resolution.policyEvidence;
+        (gap as any).requestedPolicyEvidenceIds = resolution.requestedPolicyEvidenceIds;
+        (gap as any).resolvedPolicyEvidenceIds = resolution.resolvedPolicyEvidenceIds;
+        (gap as any).invalidPolicyEvidenceIds = resolution.invalidPolicyEvidenceIds;
+
+        allFindingInputs.push({
+          id: gap.id,
+          requirement: gap.requirement,
+          status: gap.status,
+          severity: gap.severity,
+          severityRationale: gap.severityRationale || gap.description,
+          regulatoryBasis: gap.regulatoryBasis,
+          policyCurrentState: gap.policyCurrentState,
+          regulatoryEvidence: resolution.regulatoryEvidence,
+          policyEvidence: resolution.policyEvidence,
+          frameworkSlug: gap.frameworkSlug,
+          jurisdiction: analysisJurisdiction,
+          requestedEvidenceIds: resolution.requestedEvidenceIds,
+          resolvedEvidenceIds: resolution.resolvedEvidenceIds,
+          invalidEvidenceIds: resolution.invalidEvidenceIds,
+          requestedPolicyEvidenceIds: resolution.requestedPolicyEvidenceIds,
+          resolvedPolicyEvidenceIds: resolution.resolvedPolicyEvidenceIds,
+          invalidPolicyEvidenceIds: resolution.invalidPolicyEvidenceIds,
+        });
+      }
     }
+
+    // Claim-level verification: fail-safe if verifier unavailable (never synthetic 0.95 SUPPORTED)
+    const verificationVerdicts = typeof verifyFindingClaims === 'function'
+      ? verifyFindingClaims(allFindingInputs, analysisJurisdiction)
+      : allFindingInputs.map((f) => ({
+          findingId: f.id,
+          verdict: 'NOT_VERIFIABLE' as const,
+          confidence: 0.0,
+          unsupportedClaims: [`Claim verifier unavailable — finding cannot be verified`],
+          reason: 'Verifier service unavailable',
+        }));
+
+    const verdictMap = new Map(verificationVerdicts.map((v) => [v.findingId, v]));
+    let unsupportedCount = 0;
+
+    for (const fw of gapResults.frameworks) {
+      for (const gap of fw.gaps) {
+        const v = verdictMap.get(gap.id);
+        if (v) {
+          gap.verification = {
+            verdict: v.verdict,
+            confidence: v.confidence,
+            unsupportedClaims: v.unsupportedClaims,
+            reason: v.reason,
+          };
+          gap.citationVerified = v.verdict === 'SUPPORTED';
+          gap.verificationStatus =
+            v.verdict === 'SUPPORTED'
+              ? 'verified'
+              : v.verdict === 'UNSUPPORTED'
+              ? 'unverified'
+              : 'not_checked';
+          if (v.verdict === 'UNSUPPORTED') unsupportedCount++;
+        }
+      }
+    }
+
+    // Document & Framework Coverage (GA-13 truthful)
+    const documentCoverage: DocumentCoverage = {
+      totalChunks: allPolicyChunks.length,
+      processedChunks: chunksProcessed,
+      failedChunks,
+      skippedChunks,
+      extractionComplete,
+    };
+
+    const frameworkCoverage: Record<string, FrameworkCoverage> = {};
+    for (let i = 0; i < regulatoryFrameworks.length; i++) {
+      const slug = regulatoryFrameworkSlugs[i] || regulatoryFrameworks[i];
+      const results = ragResultsByFramework[i] ?? [];
+      const assessedCount = gapResults.frameworks.find((f) => f.name === regulatoryFrameworks[i])?.gaps.length ?? 0;
+      // Truthful semantics: SheriaBot evaluates retrieved obligations, not an exhaustive statutory inventory
+      const evidenceStatus: FrameworkEvidenceStatus =
+        results.length === 0
+          ? 'UNAVAILABLE'
+          : results.length < 2
+          ? 'INSUFFICIENT'
+          : 'PARTIAL';
+
+      frameworkCoverage[slug] = {
+        frameworkSlug: slug,
+        evidenceStatus,
+        assessedRequirementCount: assessedCount,
+        notes: [
+          results.length === 0
+            ? 'No usable regulatory corpus evidence retrieved for this framework'
+            : 'Coverage represents evidence-backed evaluated obligations; complete statutory inventory not loaded',
+        ],
+      };
+    }
+
+    // Defensible Scoring Engine (GA-09)
+    const allAssessments: RequirementAssessment[] = gapResults.frameworks.flatMap((fw) =>
+      fw.gaps.map((g) => ({
+        id: g.id,
+        frameworkSlug: g.frameworkSlug ?? fw.id,
+        jurisdiction: g.jurisdiction ?? analysisJurisdiction,
+        requirement: g.requirement,
+        status: g.status,
+        severity: g.severity,
+        severityRationale: g.severityRationale || g.description,
+        policyEvidence: g.policyEvidence,
+        regulatoryEvidence: g.regulatoryEvidence,
+        verification: g.verification,
+        coverage: g.coverage,
+        requestedEvidenceIds: (g as any).requestedEvidenceIds,
+        resolvedEvidenceIds: (g as any).resolvedEvidenceIds,
+        invalidEvidenceIds: (g as any).invalidEvidenceIds,
+        requestedPolicyEvidenceIds: (g as any).requestedPolicyEvidenceIds,
+        resolvedPolicyEvidenceIds: (g as any).resolvedPolicyEvidenceIds,
+        invalidPolicyEvidenceIds: (g as any).invalidPolicyEvidenceIds,
+      }))
+    );
+
+    const scoringResult = calculateComplianceAlignmentScore({
+      assessments: allAssessments,
+      documentCoverage,
+      hasKnownRequirementInventory: false,
+    });
+
+    gapResults.overallScore = scoringResult.complianceAlignmentScore;
+    gapResults.assessmentCoverage = scoringResult.assessmentCoverageScore;
+    gapResults.metadata.scoringVersion = SCORING_VERSION_V2;
+    gapResults.metadata.complianceAlignmentScore = scoringResult.complianceAlignmentScore;
+    gapResults.metadata.assessmentCoverageScore = scoringResult.assessmentCoverageScore;
+    gapResults.metadata.coverageStatus = scoringResult.coverageStatus;
+    gapResults.metadata.documentCoverage = documentCoverage;
+    gapResults.metadata.frameworkCoverage = frameworkCoverage;
+
+    // Legacy verifier: labeled as advisory only, cannot override finding-level verdicts
+    if (typeof runVerifierAgent === 'function') {
+      try {
+        const verifierPayload = JSON.stringify(gapResults);
+        await beforeAiOperation({
+          stage: 'verification',
+          estimatedInputTokens: estimatePromptTokens(verifierPayload, ...acceptedEvidence.map((row) => row.chunkText)),
+          maxOutputTokens: 2048,
+        });
+        const legacyVerifier = await runVerifierAgent(
+          verifierPayload,
+          acceptedEvidence,
+          jurisdictionContext,
+          deadlineController.signal,
+        );
+        executionTelemetry.inputTokens += legacyVerifier.tokens.input;
+        executionTelemetry.outputTokens += legacyVerifier.tokens.output;
+        (gapResults.metadata as any).advisoryLegacyVerifier = {
+          verdict: legacyVerifier.verdict,
+          unsupportedClaims: legacyVerifier.unsupportedClaims,
+        };
+      } catch (verificationError: unknown) {
+        if (isGapAnalysisCancelledError(verificationError) || cancellation.signal.aborted) {
+          throw new GapAnalysisCancelledError();
+        }
+        executionTelemetry.limitations.push('Advisory verification did not complete.');
+      }
+
+      if (depthProfile.verification.secondaryReview) {
+        const secondaryReviewFindings = gapResults.frameworks.flatMap((framework) =>
+          framework.gaps
+            .filter((gap) =>
+              depthProfile.depth === 'deep'
+                ? gap.severity === 'CRITICAL' ||
+                  gap.severity === 'HIGH' ||
+                  gap.verification?.verdict === 'PARTIALLY_SUPPORTED' ||
+                  gap.verification?.verdict === 'NOT_VERIFIABLE'
+                : gap.verification?.verdict === 'PARTIALLY_SUPPORTED' ||
+                  gap.verification?.verdict === 'NOT_VERIFIABLE',
+            )
+            .map((gap) => ({
+              id: gap.id,
+              framework: framework.id,
+              severity: gap.severity,
+              status: gap.status,
+              verification: gap.verification,
+            })),
+        );
+        if (secondaryReviewFindings.length > 0) {
+          try {
+            const secondaryPayload = JSON.stringify(secondaryReviewFindings);
+            await beforeAiOperation({
+              stage: 'verification',
+              estimatedInputTokens: estimatePromptTokens(secondaryPayload, ...acceptedEvidence.map((row) => row.chunkText)),
+              maxOutputTokens: 2048,
+            });
+            const secondaryVerifier = await runVerifierAgent(
+              secondaryPayload,
+              acceptedEvidence,
+              jurisdictionContext,
+              deadlineController.signal,
+            );
+            executionTelemetry.inputTokens += secondaryVerifier.tokens.input;
+            executionTelemetry.outputTokens += secondaryVerifier.tokens.output;
+            (gapResults.metadata as any).secondaryDepthVerifier = {
+              verdict: secondaryVerifier.verdict,
+              unsupportedClaims: secondaryVerifier.unsupportedClaims,
+              reviewedFindingCount: secondaryReviewFindings.length,
+              mode: depthProfile.verification.mode,
+            };
+          } catch (secondaryError: unknown) {
+            if (isGapAnalysisCancelledError(secondaryError) || deadlineController.signal.aborted) {
+              throw deadlineController.signal.reason ?? new GapAnalysisCancelledError();
+            }
+            executionTelemetry.limitations.push(`${depthProfile.depth} secondary verification did not complete.`);
+          }
+        }
+      }
+    }
+
     const citations = buildCitationsFromChunks(acceptedEvidence, 'verified');
     if (!hasUsableCitations(citations)) throw new SourceInsufficiencyError(GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE);
+    verificationCompletedAt = new Date();
+    logger.info({
+      type: 'gap_analysis_verification_completed', analysisId, organizationId,
+      findingCount: verificationVerdicts.length,
+      durationMs: verificationCompletedAt.getTime() - verificationStartedAt.getTime(),
+    });
     const jurisdictionCode = jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : null;
+
+    // Authoritative verifier status derives strictly from finding-level verdicts
+    const allVerdicts = verificationVerdicts.map((v) => v.verdict);
+    const hasUnsupported = allVerdicts.some((v) => v === 'UNSUPPORTED' || v === 'NOT_VERIFIABLE');
+    const allSupported = allVerdicts.length > 0 && allVerdicts.every((v) => v === 'SUPPORTED');
+
+    const authoritativeVerifierStatus: 'PASS' | 'PARTIAL' | 'FAIL' =
+      allSupported
+        ? 'PASS'
+        : hasUnsupported && !allVerdicts.some((v) => v === 'SUPPORTED' || v === 'PARTIALLY_SUPPORTED')
+        ? 'FAIL'
+        : 'PARTIAL';
+
     gapResults.metadata = {
       ...gapResults.metadata,
       jurisdictionCode,
-      verifierStatus: verifier.verdict,
-      unsupportedClaims: verifier.unsupportedClaims,
+      verifierStatus: authoritativeVerifierStatus,
+      unsupportedClaims: verificationVerdicts.flatMap((v) => v.unsupportedClaims),
       retrievalVersion: 'regulatory-intelligence-v1',
+      depthEngineVersion: GAP_ANALYSIS_DEPTH_ENGINE_VERSION,
+      depthProfileVersion: getDepthProfileVersion(analysisDepth),
+      executionProfileVersion: GAP_ANALYSIS_EXECUTION_PROFILE_VERSION,
+      costAccounting: {
+        provider: providerLabel,
+        model: modelLabel,
+        callCount: gapProviderCallCount,
+        inputTokens: gapInputTokens,
+        outputTokens: gapOutputTokens,
+        durationMs: Date.now() - startTime,
+        costType: allGapProviderCostsVerified ? 'ESTIMATED' : 'NOT_VERIFIED',
+        ...(allGapProviderCostsVerified ? { estimatedCostUsd: gapEstimatedCostUsd } : {}),
+        providerCalls: gapProviderUsage,
+      },
+      executionStages: {
+        retrieval: depthProfile.retrieval.queryStrategy,
+        documentTraversal: depthProfile.document.strategy,
+        enhancedReview: !depthProfile.analysis.enhancedReview
+          ? 'NOT_CONFIGURED'
+          : executionTelemetry.limitations.some((item) => item.startsWith('Enhanced contradiction'))
+          ? 'FAILED_WITH_LIMITATION'
+          : 'COMPLETED',
+        verification: executionTelemetry.limitations.some((item) => item.includes('verification did not complete'))
+          ? `${depthProfile.verification.mode}_WITH_LIMITATION`
+          : depthProfile.verification.mode,
+      },
+      executionMetrics: {
+        retrievalQueryCount: executionTelemetry.retrievalQueryCount,
+        retrievalCandidateCount: executionTelemetry.retrievalCandidateCount,
+        acceptedEvidenceCount: executionTelemetry.acceptedEvidenceCount,
+        weakEvidenceRetryCount: executionTelemetry.weakEvidenceRetryCount,
+        documentChunks: executionTelemetry.documentChunks,
+        processedChunks: executionTelemetry.processedChunks,
+        analysisCallCount: executionTelemetry.analysisCallCount,
+        verificationCallCount: executionTelemetry.verificationCallCount,
+        inputTokens: executionTelemetry.inputTokens,
+        outputTokens: executionTelemetry.outputTokens,
+        durationMs: Date.now() - startTime,
+      },
+      lifecycleTelemetry: {
+        requestedAt: analysisRecord?.createdAt?.toISOString(),
+        startedAt: startedAt.toISOString(),
+        completedAt: new Date().toISOString(),
+        queueWaitMs: analysisRecord?.createdAt ? Math.max(0, startedAt.getTime() - analysisRecord.createdAt.getTime()) : undefined,
+        retrievalDurationMs: retrievalStartedAt && retrievalCompletedAt ? retrievalCompletedAt.getTime() - retrievalStartedAt.getTime() : undefined,
+        analysisDurationMs: analysisStartedAt && analysisCompletedAt ? analysisCompletedAt.getTime() - analysisStartedAt.getTime() : undefined,
+        verificationDurationMs: verificationStartedAt && verificationCompletedAt ? verificationCompletedAt.getTime() - verificationStartedAt.getTime() : undefined,
+        workerDurationMs: Date.now() - startTime,
+        totalDurationMs: analysisRecord?.createdAt ? Date.now() - analysisRecord.createdAt.getTime() : undefined,
+      },
+      retrievalTelemetry: {
+        rawRetrieved: executionTelemetry.retrievalCandidateCount,
+        finalEvidence: executionTelemetry.acceptedEvidenceCount,
+        pineconeNamespace: resolvePineconeNamespace(retrievalNamespace),
+      },
+      executionLimitations: executionTelemetry.limitations,
     };
 
     // -- COMPLETING (progress: 90) ----------------------------------------
+    await assertActive();
     await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 90 });
     currentProgress = 90;
 
-    await prisma.gapAnalysis.update({
-      where: { id: analysisId },
+    const finalWrite = await prisma.gapAnalysis.updateMany({
+      where: { id: analysisId, deletedAt: null, status: { not: 'CANCELLED' } },
       data: {
         results: gapResults,
         jurisdictionCode,
         citations: citations as unknown as Prisma.InputJsonValue,
-        evidenceProvenance: acceptedEvidence.map((source) => ({
-          vectorId: source.vectorId,
-          chunkId: source.chunkId,
-          documentId: source.documentId,
-          jurisdictionCode: source.jurisdictionCode,
-          section: source.section,
-          score: source.score,
-        })) as unknown as Prisma.InputJsonValue,
+        evidenceProvenance: [...acceptedEvidenceMap.values()] as unknown as Prisma.InputJsonValue,
         overallScore: gapResults.overallScore,
         status: 'COMPLETED',
         progress: 100,
@@ -576,20 +1149,23 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
         chunksProcessed,
       },
     });
+    if (finalWrite.count !== 1) throw new GapAnalysisCancelledError();
 
     logger.info({
-      type: 'gap_analysis_pipeline_complete',
+      type: 'gap_analysis_completed',
       userId,
       analysisId,
       overallScore: gapResults.overallScore,
       totalGaps: gapResults.metadata.totalGaps,
       chunksProcessed,
       durationMs: Date.now() - startTime,
+      executionProfileVersion: GAP_ANALYSIS_EXECUTION_PROFILE_VERSION,
+      executionMetrics: gapResults.metadata.executionMetrics,
     });
 
     // Invalidate list cache so the completed status is visible on next poll
     try {
-      await redis.del(`cache:gap-analysis:list:${userId}`);
+      await redis.del(`cache:gap-analysis:list:${organizationId}:${userId}`);
     } catch { /* non-fatal */ }
 
     // -- POST-COMPLETION: notifications + audit log ------------------------
@@ -617,6 +1193,9 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
           chunksProcessed,
           benchmarkDocumentIds,
           tokenCost: gapResults.metadata.tokenCost ?? null,
+          executionProfileVersion: GAP_ANALYSIS_EXECUTION_PROFILE_VERSION,
+          executionMetrics: gapResults.metadata.executionMetrics,
+          executionLimitations: gapResults.metadata.executionLimitations,
         },
         ipAddress: ipAddress ?? null,
         userAgent: userAgent ?? null,
@@ -625,12 +1204,17 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
       logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId, error: (err as Error).message });
     });
   } catch (err) {
+    if (isGapAnalysisCancelledError(err) || cancellation.signal.aborted) {
+      logger.info({ type: 'gap_analysis_cancelled', userId, analysisId, failureClass: 'CANCELLED', retryable: false });
+      throw new GapAnalysisCancelledError();
+    }
+    const normalizedFailure = classifyGapAnalysisFailure(err);
     logger.error({
-      type: 'gap_analysis_pipeline_failed',
+      type: 'gap_analysis_failed',
       userId,
       analysisId,
       durationMs: Date.now() - startTime,
-      error: (err as Error).message,
+      ...normalizedFailure,
     });
 
     const errorMessage = err instanceof SourceInsufficiencyError
@@ -641,6 +1225,10 @@ export async function executeGapAnalysisPipeline(params: GapAnalysisPipelinePara
 
     await updateAnalysisStatus(analysisId, { status: 'FAILED', progress: currentProgress, errorMessage });
     throw err;
+  } finally {
+    clearTimeout(deadlineTimer);
+    cancellation.signal.removeEventListener('abort', relayCancellation);
+    cancellation.stop();
   }
 }
 
@@ -2582,8 +3170,12 @@ Follow-up Question: ${followUp}
       userAgent?: string;
       trialUserId?: string;
       jurisdictionContext: JurisdictionContext;
+      consentVersion?: string;
+      documentChecksum: string;
+      executionIdentity: string;
+      executionIdentityMetadata: Record<string, unknown>;
     }
-  ): Promise<{ id: string; status: string; progress: number }> {
+  ): Promise<{ id: string; status: string; progress: number; reused: boolean }> {
     logger.info({
       type: 'gap_analysis_run_started',
       userId,
@@ -2594,15 +3186,14 @@ Follow-up Question: ${followUp}
 
     // Validate file size (base64 -> actual size)
     const estimatedBytes = Math.round((params.fileContent.length * 3) / 4);
-    if (estimatedBytes > 10 * 1024 * 1024) {
-      throw new Error(`File too large. Maximum size is 10MB (estimated: ${(estimatedBytes / 1024 / 1024).toFixed(1)}MB)`);
+    if (estimatedBytes > GAP_ANALYSIS_MAX_FILE_BYTES) {
+      throw new Error(`File too large. Maximum size is ${GAP_ANALYSIS_MAX_FILE_BYTES / 1024 / 1024}MB (estimated: ${(estimatedBytes / 1024 / 1024).toFixed(1)}MB)`);
     }
 
     // Validate file type
-    const allowedTypes = ['pdf', 'docx', 'doc', 'txt'];
-    const ext = params.fileName.split('.').pop()?.toLowerCase() ?? '';
-    if (!allowedTypes.includes(ext)) {
-      throw new Error(`Unsupported file type .${ext}. Allowed: ${allowedTypes.join(', ')}`);
+    const ext = getGapAnalysisFileExtension(params.fileName);
+    if (!isGapAnalysisFileType(ext) || ext !== params.fileType) {
+      throw new Error('Unsupported or mismatched Gap Analysis file type.');
     }
 
     // Trigger stale job recovery lazily (non-blocking  -  does not delay this request)
@@ -2611,8 +3202,10 @@ Follow-up Question: ${followUp}
     });
 
     // Create placeholder record (UPLOADING, progress: 0)
-    const record = await prisma.gapAnalysis.create({
-      data: {
+    let record: { id: string };
+    try {
+      record = await prisma.gapAnalysis.create({
+        data: {
         userId,
         organizationId: params.organizationId ?? null,
         documentName: params.fileName,
@@ -2626,28 +3219,56 @@ Follow-up Question: ${followUp}
           : null,
         status: 'UPLOADING',
         progress: 0,
-      },
-    });
+          documentChecksum: params.documentChecksum,
+          executionIdentity: params.executionIdentity,
+          executionIdentityMetadata: params.executionIdentityMetadata as Prisma.InputJsonValue,
+        },
+        select: { id: true },
+      });
+    } catch (error: unknown) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const existing = await prisma.gapAnalysis.findFirst({
+          where: {
+            executionIdentity: params.executionIdentity,
+            organizationId: params.organizationId ?? null,
+            deletedAt: null,
+            status: { in: [...GAP_ANALYSIS_REUSABLE_EXECUTION_STATUSES] },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, status: true, progress: true },
+        });
+        if (existing) {
+          logger.info({ type: 'gap_analysis_dedupe_race_won', userId, analysisId: existing.id });
+          return { ...existing, reused: true };
+        }
+      }
+      throw error;
+    }
 
     // Invalidate list cache so the new record appears immediately
     try {
-      await redis.del(`cache:gap-analysis:list:${userId}`);
+      await redis.del(`cache:gap-analysis:list:${params.organizationId}:${userId}`);
     } catch { /* non-fatal */ }
 
+    const fileBuffer = Buffer.from(params.fileContent, 'base64');
+    const orgPartition = (params.organizationId || userId).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const storageKey = `gap-analysis/${orgPartition}/${record.id}/${randomUUID()}.${ext}`;
+
     try {
-      // Upload file to R2
-      const fileBuffer = Buffer.from(params.fileContent, 'base64');
-      const uploadResult = await storageService.uploadDocument(
+      // Authoritative upload to R2 using tenant-isolated path
+      await storageService.uploadDocument(
         fileBuffer,
         params.fileName,
         userId,
-        { purpose: 'gap_analysis', analysisId: record.id }
+        { purpose: 'gap_analysis', analysisId: record.id },
+        'gapAnalysis',
+        storageKey,
       );
 
-      // Update documentUrl + mark as QUEUED (progress: 5)
+      // Update documentUrl with secure storage key + mark as QUEUED (progress: 5)
       await prisma.gapAnalysis.update({
         where: { id: record.id },
-        data: { documentUrl: uploadResult.key, status: 'QUEUED', progress: 5 },
+        data: { documentUrl: storageKey, status: 'QUEUED', progress: 5 },
       });
 
       // Notify user that analysis has started (fire-and-forget)
@@ -2660,23 +3281,31 @@ Follow-up Question: ${followUp}
         link: `/startup/gap-analysis/${record.id}`,
       }).catch(() => { /* non-blocking */ });
 
+      // Build durable AiJob payload containing ONLY storage reference & metadata — NO raw base64 / fileContent!
       const pipelinePayload = JSON.parse(JSON.stringify({
         analysisId: record.id,
-        userId,
-        organizationId: params.organizationId,
-        trialUserId: params.trialUserId,
+        storageKey,
+        fileSize: fileBuffer.length,
         fileName: params.fileName,
-        fileContent: params.fileContent,
         fileType: ext,
         regulatoryFrameworks: params.regulatoryFrameworks,
         regulatoryFrameworkSlugs: params.regulatoryFrameworkSlugs,
         benchmarkDocumentIds: params.benchmarkDocumentIds,
         benchmarkDocuments: params.benchmarkDocuments,
         jurisdictionContext: params.jurisdictionContext,
+        retrievalNamespace: resolvePineconeNamespace(),
         analysisDepth: params.analysisDepth,
         focusAreas: params.focusAreas,
+        userId,
+        organizationId: params.organizationId,
+        trialUserId: params.trialUserId,
         ipAddress: params.ipAddress,
         userAgent: params.userAgent,
+        consentVersion: params.consentVersion,
+        executionProfileVersion: GAP_ANALYSIS_EXECUTION_PROFILE_VERSION,
+        documentChecksum: params.documentChecksum,
+        executionIdentity: params.executionIdentity,
+        executionIdentityMetadata: params.executionIdentityMetadata,
       })) as Prisma.InputJsonValue;
 
       const job = await aiJobRunner.enqueue({
@@ -2693,9 +3322,13 @@ Follow-up Question: ${followUp}
 
       logger.info({ type: 'gap_analysis_queued', userId, analysisId: record.id, jobId: job.id });
 
-      return { id: record.id, status: 'QUEUED', progress: 5 };
+      return { id: record.id, status: 'QUEUED', progress: 5, reused: false };
     } catch (error: unknown) {
-      // R2 upload failed  -  mark as FAILED immediately (no pipeline to clean up)
+      // Compensating cleanup: if storageKey was created, remove orphan R2 object
+      try {
+        await storageService.deleteFile(storageKey);
+      } catch { /* best-effort cleanup */ }
+
       await updateAnalysisStatus(record.id, {
         status: 'FAILED',
         progress: 0,
@@ -2710,7 +3343,7 @@ Follow-up Question: ${followUp}
    * List all gap analyses for a user (summary list).
    * Triggers stale job recovery lazily before returning results.
    */
-  async getUserGapAnalyses(userId: string): Promise<{
+  async getUserGapAnalyses(userId: string, organizationId: string): Promise<{
     id: string;
     documentName: string;
     documentType: string;
@@ -2720,6 +3353,8 @@ Follow-up Question: ${followUp}
     status: string;
     progress: number;
     errorMessage: string | null;
+    jurisdictionCode: string | null;
+    results?: Prisma.JsonValue | null;
     createdAt: Date;
     updatedAt: Date;
   }[]> {
@@ -2729,14 +3364,14 @@ Follow-up Question: ${followUp}
     });
 
     // Cache-aside: short TTL for in-progress, 60s for all-terminal
-    const listCacheKey = `cache:gap-analysis:list:${userId}`;
+    const listCacheKey = `cache:gap-analysis:list:${organizationId}:${userId}`;
     try {
       const cached = await redis.get<string>(listCacheKey);
       if (cached) return JSON.parse(cached);
     } catch { /* non-fatal  -  fall through to DB */ }
 
     const analyses = await prisma.gapAnalysis.findMany({
-      where: { userId, deletedAt: null },
+      where: { userId, organizationId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -2748,6 +3383,8 @@ Follow-up Question: ${followUp}
         status: true,
         progress: true,
         errorMessage: true,
+        jurisdictionCode: true,
+        results: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -2769,6 +3406,7 @@ Follow-up Question: ${followUp}
    */
   async getGapAnalysisResult(
     userId: string,
+    organizationId: string,
     analysisId: string,
     opts?: { ipAddress?: string; userAgent?: string },
   ): Promise<{
@@ -2796,9 +3434,8 @@ Follow-up Question: ${followUp}
 
     if (!analysis || analysis.deletedAt !== null) throw new NotFoundError('Gap analysis');
 
-    if (analysis.userId !== userId) {
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
-      if (user?.role !== UserRole.ADMIN) throw new ForbiddenError('Access denied');
+    if (analysis.userId !== userId || analysis.organizationId !== organizationId) {
+      throw new ForbiddenError('Access denied');
     }
 
     // Audit log  -  fire-and-forget; must never block the primary operation.
@@ -2817,7 +3454,7 @@ Follow-up Question: ${followUp}
     });
 
     // Cache-aside: only cache COMPLETED results (in-progress results must stay live)
-    const resultCacheKey = `cache:gap-analysis:result:${analysisId}`;
+    const resultCacheKey = `cache:gap-analysis:result:${organizationId}:${analysisId}`;
     if (analysis.status === 'COMPLETED') {
       try {
         const cached = await redis.get<string>(resultCacheKey);
@@ -2835,6 +3472,7 @@ Follow-up Question: ${followUp}
 
     const result = {
       ...analysis,
+      documentUrl: analysis.documentUrl ? `gap-analysis:${analysis.id}` : '',
       results: (analysis.results as GapAnalysisResult) ?? null,
       userName: ownerUser?.fullName ?? null,
       organizationName: organization?.name ?? null,
@@ -2855,43 +3493,64 @@ Follow-up Question: ${followUp}
    */
   async deleteGapAnalysis(
     userId: string,
+    organizationId: string,
     analysisId: string,
     opts?: { ipAddress?: string; userAgent?: string },
   ): Promise<void> {
     const analysis = await prisma.gapAnalysis.findUnique({
       where: { id: analysisId },
-      select: { userId: true, documentUrl: true, deletedAt: true },
+      select: { userId: true, organizationId: true, documentUrl: true, reportUrl: true, deletedAt: true },
     });
 
     if (!analysis || analysis.deletedAt !== null) throw new NotFoundError('Gap analysis');
-    if (analysis.userId !== userId) {
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
-      if (user?.role !== UserRole.ADMIN) throw new ForbiddenError('Access denied');
+    if (analysis.userId !== userId || analysis.organizationId !== organizationId) {
+      throw new ForbiddenError('Access denied');
     }
 
-    // Audit log before soft-deletion (entity still exists at this point).
-    // Fire-and-forget; must never block the delete operation.
-    prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'GAP_ANALYSIS_DELETED',
-        entityType: 'GapAnalysis',
-        entityId: analysisId,
-        metadata: { documentUrl: analysis.documentUrl },
-        ipAddress: opts?.ipAddress ?? null,
-        userAgent: opts?.userAgent ?? null,
-      },
-    }).catch((err: unknown) => {
-      logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId, error: (err as Error).message });
+    // Revoke worker authorization first. A worker that has already loaded the
+    // row must observe CANCELLED at its next cooperative boundary.
+    await prisma.gapAnalysis.update({
+      where: { id: analysisId },
+      data: { status: 'CANCELLED' },
     });
 
-    // Delete R2 file if it exists
-    if (analysis.documentUrl) {
+    await prisma.aiJob.updateMany({
+      where: {
+        type: 'GAP_ANALYSIS_PIPELINE',
+        targetEntityType: 'GapAnalysis',
+        targetEntityId: analysisId,
+        status: { in: ['QUEUED', 'RUNNING', 'RETRYING'] },
+      },
+      data: { status: 'CANCELLED', lockedAt: null, lockedBy: null },
+    });
+
+    // Delete source R2 file if it exists
+    if (analysis.documentUrl && analysis.documentUrl.startsWith(GAP_ANALYSIS_STORAGE_PATH_PREFIX)) {
       try {
         await storageService.deleteFile(analysis.documentUrl);
+        logger.info({ type: 'gap_analysis_source_deleted', analysisId });
       } catch {
         logger.warn({ type: 'gap_analysis_r2_delete_failed', analysisId });
       }
+    }
+
+    // Delete report R2 file if it exists
+    const canonicalReportPrefix = `gap-analysis-exports/${organizationId}/${analysisId}/`;
+    const isOwnedReportObject = analysis.reportUrl?.startsWith(canonicalReportPrefix)
+      || analysis.reportUrl?.startsWith('reports/');
+    if (analysis.reportUrl && isOwnedReportObject) {
+      try {
+        await storageService.deleteFile(analysis.reportUrl);
+      } catch { /* best-effort cleanup */ }
+    }
+
+    // Scrub every historical job payload after cancellation. No raw content or
+    // internal storage key is copied into operational logs.
+    try {
+      const { scrubAiJobPayloadForEntity } = await import('@/modules/ai-jobs/ai-job-runner');
+      await scrubAiJobPayloadForEntity('GapAnalysis', analysisId);
+    } catch (err: unknown) {
+      logger.warn({ type: 'gap_analysis_job_cleanup_failed', analysisId, error: (err as Error).message });
     }
 
     // Soft delete  -  set deletedAt instead of destroying the row
@@ -2900,10 +3559,29 @@ Follow-up Question: ${followUp}
       data: { deletedAt: new Date() },
     });
 
+    // Content-free security audit metadata is retained after deletion is final.
+    prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'GAP_ANALYSIS_DELETED',
+        entityType: 'GapAnalysis',
+        entityId: analysisId,
+        metadata: {
+          analysisId,
+          sourceObjectDeletionAttempted: !!analysis.documentUrl,
+          reportObjectDeletionAttempted: !!analysis.reportUrl,
+        },
+        ipAddress: opts?.ipAddress ?? null,
+        userAgent: opts?.userAgent ?? null,
+      },
+    }).catch((err: unknown) => {
+      logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId, error: (err as Error).message });
+    });
+
     // Invalidate caches
     try {
-      await redis.del(`cache:gap-analysis:list:${userId}`);
-      await redis.del(`cache:gap-analysis:result:${analysisId}`);
+      await redis.del(`cache:gap-analysis:list:${organizationId}:${userId}`);
+      await redis.del(`cache:gap-analysis:result:${organizationId}:${analysisId}`);
     } catch { /* non-fatal */ }
 
     logger.info({ type: 'gap_analysis_deleted', userId, analysisId });

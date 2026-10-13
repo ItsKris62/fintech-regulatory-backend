@@ -814,6 +814,9 @@ model GapAnalysis {
   documentName         String
   documentUrl          String
   documentType         String
+  documentChecksum     String?
+    executionIdentity    String?
+  executionIdentityMetadata Json?
   regulatoryFrameworks Json
   analysisDepth        String                 @default("standard")
   focusAreas           Json?
@@ -843,6 +846,7 @@ model GapAnalysis {
   @@index([status])
   @@index([organizationId])
   @@index([jurisdictionCode])
+    @@index([documentChecksum])
   @@index([createdAt])
   @@index([deletedAt])
 }

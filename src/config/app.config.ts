@@ -54,6 +54,7 @@ const envSchema = z.object({
   PINECONE_API_KEY: z.string().min(1, 'Pinecone API key is required'),
   PINECONE_ENVIRONMENT: z.string().default('us-east-1-aws'),
   PINECONE_INDEX_NAME: z.string().default('sheriabot-legal-corpus'),
+  PINECONE_NAMESPACE: z.string().min(1).default('__default__'),
 
   // Cloudflare R2  -  private bucket
   R2_ACCOUNT_ID: z.string().min(1, 'R2 account ID is required'),
@@ -318,19 +319,9 @@ function validateEnv() {
 
 const env = validateEnv();
 
-// TODO: [CRITICAL-SECURITY] Re-enable ClamAV host check before full production launch.
-// This check is temporarily disabled to allow deployment without a running ClamAV service.
-/*
-if (
-  env.NODE_ENV !== 'development' &&
-  env.NODE_ENV !== 'test' &&
-  (!env.MALWARE_SCAN_ENABLED || !env.CLAMAV_HOST)
-) {
-  throw new Error(
-    'Startup blocked: vault malware scanning must be enabled with CLAMAV_HOST outside development/test.',
-  );
-}
-*/
+// Scanner readiness is reported at startup and through authenticated detailed
+// health. Production uploads fail closed when scanning is disabled, missing, or
+// unreachable; the API remains available so operations can diagnose readiness.
 
 /**
  * Application configuration object
@@ -473,6 +464,7 @@ export const appConfig = {
     apiKey: env.PINECONE_API_KEY,
     environment: env.PINECONE_ENVIRONMENT,
     indexName: env.PINECONE_INDEX_NAME,
+    namespace: env.PINECONE_NAMESPACE,
   },
 
   // Storage  -  private bucket (RAG documents, vault files)

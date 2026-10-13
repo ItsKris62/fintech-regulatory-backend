@@ -1,4 +1,5 @@
 import { complete, stream, AICompletionResult } from './client';
+import { CURRENT_PRICING_VERSION, getModelPricing } from './gateway/pricing';
 import {
   PolicyGenerationParams,
   generatePolicySystemPrompt,
@@ -39,6 +40,8 @@ import {
   GapAnalysisResultSchema,
   JurisdictionContext,
 } from './prompts/gap-analysis';
+import { getGapAnalysisDepthProfile } from '@/config/gap-analysis-depth-profiles';
+import { estimatePromptTokens, mergeEnhancedRawFindings } from '@/modules/compliance/gap-analysis-depth-engine';
 import { aiConfig } from '@/config/ai.config';
 import { logger } from '@/utils/logger';
 import { policyProgressPubSub } from '@/lib/redis/pubsub';
@@ -80,6 +83,61 @@ export interface ComplianceQueryResult extends AICompletionResult {
     relatedConsiderations: string;
     citations: string[];
   };
+}
+
+export interface GapAnalysisProviderUsage {
+  provider: string;
+  model: string;
+  callCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  costType: 'ESTIMATED' | 'NOT_VERIFIED';
+  estimatedCostUsd?: number;
+  pricingVersion?: string;
+  ratesUsdPerMillion?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+}
+
+export function mergeGapAnalysisProviderUsage(results: readonly AICompletionResult[]): GapAnalysisProviderUsage[] {
+  const grouped = new Map<string, GapAnalysisProviderUsage>();
+  for (const result of results) {
+    if (!result.provider) continue;
+    const key = `${result.provider}:${result.model}`;
+    const existing = grouped.get(key) ?? {
+      provider: result.provider,
+      model: result.model,
+      callCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costType: 'ESTIMATED' as const,
+      estimatedCostUsd: 0,
+    };
+    existing.callCount += 1;
+    existing.inputTokens += result.inputTokens;
+    existing.outputTokens += result.outputTokens;
+    if (result.pricingVerified !== true) {
+      existing.costType = 'NOT_VERIFIED';
+      delete existing.estimatedCostUsd;
+      delete existing.pricingVersion;
+      delete existing.ratesUsdPerMillion;
+    } else if (existing.costType === 'ESTIMATED') {
+      const pricing = getModelPricing(result.provider, result.model);
+      existing.estimatedCostUsd = (existing.estimatedCostUsd ?? 0) + result.cost;
+      existing.pricingVersion = CURRENT_PRICING_VERSION;
+      existing.ratesUsdPerMillion = {
+        input: pricing.input,
+        output: pricing.output,
+        cacheRead: pricing.cacheRead,
+        cacheWrite: pricing.cacheWrite,
+      };
+    }
+    grouped.set(key, existing);
+  }
+  return [...grouped.values()];
 }
 
 /**
@@ -775,7 +833,7 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
    */
   async performGapAnalysis(
     params: GapAnalysisParams
-  ): Promise<{ result: GapAnalysisResult; inputTokens: number; outputTokens: number }> {
+  ): Promise<{ result: GapAnalysisResult; inputTokens: number; outputTokens: number; totalCost: number; providerUsage: GapAnalysisProviderUsage[]; truncated?: boolean }> {
     const startTime = Date.now();
 
     logger.info({
@@ -799,18 +857,25 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
     const systemPrompt = generateGapAnalysisSystemPrompt(params.jurisdictionContext);
     const userPrompt = generateGapAnalysisUserPrompt(params);
 
-    // Allow full 8192 output token window so complete JSON can be generated without truncation
-    const maxTokens = 8192;
+    const profile = getGapAnalysisDepthProfile(params.analysisDepth);
+    const maxTokens = profile.analysis.singlePassOutputTokens;
 
+    await params.beforeAiOperation?.({
+      stage: 'analysis',
+      estimatedInputTokens: estimatePromptTokens(systemPrompt, userPrompt),
+      maxOutputTokens: maxTokens,
+    });
     const result = await complete(
       {
         prompt: userPrompt,
         systemPrompt,
         maxTokens,
         temperature: 0.2,
+        signal: params.signal,
       },
       'policy'
     );
+    const providerResults: AICompletionResult[] = [result];
 
     if (result.stopReason === 'max_tokens') {
       logger.warn({
@@ -821,7 +886,14 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
       const partial = repairTruncatedGapAnalysisJson(result.content);
       if (partial) {
         logger.info({ type: 'gap_analysis_partial_recovered', outputTokens: result.outputTokens });
-        return { result: partial, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
+        return {
+          result: partial,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          totalCost: result.cost,
+          providerUsage: mergeGapAnalysisProviderUsage(providerResults),
+          truncated: true,
+        };
       }
       throw new Error(
         `AI response was truncated at ${result.outputTokens} tokens and could not be partially recovered`
@@ -832,6 +904,7 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
     let gapAnalysis: GapAnalysisResult;
     let inputTokens = result.inputTokens;
     let outputTokens = result.outputTokens;
+    let totalCost = result.cost;
     try {
       gapAnalysis = parseGapAnalysisOutput(result.content);
     } catch (parseError: unknown) {
@@ -839,17 +912,25 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
         type: 'gap_analysis_parse_retry',
         error: (parseError as Error).message,
       });
+      await params.beforeAiOperation?.({
+        stage: 'analysis',
+        estimatedInputTokens: estimatePromptTokens(systemPrompt, userPrompt),
+        maxOutputTokens: maxTokens,
+      });
       const retryResult = await complete(
         {
           prompt: userPrompt + '\n\nIMPORTANT: Return ONLY valid JSON, starting with { and ending with }. No other text.',
           systemPrompt,
           maxTokens,
           temperature: 0.1,
+          signal: params.signal,
         },
         'policy'
       );
+      providerResults.push(retryResult);
       inputTokens += retryResult.inputTokens;
       outputTokens += retryResult.outputTokens;
+      totalCost += retryResult.cost;
       gapAnalysis = parseGapAnalysisOutput(retryResult.content);
     }
 
@@ -862,7 +943,14 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
       cost: result.cost,
     });
 
-    return { result: gapAnalysis, inputTokens, outputTokens };
+    return {
+      result: gapAnalysis,
+      inputTokens,
+      outputTokens,
+      totalCost,
+      providerUsage: mergeGapAnalysisProviderUsage(providerResults),
+      truncated: false,
+    };
   }
 
   /**
@@ -885,7 +973,22 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
     focusAreas?: string[];
     ragContext?: string;
     jurisdictionContext?: JurisdictionContext;
-  }): Promise<{ result: GapAnalysisResult; chunksProcessed: number; totalInputTokens: number; totalOutputTokens: number; totalCost: number }> {
+    signal?: AbortSignal;
+    beforeAiOperation?: GapAnalysisParams['beforeAiOperation'];
+  }): Promise<{
+    result: GapAnalysisResult;
+    chunksProcessed: number;
+    totalChunks: number;
+    failedChunks: number;
+    skippedChunks: number;
+    chunkFailures: Array<{ chunkIndex: number; error: string }>;
+    extractionComplete: boolean;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCost: number;
+    providerUsage: GapAnalysisProviderUsage[];
+    executionLimitations: string[];
+  }> {
     const startTime = Date.now();
     const { chunks, ...baseParams } = params;
     const totalChunks = chunks.length;
@@ -906,13 +1009,18 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
       throw new SourceInsufficiencyError(GAP_ANALYSIS_SOURCE_INSUFFICIENCY_MESSAGE);
     }
 
-    const systemPrompt = generateGapAnalysisSystemPrompt();
-    // Chunks only need to identify gaps  -  keep token budget lean
-    const chunkMaxTokens = 3000;
+    const systemPrompt = generateGapAnalysisSystemPrompt(params.jurisdictionContext);
+    const profile = getGapAnalysisDepthProfile(params.analysisDepth);
+    const chunkMaxTokens = profile.analysis.chunkOutputTokens;
     const allRawGaps: RawChunkGapItem[] = [];
+    let successfulChunks = 0;
+    let failedChunks = 0;
+    let skippedChunks = 0;
+    const chunkFailures: Array<{ chunkIndex: number; error: string }> = [];
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let totalCost = 0;
+    const providerResults: AICompletionResult[] = [];
 
     // -- Phase 1: sequential per-chunk analysis --------------------------------
     for (let i = 0; i < chunks.length; i++) {
@@ -932,16 +1040,26 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
 
       let chunkGaps: RawChunkGapItem[];
       try {
+        await params.beforeAiOperation?.({
+          stage: 'analysis',
+          estimatedInputTokens: estimatePromptTokens(systemPrompt, chunkPrompt),
+          maxOutputTokens: chunkMaxTokens,
+        });
         const chunkResult = await complete(
-          { prompt: chunkPrompt, systemPrompt, maxTokens: chunkMaxTokens, temperature: 0.2 },
+          { prompt: chunkPrompt, systemPrompt, maxTokens: chunkMaxTokens, temperature: 0.2, signal: params.signal },
           'policy',
         );
+        providerResults.push(chunkResult);
         totalInputTokens += chunkResult.inputTokens;
         totalOutputTokens += chunkResult.outputTokens;
         totalCost += chunkResult.cost;
         chunkGaps = parseChunkAnalysisOutput(chunkResult.content, i);
+        successfulChunks++;
       } catch (chunkErr: unknown) {
-        // A single failed chunk does not abort the whole analysis  -  log and skip
+        if (params.signal?.aborted) throw params.signal.reason ?? chunkErr;
+        // A single failed chunk does not abort the whole analysis  -  log and track
+        failedChunks++;
+        chunkFailures.push({ chunkIndex: i + 1, error: (chunkErr as Error).message });
         logger.error({
           type: 'gap_analysis_chunk_error',
           chunk: i + 1,
@@ -961,29 +1079,88 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
       });
     }
 
+    const executionLimitations: string[] = [];
+    if (profile.analysis.enhancedReview) {
+      const enhancedPrompt = `Perform the enhanced investigative pass for a DEEP Gap Analysis.
+Review the policy chunks and already-discovered findings for material contradictions, unresolved evidence-backed obligations, and cross-section conflicts.
+Do not remove or rewrite existing findings. Add only distinct findings supported by an exact regulatory EVIDENCE_ID and exact policy chunk IDs.
+Ordinary wording differences are not contradictions. Return [] when there is no supported additional finding.
+
+REGULATORY CONTEXT:
+${params.ragContext}
+
+POLICY CHUNKS:
+${chunks.map((chunk) => `[pol-chunk-${chunk.index + 1}] ${chunk.text}`).join('\n\n---\n\n')}
+
+BASELINE FINDINGS:
+${JSON.stringify(allRawGaps)}
+
+Return only a JSON array matching the chunk finding schema.`;
+      try {
+        await params.beforeAiOperation?.({
+          stage: 'enhanced_review',
+          estimatedInputTokens: estimatePromptTokens(systemPrompt, enhancedPrompt),
+          maxOutputTokens: profile.analysis.enhancedReviewOutputTokens,
+        });
+        const enhancedResult = await complete(
+          {
+            prompt: enhancedPrompt,
+            systemPrompt,
+            maxTokens: profile.analysis.enhancedReviewOutputTokens,
+            temperature: 0.1,
+            signal: params.signal,
+          },
+          'policy',
+        );
+        providerResults.push(enhancedResult);
+        totalInputTokens += enhancedResult.inputTokens;
+        totalOutputTokens += enhancedResult.outputTokens;
+        totalCost += enhancedResult.cost;
+        const enhancedFindings = parseChunkAnalysisOutput(enhancedResult.content, -1);
+        const merged = mergeEnhancedRawFindings(allRawGaps, enhancedFindings);
+        allRawGaps.length = 0;
+        allRawGaps.push(...merged);
+      } catch (enhancedError: unknown) {
+        if (params.signal?.aborted) throw params.signal.reason ?? enhancedError;
+        executionLimitations.push('Enhanced contradiction and unresolved-obligation review did not complete.');
+        logger.warn({ type: 'gap_analysis_enhanced_review_failed', error: (enhancedError as Error).message });
+      }
+    }
+
     // -- Phase 2: merge / consolidate all raw gaps -----------------------------
     const mergePrompt = generateMergeUserPrompt(allRawGaps, {
       ...baseParams,
       chunkCount: totalChunks,
     });
 
-    const mergeMaxTokens =
-      params.analysisDepth === 'deep' ? 8000 : params.analysisDepth === 'standard' ? 5000 : 3000;
+    const mergeMaxTokens = profile.analysis.mergeOutputTokens;
 
     let mergeCompletionResult;
     try {
+      await params.beforeAiOperation?.({
+        stage: 'merge',
+        estimatedInputTokens: estimatePromptTokens(systemPrompt, mergePrompt),
+        maxOutputTokens: mergeMaxTokens,
+      });
       mergeCompletionResult = await complete(
-        { prompt: mergePrompt, systemPrompt, maxTokens: mergeMaxTokens, temperature: 0.2 },
+        { prompt: mergePrompt, systemPrompt, maxTokens: mergeMaxTokens, temperature: 0.2, signal: params.signal },
         'policy',
       );
-    } catch {
+    } catch (mergeError: unknown) {
+      if (params.signal?.aborted) throw params.signal.reason ?? mergeError;
       // Retry once with a stricter JSON-only instruction
+      await params.beforeAiOperation?.({
+        stage: 'merge',
+        estimatedInputTokens: estimatePromptTokens(systemPrompt, mergePrompt),
+        maxOutputTokens: mergeMaxTokens,
+      });
       mergeCompletionResult = await complete(
         {
           prompt: mergePrompt + '\n\nIMPORTANT: Return ONLY valid JSON starting with { and ending with }. No other text.',
           systemPrompt,
           maxTokens: mergeMaxTokens,
           temperature: 0.1,
+          signal: params.signal,
         },
         'policy',
       );
@@ -992,6 +1169,7 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
     totalInputTokens += mergeCompletionResult.inputTokens;
     totalOutputTokens += mergeCompletionResult.outputTokens;
     totalCost += mergeCompletionResult.cost;
+    providerResults.push(mergeCompletionResult);
 
     let gapAnalysis: GapAnalysisResult;
     try {
@@ -1001,30 +1179,42 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
         type: 'gap_analysis_merge_parse_retry',
         error: (parseErr as Error).message,
       });
+      await params.beforeAiOperation?.({
+        stage: 'merge',
+        estimatedInputTokens: estimatePromptTokens(systemPrompt, mergePrompt),
+        maxOutputTokens: mergeMaxTokens,
+      });
       const retryResult = await complete(
         {
           prompt: mergePrompt + '\n\nIMPORTANT: Return ONLY valid JSON starting with { and ending with }. No other text.',
           systemPrompt,
           maxTokens: mergeMaxTokens,
           temperature: 0.1,
+          signal: params.signal,
         },
         'policy',
       );
+      providerResults.push(retryResult);
       totalInputTokens += retryResult.inputTokens;
       totalOutputTokens += retryResult.outputTokens;
       totalCost += retryResult.cost;
       gapAnalysis = parseGapAnalysisOutput(retryResult.content);
     }
 
+    const extractionComplete = failedChunks === 0 && skippedChunks === 0 && successfulChunks === totalChunks;
+
     // Set chunksProcessed in the metadata blob so it flows through to the DB
-    gapAnalysis.metadata.chunksProcessed = totalChunks;
+    gapAnalysis.metadata.chunksProcessed = successfulChunks;
 
     logger.info({
       type: 'gap_analysis_multi_chunk_complete',
       documentName: params.documentName,
       overallScore: gapAnalysis.overallScore,
       totalGaps: gapAnalysis.metadata.totalGaps,
-      chunksProcessed: totalChunks,
+      chunksProcessed: successfulChunks,
+      failedChunks,
+      skippedChunks,
+      extractionComplete,
       totalInputTokens,
       totalOutputTokens,
       estimatedCost: totalCost,
@@ -1033,10 +1223,17 @@ No legal obligations, citations, penalties, deadlines, thresholds, or compliance
 
     return {
       result: gapAnalysis,
-      chunksProcessed: totalChunks,
+      chunksProcessed: successfulChunks,
+      totalChunks,
+      failedChunks,
+      skippedChunks,
+      chunkFailures,
+      extractionComplete,
       totalInputTokens,
       totalOutputTokens,
       totalCost,
+      providerUsage: mergeGapAnalysisProviderUsage(providerResults),
+      executionLimitations,
     };
   }
 

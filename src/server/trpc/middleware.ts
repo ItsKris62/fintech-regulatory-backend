@@ -666,6 +666,8 @@ export interface UsageLimitPatch {
   user: User;
   usageInfo: { metric: BillingMetric; current: number; limit: number };
   incrementUsage?: () => Promise<void>;
+  /** Reverses a successful deferred reservation before durable work exists. */
+  rollbackUsage?: () => Promise<void>;
 }
 
 /**
@@ -855,11 +857,27 @@ export async function resolveUsageLimit(
     });
   };
 
+  const rollbackIncrement = async (): Promise<void> => {
+    if (units === 1) {
+      await redis.decr(usageKey);
+    } else {
+      await redis.decrby(usageKey, units);
+    }
+    logger.debug({
+      type: 'usage_reservation_rolled_back',
+      orgId: scopeId,
+      metric,
+      units,
+      period,
+    });
+  };
+
   if (opts?.deferIncrement) {
     return {
       user,
       usageInfo: { metric, current, limit },
       incrementUsage: doIncrement,
+      rollbackUsage: rollbackIncrement,
     };
   }
 

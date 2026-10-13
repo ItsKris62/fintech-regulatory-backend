@@ -98,6 +98,8 @@ Only claims supported by accepted corpus evidence are shown.${excludedNote}`;
 }
 
 export class SourceInsufficiencyError extends Error {
+  readonly retryable = false;
+
   constructor(message: string) {
     super(message);
     this.name = 'SourceInsufficiencyError';

@@ -25,6 +25,7 @@ import { registerComplianceStreamRoute } from './routes/compliance-stream.route'
 import { registerApprovalDecisionRoutes } from './routes/approval-decision.route';
 import { registerAutomationIncidentRoutes } from './routes/automation-incident.route';
 import { appConfig } from './config/app.config';
+import { probeGapAnalysisMalwareScanner } from './lib/security/gap-analysis-malware';
 import {
   verifyIntaSendWebhook,
   isAllowedIntaSendIp,
@@ -149,7 +150,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false, // Structured logging handled by Pino via src/utils/logger
     maxParamLength: 5000,
-    bodyLimit: 31457280, // 30 MB  -  covers 20 MB base64 gap analysis uploads
+    bodyLimit: 31457280, // 30 MB transport ceiling; Gap Analysis enforces its canonical 10 MB binary limit
     trustProxy: resolvedProxy.trustProxy,
     connectionTimeout: 30000,
     requestTimeout: 60000,
@@ -606,6 +607,15 @@ export async function buildApp(): Promise<FastifyInstance> {
 
     // Pinecone / Vector DB  -  passive check
     checks.vectordb = { status: 'healthy' };
+
+    // ClamAV - active, content-free PING only on this explicit admin health route.
+    const malwareScanner = await probeGapAnalysisMalwareScanner();
+    checks.malwareScanner = {
+      status: malwareScanner.status,
+      latencyMs: malwareScanner.latencyMs,
+      message: malwareScanner.message,
+    };
+    if (malwareScanner.status !== 'READY') overallStatus = 'degraded';
 
     if (checks.database?.status === 'down' && checks.redis?.status === 'down') {
       overallStatus = 'down';

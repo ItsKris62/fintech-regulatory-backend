@@ -127,6 +127,7 @@ export interface RegulatoryEvidenceSearchOptions {
   namespace?: string;
   preferActiveSources?: boolean;
   sourceIndexMode?: SearchOptions['sourceIndexMode'];
+  frameworkScope?: 'DOMESTIC' | 'INTERNATIONAL' | 'CROSS_BORDER';
 }
 
 function andFilters(...filters: Array<Record<string, any> | undefined | null>): Record<string, any> | undefined {
@@ -164,6 +165,22 @@ export function buildRegulatoryEvidenceFilter(
     ],
   };
   return andFilters(jurisdictionFilter, indexVersionFilter(sourceIndexMode)) ?? jurisdictionFilter;
+}
+
+export function buildInternationalEvidenceFilter(
+  jurisdictionCode: JurisdictionCode,
+  sourceIndexMode?: SearchOptions['sourceIndexMode'],
+): Record<string, unknown> {
+  const legacyLabel = jurisdictionLabel(jurisdictionCode);
+  const internationalJurisdictionFilter = {
+    $or: [
+      { jurisdictionCode: { $in: ['GLOBAL', 'INTERNATIONAL'] } },
+      { jurisdictionCode: { $eq: jurisdictionCode } },
+      { jurisdiction: { $in: ['International', 'Global', 'EU', legacyLabel] } },
+      { jurisdictionCode: { $exists: false } },
+    ],
+  };
+  return andFilters(internationalJurisdictionFilter, indexVersionFilter(sourceIndexMode)) ?? internationalJurisdictionFilter;
 }
 
 function resolveResultJurisdictionCode(metadata: {
@@ -514,13 +531,19 @@ export class RAGService {
       namespace,
       preferActiveSources = true,
       sourceIndexMode,
+      frameworkScope = 'DOMESTIC',
     } = options;
+    const isInternationalScope = frameworkScope === 'INTERNATIONAL';
     const jurisdictionsToSearch = jurisdictionContext.mode === 'SINGLE' ? [jurisdictionContext.primaryJurisdiction] : jurisdictionContext.jurisdictions;
     
     // Balanced concurrent retrieval: fetch topK for each jurisdiction independently
     const fetchPromises = jurisdictionsToSearch.map(async (jcode) => {
+      const jurisdictionFilter = isInternationalScope
+        ? buildInternationalEvidenceFilter(jcode, sourceIndexMode)
+        : buildRegulatoryEvidenceFilter(jcode, sourceIndexMode);
+
       const filter = andFilters(
-        buildRegulatoryEvidenceFilter(jcode, sourceIndexMode),
+        jurisdictionFilter,
         additionalFilter,
       );
       const jResults = await this.searchWithReranking(query, {
@@ -531,12 +554,31 @@ export class RAGService {
         preferActiveSources,
         sourceIndexMode,
       });
-      // Filter out any leaked chunks
-      const scoped = jResults.filter(r => r.jurisdictionCode === jcode);
+
+      // Filter out any leaked chunks:
+      // For domestic scope: strict match to jcode.
+      // For international scope: allow international/global or matching jcode, reject foreign domestic jurisdictions.
+      const scoped = jResults.filter(r => {
+        if (!isInternationalScope) {
+          return r.jurisdictionCode === jcode;
+        }
+        const isInternational =
+          !r.jurisdictionCode ||
+          (r.jurisdictionCode as string) === 'GLOBAL' ||
+          (r.jurisdictionCode as string) === 'INTERNATIONAL' ||
+          r.jurisdiction === 'International' ||
+          r.jurisdiction === 'Global';
+        const isDomesticMatch =
+          r.jurisdictionCode === jcode ||
+          r.jurisdiction === jurisdictionLabel(jcode);
+        return isInternational || isDomesticMatch;
+      });
+
       if (scoped.length !== jResults.length) {
         logger.warn({
           type: 'rag_regulatory_evidence_jurisdiction_mismatch_filtered',
           requestedJurisdiction: jcode,
+          isInternationalScope,
           removedCount: jResults.length - scoped.length,
           resultCount: jResults.length,
         });
@@ -788,6 +830,7 @@ export async function searchAndGetRegulatoryEvidenceContext(
     namespace,
     preferActiveSources = true,
     sourceIndexMode,
+    frameworkScope = 'DOMESTIC',
   } = options;
   const normalizedQuestion = query.trim().replace(/\s+/g, ' ');
   const corpusVersions = await getCorpusVersionSnapshot(jurisdictionContext);
@@ -804,6 +847,7 @@ export async function searchAndGetRegulatoryEvidenceContext(
     namespace: namespace ?? null,
     preferActiveSources,
     sourceIndexMode: sourceIndexMode ?? null,
+    frameworkScope,
     jurisdictionFilterMode: 'jurisdictionCode-or-legacy-label',
   }))}`;
 
@@ -837,6 +881,7 @@ export async function searchAndGetRegulatoryEvidenceContext(
     namespace,
     preferActiveSources,
     sourceIndexMode,
+    frameworkScope,
   });
   const context = ragService.getContextForPrompt(results);
   const citations = ragService.extractCitations(results);

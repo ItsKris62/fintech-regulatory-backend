@@ -39,6 +39,8 @@ import {
   WidthType,
 } from 'docx';
 import type { GapAnalysisResult, GapItem, ActionPlanItem } from '@/lib/ai/prompts/gap-analysis';
+import { jurisdictionLabel } from '@/types/jurisdiction';
+import { buildGapAnalysisReportMetrics } from '@/services/gap-analysis-report-model';
 
 // --- Constants ----------------------------------------------------------------
 
@@ -83,6 +85,7 @@ export interface DocxExportParams {
   createdAt: Date;
   organizationName?: string;
   userName?: string;
+  jurisdictionCode?: string | null;
   selectedBenchmarkDocuments?: Array<{
     id: string;
     title: string;
@@ -137,8 +140,10 @@ function s(v: string | undefined | null): string {
 }
 
 function verificationLabel(gap: GapItem): string {
-  if (gap.verificationStatus === 'verified') return '[✓ Verified]';
-  if (gap.verificationStatus === 'unverified') return '[⚠ Unverified]';
+  if (gap.verification?.verdict === 'SUPPORTED' || gap.verificationStatus === 'verified') return '[✓ Verified]';
+  if (gap.verification?.verdict === 'PARTIALLY_SUPPORTED') return '[⚠ Partially Verified]';
+  if (gap.verification?.verdict === 'UNSUPPORTED' || gap.verificationStatus === 'unverified') return '[✗ Unsupported - Quarantined]';
+  if (gap.verification?.verdict === 'NOT_VERIFIABLE') return '[? Evidence Limitation]';
   return '[? Not checked]';
 }
 
@@ -287,7 +292,9 @@ function buildCoverSection(params: DocxExportParams): object {
   const { result, documentName, analysisDepth, createdAt, organizationName, userName } = params;
   const displayName = organizationName ?? userName ?? 'Your Organisation';
   const dateStr = formatDate(createdAt);
-  const sc = scoreColor(result.overallScore);
+  const reportMetrics = buildGapAnalysisReportMetrics(result);
+  const alignment = reportMetrics.complianceAlignment;
+  const sc = scoreColor(alignment);
 
   const children: Paragraph[] = [
     // Brand header
@@ -310,7 +317,7 @@ function buildCoverSection(params: DocxExportParams): object {
       alignment: AlignmentType.CENTER,
       spacing: { before: 400, after: 200 },
       children: [
-        new TextRun({ text: 'Regulatory Compliance Gap Analysis Report', font: 'Arial', size: 56, bold: true, color: C.navy }),
+        new TextRun({ text: 'Policy Gap Analysis', font: 'Arial', size: 56, bold: true, color: C.navy }),
       ],
     }),
     // Subtitle
@@ -326,8 +333,8 @@ function buildCoverSection(params: DocxExportParams): object {
       alignment: AlignmentType.CENTER,
       spacing: { before: 200, after: 160 },
       children: [
-        new TextRun({ text: 'Overall Compliance Score: ', font: 'Arial', size: 28, color: C.slate }),
-        new TextRun({ text: String(result.overallScore), font: 'Arial', size: 96, bold: true, color: sc }),
+        new TextRun({ text: 'Compliance Alignment: ', font: 'Arial', size: 28, color: C.slate }),
+        new TextRun({ text: String(alignment), font: 'Arial', size: 96, bold: true, color: sc }),
         new TextRun({ text: '/100', font: 'Arial', size: 36, color: C.slate }),
       ],
     }),
@@ -336,8 +343,13 @@ function buildCoverSection(params: DocxExportParams): object {
       alignment: AlignmentType.CENTER,
       spacing: { before: 0, after: 400 },
       children: [
-        new TextRun({ text: result.overallScore >= 75 ? 'Good' : result.overallScore >= 50 ? 'Needs Work' : 'Critical Risk', font: 'Arial', size: 28, color: sc }),
+        new TextRun({ text: alignment >= 75 ? 'Good' : alignment >= 50 ? 'Needs Work' : 'Critical Risk', font: 'Arial', size: 28, color: sc }),
       ],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 0, after: 280 },
+      children: [new TextRun({ text: `Assessment Coverage: ${reportMetrics.assessmentCoverage}`, font: 'Arial', size: 20, color: C.slate })],
     }),
     // Meta info
     new Paragraph({
@@ -349,6 +361,11 @@ function buildCoverSection(params: DocxExportParams): object {
       alignment: AlignmentType.CENTER,
       spacing: { after: 120 },
       children: [new TextRun({ text: `Analysis Type: ${formatDepth(analysisDepth)}`, font: 'Arial', size: 22, color: C.slate })],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 120 },
+      children: [new TextRun({ text: `Jurisdiction: ${params.jurisdictionCode ? `${params.jurisdictionCode} (${jurisdictionLabel(params.jurisdictionCode as any) || params.jurisdictionCode})` : 'Not recorded (legacy analysis)'}`, font: 'Arial', size: 22, color: C.slate })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -431,6 +448,7 @@ function buildMainSection(params: DocxExportParams): object {
   const { executiveSummary, frameworks, actionPlan, metadata } = result;
   const displayName = organizationName ?? userName ?? 'Your Organisation';
   const dateStr = formatDate(createdAt);
+  const reportMetrics = buildGapAnalysisReportMetrics(result);
   const allGaps = result.frameworks.flatMap((fw) => fw.gaps);
   const verifiedGapCount = allGaps.filter((gap) => gap.verificationStatus === 'verified').length;
   const unverifiedGapCount = allGaps.filter((gap) => gap.verificationStatus === 'unverified').length;
@@ -506,9 +524,17 @@ function buildMainSection(params: DocxExportParams): object {
 
   const methodRows: TableRow[] = [
     methodRow('Document Analysed',       documentName),
+    methodRow(
+      'Jurisdiction',
+      params.jurisdictionCode
+        ? `${params.jurisdictionCode} (${jurisdictionLabel(params.jurisdictionCode as any) || params.jurisdictionCode})`
+        : 'Not recorded (legacy analysis)',
+    ),
     methodRow('Analysis Date',           dateStr),
     methodRow('Analysis Depth',          formatDepth(analysisDepth)),
-    methodRow('Chunks Processed',        `${chunksProcessed} ${chunksProcessed > 1 ? '(Full document multi-pass)' : '(Single-pass)'}`),
+    methodRow('Depth Engine Version',    result.metadata.depthEngineVersion ?? 'gap-analysis-depth-v2'),
+    methodRow('Depth Profile Version',   result.metadata.depthProfileVersion ?? (result.metadata.executionProfileVersion ?? `${analysisDepth}-v1`)),
+    methodRow('Chunks Processed',        `${chunksProcessed} of ${result.metadata.documentCoverage?.totalChunks ?? chunksProcessed}`),
     methodRow('Frameworks Assessed',     frameworks.map((f) => f.name).join(', ')),
     methodRow(
       'Benchmark Documents',
@@ -517,6 +543,15 @@ function buildMainSection(params: DocxExportParams): object {
         : 'All available corpus documents',
     ),
     methodRow('Regulatory Grounding',    ragGrounded ? 'Grounded in SheriaBot regulatory document database' : 'Warning: Limited grounding - AI knowledge only'),
+    methodRow('Compliance Alignment',   `${reportMetrics.complianceAlignment}% (Assessed obligations)`),
+    methodRow('Assessment Coverage',     reportMetrics.assessmentCoverage),
+    methodRow('Scoring Methodology',     result.metadata.scoringVersion ?? 'Legacy v1.0'),
+    methodRow(
+      'Known Limitations',
+      result.metadata.executionLimitations?.length
+        ? result.metadata.executionLimitations.join('; ')
+        : 'No execution-stage limitation recorded',
+    ),
     methodRow('Report ID',               analysisId),
   ];
 
@@ -557,7 +592,7 @@ function buildMainSection(params: DocxExportParams): object {
       new Paragraph({
         spacing: { after: 160 },
         children: [
-          new TextRun({ text: 'Compliance Score: ', font: 'Arial', size: 24, bold: true, color: C.navy }),
+          new TextRun({ text: 'Compliance Alignment: ', font: 'Arial', size: 24, bold: true, color: C.navy }),
           new TextRun({ text: `${Math.round(fw.score)}%`, font: 'Arial', size: 24, bold: true, color: scoreColor(fw.score) }),
         ],
       }),
@@ -613,6 +648,34 @@ function buildMainSection(params: DocxExportParams): object {
           rows: gapRows,
         }) as unknown as Paragraph,
       );
+
+      fw.gaps.forEach((gap: GapItem) => {
+        children.push(new Paragraph({
+          heading: HeadingLevel.HEADING_3,
+          text: `${gap.id}: ${gap.title}`,
+          spacing: { before: 180, after: 100 },
+        }));
+        children.push(body(`Severity: ${gap.severity}. Verification: ${verificationLabel(gap).replace(/[\[\]]/g, '')}.`));
+        if (gap.policyEvidence?.length) {
+          children.push(new Paragraph({ children: [new TextRun({ text: 'Policy Evidence', bold: true, color: C.navy })] }));
+          gap.policyEvidence.forEach((evidence) => {
+            const locator = evidence.sectionHeading ?? (evidence.page ? `Page ${evidence.page}` : 'Policy excerpt');
+            children.push(body(`${locator}: ${evidence.excerpt}`));
+          });
+        } else {
+          children.push(body('Policy Evidence: No matching policy excerpt was recorded.'));
+        }
+        if (gap.regulatoryEvidence?.length) {
+          children.push(new Paragraph({ children: [new TextRun({ text: 'Regulatory Evidence', bold: true, color: C.navy })] }));
+          gap.regulatoryEvidence.forEach((evidence) => {
+            const authority = evidence.sourceAuthority ? ` - ${evidence.sourceAuthority}` : '';
+            const locator = evidence.section ? ` - ${evidence.section}` : '';
+            children.push(body(`${evidence.documentTitle}${authority}${locator}: ${evidence.excerpt}`));
+          });
+        } else {
+          children.push(body('Regulatory Evidence: No verified regulatory evidence was attached.'));
+        }
+      });
     }
 
     children.push(pageBreak());

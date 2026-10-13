@@ -18,15 +18,22 @@ export function extractJsonCandidate(rawText: string): string | null {
   const fenceMatch = trimmed.match(FENCED_BLOCK_PATTERN);
   const unfenced = fenceMatch ? fenceMatch[1].trim() : trimmed;
 
+  let jsonText: string;
   if (unfenced.startsWith('{') && unfenced.endsWith('}')) {
-    return unfenced;
+    jsonText = unfenced;
+  } else {
+    const firstBrace = unfenced.indexOf('{');
+    const lastBrace = unfenced.lastIndexOf('}');
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+      return null;
+    }
+    jsonText = unfenced.slice(firstBrace, lastBrace + 1);
   }
 
-  const firstBrace = unfenced.indexOf('{');
-  const lastBrace = unfenced.lastIndexOf('}');
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    return null;
-  }
-
-  return unfenced.slice(firstBrace, lastBrace + 1);
+  // Strip trailing ellipses and trailing commas commonly emitted by LLMs
+  return jsonText
+    .replace(/,\s*\.\.\.\s*\]/g, ']')
+    .replace(/,\s*\.\.\.\s*\}/g, '}')
+    .replace(/,\s*\]/g, ']')
+    .replace(/,\s*\}/g, '}');
 }

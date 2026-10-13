@@ -74,6 +74,8 @@ services:
         value: us-east-1-aws
       - key: PINECONE_INDEX_NAME
         value: sheriabot-legal-corpus
+      - key: PINECONE_NAMESPACE
+        sync: false
 
       # File Storage (Cloudflare R2)
       - key: R2_ACCOUNT_ID
@@ -88,6 +90,17 @@ services:
         value: sheria-bot-audit-immutable
       - key: R2_PUBLIC_URL
         sync: false
+
+      # Malware scanning. CLAMAV_HOST must resolve over a private, isolated
+      # network path to an operator-owned ClamAV service.
+      - key: MALWARE_SCAN_ENABLED
+        value: "true"
+      - key: CLAMAV_HOST
+        sync: false
+      - key: CLAMAV_PORT
+        value: "3310"
+      - key: CLAMAV_TIMEOUT_MS
+        value: "30000"
 
       # File Storage (Cloudflare R2) - public bucket (avatars, logos, branding)
       - key: R2_PUBLIC_ACCESS_KEY_ID

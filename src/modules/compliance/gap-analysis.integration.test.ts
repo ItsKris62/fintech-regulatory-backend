@@ -22,30 +22,37 @@ vi.mock('@/lib/rag/rag.service', () => ({
 
 vi.mock('@/modules/regulatory-intelligence/regulatory-intelligence.service', () => ({
   regulatoryIntelligenceService: {
-    retrieveAndGrade: vi.fn().mockResolvedValue({
-      evidence: [
-        {
-          vectorId: 'bench-doc-1:chunk-1',
-          chunkId: 'chunk-1',
-          documentId: 'bench-doc-1',
-          documentTitle: 'Data Protection Act 2019',
-          chunkText: 'DPA context about privacy rights, breach notification, consent, and data subject access.',
-          frameworkSlug: 'dpa_2019',
-          jurisdictionCode: 'KE',
-          score: 0.95,
-          rank: 1,
-        },
-      ],
+    retrieveAndGrade: vi.fn().mockImplementation(async ({ retrievalProfile, question }: any) => {
+      const slug = retrievalProfile?.filter?.frameworkSlug;
+      return {
+        evidence: [
+          {
+            vectorId: `bench-doc:${slug ?? 'chunk-1'}`,
+            chunkId: 'chunk-1',
+            documentId: 'bench-doc-1',
+            documentTitle: question?.includes('CBK') ? 'CBK Prudential Guidelines' : 'Data Protection Act 2019',
+            chunkText: 'DPA context about privacy rights, breach notification, consent, and data subject access.',
+            frameworkSlug: slug ?? 'dpa_2019',
+            jurisdictionCode: 'KE',
+            score: 0.95,
+            rank: 1,
+          },
+        ],
+      };
     }),
   },
 }));
 
-vi.mock('@/modules/compliance/orchestrator/verifier.agent', () => ({
-  runVerifierAgent: vi.fn().mockResolvedValue({
-    verdict: 'PASS', unsupportedClaims: [], parseFailed: false,
-    tokens: { input: 10, output: 5 },
-  }),
-}));
+vi.mock('@/modules/compliance/orchestrator/verifier.agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/modules/compliance/orchestrator/verifier.agent')>();
+  return {
+    ...actual,
+    runVerifierAgent: vi.fn().mockResolvedValue({
+      verdict: 'PASS', unsupportedClaims: [], parseFailed: false,
+      tokens: { input: 10, output: 5 },
+    }),
+  };
+});
 
 vi.mock('@/lib/pdf/extract-text', () => ({
   extractPdfText: vi.fn(),
@@ -55,6 +62,18 @@ vi.mock('@/lib/prisma/client', () => ({
   prisma: {
     gapAnalysis: {
       update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'ga-test-1',
+        userId: 'user-1',
+        organizationId: null,
+        documentUrl: '',
+        deletedAt: null,
+        status: 'QUEUED',
+      }),
+    },
+    aiJob: {
+      findUnique: vi.fn().mockResolvedValue({ status: 'RUNNING' }),
     },
     auditLog: {
       create: vi.fn().mockResolvedValue({}),
@@ -127,7 +146,7 @@ const basePipelineParams = {
   userId: 'user-1',
   fileName: 'policy.pdf',
   fileContent: Buffer.from('%PDF test content').toString('base64'),
-  fileType: 'pdf',
+  fileType: 'pdf' as const,
   regulatoryFrameworks: ['Data Protection Act 2019'],
   regulatoryFrameworkSlugs: ['dpa_2019'],
   jurisdictionContext: {
@@ -140,7 +159,7 @@ const basePipelineParams = {
 };
 
 function completedUpdate() {
-  return vi.mocked(prisma.gapAnalysis.update).mock.calls.find(([arg]) => (
+  return vi.mocked(prisma.gapAnalysis.updateMany).mock.calls.find(([arg]) => (
     arg.data?.status === 'COMPLETED'
   ))?.[0];
 }
@@ -160,9 +179,9 @@ describe('Gap Analysis Pipeline Integration', () => {
     })).rejects.toThrow('Could not extract meaningful text');
 
     expect(extractPdfText).toHaveBeenCalled();
-    expect(prisma.gapAnalysis.update).toHaveBeenCalledWith(
+    expect(prisma.gapAnalysis.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'gap-fail-test' },
+        where: expect.objectContaining({ id: 'gap-fail-test' }),
         data: expect.objectContaining({
           status: 'FAILED',
           errorMessage: expect.stringContaining('Could not extract meaningful text'),
@@ -217,41 +236,33 @@ describe('Gap Analysis Pipeline Integration', () => {
     expect(ragService.search).not.toHaveBeenCalled();
   });
 
-  it('falls back from a legacy framework slug to jurisdiction-scoped approved evidence', async () => {
+  it('keeps an unsupported framework strictly filtered and returns no evidence', async () => {
     vi.mocked(extractPdfText).mockResolvedValueOnce(
       'Valid substantive text that safely surpasses the readable text guard threshold. '.repeat(10)
     );
     const { regulatoryIntelligenceService } = await import('@/modules/regulatory-intelligence/regulatory-intelligence.service');
     vi.mocked(regulatoryIntelligenceService.retrieveAndGrade)
-      .mockResolvedValueOnce({ evidence: [] } as never)
-      .mockResolvedValueOnce({
-        evidence: [{
-          vectorId: 'ng-doc:chunk-1', chunkId: 'chunk-1', documentId: 'ng-doc',
-          documentTitle: 'Nigeria Regulation', chunkText: 'Substantive Nigerian regulatory obligation.',
-          frameworkSlug: null, jurisdictionCode: 'NG', score: 0.91, rank: 1,
-        }],
-      } as never);
+      .mockResolvedValueOnce({ evidence: [], retrievedCount: 0 } as never)
+      .mockResolvedValueOnce({ evidence: [], retrievedCount: 0 } as never)
+      .mockResolvedValueOnce({ evidence: [], retrievedCount: 0 } as never);
 
-    await executeGapAnalysisPipeline({
+    await expect(executeGapAnalysisPipeline({
       ...basePipelineParams,
-      analysisId: 'gap-slug-fallback-test',
+      analysisId: 'gap-unsupported-slug-test',
       regulatoryFrameworks: ['Legacy Framework Label'],
       regulatoryFrameworkSlugs: ['legacy-framework'],
       jurisdictionContext: {
         mode: 'SINGLE', jurisdictions: ['NG'], primaryJurisdiction: 'NG', jurisdictionSource: 'ORGANIZATION_HOME',
       },
-    });
+    })).rejects.toThrow('do not provide enough verified regulatory evidence');
 
-    expect(regulatoryIntelligenceService.retrieveAndGrade).toHaveBeenNthCalledWith(1,
-      expect.objectContaining({ retrievalProfile: expect.objectContaining({ filter: { frameworkSlug: 'legacy-framework' } }) })
-    );
-    expect(regulatoryIntelligenceService.retrieveAndGrade).toHaveBeenNthCalledWith(2,
-      expect.objectContaining({
-        question: expect.not.stringContaining('Legacy Framework Label'),
+    expect(regulatoryIntelligenceService.retrieveAndGrade).toHaveBeenCalled();
+    for (const [request] of vi.mocked(regulatoryIntelligenceService.retrieveAndGrade).mock.calls) {
+      expect(request).toEqual(expect.objectContaining({
         jurisdictionContext: expect.objectContaining({ primaryJurisdiction: 'NG' }),
-        retrievalProfile: expect.objectContaining({ filter: undefined }),
-      })
-    );
+        retrievalProfile: expect.objectContaining({ filter: { frameworkSlug: 'legacy-framework' } }),
+      }));
+    }
   });
 
   it('passes selected benchmark document metadata into the completed result', async () => {

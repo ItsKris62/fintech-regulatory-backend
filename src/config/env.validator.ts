@@ -73,6 +73,7 @@ const envSchema = z.object({
   PINECONE_API_KEY: z.string().min(1, 'PINECONE_API_KEY is required'),
   PINECONE_ENVIRONMENT: z.string().default('us-east-1-aws'),
   PINECONE_INDEX_NAME: z.string().default('sheriabot-legal-corpus'),
+  PINECONE_NAMESPACE: z.string().min(1).default('__default__'),
 
   // -- Storage (Cloudflare R2) ---------------------------------------------
   R2_ACCOUNT_ID: z.string().min(1, 'R2_ACCOUNT_ID is required'),
