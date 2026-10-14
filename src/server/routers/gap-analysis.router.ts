@@ -18,6 +18,8 @@ import {
   GAP_ANALYSIS_PROCESSING_ACK_VERSION,
   getGapAnalysisContract,
   getGapAnalysisFileExtension,
+  getPilotFrameworkAvailability,
+  getPilotJurisdictionAvailability,
   isGapAnalysisDepthAllowed,
 } from '@/config/gap-analysis.config';
 import { getCorpusVersionSnapshot } from '@/lib/rag/corpus-version';
@@ -84,6 +86,7 @@ export const gapAnalysisRouter = router({
         const applicable = input?.jurisdiction
           ? isFrameworkApplicableToJurisdiction(fw.slug, input.jurisdiction)
           : true;
+        const pilot = getPilotFrameworkAvailability(fw.slug, input?.jurisdiction);
 
         return {
           slug: fw.slug,
@@ -95,6 +98,8 @@ export const gapAnalysisRouter = router({
           scope,
           jurisdictions,
           applicable,
+          pilotEnabled: pilot.pilotEnabled,
+          readiness: pilot.readiness,
         };
       });
     }),
@@ -343,12 +348,28 @@ export const gapAnalysisRouter = router({
           ? jurisdictionContext.primaryJurisdiction
           : 'KE';
 
+        // Authoritative Pilot Availability Enforcement
+        const jurisdictionAvailability = getPilotJurisdictionAvailability(analysisJurisdiction);
+        if (!jurisdictionAvailability.pilotEnabled) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: jurisdictionAvailability.message || `Jurisdiction "${analysisJurisdiction}" is not currently enabled for Gap Analysis pilot testing.`,
+          });
+        }
+
         // Validate Framework Applicability against the authorized analysis jurisdiction
         for (const fw of orderedFrameworks) {
           if (!isFrameworkApplicableToJurisdiction(fw.slug, analysisJurisdiction)) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
               message: `Framework "${fw.name}" (${fw.slug}) is not applicable to jurisdiction ${analysisJurisdiction}.`,
+            });
+          }
+          const fwPilot = getPilotFrameworkAvailability(fw.slug, analysisJurisdiction);
+          if (!fwPilot.pilotEnabled) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: `Framework "${fw.name}" (${fw.slug}) is not enabled for Gap Analysis pilot testing in ${analysisJurisdiction}.`,
             });
           }
         }

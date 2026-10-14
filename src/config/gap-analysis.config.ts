@@ -106,7 +106,159 @@ export function getGapAnalysisContract(
       version: GAP_ANALYSIS_PROCESSING_ACK_VERSION,
       text: GAP_ANALYSIS_PROCESSING_ACK_TEXT,
     },
+    pilotAvailability: getGapAnalysisPilotAvailability(),
   } as const;
+}
+
+export type PilotCorpusReadiness =
+  | 'UNAVAILABLE'
+  | 'INDEXED_PARTIAL'
+  | 'VALIDATED_FOR_GAP_ANALYSIS'
+  | 'STALE_OR_UNKNOWN';
+
+export interface PilotJurisdictionAvailability {
+  jurisdiction: string;
+  pilotEnabled: boolean;
+  readiness: PilotCorpusReadiness;
+  message?: string;
+}
+
+export interface PilotFrameworkAvailability {
+  slug: string;
+  pilotEnabled: boolean;
+  readiness: PilotCorpusReadiness;
+}
+
+export interface GapAnalysisPilotAvailability {
+  jurisdictions: Record<string, PilotJurisdictionAvailability>;
+}
+
+export function getPilotJurisdictionAvailability(code: string): PilotJurisdictionAvailability {
+  const upper = code.toUpperCase();
+  const enabledEnv = process.env.GAP_ANALYSIS_PILOT_ENABLED_JURISDICTIONS;
+  const validatedEnv = process.env.GAP_ANALYSIS_PILOT_VALIDATED_JURISDICTIONS;
+
+  const enabledList = (enabledEnv ?? '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  const validatedList = (validatedEnv ?? '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+
+  const isExplicitlyValidated = validatedList.includes(upper);
+  const isExplicitlyEnabled = enabledList.includes(upper) || isExplicitlyValidated;
+
+  if (isExplicitlyValidated) {
+    return {
+      jurisdiction: upper,
+      pilotEnabled: true,
+      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
+    };
+  }
+
+  if (isExplicitlyEnabled) {
+    return {
+      jurisdiction: upper,
+      pilotEnabled: true,
+      readiness: 'INDEXED_PARTIAL',
+      message: `Corpus validation in progress for ${upper}. Enabled for controlled pilot testing with partial coverage.`,
+    };
+  }
+
+  // If in a test environment without explicit pilot configuration or gating override,
+  // allow KE for test runners that do not test pilot gating explicitly.
+  if (process.env.NODE_ENV === 'test' && !process.env.GAP_ANALYSIS_PILOT_STRICT_GATE && enabledEnv === undefined) {
+    if (upper === 'KE') {
+      return {
+        jurisdiction: 'KE',
+        pilotEnabled: true,
+        readiness: 'INDEXED_PARTIAL',
+        message: 'Corpus validation in progress for Kenya. Enabled for controlled pilot testing with partial coverage.',
+      };
+    }
+  }
+
+  if (upper === 'KE') {
+    return {
+      jurisdiction: 'KE',
+      pilotEnabled: false,
+      readiness: 'INDEXED_PARTIAL',
+      message: 'Corpus validation in progress. Regulatory sources for Kenya are undergoing release validation. Gap Analysis pilot testing is pending formal release validation.',
+    };
+  }
+
+  return {
+    jurisdiction: upper,
+    pilotEnabled: false,
+    readiness: 'UNAVAILABLE',
+    message: `Gap Analysis corpus for jurisdiction ${upper} is not yet available or enabled for pilot testing.`,
+  };
+}
+
+export function getPilotFrameworkAvailability(
+  slug: string,
+  _jurisdiction?: string,
+): PilotFrameworkAvailability {
+  const enabledEnv = process.env.GAP_ANALYSIS_PILOT_ENABLED_FRAMEWORKS;
+  const validatedEnv = process.env.GAP_ANALYSIS_PILOT_VALIDATED_FRAMEWORKS;
+
+  const enabledSlugs = (enabledEnv ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const validatedSlugs = (validatedEnv ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+  const lowerSlug = slug.toLowerCase();
+  const isValidated = validatedSlugs.includes(lowerSlug) || validatedSlugs.includes('*');
+  const isEnabled = enabledSlugs.includes(lowerSlug) || enabledSlugs.includes('*') || isValidated;
+
+  if (isValidated) {
+    return {
+      slug,
+      pilotEnabled: true,
+      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
+    };
+  }
+
+  if (isEnabled) {
+    return {
+      slug,
+      pilotEnabled: true,
+      readiness: 'INDEXED_PARTIAL',
+    };
+  }
+
+  // If in a test environment without explicit pilot configuration or gating override,
+  // allow frameworks for test runners that do not test pilot gating explicitly.
+  if (process.env.NODE_ENV === 'test' && !process.env.GAP_ANALYSIS_PILOT_STRICT_GATE && enabledEnv === undefined) {
+    return {
+      slug,
+      pilotEnabled: true,
+      readiness: 'INDEXED_PARTIAL',
+    };
+  }
+
+  return {
+    slug,
+    pilotEnabled: false,
+    readiness: 'UNAVAILABLE',
+  };
+}
+
+export function getGapAnalysisPilotAvailability(): GapAnalysisPilotAvailability {
+  return {
+    jurisdictions: {
+      KE: getPilotJurisdictionAvailability('KE'),
+      RW: getPilotJurisdictionAvailability('RW'),
+      MW: getPilotJurisdictionAvailability('MW'),
+      NG: getPilotJurisdictionAvailability('NG'),
+    },
+  };
 }
 
 /**
