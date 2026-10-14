@@ -89,7 +89,7 @@ llmGateway.complete = async (req: any, cacheTTL: number = 0) => {
         evidenceIds = [`${activeFixture!.frameworkSlug}-chunk-1`];
       }
 
-      const isAligned = activeFixture!.type === 'ALIGNED';
+      const isAligned = activeFixture!.type === 'PARTIALLY_ALIGNED';
       const frameworkName = activeFixture!.frameworkSlug;
       const jCode = activeFixture!.jurisdiction;
 

@@ -519,7 +519,7 @@ export const FRAMEWORK_METADATA_REGISTRY: Record<string, RegulatoryFrameworkMeta
  * Returns framework metadata for a given slug, or a synthetic default if unlisted.
  */
 export function getFrameworkMetadata(slug: string): RegulatoryFrameworkMetadata | null {
-  return FRAMEWORK_METADATA_REGISTRY[slug] ?? null;
+  return FRAMEWORK_METADATA_REGISTRY[slug] ?? FRAMEWORK_METADATA_REGISTRY[slug.replace(/_/g, '-')] ?? null;
 }
 
 /**

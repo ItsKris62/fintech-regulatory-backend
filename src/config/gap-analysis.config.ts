@@ -268,7 +268,7 @@ export function getPilotFrameworkAvailability(
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 
-  const lowerSlug = slug.toLowerCase();
+  const lowerSlug = slug.toLowerCase().replace(/_/g, '-');
   const isValidated = validatedSlugs.includes(lowerSlug) || validatedSlugs.includes('*');
   const isEnabled = enabledSlugs.includes(lowerSlug) || enabledSlugs.includes('*') || isValidated;
 

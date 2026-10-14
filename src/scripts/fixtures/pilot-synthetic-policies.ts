@@ -7,7 +7,7 @@ export interface SyntheticPolicyFixture {
   jurisdiction: 'KE' | 'RW' | 'MW' | 'NG';
   frameworkSlug: string;
   name: string;
-  type: 'ALIGNED' | 'DELIBERATE_GAPS' | 'AMBIGUOUS';
+  type: 'PARTIALLY_ALIGNED' | 'DELIBERATE_GAPS' | 'AMBIGUOUS';
   description: string;
   content: string;
 }
@@ -20,7 +20,7 @@ export const PILOT_SYNTHETIC_POLICIES: SyntheticPolicyFixture[] = [
     jurisdiction: 'KE',
     frameworkSlug: 'dpa-2019',
     name: 'RafikiPay Kenya Data Protection & Privacy Policy',
-    type: 'ALIGNED',
+    type: 'PARTIALLY_ALIGNED',
     description: 'Aligned fintech policy with explicit DPO, 72h breach notification, consent, lawful bases, and subject access rights.',
     content: `# RafikiPay Kenya Limited — Customer Data Protection & Privacy Policy
 
@@ -97,7 +97,7 @@ If you have questions about your privacy, contact our general customer care supp
     jurisdiction: 'RW',
     frameworkSlug: 'rw-dpa-2021',
     name: 'KigaliFin Rwanda Data Privacy & Security Policy',
-    type: 'ALIGNED',
+    type: 'PARTIALLY_ALIGNED',
     description: 'Aligned policy under Rwanda Law N° 058/2021 with NCSA registration, 48h breach notification, and data subject rights.',
     content: `# KigaliFin Technologies Rwanda — Personal Data Protection Policy
 
@@ -168,7 +168,7 @@ For concerns regarding data privacy, please write to our support desk.
     jurisdiction: 'MW',
     frameworkSlug: 'mw-cybersecurity-2016',
     name: 'LakePay Malawi Electronic Transactions & Cyber Security Governance Policy',
-    type: 'ALIGNED',
+    type: 'PARTIALLY_ALIGNED',
     description: 'Aligned fintech policy under Malawi Electronic Transactions and Cyber Security Act 2016 covering risk management, MACRA reporting, and electronic signature integrity.',
     content: `# LakePay Malawi Limited — Electronic Transactions & Cyber Security Governance Policy
 
@@ -234,7 +234,7 @@ Users should use strong passwords and keep their devices safe.
     jurisdiction: 'NG',
     frameworkSlug: 'ndpa-2023',
     name: 'NaijaPay Nigeria Data Governance & Privacy Policy',
-    type: 'ALIGNED',
+    type: 'PARTIALLY_ALIGNED',
     description: 'Aligned policy under Nigeria Data Protection Act (NDPA) 2023 with Section 24 principles, 72h NDPC breach notification, DPO, and cross-border safeguards.',
     content: `# NaijaPay Limited — Comprehensive Data Protection & Governance Policy
 
