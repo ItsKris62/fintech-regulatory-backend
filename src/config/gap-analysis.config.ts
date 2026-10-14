@@ -116,6 +116,54 @@ export type PilotCorpusReadiness =
   | 'VALIDATED_FOR_GAP_ANALYSIS'
   | 'STALE_OR_UNKNOWN';
 
+export interface PilotCountryConfig {
+  pilotEnabled: boolean;
+  readiness: PilotCorpusReadiness;
+  validatedFrameworks: readonly string[];
+  indexedPartialFrameworks: readonly string[];
+  unavailableFrameworks: readonly string[];
+  message?: string;
+}
+
+export const GAP_ANALYSIS_PILOT_CONFIG: Readonly<{
+  jurisdictions: Record<string, PilotCountryConfig>;
+}> = {
+  jurisdictions: {
+    KE: {
+      pilotEnabled: true,
+      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
+      validatedFrameworks: ['dpa-2019'],
+      indexedPartialFrameworks: ['odpc-regs-2021', 'cbk-cyber', 'cbk-kyc', 'cbk-prudential', 'pocamla', 'nps-2011'],
+      unavailableFrameworks: [],
+      message: 'Kenya corpus validated for pilot testing under Data Protection Act 2019.',
+    },
+    RW: {
+      pilotEnabled: true,
+      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
+      validatedFrameworks: ['rw-dpa-2021'],
+      indexedPartialFrameworks: ['bnr-cybersecurity-2021', 'bnr-psp-2018'],
+      unavailableFrameworks: [],
+      message: 'Rwanda corpus validated for pilot testing under Law N° 058/2021 relating to Personal Data and Privacy.',
+    },
+    MW: {
+      pilotEnabled: true,
+      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
+      validatedFrameworks: ['mw-cybersecurity-2016'],
+      indexedPartialFrameworks: ['mw-dpa-2024', 'rbm-payment-systems-2016'],
+      unavailableFrameworks: [],
+      message: 'Malawi corpus validated for pilot testing under Electronic Transactions and Cyber Security Act 2016.',
+    },
+    NG: {
+      pilotEnabled: true,
+      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
+      validatedFrameworks: ['ndpa-2023'],
+      indexedPartialFrameworks: ['cbn-cybersecurity-2024', 'bofia-2020'],
+      unavailableFrameworks: [],
+      message: 'Nigeria corpus validated for pilot testing under Nigeria Data Protection Act 2023.',
+    },
+  },
+};
+
 export interface PilotJurisdictionAvailability {
   jurisdiction: string;
   pilotEnabled: boolean;
@@ -167,25 +215,32 @@ export function getPilotJurisdictionAvailability(code: string): PilotJurisdictio
     };
   }
 
-  // If in a test environment without explicit pilot configuration or gating override,
-  // allow KE for test runners that do not test pilot gating explicitly.
-  if (process.env.NODE_ENV === 'test' && !process.env.GAP_ANALYSIS_PILOT_STRICT_GATE && enabledEnv === undefined) {
+  // Strict gate mode (e.g. baseline test simulation): fail-closed
+  if (process.env.GAP_ANALYSIS_PILOT_STRICT_GATE === 'true') {
     if (upper === 'KE') {
       return {
         jurisdiction: 'KE',
-        pilotEnabled: true,
+        pilotEnabled: false,
         readiness: 'INDEXED_PARTIAL',
-        message: 'Corpus validation in progress for Kenya. Enabled for controlled pilot testing with partial coverage.',
+        message: 'Corpus validation in progress. Regulatory sources for Kenya are undergoing release validation. Gap Analysis pilot testing is pending formal release validation.',
       };
     }
+    return {
+      jurisdiction: upper,
+      pilotEnabled: false,
+      readiness: 'UNAVAILABLE',
+      message: `Gap Analysis corpus for jurisdiction ${upper} is not yet available or enabled for pilot testing.`,
+    };
   }
 
-  if (upper === 'KE') {
+  // Release configuration from GAP_ANALYSIS_PILOT_CONFIG
+  const configured = GAP_ANALYSIS_PILOT_CONFIG.jurisdictions[upper];
+  if (configured) {
     return {
-      jurisdiction: 'KE',
-      pilotEnabled: false,
-      readiness: 'INDEXED_PARTIAL',
-      message: 'Corpus validation in progress. Regulatory sources for Kenya are undergoing release validation. Gap Analysis pilot testing is pending formal release validation.',
+      jurisdiction: upper,
+      pilotEnabled: configured.pilotEnabled,
+      readiness: configured.readiness,
+      message: configured.message,
     };
   }
 
@@ -233,14 +288,31 @@ export function getPilotFrameworkAvailability(
     };
   }
 
-  // If in a test environment without explicit pilot configuration or gating override,
-  // allow frameworks for test runners that do not test pilot gating explicitly.
-  if (process.env.NODE_ENV === 'test' && !process.env.GAP_ANALYSIS_PILOT_STRICT_GATE && enabledEnv === undefined) {
+  // Strict gate mode (e.g. baseline test simulation): fail-closed
+  if (process.env.GAP_ANALYSIS_PILOT_STRICT_GATE === 'true') {
     return {
       slug,
-      pilotEnabled: true,
-      readiness: 'INDEXED_PARTIAL',
+      pilotEnabled: false,
+      readiness: 'UNAVAILABLE',
     };
+  }
+
+  // Release configuration from GAP_ANALYSIS_PILOT_CONFIG
+  for (const config of Object.values(GAP_ANALYSIS_PILOT_CONFIG.jurisdictions)) {
+    if (config.validatedFrameworks.map((f) => f.toLowerCase()).includes(lowerSlug)) {
+      return {
+        slug,
+        pilotEnabled: true,
+        readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
+      };
+    }
+    if (config.indexedPartialFrameworks.map((f) => f.toLowerCase()).includes(lowerSlug)) {
+      return {
+        slug,
+        pilotEnabled: false,
+        readiness: 'INDEXED_PARTIAL',
+      };
+    }
   }
 
   return {

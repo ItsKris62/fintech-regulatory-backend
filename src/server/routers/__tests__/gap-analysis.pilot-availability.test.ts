@@ -103,4 +103,55 @@ describe('Gap Analysis Pilot Availability Contract', () => {
     expect(contract.pilotAvailability.jurisdictions.KE).toBeDefined();
     expect(contract.pilotAvailability.jurisdictions.RW).toBeDefined();
   });
+
+  it('9. all four pilot jurisdictions (KE, RW, MW, NG) are validated in release pilot configuration', () => {
+    delete process.env.GAP_ANALYSIS_PILOT_STRICT_GATE;
+    for (const code of ['KE', 'RW', 'MW', 'NG']) {
+      const avail = getPilotJurisdictionAvailability(code);
+      expect(avail.jurisdiction).toBe(code);
+      expect(avail.pilotEnabled).toBe(true);
+      expect(avail.readiness).toBe('VALIDATED_FOR_GAP_ANALYSIS');
+    }
+  });
+
+  it('10. each pilot country exposes its validated framework pack', () => {
+    delete process.env.GAP_ANALYSIS_PILOT_STRICT_GATE;
+    const validatedPacks = [
+      { slug: 'dpa-2019', country: 'KE' },
+      { slug: 'rw-dpa-2021', country: 'RW' },
+      { slug: 'mw-cybersecurity-2016', country: 'MW' },
+      { slug: 'ndpa-2023', country: 'NG' },
+    ];
+
+    for (const pack of validatedPacks) {
+      const avail = getPilotFrameworkAvailability(pack.slug, pack.country);
+      expect(avail.slug).toBe(pack.slug);
+      expect(avail.pilotEnabled).toBe(true);
+      expect(avail.readiness).toBe('VALIDATED_FOR_GAP_ANALYSIS');
+    }
+  });
+
+  it('11. pending secondary frameworks remain INDEXED_PARTIAL and not selectable', () => {
+    delete process.env.GAP_ANALYSIS_PILOT_STRICT_GATE;
+    const pendingFrameworks = [
+      'odpc-regs-2021',
+      'bnr-cybersecurity-2021',
+      'mw-dpa-2024',
+      'cbn-cybersecurity-2024',
+    ];
+
+    for (const slug of pendingFrameworks) {
+      const avail = getPilotFrameworkAvailability(slug);
+      expect(avail.slug).toBe(slug);
+      expect(avail.pilotEnabled).toBe(false);
+      expect(avail.readiness).toBe('INDEXED_PARTIAL');
+    }
+  });
+
+  it('12. unknown frameworks remain fail-closed UNAVAILABLE', () => {
+    delete process.env.GAP_ANALYSIS_PILOT_STRICT_GATE;
+    const fake = getPilotFrameworkAvailability('unknown-foreign-regulation');
+    expect(fake.pilotEnabled).toBe(false);
+    expect(fake.readiness).toBe('UNAVAILABLE');
+  });
 });

@@ -362,6 +362,93 @@ export const FRAMEWORK_METADATA_REGISTRY: Record<string, RegulatoryFrameworkMeta
     regulator: 'CMA',
   },
 
+  // ─── NIGERIA Domestic Frameworks ──────────────────────────────────────────
+  'ndpa-2023': {
+    slug: 'ndpa-2023',
+    name: 'Nigeria Data Protection Act 2023',
+    category: 'Data Protection',
+    tier: 'STARTUP',
+    scope: 'DOMESTIC',
+    jurisdictions: ['NG'],
+    regulator: 'NDPC',
+  },
+  'cbn-cybersecurity-2024': {
+    slug: 'cbn-cybersecurity-2024',
+    name: 'CBN Risk-Based Cybersecurity Framework 2024',
+    category: 'Cybersecurity',
+    tier: 'STARTUP',
+    scope: 'DOMESTIC',
+    jurisdictions: ['NG'],
+    regulator: 'CBN',
+  },
+  'bofia-2020': {
+    slug: 'bofia-2020',
+    name: 'Banks and Other Financial Institutions Act 2020',
+    category: 'Banking Supervision',
+    tier: 'BUSINESS',
+    scope: 'DOMESTIC',
+    jurisdictions: ['NG'],
+    regulator: 'CBN',
+  },
+
+  // ─── RWANDA Domestic Frameworks ───────────────────────────────────────────
+  'rw-dpa-2021': {
+    slug: 'rw-dpa-2021',
+    name: 'Law Relating to the Protection of Personal Data and Privacy 2021',
+    category: 'Data Protection',
+    tier: 'STARTUP',
+    scope: 'DOMESTIC',
+    jurisdictions: ['RW'],
+    regulator: 'NCSA',
+  },
+  'bnr-cybersecurity-2021': {
+    slug: 'bnr-cybersecurity-2021',
+    name: 'BNR Regulation on Cyber Security in Regulated Institutions',
+    category: 'Cybersecurity',
+    tier: 'STARTUP',
+    scope: 'DOMESTIC',
+    jurisdictions: ['RW'],
+    regulator: 'BNR',
+  },
+  'bnr-psp-2018': {
+    slug: 'bnr-psp-2018',
+    name: 'BNR Regulation Governing Payment Services Providers',
+    category: 'Payments',
+    tier: 'STARTUP',
+    scope: 'DOMESTIC',
+    jurisdictions: ['RW'],
+    regulator: 'BNR',
+  },
+
+  // ─── MALAWI Domestic Frameworks ───────────────────────────────────────────
+  'mw-cybersecurity-2016': {
+    slug: 'mw-cybersecurity-2016',
+    name: 'Electronic Transactions and Cyber Security Act 2016',
+    category: 'Cybersecurity',
+    tier: 'STARTUP',
+    scope: 'DOMESTIC',
+    jurisdictions: ['MW'],
+    regulator: 'MACRA',
+  },
+  'mw-dpa-2024': {
+    slug: 'mw-dpa-2024',
+    name: 'Data Protection Act 2024',
+    category: 'Data Protection',
+    tier: 'STARTUP',
+    scope: 'DOMESTIC',
+    jurisdictions: ['MW'],
+    regulator: 'MACRA',
+  },
+  'rbm-payment-systems-2016': {
+    slug: 'rbm-payment-systems-2016',
+    name: 'Payment Systems Act 2016',
+    category: 'Payments',
+    tier: 'STARTUP',
+    scope: 'DOMESTIC',
+    jurisdictions: ['MW'],
+    regulator: 'RBM',
+  },
+
   // ─── INTERNATIONAL Standards ──────────────────────────────────────────────
   'fatf-recommendations': {
     slug: 'fatf-recommendations',

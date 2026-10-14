@@ -80,8 +80,92 @@ export const KENYA_PRIORITY_APPROVED_SOURCES: ApprovedSourceSeed[] = [
   },
 ];
 
+export const MULTI_COUNTRY_APPROVED_SOURCES: ApprovedSourceSeed[] = [
+  ...KENYA_PRIORITY_APPROVED_SOURCES,
+  // Nigeria (NG)
+  {
+    id: 'ng-ndpc',
+    jurisdiction: 'Nigeria',
+    authorityName: 'Nigeria Data Protection Commission',
+    authorityType: 'REGULATOR',
+    baseUrl: 'https://ndpc.gov.ng',
+    allowedDomains: ['ndpc.gov.ng', 'www.ndpc.gov.ng'],
+    notes: 'Designated supervisory authority under the Nigeria Data Protection Act 2023.',
+  },
+  {
+    id: 'ng-cbn',
+    jurisdiction: 'Nigeria',
+    authorityName: 'Central Bank of Nigeria',
+    authorityType: 'REGULATOR',
+    baseUrl: 'https://www.cbn.gov.ng',
+    allowedDomains: ['cbn.gov.ng', 'www.cbn.gov.ng'],
+    notes: 'Apex banking, payment system, and financial sector regulator in Nigeria.',
+  },
+  // Rwanda (RW)
+  {
+    id: 'rw-ncsa',
+    jurisdiction: 'Rwanda',
+    authorityName: 'National Cyber Security Authority',
+    authorityType: 'REGULATOR',
+    baseUrl: 'https://www.ncsa.gov.rw',
+    allowedDomains: ['ncsa.gov.rw', 'www.ncsa.gov.rw'],
+    notes: 'National supervisory authority for data protection, privacy, and cybersecurity in Rwanda.',
+  },
+  {
+    id: 'rw-bnr',
+    jurisdiction: 'Rwanda',
+    authorityName: 'National Bank of Rwanda',
+    authorityType: 'REGULATOR',
+    baseUrl: 'https://www.bnr.rw',
+    allowedDomains: ['bnr.rw', 'www.bnr.rw'],
+    notes: 'Central bank regulating payment service providers, banking, and financial sector cybersecurity in Rwanda.',
+  },
+  {
+    id: 'rw-primature',
+    jurisdiction: 'Rwanda',
+    authorityName: 'Official Gazette / Office of the Prime Minister',
+    authorityType: 'OFFICIAL_LEGAL_PUBLISHER',
+    baseUrl: 'https://www.primature.gov.rw',
+    allowedDomains: ['primature.gov.rw', 'www.primature.gov.rw', 'minijust.gov.rw'],
+    notes: 'Official Gazette publisher for enacted laws and statutory instruments in Rwanda.',
+  },
+  // Malawi (MW)
+  {
+    id: 'mw-macra',
+    jurisdiction: 'Malawi',
+    authorityName: 'Malawi Communications Regulatory Authority',
+    authorityType: 'REGULATOR',
+    baseUrl: 'https://www.macra.mw',
+    allowedDomains: ['macra.mw', 'www.macra.mw'],
+    notes: 'Communications and electronic transactions regulator in Malawi.',
+  },
+  {
+    id: 'mw-rbm',
+    jurisdiction: 'Malawi',
+    authorityName: 'Reserve Bank of Malawi',
+    authorityType: 'REGULATOR',
+    baseUrl: 'https://www.rbm.mw',
+    allowedDomains: ['rbm.mw', 'www.rbm.mw'],
+    notes: 'Central bank and payment systems regulator in Malawi.',
+  },
+  {
+    id: 'mw-ministry-information',
+    jurisdiction: 'Malawi',
+    authorityName: 'Ministry of Information and Digitization',
+    authorityType: 'MINISTRY',
+    baseUrl: 'https://www.information.gov.mw',
+    allowedDomains: ['information.gov.mw', 'www.information.gov.mw'],
+    notes: 'Parent ministry for ICT, data protection, and digital economy governance in Malawi.',
+  },
+];
+
 export const PRIORITY_SOURCE_KEYWORDS = [
   'data protection',
+  'privacy',
+  'personal data',
+  'cyber security',
+  'cybersecurity',
+  'electronic transactions',
   'odpc',
   'national payment',
   'payment system',
@@ -91,7 +175,6 @@ export const PRIORITY_SOURCE_KEYWORDS = [
   'anti-money laundering',
   'aml',
   'financial reporting centre',
-  'cybersecurity',
   'risk management',
   'banking act',
   'prudential guideline',
@@ -100,6 +183,12 @@ export const PRIORITY_SOURCE_KEYWORDS = [
   'artificial intelligence',
   'ai strategy',
   'ict policy',
+  'ndpc',
+  'cbn',
+  'ncsa',
+  'bnr',
+  'macra',
+  'rbm',
 ];
 
 export function isPriorityRegulatoryDocument(doc: {
@@ -118,7 +207,7 @@ export function matchApprovedSourceId(doc: { source?: string | null; title?: str
     if (url) {
       try {
         const hostname = new URL(url).hostname.toLowerCase();
-        for (const source of KENYA_PRIORITY_APPROVED_SOURCES) {
+        for (const source of MULTI_COUNTRY_APPROVED_SOURCES) {
           if (source.allowedDomains.some(domain => hostname === domain || hostname.endsWith(`.${domain}`))) {
             return source.id;
           }
@@ -130,6 +219,23 @@ export function matchApprovedSourceId(doc: { source?: string | null; title?: str
   }
 
   const haystack = [doc.source, doc.title, doc.category].filter(Boolean).join(' ').toLowerCase();
+
+  // Multi-Country Authorities
+  // Nigeria
+  if (/\bndpc\b|nigeria data protection|data protection commission/i.test(haystack)) return 'ng-ndpc';
+  if (/central bank of nigeria|\bcbn\b|bofia|banks and other financial institutions/i.test(haystack)) return 'ng-cbn';
+
+  // Rwanda
+  if (/\bncsa\b|national cyber security authority|protection of personal data and privacy/i.test(haystack)) return 'rw-ncsa';
+  if (/national bank of rwanda|\bbnr\b|payment services providers|cyber security in regulated/i.test(haystack)) return 'rw-bnr';
+  if (/official gazette|primature|republic of rwanda/i.test(haystack)) return 'rw-primature';
+
+  // Malawi
+  if (/\bmacra\b|malawi communications|electronic transactions and cyber/i.test(haystack)) return 'mw-macra';
+  if (/reserve bank of malawi|\brbm\b|payment systems act/i.test(haystack)) return 'mw-rbm';
+  if (/ministry of information|malawi government/i.test(haystack)) return 'mw-ministry-information';
+
+  // Kenya & Global
   if (/\bnist\b|national institute of standards/i.test(haystack)) return 'nist';
   if (/ministry of ict|ict ministry|ict authority|information, communications and the digital economy|government of kenya|ict policy|cloud policy|artificial intelligence strategy|ai strategy/i.test(haystack)) return 'ict-ministry-ke';
   if (/\bodpc\b|data protection commissioner/i.test(haystack)) return 'ke-office-data-protection-commissioner';

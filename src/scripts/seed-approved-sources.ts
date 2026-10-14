@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma/client';
 import { logger } from '@/utils/logger';
-import { KENYA_PRIORITY_APPROVED_SOURCES } from '@/lib/source-grounding/approved-sources';
+import { MULTI_COUNTRY_APPROVED_SOURCES } from '@/lib/source-grounding/approved-sources';
 
 type Options = {
   dryRun: boolean;
@@ -21,13 +21,13 @@ function parseOptions(argv: string[]): Options {
 export async function seedApprovedSources(options: Options): Promise<Summary> {
   const summary: Summary = {
     dryRun: options.dryRun,
-    scanned: KENYA_PRIORITY_APPROVED_SOURCES.length,
+    scanned: MULTI_COUNTRY_APPROVED_SOURCES.length,
     created: 0,
     updated: 0,
     unchanged: 0,
   };
 
-  for (const source of KENYA_PRIORITY_APPROVED_SOURCES) {
+  for (const source of MULTI_COUNTRY_APPROVED_SOURCES) {
     const existing = await (prisma as any).approvedSource.findUnique({
       where: { id: source.id },
     });
@@ -77,13 +77,15 @@ export async function seedApprovedSources(options: Options): Promise<Summary> {
 }
 
 if (require.main === module) {
+  let exitCode = 0;
   seedApprovedSources(parseOptions(process.argv.slice(2)))
     .then((summary) => console.log(JSON.stringify(summary, null, 2)))
     .catch((error) => {
       console.error(error);
-      process.exitCode = 1;
+      exitCode = 1;
     })
     .finally(async () => {
       await prisma.$disconnect();
+      process.exit(exitCode);
     });
 }

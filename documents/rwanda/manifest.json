@@ -321,19 +321,22 @@
       "country": "Rwanda",
       "jurisdictionCode": "RW",
       "scope": "COUNTRY",
-      "category": "cybersecurity",
-      "regulator": "Parliament of Rwanda",
+      "category": "data-protection",
+      "regulator": "National Cyber Security Authority",
       "title": "Law Relating to the Protection of Personal Data and Privacy",
       "documentType": "ACT",
-      "authorityStatus": "UNKNOWN",
+      "authorityStatus": "IN_FORCE",
       "isBinding": true,
       "localPath": "documents/rwanda/cybersecurity/Law relating to the Protection of Personal Data and Privacy.pdf",
-      "sourceUrl": null,
+      "sourceUrl": "https://www.ncsa.gov.rw/law-and-regulations",
       "checksumSha256": "967fce9942443071fd686be2bdf9045ce845801982e22f6b946e31245fac902c",
-      "reviewStatus": "NEEDS_REVIEW",
-      "priority": "UNKNOWN",
+      "reviewStatus": "APPROVED",
+      "priority": "P0",
       "tags": [],
-      "language": "en"
+      "language": "en",
+      "frameworkSlugs": [
+        "rw-dpa-2021"
+      ]
     },
     {
       "id": "rw-banking-law-2024-018",
