@@ -1551,9 +1551,11 @@ export const adminRouter = router({
       overallStatus: baseHealth.status,
       malwareScanning: {
         status: malwareHealth.status,
+        provider: malwareHealth.provider,
         enabled: malwareHealth.enabled,
         configured: malwareHealth.configured,
         reachable: malwareHealth.reachable,
+        timeoutMs: malwareHealth.timeoutMs,
         latencyMs: malwareHealth.latencyMs,
         message: malwareHealth.message,
         skippedScanCountLast7d: null,

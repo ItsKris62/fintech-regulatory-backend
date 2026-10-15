@@ -301,3 +301,29 @@ We comply with general privacy standards and implement reasonable computer secur
 `,
   },
 ];
+
+/**
+ * Deep-only synthetic fixtures deliberately combine aligned language, gaps,
+ * ambiguity, a direct internal contradiction, and absent implementation
+ * evidence. They contain no customer data.
+ */
+export const DEEP_VALIDATION_SYNTHETIC_POLICIES = (['KE', 'RW', 'MW', 'NG'] as const).map((jurisdiction) => {
+  const base = PILOT_SYNTHETIC_POLICIES.find((fixture) =>
+    fixture.jurisdiction === jurisdiction && fixture.type === 'DELIBERATE_GAPS',
+  )!;
+  return {
+    ...base,
+    name: `${jurisdiction} Deep Reasoning Conflict Fixture`,
+    description: 'Synthetic mixed-compliance policy with ambiguity, conflicting clauses, and missing implementation evidence.',
+    content: `${base.content}
+
+DEEP VALIDATION ADDENDUM
+- Compliant section: Requests for access and correction are acknowledged and tracked by the privacy team.
+- Deliberate gap: No owner or deadline is assigned for deletion requests.
+- Ambiguous wording: Material incidents may be reported promptly where appropriate.
+- Conflicting clauses: Section A requires regulator notification within 72 hours; Section B prohibits external notification without executive approval.
+- Missing implementation evidence: The policy asserts annual control testing, but provides no test record, owner, date, or remediation evidence.
+`,
+    validationFeatures: ['COMPLIANT', 'DELIBERATE_GAP', 'AMBIGUOUS', 'CONTRADICTION', 'MISSING_IMPLEMENTATION_EVIDENCE'] as const,
+  };
+});

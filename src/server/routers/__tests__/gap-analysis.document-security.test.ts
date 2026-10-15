@@ -15,6 +15,9 @@ import {
   EICAR_STANDARD_TEST_SIGNATURE,
   assertProductionMalwareScanningAvailable,
   probeGapAnalysisMalwareScanner,
+  DisabledDevelopmentScanner,
+  type DocumentMalwareScanStatus,
+  type DocumentMalwareScanner,
 } from '@/lib/security/gap-analysis-malware';
 import { scrubAiJobPayload } from '@/modules/ai-jobs/ai-job-runner';
 
@@ -821,8 +824,59 @@ describe('BATCH 4: DOCUMENT SECURITY, PRIVACY, RETENTION, CONSENT & SAFE FILE PR
         enabled: expect.any(Boolean),
         configured: expect.any(Boolean),
         reachable: expect.any(Boolean),
+        provider: expect.any(String),
+        timeoutMs: expect.any(Number),
       }));
       expect(JSON.stringify(health)).not.toContain('SHERIABOT_PRIVATE_POLICY_CANARY_4A91F');
+    });
+
+    it('27c. Development scanner implements the explicit scanner contract', async () => {
+      const scanner = new DisabledDevelopmentScanner();
+      expect(scanner.providerName).toBe('disabled-development');
+      expect(scanner.status).toBe('DISABLED_DEVELOPMENT');
+      await expect(scanner.scan(Buffer.from('synthetic clean fixture'))).resolves.toEqual({ status: 'CLEAN' });
+      await expect(scanner.health()).resolves.toEqual(expect.objectContaining({
+        provider: 'disabled-development',
+        timeoutMs: expect.any(Number),
+      }));
+    });
+
+    it('27d. Server rejects Deep when framework-level readiness is gated', async () => {
+      const caller = createCaller();
+      const validText = Buffer.from('Synthetic policy document with sufficient readable content and no customer data.').toString('base64');
+      await expect(caller.runGapAnalysis({
+        fileName: 'synthetic.txt',
+        fileType: 'txt',
+        fileContent: validText,
+        regulatoryFrameworks: ['dpa_2019'],
+        analysisDepth: 'deep',
+        processingConsentAcknowledged: true,
+        consentVersion: GAP_ANALYSIS_PROCESSING_ACK_VERSION,
+      })).rejects.toThrow(/Deep Analysis is not yet validated/i);
+    });
+
+    it.each([
+      ['SCANNER_UNAVAILABLE', 'CLAMAV_TIMEOUT'],
+      ['SCANNER_UNAVAILABLE', 'ECONNREFUSED'],
+      ['SCAN_ERROR', 'UNEXPECTED_RESPONSE'],
+    ] as const)('27e. production fails closed for deterministic scanner result %s/%s', async (status, errorCode) => {
+      const scanner: DocumentMalwareScanner = {
+        providerName: 'deterministic-test-scanner',
+        status: 'ENABLED',
+        async scan() { return { status: status as DocumentMalwareScanStatus, errorCode }; },
+        async health() {
+          return {
+            status: 'UNAVAILABLE', enabled: true, configured: true, reachable: false,
+            provider: 'deterministic-test-scanner', timeoutMs: 25, message: errorCode,
+          };
+        },
+      };
+      await expect(scanGapAnalysisBuffer(
+        Buffer.from('synthetic clean policy content'),
+        'synthetic.txt',
+        scanner,
+        { required: true, isProduction: true },
+      )).rejects.toThrow(MalwareScanServiceError);
     });
   });
 

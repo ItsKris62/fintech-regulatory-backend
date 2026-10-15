@@ -539,8 +539,7 @@ export async function validateGapAnalysisFile(
   if (result.valid) {
     logger.info({
       type: 'gap_analysis_upload_validated',
-      fileName,
-      fileType: ext,
+      safeExtension: ext,
       fileSize: buffer.length,
       extractedTextLength: result.extractedTextLength,
     });
@@ -548,10 +547,8 @@ export async function validateGapAnalysisFile(
   } else {
     logger.warn({
       type: 'gap_analysis_file_rejected',
-      fileName,
-      fileType: ext,
-      code: result.code,
-      reason: result.reason,
+      safeExtension: ext,
+      failureClass: result.code,
     });
     throw new GapAnalysisFileValidationError(result.reason, result.code);
   }

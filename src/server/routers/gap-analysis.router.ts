@@ -18,6 +18,7 @@ import {
   GAP_ANALYSIS_PROCESSING_ACK_VERSION,
   getGapAnalysisContract,
   getGapAnalysisFileExtension,
+  isFrameworkDepthAvailable,
   getPilotFrameworkAvailability,
   getPilotJurisdictionAvailability,
   isGapAnalysisDepthAllowed,
@@ -28,7 +29,7 @@ import {
   buildGapAnalysisExecutionIdentity,
   GAP_ANALYSIS_REUSABLE_EXECUTION_STATUSES,
 } from '@/modules/compliance/gap-analysis-execution-identity';
-import { validateGapAnalysisFile } from '@/lib/security/gap-analysis-file-validator';
+import { GapAnalysisFileValidationError, validateGapAnalysisFile } from '@/lib/security/gap-analysis-file-validator';
 import { scanGapAnalysisBuffer, MalwareDetectedError } from '@/lib/security/gap-analysis-malware';
 import { validateAuthorizedBenchmarkDocumentIds } from '../services/benchmark-document.service';
 import { canAccessFrameworkTier } from '../services/framework-access.service';
@@ -234,9 +235,10 @@ export const gapAnalysisRouter = router({
             type: 'gap_analysis_file_rejected',
             userId: ctx.user!.id,
             orgId: ctx.orgMembership!.organizationId,
-            fileName: input.fileName,
-            fileType: input.fileType,
-            reason: (validationErr as Error).message,
+            safeExtension: input.fileType,
+            failureClass: validationErr instanceof GapAnalysisFileValidationError
+              ? validationErr.code ?? 'VALIDATION'
+              : 'VALIDATION',
           });
           throw new TRPCError({
             code: 'BAD_REQUEST',
@@ -261,8 +263,8 @@ export const gapAnalysisRouter = router({
             type: 'gap_analysis_malware_scan_failed',
             userId: ctx.user!.id,
             orgId: ctx.orgMembership!.organizationId,
-            fileName: input.fileName,
-            error: (scanErr as Error).message,
+            safeExtension: input.fileType,
+            failureClass: scanErr instanceof MalwareDetectedError ? 'INFECTED' : 'SCANNER_UNAVAILABLE',
           });
           if (scanErr instanceof MalwareDetectedError) {
             throw new TRPCError({
@@ -372,6 +374,12 @@ export const gapAnalysisRouter = router({
               message: `Framework "${fw.name}" (${fw.slug}) is not enabled for Gap Analysis pilot testing in ${analysisJurisdiction}.`,
             });
           }
+          if (!isFrameworkDepthAvailable(analysisJurisdiction, fw.slug, input.analysisDepth)) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: `${input.analysisDepth === 'deep' ? 'Deep Analysis' : `The ${input.analysisDepth} analysis depth`} is not yet validated for framework "${fw.name}" (${fw.slug}) in ${analysisJurisdiction}.`,
+            });
+          }
         }
 
         const frameworkNames = orderedFrameworks.map((f) => f.name);
@@ -437,7 +445,7 @@ export const gapAnalysisRouter = router({
           type:       'gap_analysis_requested',
           userId,
           orgId,
-          fileName:   input.fileName,
+          safeExtension: input.fileType,
           frameworks: input.regulatoryFrameworks,
           benchmarkDocumentIds,
           depth:      input.analysisDepth,
@@ -520,7 +528,11 @@ export const gapAnalysisRouter = router({
         return result;
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Failed to run gap analysis';
-        logger.error({ type: 'gap_analysis_request_error', userId: ctx.user!.id, error: msg });
+        logger.error({
+          type: 'gap_analysis_request_error',
+          userId: ctx.user!.id,
+          failureClass: error instanceof TRPCError ? error.code : 'INTERNAL',
+        });
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
       }
@@ -546,6 +558,33 @@ export const gapAnalysisRouter = router({
         logger.error({ type: 'gap_analysis_list_error', userId: ctx.user!.id, error: msg });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: msg, cause: error });
       }
+    }),
+
+  /**
+   * Minimal status projection for active polling. Full result JSON is fetched
+   * only after the terminal COMPLETED transition.
+   */
+  getGapAnalysisStatus: orgMemberProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      const result = await ctx.tenantPrisma.gapAnalysis.findFirst({
+        where: {
+          id: input.id,
+          organizationId: ctx.orgMembership!.organizationId,
+          deletedAt: null,
+        },
+        select: {
+          id: true,
+          documentName: true,
+          status: true,
+          progress: true,
+          currentStage: true,
+          overallScore: true,
+          errorMessage: true,
+        },
+      });
+      if (!result) throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });
+      return result;
     }),
 
   /**

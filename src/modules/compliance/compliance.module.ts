@@ -346,6 +346,7 @@ export interface GapAnalysisPipelineParams {
   documentChecksum?: string;
   executionIdentity?: string;
   executionIdentityMetadata?: Record<string, unknown>;
+  uploadDurationMs?: number;
 }
 
 /**
@@ -361,6 +362,7 @@ export async function executeGapAnalysisPipeline(
     analysisId, userId, organizationId, trialUserId, fileName, fileContent, storageKey, fileType,
     regulatoryFrameworks, regulatoryFrameworkSlugs = [], benchmarkDocumentIds = [],
     benchmarkDocuments = [], jurisdictionContext, retrievalNamespace, analysisDepth, focusAreas, ipAddress, userAgent,
+    uploadDurationMs,
   } = params;
 
   const startTime = Date.now();
@@ -371,6 +373,8 @@ export async function executeGapAnalysisPipeline(
   let analysisCompletedAt: Date | null = null;
   let verificationStartedAt: Date | null = null;
   let verificationCompletedAt: Date | null = null;
+  let storageDownloadDurationMs: number | undefined;
+  let extractionDurationMs: number | undefined;
   logger.info({
     type: 'gap_analysis_started',
     analysisId,
@@ -442,6 +446,7 @@ export async function executeGapAnalysisPipeline(
     await assertActive(); // before R2 retrieval / legacy payload decode
     let fileBuffer: Buffer;
     const effectiveStorageKey = storageKey || (analysisRecord?.documentUrl?.startsWith(GAP_ANALYSIS_STORAGE_PATH_PREFIX) ? analysisRecord.documentUrl : undefined);
+    const storageDownloadStartedAt = Date.now();
     if (effectiveStorageKey) {
       if (analysisRecord && analysisRecord.documentUrl && effectiveStorageKey !== analysisRecord.documentUrl) {
         throw new Error('Worker authorization failed: storage reference mismatch.');
@@ -456,6 +461,7 @@ export async function executeGapAnalysisPipeline(
     } else {
       throw new Error(`No document storage reference or content available for analysis ${analysisId}.`);
     }
+    storageDownloadDurationMs = Date.now() - storageDownloadStartedAt;
     await assertActive(); // after R2 retrieval
 
     // -- EXTRACTING (progress: 10) -----------------------------------------
@@ -465,6 +471,7 @@ export async function executeGapAnalysisPipeline(
 
     const ext = fileType.toLowerCase().replace('.', '');
 
+    const extractionStartedAt = Date.now();
     let policyText: string;
     if (ext === 'pdf') {
       policyText = await extractPdfText(fileBuffer);
@@ -474,6 +481,7 @@ export async function executeGapAnalysisPipeline(
     } else {
       policyText = fileBuffer.toString('utf8');
     }
+    extractionDurationMs = Date.now() - extractionStartedAt;
     await assertActive(); // after extraction
 
     if (!policyText || policyText.trim().length < 50) {
@@ -665,7 +673,7 @@ export async function executeGapAnalysisPipeline(
     // -- SANITIZE ----------------------------------------------------------
     const { sanitized: safePolicyText, wasModified: injectionDetected } = sanitizePolicyText(policyText);
     if (injectionDetected) {
-      logger.warn({ type: 'gap_analysis_prompt_injection_detected', userId, analysisId, fileName });
+      logger.warn({ type: 'gap_analysis_prompt_injection_detected', userId, analysisId, safeExtension: fileType });
     }
 
     const allPolicyChunks = chunkPolicyText(
@@ -1115,6 +1123,9 @@ export async function executeGapAnalysisPipeline(
         startedAt: startedAt.toISOString(),
         completedAt: new Date().toISOString(),
         queueWaitMs: analysisRecord?.createdAt ? Math.max(0, startedAt.getTime() - analysisRecord.createdAt.getTime()) : undefined,
+        uploadDurationMs,
+        storageDownloadDurationMs,
+        extractionDurationMs,
         retrievalDurationMs: retrievalStartedAt && retrievalCompletedAt ? retrievalCompletedAt.getTime() - retrievalStartedAt.getTime() : undefined,
         analysisDurationMs: analysisStartedAt && analysisCompletedAt ? analysisCompletedAt.getTime() - analysisStartedAt.getTime() : undefined,
         verificationDurationMs: verificationStartedAt && verificationCompletedAt ? verificationCompletedAt.getTime() - verificationStartedAt.getTime() : undefined,
@@ -3179,7 +3190,7 @@ Follow-up Question: ${followUp}
     logger.info({
       type: 'gap_analysis_run_started',
       userId,
-      fileName: params.fileName,
+      safeExtension: params.fileType,
       frameworks: params.regulatoryFrameworks,
       analysisDepth: params.analysisDepth,
     });
@@ -3256,6 +3267,7 @@ Follow-up Question: ${followUp}
 
     try {
       // Authoritative upload to R2 using tenant-isolated path
+      const uploadStartedAt = Date.now();
       await storageService.uploadDocument(
         fileBuffer,
         params.fileName,
@@ -3264,6 +3276,7 @@ Follow-up Question: ${followUp}
         'gapAnalysis',
         storageKey,
       );
+      const uploadDurationMs = Date.now() - uploadStartedAt;
 
       // Update documentUrl with secure storage key + mark as QUEUED (progress: 5)
       await prisma.gapAnalysis.update({
@@ -3306,6 +3319,7 @@ Follow-up Question: ${followUp}
         documentChecksum: params.documentChecksum,
         executionIdentity: params.executionIdentity,
         executionIdentityMetadata: params.executionIdentityMetadata,
+        uploadDurationMs,
       })) as Prisma.InputJsonValue;
 
       const job = await aiJobRunner.enqueue({
@@ -3334,7 +3348,7 @@ Follow-up Question: ${followUp}
         progress: 0,
         errorMessage: (error as Error).message,
       });
-      logger.error({ type: 'gap_analysis_upload_error', userId, analysisId: record.id, error: (error as Error).message });
+      logger.error({ type: 'gap_analysis_upload_error', userId, analysisId: record.id, failureClass: 'STORAGE' });
       throw error;
     }
   }

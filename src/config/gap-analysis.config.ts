@@ -6,6 +6,38 @@ import { GAP_ANALYSIS_DEPTH_PRODUCT_COPY } from './gap-analysis-depth-profiles';
 export const GAP_ANALYSIS_DEPTHS = ['quick', 'standard', 'deep'] as const;
 export type GapAnalysisDepth = (typeof GAP_ANALYSIS_DEPTHS)[number];
 
+export type GapAnalysisDepthAvailability = Readonly<Record<GapAnalysisDepth, boolean>>;
+
+const PILOT_FRAMEWORK_DEPTH_AVAILABILITY: Readonly<Record<string, GapAnalysisDepthAvailability>> = {
+  'KE/dpa-2019': { quick: true, standard: true, deep: false },
+  'RW/rw-dpa-2021': { quick: true, standard: true, deep: false },
+  'MW/mw-cybersecurity-2016': { quick: true, standard: true, deep: false },
+  'NG/ndpa-2023': { quick: true, standard: true, deep: false },
+};
+
+export const GAP_ANALYSIS_DEFAULT_DEPTH_AVAILABILITY: GapAnalysisDepthAvailability = {
+  quick: true,
+  standard: true,
+  deep: false,
+};
+
+export function getFrameworkDepthAvailability(
+  jurisdiction: string,
+  frameworkSlug: string,
+): GapAnalysisDepthAvailability {
+  return PILOT_FRAMEWORK_DEPTH_AVAILABILITY[
+    `${jurisdiction.toUpperCase()}/${frameworkSlug.toLowerCase().replace(/_/g, '-')}`
+  ] ?? GAP_ANALYSIS_DEFAULT_DEPTH_AVAILABILITY;
+}
+
+export function isFrameworkDepthAvailable(
+  jurisdiction: string,
+  frameworkSlug: string,
+  depth: GapAnalysisDepth,
+): boolean {
+  return getFrameworkDepthAvailability(jurisdiction, frameworkSlug)[depth];
+}
+
 export const GAP_ANALYSIS_DEPTH_UNIT_COST: Readonly<Record<GapAnalysisDepth, number>> = {
   quick: 1,
   standard: 2,
@@ -107,6 +139,10 @@ export function getGapAnalysisContract(
       text: GAP_ANALYSIS_PROCESSING_ACK_TEXT,
     },
     pilotAvailability: getGapAnalysisPilotAvailability(),
+    depthAvailability: {
+      default: GAP_ANALYSIS_DEFAULT_DEPTH_AVAILABILITY,
+      frameworks: PILOT_FRAMEWORK_DEPTH_AVAILABILITY,
+    },
   } as const;
 }
 

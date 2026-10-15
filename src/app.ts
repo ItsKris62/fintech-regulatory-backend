@@ -579,7 +579,15 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
     // -- End auth gate --------------------------------------------------------
 
-    const checks: Record<string, { status: string; latencyMs?: number; message?: string }> = {};
+    const checks: Record<string, {
+      status: string;
+      latencyMs?: number;
+      message?: string;
+      provider?: string;
+      enabled?: boolean;
+      reachable?: boolean;
+      timeoutMs?: number;
+    }> = {};
     let overallStatus: 'ok' | 'degraded' | 'down' = 'ok';
 
     // Database
@@ -612,6 +620,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     const malwareScanner = await probeGapAnalysisMalwareScanner();
     checks.malwareScanner = {
       status: malwareScanner.status,
+      provider: malwareScanner.provider,
+      enabled: malwareScanner.enabled,
+      reachable: malwareScanner.reachable,
+      timeoutMs: malwareScanner.timeoutMs,
       latencyMs: malwareScanner.latencyMs,
       message: malwareScanner.message,
     };

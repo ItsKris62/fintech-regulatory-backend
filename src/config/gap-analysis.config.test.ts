@@ -8,6 +8,8 @@ import {
   GAP_ANALYSIS_PROCESSING_ACK_VERSION,
   getAllowedGapAnalysisDepths,
   getGapAnalysisContract,
+  getFrameworkDepthAvailability,
+  isFrameworkDepthAvailable,
   isGapAnalysisDepthAllowed,
   isGapAnalysisFileType,
 } from './gap-analysis.config';
@@ -71,6 +73,17 @@ describe('canonical Gap Analysis plan contract', () => {
 
   it('keeps the existing commercial usage costs unchanged', () => {
     expect(GAP_ANALYSIS_DEPTH_UNIT_COST).toEqual({ quick: 1, standard: 2, deep: 5 });
+  });
+
+  it('keeps Deep release-gated independently of commercial plan entitlement', () => {
+    expect(getFrameworkDepthAvailability('KE', 'dpa-2019')).toEqual({
+      quick: true,
+      standard: true,
+      deep: false,
+    });
+    expect(isFrameworkDepthAvailable('RW', 'rw-dpa-2021', 'standard')).toBe(true);
+    expect(isFrameworkDepthAvailable('NG', 'ndpa-2023', 'deep')).toBe(false);
+    expect(getGapAnalysisContract('ENTERPRISE').depthAvailability.frameworks['MW/mw-cybersecurity-2016'].deep).toBe(false);
   });
 
   it('binds the canonical processing acknowledgement version to its exact UI wording', () => {
