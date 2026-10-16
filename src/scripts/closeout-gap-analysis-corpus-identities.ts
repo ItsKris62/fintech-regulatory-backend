@@ -2,7 +2,10 @@ import 'dotenv/config';
 
 import { prisma } from '@/lib/prisma/client';
 import { getIndex, getIndexStats, resolvePineconeNamespace } from '@/lib/rag/client';
-import { getCorpusVersionSnapshot } from '@/lib/rag/corpus-version';
+import {
+  getCorpusSourceSetFingerprintSnapshot,
+  getCorpusVersionSnapshot,
+} from '@/lib/rag/corpus-version';
 import type { JurisdictionCode } from '@/types/jurisdiction';
 
 const WRITE = process.argv.includes('--write');
@@ -34,6 +37,36 @@ type PilotChunkRow = {
   pineconeId: string;
   chunkIndex: number;
   contentHash: string | null;
+};
+
+type DuplicateClassification = {
+  contentHash: string;
+  chunkIndexes: readonly number[];
+  classification: 'LEGITIMATE_REPEATED_TEXT';
+  basis: string;
+};
+
+const CLASSIFIED_DUPLICATE_CONTENT_HASHES: Partial<Record<JurisdictionCode, readonly DuplicateClassification[]>> = {
+  RW: [{
+    contentHash: 'd19c72de8f60ba3d358e2a6095db0061ceb4fee7cb8a50b89ba3d6c152534b7d',
+    chunkIndexes: [117, 126],
+    classification: 'LEGITIMATE_REPEATED_TEXT',
+    basis: 'Same appeal wording occurs under distinct Articles 20 and 23 with distinct provision identities.',
+  }],
+  MW: [
+    {
+      contentHash: '5e4ceb6246abd1518744ea77b4161ca2ec1432f64f106a1c4bd4176a3137df02',
+      chunkIndexes: [123, 131],
+      classification: 'LEGITIMATE_REPEATED_TEXT',
+      basis: 'Source license text occurs at distinct page boundaries with distinct surrounding source text.',
+    },
+    {
+      contentHash: '53de8eef54c131499421bab7dfdfc45e6707905667a12309d3181f4b9bdacf7e',
+      chunkIndexes: [455, 458],
+      classification: 'LEGITIMATE_REPEATED_TEXT',
+      basis: 'Same subsection text occurs under distinct Sections 52 and 53 with distinct surrounding provisions.',
+    },
+  ],
 };
 
 function duplicates<T>(values: readonly T[]): T[] {
@@ -120,6 +153,26 @@ async function main() {
       .map((chunk) => chunk.contentHash)
       .filter((value): value is string => Boolean(value));
     const duplicateContentHashes = duplicates(contentHashes);
+    const classifiedDuplicateContentHashes = duplicateContentHashes.map((contentHash) => {
+      const actualIndexes = chunks
+        .filter((chunk) => chunk.contentHash === contentHash)
+        .map((chunk) => chunk.chunkIndex)
+        .sort((left, right) => left - right);
+      const classification = CLASSIFIED_DUPLICATE_CONTENT_HASHES[target.jurisdictionCode]
+        ?.find((entry) => entry.contentHash === contentHash);
+      const expectedIndexes = classification
+        ? [...classification.chunkIndexes].sort((left, right) => left - right)
+        : [];
+      const exactMembership = JSON.stringify(actualIndexes) === JSON.stringify(expectedIndexes);
+      return {
+        contentHash,
+        actualIndexes,
+        classification: exactMembership ? classification?.classification ?? null : null,
+        basis: exactMembership ? classification?.basis ?? null : null,
+      };
+    });
+    const unclassifiedDuplicateContentHashes = classifiedDuplicateContentHashes
+      .filter((entry) => entry.classification === null);
     const missingContentHashes = chunks.length - contentHashes.length;
     const fetched = new Map<string, Record<string, unknown>>();
 
@@ -154,7 +207,9 @@ async function main() {
       duplicatePineconeIds.length ? `duplicate Pinecone IDs ${duplicatePineconeIds.length}` : null,
       duplicateChunkIndexes.length ? `duplicate chunk indexes ${duplicateChunkIndexes.length}` : null,
       missingContentHashes ? `missing content hashes ${missingContentHashes}` : null,
-      duplicateContentHashes.length ? `duplicate content hashes ${duplicateContentHashes.length}` : null,
+      unclassifiedDuplicateContentHashes.length
+        ? `unclassified duplicate content hashes ${unclassifiedDuplicateContentHashes.length}`
+        : null,
       missingVectorIds.length ? `missing vectors ${missingVectorIds.length}` : null,
       metadataMismatches.length ? `vector metadata mismatches ${metadataMismatches.length}` : null,
       !linkedApprovedSource ? 'approved source linkage is missing or inactive' : null,
@@ -165,6 +220,7 @@ async function main() {
     findings.push({
       jurisdictionCode: target.jurisdictionCode,
       frameworkSlug: target.frameworkSlug,
+      canonicalDocumentSourceCount: matches.length,
       documentChecksum: document.checksum,
       dbChunkCount: actualCount,
       pineconeVectorCount: fetched.size,
@@ -175,6 +231,7 @@ async function main() {
       duplicateChunkIndexes: duplicateChunkIndexes.length,
       missingContentHashes,
       duplicateContentHashes: duplicateContentHashes.length,
+      classifiedDuplicateContentHashes,
       metadataMismatches: metadataMismatches.length,
     });
   }
@@ -191,6 +248,11 @@ async function main() {
 
   const jurisdictionCodes = TARGETS.map((target) => target.jurisdictionCode);
   const before = await getCorpusVersionSnapshot({
+    mode: 'COMPARE',
+    jurisdictions: jurisdictionCodes,
+    jurisdictionSource: 'REQUEST',
+  });
+  const fingerprintsBefore = await getCorpusSourceSetFingerprintSnapshot({
     mode: 'COMPARE',
     jurisdictions: jurisdictionCodes,
     jurisdictionSource: 'REQUEST',
@@ -217,6 +279,11 @@ async function main() {
     jurisdictions: jurisdictionCodes,
     jurisdictionSource: 'REQUEST',
   });
+  const fingerprintsAfter = await getCorpusSourceSetFingerprintSnapshot({
+    mode: 'COMPARE',
+    jurisdictions: jurisdictionCodes,
+    jurisdictionSource: 'REQUEST',
+  });
   console.error('[corpus-closeout] computed post-write corpus snapshots');
 
   console.log(JSON.stringify({
@@ -225,14 +292,20 @@ async function main() {
     namespaceVectorCount: namespaceCount,
     expectedTotal,
     findings,
+    fingerprintsBefore,
+    fingerprintsAfter,
     corpusVersionsBefore: before,
     corpusVersionsAfter: after,
   }, null, 2));
 }
 
 main()
-  .catch((error: unknown) => {
-    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-    process.exitCode = 1;
+  .then(async () => {
+    await prisma.$disconnect();
+    process.exit(0);
   })
-  .finally(async () => prisma.$disconnect());
+  .catch(async (error: unknown) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    await prisma.$disconnect().catch(() => undefined);
+    process.exit(1);
+  });

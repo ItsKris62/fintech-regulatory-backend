@@ -17,11 +17,12 @@ import {
   buildCorpusSourceSetFingerprint,
   CORPUS_VERSION_FALLBACK,
   getCorpusVersionSnapshot,
+  type CorpusSourceIdentityRow,
 } from './corpus-version';
 
 const context = {
   mode: 'SINGLE' as const,
-  jurisdictions: ['KE' as const],
+  jurisdictions: ['KE'] as const,
   primaryJurisdiction: 'KE' as const,
   jurisdictionSource: 'REQUEST' as const,
 };
@@ -51,7 +52,18 @@ const source = {
   sourceVersionPublicationDate: new Date('2026-01-01T00:00:00.000Z'),
   sourceVersionEffectiveDate: new Date('2026-02-01T00:00:00.000Z'),
   sourceVersionEffectiveEndDate: null,
-};
+  chunkIndex: 7,
+  chunkContentHash: 'chunk-hash-a',
+  chunkIndexVersion: 'v2',
+  chunkPageStart: 3,
+  chunkPageEnd: 3,
+  chunkSectionNumber: '12',
+  chunkClauseNumber: null,
+  chunkScheduleNumber: null,
+  chunkHeadingPath: ['Part II', 'Section 12'],
+  chunkCharStart: 1200,
+  chunkCharEnd: 1600,
+} satisfies CorpusSourceIdentityRow;
 
 describe('corpus version snapshot', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -106,10 +118,24 @@ describe('corpus version snapshot', () => {
     ['approved source status', { approvedSourceStatus: 'SUSPENDED' }],
     ['source version content', { sourceVersionChecksum: 'checksum-b' }],
     ['source version status', { sourceVersionStatus: 'SUPERSEDED' }],
+    ['chunk membership', { chunkIndex: 8 }],
+    ['chunk content', { chunkContentHash: 'chunk-hash-b' }],
+    ['chunk source location', { chunkSectionNumber: '13' }],
   ])('changes when %s changes', (_name, patch) => {
     expect(buildCorpusSourceSetFingerprint([source])).not.toBe(
       buildCorpusSourceSetFingerprint([{ ...source, ...patch }]),
     );
+  });
+
+  it('preserves legitimate repeated content at distinct stable locations', () => {
+    const repeated = { ...source, chunkContentHash: 'same-content' };
+    const first = buildCorpusSourceSetFingerprint([
+      repeated,
+      { ...repeated, chunkIndex: 8, chunkSectionNumber: '13' },
+    ]);
+    const collapsed = buildCorpusSourceSetFingerprint([repeated]);
+
+    expect(first).not.toBe(collapsed);
   });
 
   it('fails closed to an explicit legacy marker when snapshot queries fail', async () => {

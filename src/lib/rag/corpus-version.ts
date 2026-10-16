@@ -38,6 +38,17 @@ export type CorpusSourceIdentityRow = {
   sourceVersionPublicationDate: Date | null;
   sourceVersionEffectiveDate: Date | null;
   sourceVersionEffectiveEndDate: Date | null;
+  chunkIndex?: number | null;
+  chunkContentHash?: string | null;
+  chunkIndexVersion?: string | null;
+  chunkPageStart?: number | null;
+  chunkPageEnd?: number | null;
+  chunkSectionNumber?: string | null;
+  chunkClauseNumber?: string | null;
+  chunkScheduleNumber?: string | null;
+  chunkHeadingPath?: unknown;
+  chunkCharStart?: number | null;
+  chunkCharEnd?: number | null;
 };
 
 function canonicalDate(value: Date | string | null): string | null {
@@ -85,6 +96,22 @@ export function buildCorpusSourceSetFingerprint(rows: CorpusSourceIdentityRow[])
       sourceVersionPublicationDate: canonicalDate(row.sourceVersionPublicationDate),
       sourceVersionEffectiveDate: canonicalDate(row.sourceVersionEffectiveDate),
       sourceVersionEffectiveEndDate: canonicalDate(row.sourceVersionEffectiveEndDate),
+      // Chunk membership is part of the effective retrieval corpus. Content
+      // hashes alone are intentionally not unique: the same authoritative text
+      // may occur at multiple stable source locations. Keep the locator and
+      // membership fields in the fingerprint, but exclude database row IDs and
+      // Pinecone IDs because those are deployment artifacts.
+      chunkIndex: row.chunkIndex ?? null,
+      chunkContentHash: row.chunkContentHash ?? null,
+      chunkIndexVersion: row.chunkIndexVersion ?? null,
+      chunkPageStart: row.chunkPageStart ?? null,
+      chunkPageEnd: row.chunkPageEnd ?? null,
+      chunkSectionNumber: row.chunkSectionNumber?.trim() || null,
+      chunkClauseNumber: row.chunkClauseNumber?.trim() || null,
+      chunkScheduleNumber: row.chunkScheduleNumber?.trim() || null,
+      chunkHeadingPath: row.chunkHeadingPath ?? null,
+      chunkCharStart: row.chunkCharStart ?? null,
+      chunkCharEnd: row.chunkCharEnd ?? null,
     }))
     .map((row) => JSON.stringify(row))
     .sort();
@@ -92,6 +119,72 @@ export function buildCorpusSourceSetFingerprint(rows: CorpusSourceIdentityRow[])
   return createHash('sha256')
     .update(`[${canonicalRows.join(',')}]`)
     .digest('hex');
+}
+
+async function loadActiveCorpusSourceRows(
+  requested: readonly JurisdictionCode[],
+): Promise<CorpusSourceIdentityRow[]> {
+  return prisma.$queryRaw<CorpusSourceIdentityRow[]>`
+    SELECT
+      document."jurisdictionCode",
+      document."metadata" ->> 'frameworkSlug' AS "frameworkSlug",
+      document."checksum",
+      document."version" AS "documentVersion",
+      document."indexVersion",
+      document."authorityStatus"::text AS "documentAuthorityStatus",
+      document."isBinding" AS "documentIsBinding",
+      document."effectiveDate" AS "documentEffectiveDate",
+      document."effectiveEndDate" AS "documentEffectiveEndDate",
+      document."officialUrl" AS "documentOfficialUrl",
+      approved."jurisdiction" AS "approvedSourceJurisdiction",
+      approved."authorityName" AS "approvedSourceAuthorityName",
+      approved."authorityType" AS "approvedSourceAuthorityType",
+      approved."baseUrl" AS "approvedSourceBaseUrl",
+      approved."status"::text AS "approvedSourceStatus",
+      source_version."officialUrl" AS "sourceVersionOfficialUrl",
+      source_version."versionLabel" AS "sourceVersionLabel",
+      source_version."checksumSha256" AS "sourceVersionChecksum",
+      source_version."authorityStatus"::text AS "sourceVersionAuthorityStatus",
+      source_version."isBinding" AS "sourceVersionIsBinding",
+      source_version."status"::text AS "sourceVersionStatus",
+      source_version."publicationDate" AS "sourceVersionPublicationDate",
+      source_version."effectiveDate" AS "sourceVersionEffectiveDate",
+      source_version."effectiveEndDate" AS "sourceVersionEffectiveEndDate",
+      chunk."chunkIndex" AS "chunkIndex",
+      chunk."contentHash" AS "chunkContentHash",
+      chunk."indexVersion" AS "chunkIndexVersion",
+      chunk."pageStart" AS "chunkPageStart",
+      chunk."pageEnd" AS "chunkPageEnd",
+      chunk."sectionNumber" AS "chunkSectionNumber",
+      chunk."clauseNumber" AS "chunkClauseNumber",
+      chunk."scheduleNumber" AS "chunkScheduleNumber",
+      chunk."headingPath" AS "chunkHeadingPath",
+      chunk."charStart" AS "chunkCharStart",
+      chunk."charEnd" AS "chunkCharEnd"
+    FROM "RegulatoryDocument" AS document
+    LEFT JOIN "ApprovedSource" AS approved
+      ON approved."id" = document."sourceRegistryId"
+    LEFT JOIN "SourceDocumentVersion" AS source_version
+      ON source_version."id" = document."sourceDocumentVersionId"
+    LEFT JOIN "RegulatoryDocumentChunk" AS chunk
+      ON chunk."documentId" = document."id"
+    WHERE document."jurisdictionCode" IN (${Prisma.join(requested)})
+      AND document."status" = 'ACTIVE'
+  `;
+}
+
+export async function getCorpusSourceSetFingerprintSnapshot(
+  context: JurisdictionContext,
+): Promise<CorpusVersionSnapshot> {
+  const requested = [...context.jurisdictions];
+  const sources = await loadActiveCorpusSourceRows(requested);
+
+  return Object.fromEntries(requested.map((code) => [
+    code,
+    buildCorpusSourceSetFingerprint(
+      sources.filter((source) => source.jurisdictionCode === code),
+    ),
+  ])) as CorpusVersionSnapshot;
 }
 
 export async function getCorpusVersionSnapshot(
@@ -106,44 +199,11 @@ export async function getCorpusVersionSnapshot(
       WHERE "jurisdictionCode" IN (${Prisma.join(requested)})
     `;
 
-    // Bind the snapshot to the exact active source set. The manual generation
-    // remains useful for operator-forced invalidation, while this fingerprint
-    // prevents a missed counter bump from reusing results grounded in an older
-    // corpus. No document or chunk content is read into the identity.
-    const sources = await prisma.$queryRaw<CorpusSourceIdentityRow[]>`
-      SELECT
-        document."jurisdictionCode",
-        document."metadata" ->> 'frameworkSlug' AS "frameworkSlug",
-        document."checksum",
-        document."version" AS "documentVersion",
-        document."indexVersion",
-        document."authorityStatus"::text AS "documentAuthorityStatus",
-        document."isBinding" AS "documentIsBinding",
-        document."effectiveDate" AS "documentEffectiveDate",
-        document."effectiveEndDate" AS "documentEffectiveEndDate",
-        document."officialUrl" AS "documentOfficialUrl",
-        approved."jurisdiction" AS "approvedSourceJurisdiction",
-        approved."authorityName" AS "approvedSourceAuthorityName",
-        approved."authorityType" AS "approvedSourceAuthorityType",
-        approved."baseUrl" AS "approvedSourceBaseUrl",
-        approved."status"::text AS "approvedSourceStatus",
-        source_version."officialUrl" AS "sourceVersionOfficialUrl",
-        source_version."versionLabel" AS "sourceVersionLabel",
-        source_version."checksumSha256" AS "sourceVersionChecksum",
-        source_version."authorityStatus"::text AS "sourceVersionAuthorityStatus",
-        source_version."isBinding" AS "sourceVersionIsBinding",
-        source_version."status"::text AS "sourceVersionStatus",
-        source_version."publicationDate" AS "sourceVersionPublicationDate",
-        source_version."effectiveDate" AS "sourceVersionEffectiveDate",
-        source_version."effectiveEndDate" AS "sourceVersionEffectiveEndDate"
-      FROM "RegulatoryDocument" AS document
-      LEFT JOIN "ApprovedSource" AS approved
-        ON approved."id" = document."sourceRegistryId"
-      LEFT JOIN "SourceDocumentVersion" AS source_version
-        ON source_version."id" = document."sourceDocumentVersionId"
-      WHERE document."jurisdictionCode" IN (${Prisma.join(requested)})
-        AND document."status" = 'ACTIVE'
-    `;
+    // Bind the snapshot to the exact active source and chunk membership set.
+    // The manual generation remains useful for operator-forced invalidation,
+    // while this fingerprint prevents a missed counter bump from reusing
+    // results grounded in an older effective retrieval corpus.
+    const fingerprints = await getCorpusSourceSetFingerprintSnapshot(context);
 
     const snapshot: CorpusVersionSnapshot = {};
     for (const code of requested) {
@@ -153,9 +213,11 @@ export async function getCorpusVersionSnapshot(
         continue;
       }
 
-      const fingerprint = buildCorpusSourceSetFingerprint(
-        sources.filter((source) => source.jurisdictionCode === code),
-      );
+      const fingerprint = fingerprints[code];
+      if (!fingerprint) {
+        snapshot[code] = CORPUS_VERSION_FALLBACK;
+        continue;
+      }
       snapshot[code] = `${row.version}:${fingerprint}`;
     }
     return snapshot;
