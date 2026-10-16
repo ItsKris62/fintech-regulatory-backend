@@ -48,6 +48,7 @@
     "purge:expired-accounts": "tsx src/scripts/purge-expired-accounts.ts",
     "query:archive-expired": "tsx src/scripts/archive-expired-queries.ts",
     "gap-analysis:cleanup-legacy-payloads": "tsx src/scripts/cleanup-gap-analysis-ai-job-payloads.ts",
+    "gap-analysis:purge-retention": "tsx src/scripts/purge-gap-analysis-retention.ts",
     "gap-analysis:benchmark-depths": "tsx src/scripts/benchmark-gap-analysis-depth-profiles.ts",
     "seed:marketing:flags": "tsx src/scripts/seed-marketing-feature-flags.ts",
     "db:identity:preview": "tsx src/scripts/report-database-identity.ts",

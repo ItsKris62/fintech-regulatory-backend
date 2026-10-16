@@ -121,6 +121,10 @@ const envSchema = z.object({
   VAULT_RECONCILIATION_DRY_RUN: z.coerce.boolean().default(true).optional(),
   VAULT_RECONCILIATION_VERIFY_HASHES: z.coerce.boolean().default(false).optional(),
   VAULT_DELETED_RETENTION_DAYS: z.coerce.number().int().positive().default(30).optional(),
+  // Gap Analysis retention remains governance-controlled. These are optional
+  // mechanics only: no default means no retention purge can run implicitly.
+  GAP_ANALYSIS_SOURCE_RETENTION_DAYS: z.coerce.number().int().positive().optional(),
+  GAP_ANALYSIS_RESULT_RETENTION_DAYS: z.coerce.number().int().positive().optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
