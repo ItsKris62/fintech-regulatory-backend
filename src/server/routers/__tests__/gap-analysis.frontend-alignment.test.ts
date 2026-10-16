@@ -10,6 +10,7 @@ describe('Gap Analysis frontend/server contract alignment', () => {
   const page = frontend('app/(dashboard)/startup/gap-analysis/page.tsx');
   const helper = frontend('lib/gap-analysis-contract.ts');
   const input = frontend('lib/gap-analysis-input.ts');
+  const router = readFileSync(resolve(__dirname, '../gap-analysis.router.ts'), 'utf8');
 
   it('drives depth authorization and defaults from the backend limits response', () => {
     expect(page).toContain('gapLimits?.allowedDepths');
@@ -29,5 +30,16 @@ describe('Gap Analysis frontend/server contract alignment', () => {
     expect(page).not.toContain('const MAX_FILE_SIZE');
     expect(helper).toContain('validateGapAnalysisFile');
     expect(input).not.toContain('"doc"');
+  });
+
+  it('polls only fields that exist on the GapAnalysis persistence model', () => {
+    const statusProcedure = router.slice(
+      router.indexOf('getGapAnalysisStatus:'),
+      router.indexOf('getGapAnalysisResult:'),
+    );
+
+    expect(statusProcedure).toContain('status: true');
+    expect(statusProcedure).toContain('progress: true');
+    expect(statusProcedure).not.toContain('currentStage: true');
   });
 });

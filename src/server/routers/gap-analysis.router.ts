@@ -578,7 +578,6 @@ export const gapAnalysisRouter = router({
           documentName: true,
           status: true,
           progress: true,
-          currentStage: true,
           overallScore: true,
           errorMessage: true,
         },
