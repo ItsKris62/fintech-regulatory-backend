@@ -149,6 +149,7 @@ function createCaller(userId = 'usr_batch2_test', orgId = 'org_batch2_test') {
 describe('Batch 2: Jurisdiction Architecture & Framework Scope', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('GAP_ANALYSIS_PILOT_VALIDATED_FRAMEWORKS', '*');
     mocks.plan = 'STARTER';
     mocks.source = 'SUBSCRIPTION';
     mocks.entitlements = null;

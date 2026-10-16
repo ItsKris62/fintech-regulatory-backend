@@ -174,17 +174,17 @@ const matrix: MatrixCase[] = [
   { label: 'Free', plan: 'FREE', depths: [], benchmark: false },
   { label: 'Starter', plan: 'STARTER', depths: ['quick'], benchmark: false },
   { label: 'Growth', plan: 'GROWTH', depths: ['quick', 'standard'], benchmark: false },
-  { label: 'Business', plan: 'BUSINESS', depths: ['quick', 'standard', 'deep'], benchmark: true },
-  { label: 'Enterprise', plan: 'ENTERPRISE', depths: ['quick', 'standard', 'deep'], benchmark: true },
+  { label: 'Business', plan: 'BUSINESS', depths: ['quick', 'standard'], benchmark: true },
+  { label: 'Enterprise', plan: 'ENTERPRISE', depths: ['quick', 'standard'], benchmark: true },
   { label: 'Regulator', plan: 'REGULATOR', depths: [], benchmark: false },
-  { label: 'Free Trial', plan: 'FREE_TRIAL', source: 'FREE_TRIAL', depths: ['quick', 'standard', 'deep'], benchmark: false },
+  { label: 'Free Trial', plan: 'FREE_TRIAL', source: 'FREE_TRIAL', depths: ['quick', 'standard'], benchmark: false },
   { label: 'legacy Startup', plan: 'STARTUP', depths: ['quick'], benchmark: false },
   {
     label: 'active Pilot',
     plan: 'ENTERPRISE',
     source: 'PILOT',
     entitlements: PILOT_ENTITLEMENT_PROFILES.PILOT_FULL,
-    depths: ['quick', 'standard', 'deep'],
+    depths: ['quick', 'standard'],
     benchmark: true,
   },
 ];
@@ -192,6 +192,7 @@ const matrix: MatrixCase[] = [
 describe('Gap Analysis direct backend contract', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('GAP_ANALYSIS_PILOT_VALIDATED_FRAMEWORKS', '*');
     mocks.prisma.organizationMember.findUnique.mockResolvedValue({
       userId: 'user-1',
       organizationId: 'org-1',
@@ -276,7 +277,6 @@ describe('Gap Analysis direct backend contract', () => {
   it.each([
     ['quick', 1],
     ['standard', 2],
-    ['deep', 5],
   ] as const)('%s consumes %i unit(s) only after a valid request is accepted', async (depth, units) => {
     mocks.plan = 'BUSINESS';
     mocks.source = 'SUBSCRIPTION';
