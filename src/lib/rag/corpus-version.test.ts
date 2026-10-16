@@ -13,7 +13,11 @@ vi.mock('@/utils/logger', () => ({
   logger: { warn: mocks.warn },
 }));
 
-import { CORPUS_VERSION_FALLBACK, getCorpusVersionSnapshot } from './corpus-version';
+import {
+  buildCorpusSourceSetFingerprint,
+  CORPUS_VERSION_FALLBACK,
+  getCorpusVersionSnapshot,
+} from './corpus-version';
 
 const context = {
   mode: 'SINGLE' as const,
@@ -24,17 +28,29 @@ const context = {
 
 const source = {
   jurisdictionCode: 'KE',
-  id: 'doc-1',
-  checksum: 'checksum-a',
-  version: '2026',
-  sourceDocumentVersionId: 'source-version-1',
-  indexVersion: 'v1',
-  authorityStatus: 'IN_FORCE',
-  isBinding: true,
-  effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
-  effectiveEndDate: null,
-  officialUrl: 'https://authority.example/regulation',
   frameworkSlug: 'aml',
+  checksum: 'checksum-a',
+  documentVersion: '2026',
+  indexVersion: 'v1',
+  documentAuthorityStatus: 'IN_FORCE',
+  documentIsBinding: true,
+  documentEffectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+  documentEffectiveEndDate: null,
+  documentOfficialUrl: 'https://authority.example/regulation/',
+  approvedSourceJurisdiction: 'Kenya',
+  approvedSourceAuthorityName: 'Example Authority',
+  approvedSourceAuthorityType: 'REGULATOR',
+  approvedSourceBaseUrl: 'https://authority.example/',
+  approvedSourceStatus: 'ACTIVE',
+  sourceVersionOfficialUrl: 'https://authority.example/regulation',
+  sourceVersionLabel: '2026',
+  sourceVersionChecksum: 'checksum-a',
+  sourceVersionAuthorityStatus: 'IN_FORCE',
+  sourceVersionIsBinding: true,
+  sourceVersionStatus: 'ACTIVE',
+  sourceVersionPublicationDate: new Date('2026-01-01T00:00:00.000Z'),
+  sourceVersionEffectiveDate: new Date('2026-02-01T00:00:00.000Z'),
+  sourceVersionEffectiveEndDate: null,
 };
 
 describe('corpus version snapshot', () => {
@@ -43,12 +59,12 @@ describe('corpus version snapshot', () => {
   it('is stable when the active source set order changes', async () => {
     mocks.queryRaw
       .mockResolvedValueOnce([{ jurisdictionCode: 'KE', version: 4 }])
-      .mockResolvedValueOnce([{ ...source, id: 'doc-2' }, source]);
+      .mockResolvedValueOnce([{ ...source, checksum: 'checksum-b' }, source]);
     const first = await getCorpusVersionSnapshot(context);
 
     mocks.queryRaw
       .mockResolvedValueOnce([{ jurisdictionCode: 'KE', version: 4 }])
-      .mockResolvedValueOnce([source, { ...source, id: 'doc-2' }]);
+      .mockResolvedValueOnce([source, { ...source, checksum: 'checksum-b' }]);
     const second = await getCorpusVersionSnapshot(context);
 
     expect(first).toEqual(second);
@@ -67,6 +83,33 @@ describe('corpus version snapshot', () => {
     const second = await getCorpusVersionSnapshot(context);
 
     expect(first.KE).not.toBe(second.KE);
+  });
+
+  it('uses stable source fields rather than database identifiers or insertion order', () => {
+    const first = buildCorpusSourceSetFingerprint([
+      source,
+      { ...source, frameworkSlug: 'payments', checksum: 'checksum-b' },
+    ]);
+    const second = buildCorpusSourceSetFingerprint([
+      { ...source, frameworkSlug: 'payments', checksum: 'checksum-b' },
+      source,
+    ]);
+
+    expect(first).toBe(second);
+    expect(first).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it.each([
+    ['framework membership', { frameworkSlug: 'payments' }],
+    ['document content', { checksum: 'checksum-b' }],
+    ['document source status', { documentAuthorityStatus: 'SUPERSEDED' }],
+    ['approved source status', { approvedSourceStatus: 'SUSPENDED' }],
+    ['source version content', { sourceVersionChecksum: 'checksum-b' }],
+    ['source version status', { sourceVersionStatus: 'SUPERSEDED' }],
+  ])('changes when %s changes', (_name, patch) => {
+    expect(buildCorpusSourceSetFingerprint([source])).not.toBe(
+      buildCorpusSourceSetFingerprint([{ ...source, ...patch }]),
+    );
   });
 
   it('fails closed to an explicit legacy marker when snapshot queries fail', async () => {

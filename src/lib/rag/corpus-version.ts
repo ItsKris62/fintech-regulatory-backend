@@ -13,40 +13,84 @@ type CorpusVersionRow = {
   version: number;
 };
 
-type CorpusSourceRow = {
+export type CorpusSourceIdentityRow = {
   jurisdictionCode: JurisdictionCode;
-  id: string;
-  checksum: string | null;
-  version: string | null;
-  sourceDocumentVersionId: string | null;
-  indexVersion: string;
-  authorityStatus: string;
-  isBinding: boolean;
-  effectiveDate: Date | null;
-  effectiveEndDate: Date | null;
-  officialUrl: string | null;
   frameworkSlug: string | null;
+  checksum: string | null;
+  documentVersion: string | null;
+  indexVersion: string;
+  documentAuthorityStatus: string;
+  documentIsBinding: boolean;
+  documentEffectiveDate: Date | null;
+  documentEffectiveEndDate: Date | null;
+  documentOfficialUrl: string | null;
+  approvedSourceJurisdiction: string | null;
+  approvedSourceAuthorityName: string | null;
+  approvedSourceAuthorityType: string | null;
+  approvedSourceBaseUrl: string | null;
+  approvedSourceStatus: string | null;
+  sourceVersionOfficialUrl: string | null;
+  sourceVersionLabel: string | null;
+  sourceVersionChecksum: string | null;
+  sourceVersionAuthorityStatus: string | null;
+  sourceVersionIsBinding: boolean | null;
+  sourceVersionStatus: string | null;
+  sourceVersionPublicationDate: Date | null;
+  sourceVersionEffectiveDate: Date | null;
+  sourceVersionEffectiveEndDate: Date | null;
 };
 
-function sourceSetFingerprint(rows: CorpusSourceRow[]): string {
+function canonicalDate(value: Date | string | null): string | null {
+  if (value === null) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function canonicalUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value.trim());
+    url.hash = '';
+    url.hostname = url.hostname.toLowerCase();
+    if (url.pathname !== '/') url.pathname = url.pathname.replace(/\/+$/, '');
+    return url.toString();
+  } catch {
+    return value.trim();
+  }
+}
+
+export function buildCorpusSourceSetFingerprint(rows: CorpusSourceIdentityRow[]): string {
   const canonicalRows = rows
     .map((row) => ({
-      id: row.id,
+      jurisdictionCode: row.jurisdictionCode.toUpperCase(),
+      frameworkSlug: row.frameworkSlug?.trim().toLowerCase() ?? null,
       checksum: row.checksum,
-      version: row.version,
-      sourceDocumentVersionId: row.sourceDocumentVersionId,
+      documentVersion: row.documentVersion,
       indexVersion: row.indexVersion,
-      authorityStatus: row.authorityStatus,
-      isBinding: row.isBinding,
-      effectiveDate: row.effectiveDate?.toISOString() ?? null,
-      effectiveEndDate: row.effectiveEndDate?.toISOString() ?? null,
-      officialUrl: row.officialUrl,
-      frameworkSlug: row.frameworkSlug,
+      documentAuthorityStatus: row.documentAuthorityStatus,
+      documentIsBinding: row.documentIsBinding,
+      documentEffectiveDate: canonicalDate(row.documentEffectiveDate),
+      documentEffectiveEndDate: canonicalDate(row.documentEffectiveEndDate),
+      documentOfficialUrl: canonicalUrl(row.documentOfficialUrl),
+      approvedSourceJurisdiction: row.approvedSourceJurisdiction,
+      approvedSourceAuthorityName: row.approvedSourceAuthorityName,
+      approvedSourceAuthorityType: row.approvedSourceAuthorityType,
+      approvedSourceBaseUrl: canonicalUrl(row.approvedSourceBaseUrl),
+      approvedSourceStatus: row.approvedSourceStatus,
+      sourceVersionOfficialUrl: canonicalUrl(row.sourceVersionOfficialUrl),
+      sourceVersionLabel: row.sourceVersionLabel,
+      sourceVersionChecksum: row.sourceVersionChecksum,
+      sourceVersionAuthorityStatus: row.sourceVersionAuthorityStatus,
+      sourceVersionIsBinding: row.sourceVersionIsBinding,
+      sourceVersionStatus: row.sourceVersionStatus,
+      sourceVersionPublicationDate: canonicalDate(row.sourceVersionPublicationDate),
+      sourceVersionEffectiveDate: canonicalDate(row.sourceVersionEffectiveDate),
+      sourceVersionEffectiveEndDate: canonicalDate(row.sourceVersionEffectiveEndDate),
     }))
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .map((row) => JSON.stringify(row))
+    .sort();
 
   return createHash('sha256')
-    .update(JSON.stringify(canonicalRows))
+    .update(`[${canonicalRows.join(',')}]`)
     .digest('hex');
 }
 
@@ -66,24 +110,39 @@ export async function getCorpusVersionSnapshot(
     // remains useful for operator-forced invalidation, while this fingerprint
     // prevents a missed counter bump from reusing results grounded in an older
     // corpus. No document or chunk content is read into the identity.
-    const sources = await prisma.$queryRaw<CorpusSourceRow[]>`
+    const sources = await prisma.$queryRaw<CorpusSourceIdentityRow[]>`
       SELECT
-        "jurisdictionCode",
-        "id",
-        "checksum",
-        "version",
-        "sourceDocumentVersionId",
-        "indexVersion",
-        "authorityStatus"::text AS "authorityStatus",
-        "isBinding",
-        "effectiveDate",
-        "effectiveEndDate",
-        "officialUrl",
-        "metadata" ->> 'frameworkSlug' AS "frameworkSlug"
-      FROM "RegulatoryDocument"
-      WHERE "jurisdictionCode" IN (${Prisma.join(requested)})
-        AND "status" = 'ACTIVE'
-      ORDER BY "jurisdictionCode", "id"
+        document."jurisdictionCode",
+        document."metadata" ->> 'frameworkSlug' AS "frameworkSlug",
+        document."checksum",
+        document."version" AS "documentVersion",
+        document."indexVersion",
+        document."authorityStatus"::text AS "documentAuthorityStatus",
+        document."isBinding" AS "documentIsBinding",
+        document."effectiveDate" AS "documentEffectiveDate",
+        document."effectiveEndDate" AS "documentEffectiveEndDate",
+        document."officialUrl" AS "documentOfficialUrl",
+        approved."jurisdiction" AS "approvedSourceJurisdiction",
+        approved."authorityName" AS "approvedSourceAuthorityName",
+        approved."authorityType" AS "approvedSourceAuthorityType",
+        approved."baseUrl" AS "approvedSourceBaseUrl",
+        approved."status"::text AS "approvedSourceStatus",
+        source_version."officialUrl" AS "sourceVersionOfficialUrl",
+        source_version."versionLabel" AS "sourceVersionLabel",
+        source_version."checksumSha256" AS "sourceVersionChecksum",
+        source_version."authorityStatus"::text AS "sourceVersionAuthorityStatus",
+        source_version."isBinding" AS "sourceVersionIsBinding",
+        source_version."status"::text AS "sourceVersionStatus",
+        source_version."publicationDate" AS "sourceVersionPublicationDate",
+        source_version."effectiveDate" AS "sourceVersionEffectiveDate",
+        source_version."effectiveEndDate" AS "sourceVersionEffectiveEndDate"
+      FROM "RegulatoryDocument" AS document
+      LEFT JOIN "ApprovedSource" AS approved
+        ON approved."id" = document."sourceRegistryId"
+      LEFT JOIN "SourceDocumentVersion" AS source_version
+        ON source_version."id" = document."sourceDocumentVersionId"
+      WHERE document."jurisdictionCode" IN (${Prisma.join(requested)})
+        AND document."status" = 'ACTIVE'
     `;
 
     const snapshot: CorpusVersionSnapshot = {};
@@ -94,7 +153,7 @@ export async function getCorpusVersionSnapshot(
         continue;
       }
 
-      const fingerprint = sourceSetFingerprint(
+      const fingerprint = buildCorpusSourceSetFingerprint(
         sources.filter((source) => source.jurisdictionCode === code),
       );
       snapshot[code] = `${row.version}:${fingerprint}`;

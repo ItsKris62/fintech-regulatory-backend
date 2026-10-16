@@ -24,6 +24,19 @@ describe('Gap Analysis execution identity', () => {
     expect(left.key).toBe(right.key);
   });
 
+  it('reuses the same semantic identity only for the same corpus fingerprint', () => {
+    const fingerprint = `1:${'a'.repeat(64)}`;
+    const sameLeft = buildGapAnalysisExecutionIdentity({ ...base, corpusVersions: { KE: fingerprint } });
+    const sameRight = buildGapAnalysisExecutionIdentity({ ...base, corpusVersions: { KE: fingerprint } });
+    const changed = buildGapAnalysisExecutionIdentity({
+      ...base,
+      corpusVersions: { KE: `1:${'b'.repeat(64)}` },
+    });
+
+    expect(sameLeft.key).toBe(sameRight.key);
+    expect(sameLeft.key).not.toBe(changed.key);
+  });
+
   it.each([
     ['tenant', { organizationId: 'org-b' }],
     ['document', { documentChecksum: 'b'.repeat(64) }],
