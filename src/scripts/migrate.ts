@@ -11,9 +11,10 @@ async function migrate(): Promise<void> {
   logger.info({ type: 'migration' }, 'Starting production database migration...');
 
   try {
-    // Verify DATABASE_URL is set
-    if (!process.env.DATABASE_URL) {
-      throw new Error('DATABASE_URL environment variable is not set');
+    // Prisma 7 reads prisma.config.ts datasource.url. Production migrations
+    // must have the independently managed CLI connection configured.
+    if (!process.env.DIRECT_URL) {
+      throw new Error('DIRECT_URL environment variable is not set');
     }
 
     // Run prisma migrate deploy (safe for production  -  applies pending migrations only)

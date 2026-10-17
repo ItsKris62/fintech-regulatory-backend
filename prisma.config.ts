@@ -9,7 +9,9 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"]!,
-    directUrl: process.env["DIRECT_URL"],
+    // Prisma 7 removed datasource.directUrl. CLI and migration commands read
+    // this URL, while the runtime adapter is configured separately with
+    // DATABASE_URL in src/lib/prisma/client.ts.
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"]!,
   },
 });
