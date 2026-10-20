@@ -614,7 +614,8 @@ describe('AutomationApprovalService.recordApprovalDecision', () => {
   it('does not expire a PENDING row still within its TTL', async () => {
     const prisma = createFakePrisma();
     let clock = new Date('2026-07-22T00:00:00.000Z');
-    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => clock, hmacSecret: HMAC_SECRET });
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const service = new AutomationApprovalService({ prisma: prisma as never, fetchImpl, now: () => clock, hmacSecret: HMAC_SECRET });
 
     const { approvalId } = await service.createApproval(baseCreateInput());
     clock = new Date('2026-07-22T23:59:59.000Z'); // 1s before the 24h TTL
@@ -625,7 +626,8 @@ describe('AutomationApprovalService.recordApprovalDecision', () => {
 
   it('leaves a legacy row with a null expiresAt undecidable-by-expiry (safe by construction)', async () => {
     const prisma = createFakePrisma();
-    const service = new AutomationApprovalService({ prisma: prisma as never, now: () => NOW, hmacSecret: HMAC_SECRET });
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const service = new AutomationApprovalService({ prisma: prisma as never, fetchImpl, now: () => NOW, hmacSecret: HMAC_SECRET });
 
     prisma.rows.set('legacy_1', {
       id: 'legacy_1',

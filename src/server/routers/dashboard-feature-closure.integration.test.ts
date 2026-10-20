@@ -128,6 +128,7 @@ function configureCommonMocks() {
   mocks.prisma.organization.findUnique.mockImplementation(async ({ where }: any) => ({
     id: where.id,
     homeJurisdictionCode: currentJurisdiction,
+    enabledJurisdictions: ['RW', 'MW'],
   }));
   mocks.prisma.organizationMember.findUnique.mockImplementation(async ({ where }: any) => ({
     userId: where.userId_organizationId.userId,

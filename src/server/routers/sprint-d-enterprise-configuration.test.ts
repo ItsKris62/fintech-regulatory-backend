@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { readWorkspaceFile } from '@/test-utils/repository-paths';
 
 function repo(relativePath: string): string {
-  return readFileSync(resolve(__dirname, '../../../..', relativePath), 'utf8');
+  return readWorkspaceFile(relativePath);
 }
 
 function local(relativePath: string): string {

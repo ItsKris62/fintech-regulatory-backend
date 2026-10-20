@@ -20,6 +20,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { readWorkspaceFile } from '@/test-utils/repository-paths';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ function src(relPath: string): string {
 }
 
 function srcFromRoot(relPath: string): string {
-  return readFileSync(resolve(__dirname, '../../../../', relPath), 'utf8');
+  return readWorkspaceFile(relPath);
 }
 
 // ── 1. userProvisioning.service — OrganizationMember creation ────────────────

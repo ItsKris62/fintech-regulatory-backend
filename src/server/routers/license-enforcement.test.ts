@@ -4,6 +4,7 @@ import { SubscriptionPlan } from '@prisma/client';
 import { describe, expect, it } from 'vitest';
 import { PLAN_ENTITLEMENTS, PILOT_ENTITLEMENT_PROFILES } from '@/config/entitlements.config';
 import { hasFeature } from '@/utils/entitlements';
+import { readWorkspaceFile } from '@/test-utils/repository-paths';
 import {
   addTimelineEventSchema,
   adminOverrideUpdateLicenseSchema,
@@ -11,7 +12,7 @@ import {
 } from '../schemas/license.schema';
 
 function repo(relativePath: string): string {
-  return readFileSync(resolve(__dirname, '../../../..', relativePath), 'utf8');
+  return readWorkspaceFile(relativePath);
 }
 
 function local(relativePath: string): string {

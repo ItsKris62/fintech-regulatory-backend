@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { readBackendFile, readWorkspaceFile } from '@/test-utils/repository-paths';
 
 function repo(relativePath: string): string {
-  return readFileSync(resolve(__dirname, '../../../..', relativePath), 'utf8');
+  return readWorkspaceFile(relativePath);
 }
 
 function local(relativePath: string): string {
@@ -15,6 +16,9 @@ describe('benchmark document enforcement and alignment map', () => {
   const gapAnalysisRouter = local('gap-analysis.router.ts');
   const benchmarkService = local('../services/benchmark-document.service.ts');
   const complianceModule = repo('fintech-regulatory-backend/src/modules/compliance/compliance.module.ts');
+  const retrievalContract = readBackendFile(
+    'src/modules/compliance/gap-analysis-retrieval-contract.ts',
+  );
   const docxExportService = repo('fintech-regulatory-backend/src/services/gap-analysis-export.service.ts');
   const frontendGapAnalysisPage = repo('fintech-regulatory-platform/app/(dashboard)/startup/gap-analysis/page.tsx');
   const pdfHtmlBuilder = repo('fintech-regulatory-platform/lib/utils/buildGapAnalysisReportHtml.ts');
@@ -33,10 +37,12 @@ describe('benchmark document enforcement and alignment map', () => {
 
   it('validates selected benchmark IDs with tenant-aware authorization before analysis starts', () => {
     const start = gapAnalysisRouter.indexOf('runGapAnalysis: orgMemberProcedure');
-    const body = gapAnalysisRouter.slice(start, start + 8200);
+    const body = gapAnalysisRouter.slice(start);
 
     expect(body).toContain("use(requirePlanFeature('gapAnalysis'))");
-    expect(body).toContain("use(requirePlanFeature('benchmarkDocuments'))");
+    expect(body).toContain('benchmarkDocumentIds.length > 0');
+    expect(body).toContain('requireEntitlementFeature(');
+    expect(body).toContain("'benchmarkDocuments'");
     expect(body).toContain('validateAuthorizedBenchmarkDocumentIds');
     expect(body).toContain('organizationId: orgId');
     expect(body).not.toContain('Invalid benchmark document ID(s):');
@@ -54,11 +60,14 @@ describe('benchmark document enforcement and alignment map', () => {
 
   it('uses selected benchmark documents as a strict RAG filter with framework-only fallback', () => {
     expect(complianceModule).toContain('const frameworkSlug = regulatoryFrameworkSlugs[index]');
-    expect(complianceModule).toContain('...(frameworkSlug ? { frameworkSlug } : {})');
-    expect(complianceModule).toContain('documentId: pineconeInFilter(benchmarkDocumentIds)');
+    expect(complianceModule).toContain('buildGapAnalysisRetrievalRequest({');
+    expect(complianceModule).toContain('benchmarkDocumentIds,');
     expect(complianceModule).toContain('regulatoryIntelligenceService');
-    expect(complianceModule).toContain("feature: 'GAP_ANALYSIS'");
-    expect(complianceModule).toContain('const benchmarkOnlyFilter = benchmarkDocumentIds.length > 0');
+    expect(retrievalContract).toContain("feature: 'GAP_ANALYSIS'");
+    expect(retrievalContract).toContain(
+      '...(input.frameworkSlug ? { frameworkSlug: input.frameworkSlug } : {})',
+    );
+    expect(retrievalContract).toContain('...(documentId ? { documentId } : {})');
   });
 
   it('aligns the frontend selector with the benchmark document endpoint and corpus wording', () => {

@@ -1,4 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('@/lib/system-config', () => ({
+  loadSystemConfig: vi.fn(async () => ({ maintenanceMode: false })),
+}));
+
+vi.mock('@/lib/redis/rate-limiter', () => ({
+  rateLimiter: {
+    check: vi.fn(async () => ({ allowed: true })),
+    checkOrThrow: vi.fn(async () => undefined),
+  },
+}));
 import { hasRole } from '../middleware';
 import {
   publicProcedure,

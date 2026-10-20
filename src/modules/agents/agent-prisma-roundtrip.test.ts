@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { prisma } from '@/lib/prisma/client';
 
-describe('AgentRun and AgentReport Prisma parity', () => {
+const safeDatabaseEnvironments = new Set(['development-uat', 'preview']);
+const databaseEnvironment = process.env.DATABASE_ENVIRONMENT?.trim().toLowerCase() ?? 'unknown';
+const canRunDatabaseTests = safeDatabaseEnvironments.has(databaseEnvironment) && Boolean(process.env.DATABASE_URL);
+
+const describeIfSafeDb = canRunDatabaseTests ? describe : describe.skip;
+
+describeIfSafeDb('AgentRun and AgentReport Prisma parity', () => {
   it('creates and reads AgentRun with cascaded AgentReport shape matching live schema', async () => {
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const runId = `test-agent-run-${suffix}`;

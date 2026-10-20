@@ -5,6 +5,17 @@ import { adminRouter } from './admin.router';
 import { intaSendService } from '@/modules/intasend';
 import { intaSendFinalizationService } from '@/modules/billing/intasend-finalization.service';
 
+vi.mock('@/lib/system-config', () => ({
+  loadSystemConfig: vi.fn(async () => ({ maintenanceMode: false })),
+}));
+
+vi.mock('@/lib/redis/rate-limiter', () => ({
+  rateLimiter: {
+    check: vi.fn(async () => ({ allowed: true })),
+    checkOrThrow: vi.fn(async () => undefined),
+  },
+}));
+
 vi.mock('@/modules/admin', () => ({
   adminModule: {},
 }));

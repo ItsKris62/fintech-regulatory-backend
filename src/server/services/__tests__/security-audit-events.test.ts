@@ -30,7 +30,7 @@ vi.mock('@/lib/redis/client', () => ({
   },
 }));
 
-vi.mock('@/lib/storage/service', () => ({
+vi.mock('@/lib/storage/storage.service', () => ({
   storageService: {
     uploadTempFile: vi.fn().mockResolvedValue({ key: 'export_key' }),
     getDownloadUrl: vi.fn().mockResolvedValue('https://downloads.sheriabot.com/export.json'),

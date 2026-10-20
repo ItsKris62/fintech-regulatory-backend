@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { readWorkspaceFile } from '@/test-utils/repository-paths';
 
 function repo(relativePath: string): string {
-  return readFileSync(resolve(__dirname, '../../../..', relativePath), 'utf8');
+  return readWorkspaceFile(relativePath);
 }
 
 function local(relativePath: string): string {
@@ -41,8 +42,8 @@ describe('dashboard feature audit invariants', () => {
   });
 
   it('stores alert jurisdiction and routes subscriptions by country', () => {
-    expect(schema).toContain('jurisdictionCode String  @default("KE")');
-    expect(schema).toContain('jurisdictions     String[] @default(["KE"])');
+    expect(schema).toMatch(/jurisdictionCode\s+String\s+@default\("KE"\)/);
+    expect(schema).toMatch(/jurisdictions\s+String\[\]\s+@default\(\["KE"\]\)/);
     expect(alertSchema).toContain('ALERT_JURISDICTIONS');
     expect(alertSchema).toContain("'BNR'");
     expect(alertSchema).toContain("'RBM'");

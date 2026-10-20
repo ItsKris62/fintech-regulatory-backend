@@ -5,6 +5,21 @@ import { sanitizeMetadata, SECURITY_EVENT_TYPES } from '../services/audit.servic
 import { MFA_ENROLLMENT_ALLOWED_PATHS, isPathAllowed, organizationMfaEnforced } from '../trpc/trpc';
 import { encryptMfaChallenge } from '../lib/mfa-challenge-crypto';
 
+vi.mock('@/lib/redis/client', () => ({
+  redis: {
+    get: vi.fn().mockResolvedValue(null),
+    set: vi.fn().mockResolvedValue('OK'),
+  },
+}));
+
+vi.mock('@/server/services/audit.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/audit.service')>();
+  return {
+    ...actual,
+    logSecurityEvent: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 function src(relativePath: string): string {
   return readFileSync(resolve(__dirname, relativePath), 'utf8');
 }

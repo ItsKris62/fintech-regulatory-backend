@@ -33,10 +33,10 @@ describe('Business package schema and release contract', () => {
   });
 
   it('adds only nullable/defaulted MFA policy fields for Phase 3', () => {
-    expect(schema).toContain('requireMfa             Boolean');
+    expect(schema).toMatch(/requireMfa\s+Boolean\s+@default\(false\)/);
     expect(schema).toContain('@default(false)');
-    expect(schema).toContain('mfaPolicyEnabledAt     DateTime?');
-    expect(schema).toContain('mfaPolicyUpdatedBy     String?');
+    expect(schema).toMatch(/mfaPolicyEnabledAt\s+DateTime\?/);
+    expect(schema).toMatch(/mfaPolicyUpdatedBy\s+String\?/);
     expect(phase3Migration).toContain('ADD COLUMN IF NOT EXISTS "requireMfa" BOOLEAN NOT NULL DEFAULT false');
     expect(phase3Migration).not.toContain('DROP COLUMN');
     expect(phase3Migration).not.toContain('DELETE FROM');

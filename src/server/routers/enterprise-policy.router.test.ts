@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-
-const repoRoot = resolve(__dirname, '../../../..');
+import { backendRoot } from '@/test-utils/repository-paths';
 
 function src(relativePath: string): string {
-  return readFileSync(resolve(repoRoot, 'fintech-regulatory-backend/src', relativePath), 'utf8');
+  return readFileSync(resolve(backendRoot, 'src', relativePath), 'utf8');
 }
 
 describe('Enterprise Policy Router Security Invariants', () => {

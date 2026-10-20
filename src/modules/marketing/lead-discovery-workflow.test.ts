@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   KENYA_DISCOVERY_SOURCES,
   getDiscoverySources,
@@ -17,6 +15,23 @@ import { leadIngestionService } from './lead-ingestion.service';
 import { TASK_TYPE_USE_CASE_MAP } from '../agents/automation/types';
 import { prisma } from '@/lib/prisma/client';
 import { DiscoveryRunStatus, CompanyOrigin, LeadStatus, IcpTier } from '@prisma/client';
+import { readWorkspaceFile } from '@/test-utils/repository-paths';
+
+const redisStore = vi.hoisted(() => new Map<string, string>());
+
+vi.mock('@/lib/redis/client', () => ({
+  redis: {
+    get: vi.fn(async (key: string) => redisStore.get(key) ?? null),
+    set: vi.fn(async (key: string, value: string) => {
+      redisStore.set(key, value);
+      return 'OK';
+    }),
+  },
+}));
+
+vi.mock('@/lib/system-config', () => ({
+  getSystemConfigNumber: vi.fn(async (_key: string, fallback: number) => fallback),
+}));
 
 // Mock prisma for isolated testing
 vi.mock('@/lib/prisma/client', () => {
@@ -62,6 +77,7 @@ vi.mock('@/lib/prisma/client', () => {
 describe('W-SALES-LEADS-01 — Kenya AI Prospect Discovery Verification Suite', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    redisStore.clear();
   });
 
   // =========================================================================
@@ -446,13 +462,10 @@ describe('W-SALES-LEADS-01 — Kenya AI Prospect Discovery Verification Suite', 
   // 5. Static AST & Security Verification of n8n Workflow File
   // =========================================================================
   describe('5. Static AST & Security Verification of n8n Workflow', () => {
-    const workflowPath = path.resolve(__dirname, '../../../../n8n_W-SALES-LEADS-01_kenya_lead_discovery.json');
     let workflowJson: any;
 
     beforeEach(() => {
-      expect(fs.existsSync(workflowPath)).toBe(true);
-      const content = fs.readFileSync(workflowPath, 'utf8');
-      workflowJson = JSON.parse(content);
+      workflowJson = JSON.parse(readWorkspaceFile('n8n_W-SALES-LEADS-01_kenya_lead_discovery.json'));
     });
 
     it('has valid workflow metadata, name, and settings', () => {

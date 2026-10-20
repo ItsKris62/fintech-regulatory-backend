@@ -1,9 +1,8 @@
 import { BillingMetric, SubscriptionPlan } from '@prisma/client';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PILOT_ENTITLEMENT_PROFILES, PLAN_ENTITLEMENTS } from './entitlements.config';
 import { getLimitFromEntitlements, getQuota, getQuotaFromEntitlements, hasFeature } from '@/utils/entitlements';
+import { readFrontendFile } from '@/test-utils/repository-paths';
 
 describe('regulator checklist quota', () => {
   it('allows one checklist generation per month and keeps history outside the quota window', () => {
@@ -79,10 +78,7 @@ describe('plan entitlement normalization', () => {
   });
 
   it('keeps the frontend plan helper aligned on zero-limit feature blocking', () => {
-    const frontendPlanContext = readFileSync(
-      resolve(__dirname, '../../../fintech-regulatory-platform/lib/plan-context.tsx'),
-      'utf8',
-    );
+    const frontendPlanContext = readFrontendFile('lib/plan-context.tsx');
 
     expect(frontendPlanContext).toContain('function resolveHasFeature');
     expect(frontendPlanContext).toContain('if ("limit" in val)');

@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-
-const repoRoot = resolve(__dirname, '../../../..');
-const frontendRoot = resolve(repoRoot, 'fintech-regulatory-platform');
+import { backendRoot, frontendRoot } from '@/test-utils/repository-paths';
 
 function readFrontend(relativePath: string): string {
   return readFileSync(resolve(frontendRoot, relativePath), 'utf8');
@@ -71,7 +69,7 @@ describe('Batch 6 enterprise policy frontend wiring invariants', () => {
 });
 
 describe('Batch 6 enterprise policy backend safety invariants', () => {
-  const routerSource = readFileSync(resolve(repoRoot, 'fintech-regulatory-backend/src/server/routers/enterprise-policy.router.ts'), 'utf8');
+  const routerSource = readFileSync(resolve(backendRoot, 'src/server/routers/enterprise-policy.router.ts'), 'utf8');
 
   it('createDraft uses org membership, plan feature, and deferred usage middleware', () => {
     expect(routerSource).toContain('createDraft: orgMemberProcedure');

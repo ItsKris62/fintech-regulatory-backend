@@ -4,7 +4,12 @@ import { contentRouter } from './content.router';
 vi.mock('@/lib/redis/rate-limiter', () => ({
   rateLimiter: {
     check: vi.fn().mockResolvedValue({ allowed: true }),
+    checkOrThrow: vi.fn().mockResolvedValue(undefined),
   },
+}));
+
+vi.mock('@/lib/system-config', () => ({
+  loadSystemConfig: vi.fn(async () => ({ maintenanceMode: false })),
 }));
 
 describe('content.router.ts listPublishedKnowledgeBase', () => {

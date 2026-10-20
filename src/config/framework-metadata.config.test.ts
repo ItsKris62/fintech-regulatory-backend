@@ -7,9 +7,9 @@ import {
 } from './framework-metadata.config';
 
 describe('Framework Metadata & Applicability Registry', () => {
-  it('registers all 44 canonical frameworks with explicit scope', () => {
+  it('registers all 53 canonical frameworks with explicit scope', () => {
     const keys = Object.keys(FRAMEWORK_METADATA_REGISTRY);
-    expect(keys.length).toBe(44);
+    expect(keys.length).toBe(53);
 
     for (const key of keys) {
       const meta = FRAMEWORK_METADATA_REGISTRY[key];

@@ -6,13 +6,14 @@ import {
   allowedFrameworkTiersForPlan,
   canAccessFrameworkTier,
 } from '../../services/framework-access.service';
+import { backendRoot, frontendRoot } from '@/test-utils/repository-paths';
 
 function src(relativePath: string): string {
-  return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
+  return fs.readFileSync(path.resolve(backendRoot, relativePath), 'utf8');
 }
 
 function platformSrc(relativePath: string): string {
-  return fs.readFileSync(path.resolve(process.cwd(), '..', 'fintech-regulatory-platform', relativePath), 'utf8');
+  return fs.readFileSync(path.resolve(frontendRoot, relativePath), 'utf8');
 }
 
 describe('framework access helpers', () => {

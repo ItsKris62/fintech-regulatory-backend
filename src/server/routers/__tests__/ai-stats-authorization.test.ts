@@ -2,6 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { UserRole, MemberStatus, SubscriptionPlan } from '@prisma/client';
 import { TRPCError } from '@trpc/server';
 
+vi.mock('@/lib/system-config', () => ({
+  loadSystemConfig: vi.fn(async () => ({ maintenanceMode: false })),
+}));
+
+vi.mock('@/lib/redis/rate-limiter', () => ({
+  rateLimiter: {
+    check: vi.fn(async () => ({ allowed: true })),
+    checkOrThrow: vi.fn(async () => undefined),
+  },
+}));
+
 const { mockPrisma } = vi.hoisted(() => ({
   mockPrisma: {
     organization: {
