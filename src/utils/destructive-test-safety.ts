@@ -7,7 +7,7 @@
  */
 
 export function isSafeTestDatabaseUrl(databaseUrl?: string): { safe: boolean; reason?: string } {
-  const url = databaseUrl || process.env.DATABASE_URL || '';
+  const url = databaseUrl ?? '';
   if (!url) {
     return { safe: false, reason: 'DATABASE_URL is empty or undefined' };
   }
@@ -54,7 +54,7 @@ export function isSafeTestDatabaseUrl(databaseUrl?: string): { safe: boolean; re
   return { safe: true };
 }
 
-export function assertSafeTestDatabase(databaseUrl?: string): void {
+export function assertSafeTestDatabase(databaseUrl = process.env.DATABASE_URL): void {
   const check = isSafeTestDatabaseUrl(databaseUrl);
   if (!check.safe) {
     throw new Error(`DESTRUCTIVE TEST SAFETY VIOLATION: ${check.reason}`);
