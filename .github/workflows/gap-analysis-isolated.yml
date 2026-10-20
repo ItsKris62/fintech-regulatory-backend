@@ -1,0 +1,112 @@
+name: Gap Analysis Isolated Release Gates
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/gap-analysis-release-recovery-20261020
+    paths:
+      - 'src/**'
+      - 'prisma/**'
+      - 'package*.json'
+      - '.github/workflows/gap-analysis-isolated.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'prisma/**'
+      - 'package*.json'
+      - '.github/workflows/gap-analysis-isolated.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  backend-isolated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NODE_ENV: test
+      DATABASE_ENVIRONMENT: test
+      DATABASE_URL: postgresql://sheria_bot_test:sheria_bot_test@localhost:5432/sheria_bot_test?schema=public
+      DIRECT_URL: postgresql://sheria_bot_test:sheria_bot_test@localhost:5432/sheria_bot_test?schema=public
+      UPSTASH_REDIS_REST_URL: http://127.0.0.1:6379
+      UPSTASH_REDIS_REST_TOKEN: test-only-no-production-token
+      R2_ENDPOINT: http://127.0.0.1:9000
+      R2_BUCKET_NAME: sheria-gap-analysis-ci-${{ github.run_id }}
+      ANTHROPIC_API_KEY: ''
+      PINECONE_API_KEY: ''
+      DISABLE_BACKGROUND_WORKERS: 'true'
+      DISABLE_SCHEDULED_JOBS: 'true'
+      DISABLE_OUTBOUND_EMAIL: 'true'
+      DISABLE_N8N_AUTOMATION: 'true'
+    services:
+      postgres:
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_USER: sheria_bot_test
+          POSTGRES_PASSWORD: sheria_bot_test
+          POSTGRES_DB: sheria_bot_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U sheria_bot_test -d sheria_bot_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.20.0
+          cache: npm
+      - name: Verify test-only endpoints and no provider credentials
+        run: |
+          test "$DATABASE_ENVIRONMENT" = test
+          test -z "$ANTHROPIC_API_KEY"
+          test -z "$PINECONE_API_KEY"
+          case "$DATABASE_URL" in *localhost*|*127.0.0.1*) ;; *) exit 1 ;; esac
+      - name: Start disposable S3-compatible storage
+        run: |
+          docker run --detach --name gap-analysis-minio --publish 9000:9000 \
+            --env MINIO_ROOT_USER=gap-analysis-ci \
+            --env MINIO_ROOT_PASSWORD=gap-analysis-ci-not-production \
+            minio/minio:RELEASE.2025-02-18T16-25-55Z server /data
+          for i in {1..20}; do curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0; sleep 1; done
+          exit 1
+      - name: Install, migrate, build, and test backend
+        run: |
+          npm ci
+          npx prisma migrate deploy
+          npx prisma validate
+          npx prisma migrate status
+          npm run build:prod
+          npx vitest run src/modules/compliance/gap-analysis-cancellation.test.ts src/modules/compliance/scoring/gap-analysis-scoring.test.ts src/lib/source-grounding/approved-evidence.test.ts src/services/gap-analysis-report-model.test.ts
+
+  frontend-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ItsKris62/sheria-bot-frontend
+          ref: 24dd3f89b3183c119a0560ef6fa2bf1013bf1913
+          path: frontend
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.20.0
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.0
+      - name: Install, verify, and build frontend
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec tsc --noEmit
+          pnpm exec eslint .
+          pnpm exec vitest run lib/gap-analysis-input.test.ts lib/gap-analysis-depth-copy.test.ts lib/gap-analysis-contract.test.ts lib/gap-analysis-presentation.test.ts lib/gap-analysis-pilot-flow.test.ts
+          pnpm build
