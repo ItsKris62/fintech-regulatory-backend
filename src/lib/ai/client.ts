@@ -4,6 +4,7 @@ import { LLMCompletionRequest, LLMStreamOptions } from './gateway/types';
 import type { LLMProviderName } from './gateway/types';
 import { calculateCost } from './gateway/pricing';
 import { AIServiceError } from '@/utils/error';
+import { normalizeAIProviderFailure } from './provider-failure';
 
 /**
  * AI completion options
@@ -126,9 +127,7 @@ export async function complete(
     if (error.name === 'LLMCostLimitError') {
       throw new AIServiceError(error.message);
     }
-    // original code says: AI completion failed after 3 attempts: ${error.message}
-    // llm-gateway throws the inner error natively. We wrap it for backward compatibility.
-    throw new AIServiceError(`AI completion failed after 3 attempts: ${error.message}`);
+    throw normalizeAIProviderFailure(error);
   }
 }
 
@@ -194,7 +193,7 @@ export async function stream(
     if (error.name === 'LLMCostLimitError') {
       throw new AIServiceError(error.message);
     }
-    throw new AIServiceError(error.message.includes('LLM streaming failed') ? error.message : `AI streaming failed: ${error.message}`);
+    throw normalizeAIProviderFailure(error);
   }
 }
 

@@ -55,6 +55,18 @@ const completeDocCoverage: DocumentCoverage = {
 };
 
 describe('Defensible Compliance Alignment & Coverage Scoring Engine', () => {
+  it('does not turn model-selected assessments into coverage when inventory scope is unknown', () => {
+    const result = calculateComplianceAlignmentScore({
+      assessments: [mockAssessment({ id: 'model-finding', status: 'COMPLIANT' })],
+      documentCoverage: completeDocCoverage,
+      inventoryCompleteness: 'UNKNOWN',
+    });
+    expect(result.complianceAlignmentScore).toBe(100);
+    expect(result.assessmentCoverageScore).toBe(0);
+    expect(result.coverageStatus).toBe('UNKNOWN');
+    expect(result.totalCount).toBe(0);
+  });
+
   it('13. Identical validated assessments produce identical score (pure determinism)', () => {
     const assessments = [
       mockAssessment({ id: 'req-1', status: 'COMPLIANT', severity: 'CRITICAL' }),

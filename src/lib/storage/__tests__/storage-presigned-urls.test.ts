@@ -120,10 +120,10 @@ describe('StorageService - Private Category URL Contract', () => {
 
   it('uploadGapAnalysisExport resolves with url === key and key does not start with http', async () => {
     const buffer = Buffer.from('dummy-gap-analysis-content');
-    const result = await storageService.uploadGapAnalysisExport(buffer, 'gap-analysis.docx', 'gap-1', 'user-1');
+    const result = await storageService.uploadGapAnalysisExport(buffer, 'gap-analysis.docx', 'org-1', 'gap-1', 'user-1');
 
     expect(result.url).toBe(result.key);
-    expect(result.key).toMatch(/^gap-analysis-exports\/gap-1\//);
+    expect(result.key).toMatch(/^gap-analysis-exports\/org-1\/gap-1\//);
     expect(result.key.startsWith('http')).toBe(false);
     expect(result.url.startsWith('http')).toBe(false);
   });

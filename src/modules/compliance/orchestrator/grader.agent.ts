@@ -6,6 +6,7 @@ import type { AgentTokens } from './types';
 import type { SearchResult } from '@/lib/rag/rag.service';
 import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
 import { extractJsonCandidate } from '@/lib/ai/structured/extract-json';
+import { AIProviderFailure, isAIProviderFailure } from '@/lib/ai/provider-failure';
 
 export type GraderFailureClassification =
   | 'NONE'
@@ -140,7 +141,8 @@ export async function runGraderAgent(
   question: string,
   chunks: SearchResult[],
   jurisdictionContextOrMaxGradeChunks: JurisdictionContext | number,
-  maxGradeChunksMaybe?: number
+  maxGradeChunksMaybe?: number,
+  options?: { propagateProviderFailures?: boolean },
 ): Promise<GraderAgentResult> {
   const jurisdictionContext: JurisdictionContext = typeof jurisdictionContextOrMaxGradeChunks === 'number'
     ? {
@@ -251,6 +253,13 @@ export async function runGraderAgent(
       });
       return { accepted, rejected, tokens, gradeFailed: false, diagnostics };
     } catch (error) {
+      if (options?.propagateProviderFailures) {
+        throw new AIProviderFailure({
+          provider: result.provider ?? 'anthropic',
+          category: 'INVALID_OUTPUT',
+          retryable: true,
+        });
+      }
       const diagnostics = buildDiagnostics({
         question,
         jurisdictionContext,
@@ -283,6 +292,7 @@ export async function runGraderAgent(
       return { accepted: [], rejected: toGrade, tokens, gradeFailed: true, diagnostics };
     }
   } catch (err: any) {
+    if (options?.propagateProviderFailures && isAIProviderFailure(err)) throw err;
     const diagnostics = buildDiagnostics({
       question,
       jurisdictionContext,

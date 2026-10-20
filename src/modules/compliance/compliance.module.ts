@@ -27,6 +27,13 @@ import { MemberRole, MemberStatus, OrganizationMember, Prisma } from '@prisma/cl
 import { notificationModule } from '@/modules/notification';
 import { incrementTrialUsage } from '@/modules/trial';
 import { aiJobRunner } from '@/modules/ai-jobs/ai-job-runner';
+import {
+  AiJobLeaseLostError,
+  type AiJobLeaseClient,
+  isAiJobLeaseLostError,
+  renewAiJobLease,
+  type AiJobExecutionLease,
+} from '@/modules/ai-jobs/ai-job-lease';
 import { complianceScorer } from './compliance-scorer';
 import { complianceAnalyzer } from './compliance-analyzer';
 import { complianceTracker } from './compliance-tracker';
@@ -67,8 +74,11 @@ import {
 } from '@/lib/source-grounding/source-insufficiency';
 import { buildCitationsFromChunks, hasUsableCitations } from '@/lib/source-grounding/citations';
 import { runGraderAgent } from '@/modules/compliance/orchestrator/grader.agent';
+import { isAIProviderFailure } from '@/lib/ai/provider-failure';
+import { recordGapAnalysisProviderFailure } from './gap-analysis-provider-readiness';
+import type { GapAnalysisUsageReservation } from './gap-analysis-usage-accounting';
 import { runVerifierAgent, verifyFindingClaims, resolveFindingEvidence, type FindingVerificationInput } from '@/modules/compliance/orchestrator/verifier.agent';
-import { calculateComplianceAlignmentScore, SCORING_VERSION_V2, type RegulatoryEvidenceRef, type PolicyEvidenceRef, type DocumentCoverage, type FrameworkCoverage, type FrameworkEvidenceStatus, type RequirementAssessment } from '@/modules/compliance/scoring/gap-analysis-scoring';
+import { calculateComplianceAlignmentScore, SCORING_VERSION_V3, type RegulatoryEvidenceRef, type PolicyEvidenceRef, type DocumentCoverage, type FrameworkCoverage, type FrameworkEvidenceStatus, type RequirementAssessment } from '@/modules/compliance/scoring/gap-analysis-scoring';
 import {
   buildDepthRetrievalQueries,
   buildWeakEvidenceRetryQuery,
@@ -81,6 +91,11 @@ import {
 import { buildGapAnalysisRetrievalRequest } from './gap-analysis-retrieval-contract';
 import { GAP_ANALYSIS_REUSABLE_EXECUTION_STATUSES } from './gap-analysis-execution-identity';
 import { classifyGapAnalysisFailure } from './gap-analysis-observability';
+import {
+  finalizeGapAnalysisAttempt,
+  GAP_ANALYSIS_ACTIVE_STATUSES,
+  type GapAnalysisFinalizationClient,
+} from './gap-analysis-finalization';
 const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
 import {
   toComplianceQueryResult,
@@ -132,51 +147,45 @@ function fallbackReasonForNoAcceptedSources(
 
 /**
  * Update status + progress on a GapAnalysis record.
- * Never throws  -  errors are logged and swallowed so callers stay non-fatal.
+ * Infrastructure errors remain non-fatal. Cancellation and lease loss are
+ * propagated so an outdated worker cannot continue to authoritative writes.
  */
 async function updateAnalysisStatus(
   analysisId: string,
-  update: { status: string; progress: number; errorMessage?: string },
+  update: { status: string; progress: number; errorMessage?: string; failureClass?: string | null },
+  execution?: AiJobExecutionLease,
 ): Promise<void> {
   try {
-    const result = await prisma.gapAnalysis.updateMany({
-      where: { id: analysisId, deletedAt: null, status: { not: 'CANCELLED' } },
-      data: {
-        status: update.status,
-        progress: update.progress,
-        ...(update.errorMessage !== undefined ? { errorMessage: update.errorMessage } : {}),
-      },
-    });
+    const writeStatus = async (db: Pick<Prisma.TransactionClient, 'gapAnalysis' | 'aiJob'>) => {
+      const result = await db.gapAnalysis.updateMany({
+        where: { id: analysisId, deletedAt: null, status: { in: [...GAP_ANALYSIS_ACTIVE_STATUSES] } },
+        data: {
+          status: update.status,
+          progress: update.progress,
+          ...(update.errorMessage !== undefined ? { errorMessage: update.errorMessage } : {}),
+          ...(update.failureClass !== undefined ? { failureClass: update.failureClass } : {}),
+        },
+      });
+      if (result.count !== 1) throw new GapAnalysisCancelledError();
+      if (execution) {
+        await renewAiJobLease(execution, new Date(), db as unknown as AiJobLeaseClient);
+      }
+      return result;
+    };
+
+    const result = execution
+      ? await prisma.$transaction((tx) => writeStatus(
+          tx as unknown as Pick<Prisma.TransactionClient, 'gapAnalysis' | 'aiJob'>,
+        ))
+      : await writeStatus(
+          prisma as unknown as Pick<Prisma.TransactionClient, 'gapAnalysis' | 'aiJob'>,
+        );
     if (result.count === 1) {
       logger.info({ type: 'gap_analysis_status_updated', analysisId, ...update });
     }
   } catch (err) {
+    if (isGapAnalysisCancelledError(err) || isAiJobLeaseLostError(err)) throw err;
     logger.error({ type: 'gap_analysis_status_update_failed', analysisId, error: (err as Error).message });
-  }
-}
-
-/**
- * Mark stuck analyses (non-terminal status, older than maxAgeMinutes) as FAILED.
- * Called lazily at the start of runGapAnalysis and getUserGapAnalyses. Never throws.
- */
-async function recoverStaleJobs(maxAgeMinutes = 20): Promise<void> {
-  const staleThreshold = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
-  try {
-    const updated = await prisma.gapAnalysis.updateMany({
-      where: {
-        status: { in: ['UPLOADING', 'QUEUED', 'EXTRACTING', 'ANALYZING', 'COMPLETING'] },
-        updatedAt: { lt: staleThreshold },
-      },
-      data: {
-        status: 'FAILED',
-        errorMessage: `Analysis timed out after ${maxAgeMinutes} minutes. This may be due to a large document or temporary service issue. Please try again.`,
-      },
-    });
-    if (updated.count > 0) {
-      logger.warn({ type: 'gap_analysis_stale_jobs_recovered', count: updated.count, maxAgeMinutes });
-    }
-  } catch (err) {
-    logger.error({ type: 'gap_analysis_stale_job_recovery_failed', error: (err as Error).message });
   }
 }
 
@@ -356,7 +365,7 @@ export interface GapAnalysisPipelineParams {
  */
 export async function executeGapAnalysisPipeline(
   params: GapAnalysisPipelineParams,
-  execution: { jobId?: string } = {},
+  execution?: AiJobExecutionLease,
 ): Promise<void> {
   const {
     analysisId, userId, organizationId, trialUserId, fileName, fileContent, storageKey, fileType,
@@ -379,14 +388,15 @@ export async function executeGapAnalysisPipeline(
     type: 'gap_analysis_started',
     analysisId,
     organizationId,
-    jobId: execution.jobId,
+    jobId: execution?.jobId,
+    fencingToken: execution?.attempt,
     jurisdictionCode: jurisdictionContext.mode === 'SINGLE' ? jurisdictionContext.primaryJurisdiction : undefined,
     frameworkSlugs: regulatoryFrameworkSlugs,
     analysisDepth,
     retrievalNamespace: resolvePineconeNamespace(retrievalNamespace),
   });
   let currentProgress = 5;
-  const cancellation = monitorGapAnalysisCancellation(analysisId, execution.jobId);
+  const cancellation = monitorGapAnalysisCancellation(analysisId, execution);
   const depthProfile = getGapAnalysisDepthProfile(analysisDepth);
   const deadlineController = new AbortController();
   const deadlineTimer = setTimeout(
@@ -397,7 +407,7 @@ export async function executeGapAnalysisPipeline(
   cancellation.signal.addEventListener('abort', relayCancellation, { once: true });
   const assertActive = async () => {
     if (deadlineController.signal.aborted) throw deadlineController.signal.reason;
-    await assertGapAnalysisStillActive(analysisId, execution.jobId);
+    await assertGapAnalysisStillActive(analysisId, execution);
   };
   const executionBudget = new GapAnalysisExecutionBudget(depthProfile, startTime, assertActive);
   const executionTelemetry: DepthExecutionTelemetry = {
@@ -466,7 +476,7 @@ export async function executeGapAnalysisPipeline(
 
     // -- EXTRACTING (progress: 10) -----------------------------------------
     await assertActive(); // before extraction
-    await updateAnalysisStatus(analysisId, { status: 'EXTRACTING', progress: 10 });
+    await updateAnalysisStatus(analysisId, { status: 'EXTRACTING', progress: 10 }, execution);
     currentProgress = 10;
 
     const ext = fileType.toLowerCase().replace('.', '');
@@ -491,7 +501,7 @@ export async function executeGapAnalysisPipeline(
     // -- RAG RETRIEVAL (progress: 15 \u2192 30) ----------------------------------
     retrievalStartedAt = new Date();
     logger.info({ type: 'gap_analysis_retrieval_started', analysisId, organizationId });
-    await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 15 });
+    await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 15 }, execution);
     currentProgress = 15;
 
     // Extract bounded compliance themes for the configured depth query strategy.
@@ -667,7 +677,7 @@ export async function executeGapAnalysisPipeline(
 
     logger.info({ type: 'gap_analysis_rag_grounding_summary', userId, analysisId, ragGrounded, groundedFrameworkCount, totalFrameworks: regulatoryFrameworks.length });
 
-    await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 30 });
+    await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 30 }, execution);
     currentProgress = 30;
 
     // -- SANITIZE ----------------------------------------------------------
@@ -742,7 +752,7 @@ export async function executeGapAnalysisPipeline(
         extractionComplete = false;
         chunksProcessed = Math.max(0, policyChunks.length - 1);
       }
-      await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 80 });
+      await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 80 }, execution);
       currentProgress = 80;
     } else {
       const chunks = policyChunks;
@@ -770,7 +780,7 @@ export async function executeGapAnalysisPipeline(
       skippedChunks += multiResult.skippedChunks;
       extractionComplete = multiResult.extractionComplete && traversal.completeConfiguredTraversal;
       executionTelemetry.limitations.push(...multiResult.executionLimitations);
-      await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 85 });
+      await updateAnalysisStatus(analysisId, { status: 'ANALYZING', progress: 85 }, execution);
       currentProgress = 85;
     }
 
@@ -808,7 +818,7 @@ export async function executeGapAnalysisPipeline(
     // -- CLAIM + CITATION VERIFICATION (progress: 88) ------------------------
     verificationStartedAt = new Date();
     await assertActive();
-    await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 88 });
+    await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 88 }, execution);
     currentProgress = 88;
 
     // Join evidence references deterministically on every finding
@@ -959,17 +969,18 @@ export async function executeGapAnalysisPipeline(
     const scoringResult = calculateComplianceAlignmentScore({
       assessments: allAssessments,
       documentCoverage,
-      hasKnownRequirementInventory: false,
+      inventoryCompleteness: 'UNKNOWN',
     });
 
     gapResults.overallScore = scoringResult.complianceAlignmentScore;
     gapResults.assessmentCoverage = scoringResult.assessmentCoverageScore;
-    gapResults.metadata.scoringVersion = SCORING_VERSION_V2;
+    gapResults.metadata.scoringVersion = SCORING_VERSION_V3;
     gapResults.metadata.complianceAlignmentScore = scoringResult.complianceAlignmentScore;
     gapResults.metadata.assessmentCoverageScore = scoringResult.assessmentCoverageScore;
     gapResults.metadata.coverageStatus = scoringResult.coverageStatus;
     gapResults.metadata.documentCoverage = documentCoverage;
     gapResults.metadata.frameworkCoverage = frameworkCoverage;
+    (gapResults.metadata as any).inventoryCompleteness = scoringResult.inventoryCompleteness;
 
     // Legacy verifier: labeled as advisory only, cannot override finding-level verdicts
     if (typeof runVerifierAgent === 'function') {
@@ -1142,25 +1153,42 @@ export async function executeGapAnalysisPipeline(
 
     // -- COMPLETING (progress: 90) ----------------------------------------
     await assertActive();
-    await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 90 });
+    await updateAnalysisStatus(analysisId, { status: 'COMPLETING', progress: 90 }, execution);
     currentProgress = 90;
 
-    const finalWrite = await prisma.gapAnalysis.updateMany({
-      where: { id: analysisId, deletedAt: null, status: { not: 'CANCELLED' } },
-      data: {
-        results: gapResults,
-        jurisdictionCode,
-        citations: citations as unknown as Prisma.InputJsonValue,
-        evidenceProvenance: [...acceptedEvidenceMap.values()] as unknown as Prisma.InputJsonValue,
-        overallScore: gapResults.overallScore,
-        status: 'COMPLETED',
-        progress: 100,
-        completedAt: new Date(),
-        ragGrounded,
-        chunksProcessed,
-      },
-    });
-    if (finalWrite.count !== 1) throw new GapAnalysisCancelledError();
+    const completedAt = new Date();
+    const analysisData: Prisma.GapAnalysisUpdateManyMutationInput = {
+      results: gapResults,
+      jurisdictionCode,
+      citations: citations as unknown as Prisma.InputJsonValue,
+      evidenceProvenance: [...acceptedEvidenceMap.values()] as unknown as Prisma.InputJsonValue,
+      overallScore: gapResults.overallScore,
+      status: 'COMPLETED',
+      progress: 100,
+      completedAt,
+      ragGrounded,
+      chunksProcessed,
+    };
+
+    if (execution) {
+      await prisma.$transaction((tx) => finalizeGapAnalysisAttempt(
+        tx as unknown as GapAnalysisFinalizationClient,
+        {
+          analysisId,
+          userId,
+          organizationId: organizationId ?? null,
+          execution,
+          analysisData,
+          completedAt,
+        },
+      ));
+    } else {
+      const finalWrite = await prisma.gapAnalysis.updateMany({
+        where: { id: analysisId, deletedAt: null, status: { in: [...GAP_ANALYSIS_ACTIVE_STATUSES] } },
+        data: analysisData,
+      });
+      if (finalWrite.count !== 1) throw new GapAnalysisCancelledError();
+    }
 
     logger.info({
       type: 'gap_analysis_completed',
@@ -1215,11 +1243,22 @@ export async function executeGapAnalysisPipeline(
       logger.error({ type: 'gap_analysis_audit_log_failed', userId, analysisId, error: (err as Error).message });
     });
   } catch (err) {
+    if (isAiJobLeaseLostError(err) || isAiJobLeaseLostError(cancellation.signal.reason)) {
+      logger.warn({
+        type: 'gap_analysis_stale_attempt_fenced',
+        userId,
+        analysisId,
+        jobId: execution?.jobId,
+        fencingToken: execution?.attempt,
+      });
+      throw new AiJobLeaseLostError();
+    }
     if (isGapAnalysisCancelledError(err) || cancellation.signal.aborted) {
       logger.info({ type: 'gap_analysis_cancelled', userId, analysisId, failureClass: 'CANCELLED', retryable: false });
       throw new GapAnalysisCancelledError();
     }
     const normalizedFailure = classifyGapAnalysisFailure(err);
+    if (isAIProviderFailure(err)) await recordGapAnalysisProviderFailure(err);
     logger.error({
       type: 'gap_analysis_failed',
       userId,
@@ -1230,11 +1269,18 @@ export async function executeGapAnalysisPipeline(
 
     const errorMessage = err instanceof SourceInsufficiencyError
       ? err.message
+      : isAIProviderFailure(err)
+      ? err.message
       : err instanceof Error
       ? `Analysis failed: ${err.message}`
       : 'Analysis failed due to an unexpected error. Please try again.';
 
-    await updateAnalysisStatus(analysisId, { status: 'FAILED', progress: currentProgress, errorMessage });
+    await updateAnalysisStatus(analysisId, {
+      status: 'FAILED',
+      progress: currentProgress,
+      errorMessage,
+      failureClass: normalizedFailure.providerFailureCategory ?? normalizedFailure.failureClass,
+    }, execution);
     throw err;
   } finally {
     clearTimeout(deadlineTimer);
@@ -3185,6 +3231,7 @@ Follow-up Question: ${followUp}
       documentChecksum: string;
       executionIdentity: string;
       executionIdentityMetadata: Record<string, unknown>;
+      usageReservation?: GapAnalysisUsageReservation;
     }
   ): Promise<{ id: string; status: string; progress: number; reused: boolean }> {
     logger.info({
@@ -3207,16 +3254,12 @@ Follow-up Question: ${followUp}
       throw new Error('Unsupported or mismatched Gap Analysis file type.');
     }
 
-    // Trigger stale job recovery lazily (non-blocking  -  does not delay this request)
-    void recoverStaleJobs().catch((err: unknown) => {
-      logger.error({ type: 'gap_analysis_stale_job_recovery_failed', error: (err as Error).message });
-    });
-
     // Create placeholder record (UPLOADING, progress: 0)
     let record: { id: string };
     try {
-      record = await prisma.gapAnalysis.create({
-        data: {
+      record = await prisma.$transaction(async (tx) => {
+        const created = await tx.gapAnalysis.create({
+          data: {
         userId,
         organizationId: params.organizationId ?? null,
         documentName: params.fileName,
@@ -3234,7 +3277,22 @@ Follow-up Question: ${followUp}
           executionIdentity: params.executionIdentity,
           executionIdentityMetadata: params.executionIdentityMetadata as Prisma.InputJsonValue,
         },
-        select: { id: true },
+          select: { id: true },
+        });
+        if (params.usageReservation) {
+          await tx.gapAnalysisUsageLedger.create({
+            data: {
+              analysisId: created.id,
+              organizationId: params.organizationId ?? userId,
+              userId,
+              scope: params.usageReservation.scope,
+              units: params.usageReservation.units,
+              counterKey: params.usageReservation.counterKey,
+              reservationKey: params.usageReservation.reservationKey,
+            },
+          });
+        }
+        return created;
       });
     } catch (error: unknown) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -3278,21 +3336,13 @@ Follow-up Question: ${followUp}
       );
       const uploadDurationMs = Date.now() - uploadStartedAt;
 
-      // Update documentUrl with secure storage key + mark as QUEUED (progress: 5)
-      await prisma.gapAnalysis.update({
-        where: { id: record.id },
-        data: { documentUrl: storageKey, status: 'QUEUED', progress: 5 },
+      // Persist the opaque storage reference while the record remains
+      // UPLOADING. QUEUED is published only after durable work exists.
+      const storageReference = await prisma.gapAnalysis.updateMany({
+        where: { id: record.id, status: 'UPLOADING', deletedAt: null },
+        data: { documentUrl: storageKey },
       });
-
-      // Notify user that analysis has started (fire-and-forget)
-      notificationModule.createCategorizedNotification({
-        userId,
-        type: 'GAP_ANALYSIS_STARTED',
-        category: 'COMPLIANCE',
-        title: 'Gap Analysis In Progress',
-        message: `Analysing "${params.fileName}" for compliance gaps. This may take a few minutes.`,
-        link: `/startup/gap-analysis/${record.id}`,
-      }).catch(() => { /* non-blocking */ });
+      if (storageReference.count !== 1) throw new GapAnalysisCancelledError();
 
       // Build durable AiJob payload containing ONLY storage reference & metadata — NO raw base64 / fileContent!
       const pipelinePayload = JSON.parse(JSON.stringify({
@@ -3334,6 +3384,23 @@ Follow-up Question: ${followUp}
         priority: 7,
       });
 
+      // Publish QUEUED only after durable work exists. A fast worker may have
+      // advanced the analysis already, so this compare-and-set never moves a
+      // later status backwards.
+      await prisma.gapAnalysis.updateMany({
+        where: { id: record.id, status: 'UPLOADING', deletedAt: null },
+        data: { status: 'QUEUED', progress: 5 },
+      });
+
+      notificationModule.createCategorizedNotification({
+        userId,
+        type: 'GAP_ANALYSIS_STARTED',
+        category: 'COMPLIANCE',
+        title: 'Gap Analysis In Progress',
+        message: `Analysing "${params.fileName}" for compliance gaps. This may take a few minutes.`,
+        link: `/startup/gap-analysis/${record.id}`,
+      }).catch(() => { /* non-blocking */ });
+
       logger.info({ type: 'gap_analysis_queued', userId, analysisId: record.id, jobId: job.id });
 
       return { id: record.id, status: 'QUEUED', progress: 5, reused: false };
@@ -3353,10 +3420,7 @@ Follow-up Question: ${followUp}
     }
   }
 
-  /**
-   * List all gap analyses for a user (summary list).
-   * Triggers stale job recovery lazily before returning results.
-   */
+  /** List all gap analyses for a user (summary list). */
   async getUserGapAnalyses(userId: string, organizationId: string): Promise<{
     id: string;
     documentName: string;
@@ -3367,16 +3431,12 @@ Follow-up Question: ${followUp}
     status: string;
     progress: number;
     errorMessage: string | null;
+    failureClass: string | null;
     jurisdictionCode: string | null;
     results?: Prisma.JsonValue | null;
     createdAt: Date;
     updatedAt: Date;
   }[]> {
-    // Lazy stale job recovery  -  non-blocking; cleans up any stuck analyses
-    void recoverStaleJobs().catch((err: unknown) => {
-      logger.error({ type: 'gap_analysis_stale_job_recovery_failed', error: (err as Error).message });
-    });
-
     // Cache-aside: short TTL for in-progress, 60s for all-terminal
     const listCacheKey = `cache:gap-analysis:list:${organizationId}:${userId}`;
     try {
@@ -3397,6 +3457,7 @@ Follow-up Question: ${followUp}
         status: true,
         progress: true,
         errorMessage: true,
+        failureClass: true,
         jurisdictionCode: true,
         results: true,
         createdAt: true,
@@ -3436,6 +3497,7 @@ Follow-up Question: ${followUp}
     status: string;
     progress: number;
     errorMessage: string | null;
+    failureClass: string | null;
     ragGrounded: boolean;
     chunksProcessed: number;
     completedAt: Date | null;
@@ -3538,25 +3600,32 @@ Follow-up Question: ${followUp}
       data: { status: 'CANCELLED', lockedAt: null, lockedBy: null },
     });
 
-    // Delete source R2 file if it exists
-    if (analysis.documentUrl && analysis.documentUrl.startsWith(GAP_ANALYSIS_STORAGE_PATH_PREFIX)) {
-      try {
-        await storageService.deleteFile(analysis.documentUrl);
-        logger.info({ type: 'gap_analysis_source_deleted', analysisId });
-      } catch {
-        logger.warn({ type: 'gap_analysis_r2_delete_failed', analysisId });
-      }
-    }
-
-    // Delete report R2 file if it exists
+    // Persist cleanup intent before publishing soft deletion. Physical removal
+    // is asynchronous and remains discoverable across storage/process failure.
+    const orgPartition = organizationId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const isOwnedSourceObject = Boolean(analysis.documentUrl)
+      && analysis.documentUrl.startsWith(`${GAP_ANALYSIS_STORAGE_PATH_PREFIX}${orgPartition}/${analysisId}/`)
+      && !analysis.documentUrl.includes('..');
     const canonicalReportPrefix = `gap-analysis-exports/${organizationId}/${analysisId}/`;
     const isOwnedReportObject = analysis.reportUrl?.startsWith(canonicalReportPrefix)
-      || analysis.reportUrl?.startsWith('reports/');
-    if (analysis.reportUrl && isOwnedReportObject) {
-      try {
-        await storageService.deleteFile(analysis.reportUrl);
-      } catch { /* best-effort cleanup */ }
-    }
+      || (analysis.reportUrl?.startsWith('reports/') && !analysis.reportUrl.includes('..'));
+    await prisma.$transaction(async (tx) => {
+      if (analysis.documentUrl && isOwnedSourceObject) {
+        await tx.gapAnalysisObjectDeletion.upsert({
+          where: { analysisId_objectKey: { analysisId, objectKey: analysis.documentUrl } },
+          create: { analysisId, organizationId, userId, objectKey: analysis.documentUrl, objectType: 'SOURCE', reason: 'EXPLICIT_DELETE' },
+          update: {},
+        });
+      }
+      if (analysis.reportUrl && isOwnedReportObject) {
+        await tx.gapAnalysisObjectDeletion.upsert({
+          where: { analysisId_objectKey: { analysisId, objectKey: analysis.reportUrl } },
+          create: { analysisId, organizationId, userId, objectKey: analysis.reportUrl, objectType: 'REPORT', reason: 'EXPLICIT_DELETE' },
+          update: {},
+        });
+      }
+      await tx.gapAnalysis.update({ where: { id: analysisId }, data: { deletedAt: new Date() } });
+    });
 
     // Scrub every historical job payload after cancellation. No raw content or
     // internal storage key is copied into operational logs.
@@ -3567,12 +3636,6 @@ Follow-up Question: ${followUp}
       logger.warn({ type: 'gap_analysis_job_cleanup_failed', analysisId, error: (err as Error).message });
     }
 
-    // Soft delete  -  set deletedAt instead of destroying the row
-    await prisma.gapAnalysis.update({
-      where: { id: analysisId },
-      data: { deletedAt: new Date() },
-    });
-
     // Content-free security audit metadata is retained after deletion is final.
     prisma.auditLog.create({
       data: {
@@ -3582,8 +3645,8 @@ Follow-up Question: ${followUp}
         entityId: analysisId,
         metadata: {
           analysisId,
-          sourceObjectDeletionAttempted: !!analysis.documentUrl,
-          reportObjectDeletionAttempted: !!analysis.reportUrl,
+          sourceObjectDeletionQueued: isOwnedSourceObject,
+          reportObjectDeletionQueued: Boolean(analysis.reportUrl && isOwnedReportObject),
         },
         ipAddress: opts?.ipAddress ?? null,
         userAgent: opts?.userAgent ?? null,

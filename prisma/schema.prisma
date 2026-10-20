@@ -162,39 +162,39 @@ model User {
 }
 
 model Organization {
-  id                      String             @id @default(cuid())
-  name                    String
-  type                    String
-  organizationType        String             @default("startup") // "regulator" | "startup" | "enterprise"
-  registrationNumber      String?
-  cbkLicenseNumber        String?
-  website                 String?
-  industry                String?
-  size                    String?
-  subscriptionTier        String             @default("starter")
-  subscriptionStatus      SubscriptionStatus @default(ACTIVE)
-  trialEndsAt             DateTime?
-  gracePeriodEndsAt       DateTime? // set on cancellation; org keeps plan until this passes
-  cancelledAt             DateTime? // when the user initiated cancellation
-  subscriptionEndsAt      DateTime?
-  verificationStatus      String             @default("pending") // "pending" | "verified" | "rejected"
-  verifiedAt              DateTime?
-  verifiedBy              String?
+  id                       String             @id @default(cuid())
+  name                     String
+  type                     String
+  organizationType         String             @default("startup") // "regulator" | "startup" | "enterprise"
+  registrationNumber       String?
+  cbkLicenseNumber         String?
+  website                  String?
+  industry                 String?
+  size                     String?
+  subscriptionTier         String             @default("starter")
+  subscriptionStatus       SubscriptionStatus @default(ACTIVE)
+  trialEndsAt              DateTime?
+  gracePeriodEndsAt        DateTime? // set on cancellation; org keeps plan until this passes
+  cancelledAt              DateTime? // when the user initiated cancellation
+  subscriptionEndsAt       DateTime?
+  verificationStatus       String             @default("pending") // "pending" | "verified" | "rejected"
+  verifiedAt               DateTime?
+  verifiedBy               String?
   // Plan entitlements (new - additive)
-  plan                    SubscriptionPlan   @default(REGULATOR)
-  planStartDate           DateTime?
-  planEndDate             DateTime?
-  maxSeats                Int                @default(1)
-  homeJurisdictionCode    String?
-  enabledJurisdictions    String[]           @default([])
-  needsCountryConfirmation Boolean           @default(false)
-  stripeCustomerId        String?            @unique
-  stripeSubId             String?            @unique
-  customLimits            Json?
+  plan                     SubscriptionPlan   @default(REGULATOR)
+  planStartDate            DateTime?
+  planEndDate              DateTime?
+  maxSeats                 Int                @default(1)
+  homeJurisdictionCode     String?
+  enabledJurisdictions     String[]           @default([])
+  needsCountryConfirmation Boolean            @default(false)
+  stripeCustomerId         String?            @unique
+  stripeSubId              String?            @unique
+  customLimits             Json?
   // M-Pesa / IntaSend payment fields
-  preferredPaymentMethod  PaymentProvider? // STRIPE | MPESA; null = Stripe default
-  mpesaPhoneNumber        String? // stored as 254XXXXXXXXX
-  mpesaNextPaymentDueDate DateTime? // set on each successful M-Pesa payment; lazy-evaluated for renewal
+  preferredPaymentMethod   PaymentProvider? // STRIPE | MPESA; null = Stripe default
+  mpesaPhoneNumber         String? // stored as 254XXXXXXXXX
+  mpesaNextPaymentDueDate  DateTime? // set on each successful M-Pesa payment; lazy-evaluated for renewal
 
   // ---- M-Pesa subscription lifecycle (added 2026-05-26) ----
   // Rolling 30-day cycle end. Drives renewal cron and access-revocation gate.
@@ -222,36 +222,36 @@ model Organization {
   // also fires on auto-downgrade. Set only when an OWNER/ADMIN explicitly
   // invokes billing.cancelMpesaSubscription. Used for analytics and to
   // distinguish voluntary churn from involuntary churn.
-  mpesaCancelledByUserAt DateTime?
+  mpesaCancelledByUserAt  DateTime?
   // Contact Information - Primary contact for regulatory matters
-  address                String?
-  contactPerson          String?
-  contactPosition        String?
-  contactEmail           String?
-  contactPhone           String?
-  requireMfa             Boolean                   @default(false)
-  mfaPolicyEnabledAt     DateTime?
+  address                 String?
+  contactPerson           String?
+  contactPosition         String?
+  contactEmail            String?
+  contactPhone            String?
+  requireMfa              Boolean                   @default(false)
+  mfaPolicyEnabledAt      DateTime?
   mfaPolicyFirstEnabledAt DateTime?
-  mfaPolicyGraceHours    Int                       @default(48)
-  mfaPolicyUpdatedBy     String?
-  createdAt              DateTime                  @default(now())
-  updatedAt              DateTime                  @updatedAt
-  users                  User[]
-  policies               Policy[]
-  complianceItems        ComplianceItem[]
-  complianceSnapshots    ComplianceScoreSnapshot[]
-  complianceEvents       ComplianceEvent[]
-  vaultDocuments         VaultDocument[]
-  usageRecords           UsageRecord[]
-  usagePeriods           UsagePeriod[]
-  payments               Payment[]
-  alertSubscription      AlertSubscription?
-  alertNotifications     AlertNotification[]
-  regulatoryApplications RegulatoryApplication[]
-  licenses               License[]
-  licenseTimelineEvents  LicenseTimelineEvent[]
-  licenseDocuments       LicenseDocument[]
-  licenseFees            LicenseFee[]
+  mfaPolicyGraceHours     Int                       @default(48)
+  mfaPolicyUpdatedBy      String?
+  createdAt               DateTime                  @default(now())
+  updatedAt               DateTime                  @updatedAt
+  users                   User[]
+  policies                Policy[]
+  complianceItems         ComplianceItem[]
+  complianceSnapshots     ComplianceScoreSnapshot[]
+  complianceEvents        ComplianceEvent[]
+  vaultDocuments          VaultDocument[]
+  usageRecords            UsageRecord[]
+  usagePeriods            UsagePeriod[]
+  payments                Payment[]
+  alertSubscription       AlertSubscription?
+  alertNotifications      AlertNotification[]
+  regulatoryApplications  RegulatoryApplication[]
+  licenses                License[]
+  licenseTimelineEvents   LicenseTimelineEvent[]
+  licenseDocuments        LicenseDocument[]
+  licenseFees             LicenseFee[]
 
   // Enterprise AI Policy Generator
   generatedPolicies GeneratedPolicy[]
@@ -304,15 +304,15 @@ model UserBackupCode {
 }
 
 model SecurityAuditEvent {
-  id             String    @id @default(cuid())
+  id             String   @id @default(cuid())
   userId         String?
   organizationId String?
   eventType      String
   ipAddress      String?
   userAgent      String?
   metadata       Json?
-  createdAt      DateTime  @default(now())
-  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt      DateTime @default(now())
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
   @@index([eventType, createdAt])
@@ -504,37 +504,37 @@ model DocumentChunk {
 }
 
 model ComplianceQuery {
-  id                 String                  @id @default(cuid())
-  userId             String
-  organizationId     String?
-  query              String
-  response           String?
-  citations          Json?
-  regulatoryAreas    Json?
-  confidence         Float?
-  recommendations    Json?
-  processingTimeMs   Int?
-  metadata           Json?
-  mode               String?
-  jurisdictions      String[]                @default([])
-  primaryJurisdiction String?
-  jurisdictionSource String?
+  id                    String                  @id @default(cuid())
+  userId                String
+  organizationId        String?
+  query                 String
+  response              String?
+  citations             Json?
+  regulatoryAreas       Json?
+  confidence            Float?
+  recommendations       Json?
+  processingTimeMs      Int?
+  metadata              Json?
+  mode                  String?
+  jurisdictions         String[]                @default([])
+  primaryJurisdiction   String?
+  jurisdictionSource    String?
   corpusVersionSnapshot Json?
-  productCategory    String?
-  summary            String?
-  regulations        Json?
-  requirements       Json?
-  gaps               Json?
-  status             String                  @default("processing")
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
-  user               User                    @relation(fields: [userId], references: [id])
-  feedbacks          QueryFeedback[]
-  saves              SavedResponse[]
-  citationRecords    Citation[]              @relation("ComplianceQueryCitations")
-  runs               ComplianceQueryRun[]
-  answerClaims       ComplianceAnswerClaim[]
-  corpusGapFeedbacks CorpusGapFeedback[]
+  productCategory       String?
+  summary               String?
+  regulations           Json?
+  requirements          Json?
+  gaps                  Json?
+  status                String                  @default("processing")
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  user                  User                    @relation(fields: [userId], references: [id])
+  feedbacks             QueryFeedback[]
+  saves                 SavedResponse[]
+  citationRecords       Citation[]              @relation("ComplianceQueryCitations")
+  runs                  ComplianceQueryRun[]
+  answerClaims          ComplianceAnswerClaim[]
+  corpusGapFeedbacks    CorpusGapFeedback[]
 
   @@index([userId])
   @@index([createdAt])
@@ -558,7 +558,7 @@ model ComplianceQueryRun {
   ragSources            Int                 @default(0)
   subQuestions          Json?
   retrievalQueries      Json?
-  jurisdictions         String[]             @default([])
+  jurisdictions         String[]            @default([])
   primaryJurisdiction   String?
   jurisdictionSource    String?
   corpusVersionSnapshot Json?
@@ -758,7 +758,7 @@ model Checklist {
   totalItems         Int             @default(0)
   summary            Json?
   metadata           Json?
-  jurisdictionCode  String?
+  jurisdictionCode   String?
   citations          Json?
   evidenceProvenance Json?
   generatedAt        DateTime?
@@ -808,36 +808,39 @@ model ChecklistItem {
 }
 
 model GapAnalysis {
-  id                   String                 @id @default(cuid())
-  userId               String
-  organizationId       String?
-  documentName         String
-  documentUrl          String
-  documentType         String
-  documentChecksum     String?
-    executionIdentity    String?
+  id                        String                      @id @default(cuid())
+  userId                    String
+  organizationId            String?
+  documentName              String
+  documentUrl               String
+  documentType              String
+  documentChecksum          String?
+  executionIdentity         String?
   executionIdentityMetadata Json?
-  regulatoryFrameworks Json
-  analysisDepth        String                 @default("standard")
-  focusAreas           Json?
-  results              Json?
-  jurisdictionCode     String?
-  citations             Json?
-  evidenceProvenance    Json?
-  overallScore         Int?
-  status               String                 @default("UPLOADING")
-  progress             Int                    @default(0)
-  errorMessage         String?
-  ragGrounded          Boolean                @default(true)
-  chunksProcessed      Int                    @default(1)
-  reportUrl            String?
-  reportGeneratedAt    DateTime?
-  completedAt          DateTime?
-  deletedAt            DateTime?
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
-  user                 User                   @relation(fields: [userId], references: [id])
-  frameworks           GapAnalysisFramework[]
+  regulatoryFrameworks      Json
+  analysisDepth             String                      @default("standard")
+  focusAreas                Json?
+  results                   Json?
+  jurisdictionCode          String?
+  citations                 Json?
+  evidenceProvenance        Json?
+  overallScore              Int?
+  status                    String                      @default("UPLOADING")
+  progress                  Int                         @default(0)
+  errorMessage              String?
+  failureClass              String?
+  ragGrounded               Boolean                     @default(true)
+  chunksProcessed           Int                         @default(1)
+  reportUrl                 String?
+  reportGeneratedAt         DateTime?
+  completedAt               DateTime?
+  deletedAt                 DateTime?
+  createdAt                 DateTime                    @default(now())
+  updatedAt                 DateTime                    @updatedAt
+  user                      User                        @relation(fields: [userId], references: [id])
+  frameworks                GapAnalysisFramework[]
+  usageLedger               GapAnalysisUsageLedger?
+  objectDeletions           GapAnalysisObjectDeletion[]
 
   // Enterprise AI Policy Generator
   generatedPolicies GeneratedPolicy[]
@@ -846,9 +849,62 @@ model GapAnalysis {
   @@index([status])
   @@index([organizationId])
   @@index([jurisdictionCode])
-    @@index([documentChecksum])
+  @@index([documentChecksum])
   @@index([createdAt])
   @@index([deletedAt])
+}
+
+model GapAnalysisUsageLedger {
+  id             String    @id @default(cuid())
+  analysisId     String    @unique
+  organizationId String
+  userId         String
+  scope          String
+  metric         String    @default("GAP_ANALYSES")
+  units          Int
+  counterKey     String?
+  reservationKey String    @unique
+  state          String    @default("RESERVED")
+  failureClass   String?
+  reservedAt     DateTime  @default(now())
+  settledAt      DateTime?
+  releasedAt     DateTime?
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  analysis GapAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, state])
+  @@index([state, updatedAt])
+}
+
+model GapAnalysisObjectDeletion {
+  id             String    @id @default(cuid())
+  analysisId     String
+  organizationId String
+  userId         String
+  objectKey      String
+  objectType     String
+  reason         String
+  status         String    @default("PENDING")
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(8)
+  runAfter       DateTime  @default(now())
+  lockedAt       DateTime?
+  lockedBy       String?
+  lastError      String?
+  completedAt    DateTime?
+  escalatedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  analysis GapAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@unique([analysisId, objectKey])
+  @@index([status, runAfter])
+  @@index([organizationId, status])
+  @@index([analysisId])
 }
 
 model GapAnalysisFramework {
@@ -1373,6 +1429,73 @@ model JurisdictionCorpusVersion {
   @@index([updatedAt])
 }
 
+// A human-reviewed, framework-specific release attestation. It is deliberately
+// separate from the corpus counter: an indexed document is not automatically
+// suitable for legal Gap Analysis findings.
+model GapAnalysisCorpusReadinessSnapshot {
+  id               String    @id @default(cuid())
+  jurisdictionCode String
+  frameworkSlug    String
+  corpusVersion    String
+  status           String
+  reviewedAt       DateTime?
+  reviewedBy       String?
+  sourceCount      Int       @default(0)
+  manifestChecksum String?
+  notes            String?   @db.Text
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([jurisdictionCode, frameworkSlug, corpusVersion])
+  @@index([jurisdictionCode, frameworkSlug, status])
+  @@index([updatedAt])
+}
+
+// Reviewed regulatory obligations for Gap Analysis. This registry intentionally
+// starts empty: AI/RAG output may propose candidates but cannot approve law.
+model RegulatoryRequirementInventory {
+  id                     String                  @id @default(cuid())
+  jurisdictionCode       String
+  frameworkSlug          String
+  version                String
+  completeness           String                  @default("UNKNOWN")
+  reviewCriteria         String?                 @db.Text
+  reviewedAt             DateTime?
+  reviewedBy             String?
+  sourceManifestChecksum String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  requirements           RegulatoryRequirement[]
+
+  @@unique([jurisdictionCode, frameworkSlug, version])
+  @@index([jurisdictionCode, frameworkSlug, completeness])
+}
+
+model RegulatoryRequirement {
+  id                 String                         @id @default(cuid())
+  inventoryId        String
+  stableKey          String                         @unique
+  sourceDocumentId   String
+  sourceVersionId    String?
+  provisionReference String
+  statement          String                         @db.Text
+  legalStatus        String
+  applicabilityRules Json?
+  category           String?
+  requiredControl    String?                        @db.Text
+  approvalStatus     String                         @default("CANDIDATE")
+  reviewedAt         DateTime?
+  reviewedBy         String?
+  contentChecksum    String?
+  supersededById     String?
+  createdAt          DateTime                       @default(now())
+  updatedAt          DateTime                       @updatedAt
+  inventory          RegulatoryRequirementInventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+
+  @@index([inventoryId, approvalStatus])
+  @@index([sourceDocumentId, sourceVersionId])
+}
+
 model ApprovedSource {
   id             String                  @id @default(cuid())
   jurisdiction   String
@@ -1495,10 +1618,10 @@ model ComplianceItem {
   updatedAt        DateTime           @updatedAt
   organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@unique([organizationId, requirementKey])
   @@index([organizationId])
   @@index([organizationId, category])
   @@index([organizationId, jurisdictionCode])
-  @@unique([organizationId, requirementKey])
 }
 
 // ============================================================================
@@ -1665,8 +1788,8 @@ model UsageRecord {
   fxRateCapturedAt DateTime?
   pricingVersion   String?
 
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([organizationId, metric, periodStart])
   @@index([organizationId, metric])
@@ -1703,26 +1826,26 @@ model PilotAccess {
 }
 
 model CustomFramework {
-  id              String                @id @default(cuid())
-  organizationId  String
-  name            String
-  slug            String
-  description     String?               @db.Text
-  jurisdiction    String?
-  citations       Json?
+  id                 String                @id @default(cuid())
+  organizationId     String
+  name               String
+  slug               String
+  description        String?               @db.Text
+  jurisdiction       String?
+  citations          Json?
   evidenceProvenance Json?
   generationMetadata Json?
-  regulator       String?
-  category        String?
-  status          CustomFrameworkStatus @default(DRAFT)
-  version         Int                   @default(1)
-  publishedAt     DateTime?
-  archivedAt      DateTime?
-  createdByUserId String
-  updatedByUserId String?
-  deletedAt       DateTime?
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
+  regulator          String?
+  category           String?
+  status             CustomFrameworkStatus @default(DRAFT)
+  version            Int                   @default(1)
+  publishedAt        DateTime?
+  archivedAt         DateTime?
+  createdByUserId    String
+  updatedByUserId    String?
+  deletedAt          DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
 
   organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   sections     CustomFrameworkSection[]
@@ -1880,8 +2003,8 @@ model UsagePeriod {
   policyGenerations    Int   @default(0)
 
   // ---- Financial spend rollups (summed from UsageRecord in period) ---------
-  costUsd              Decimal? @db.Decimal(18, 8)
-  costKes              Decimal? @db.Decimal(18, 4)
+  costUsd Decimal? @db.Decimal(18, 8)
+  costKes Decimal? @db.Decimal(18, 4)
 
   // ---- Plan snapshot (captured at period creation / plan upgrade) ----------
   // Limits use the same convention as PLAN_ENTITLEMENTS:
@@ -1950,12 +2073,12 @@ model Payment {
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
+  @@unique([provider, providerTransactionId])
   @@index([orgId])
   @@index([orgId, createdAt])
   @@index([providerTransactionId])
   @@index([invoiceNumber])
   @@index([paymentPurpose])
-  @@unique([provider, providerTransactionId])
 }
 
 // ============================================================================
@@ -2260,24 +2383,24 @@ model PilotEvent {
 // Regulatory Alerts System
 // ============================================================================
 model RegulatoryAlert {
-  id               String    @id @default(cuid())
-  title            String
-  summary          String
-  body             String
-  sourceUrl        String?
-  jurisdictionCode String  @default("KE")
-  regulatoryBody   String
-  category         String
-  severity         String    @default("MEDIUM")
-  effectiveDate    DateTime?
-  publishedAt      DateTime  @default(now())
-  expiresAt        DateTime?
-  isActive         Boolean   @default(true)
-  publishedById    String
+  id                            String    @id @default(cuid())
+  title                         String
+  summary                       String
+  body                          String
+  sourceUrl                     String?
+  jurisdictionCode              String    @default("KE")
+  regulatoryBody                String
+  category                      String
+  severity                      String    @default("MEDIUM")
+  effectiveDate                 DateTime?
+  publishedAt                   DateTime  @default(now())
+  expiresAt                     DateTime?
+  isActive                      Boolean   @default(true)
+  publishedById                 String
   primaryRegulatorySourceItemId String?
-  automationDraftKey           String?               @unique
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  automationDraftKey            String?   @unique
+  createdAt                     DateTime  @default(now())
+  updatedAt                     DateTime  @updatedAt
 
   publishedBy                 User                  @relation(fields: [publishedById], references: [id])
   primaryRegulatorySourceItem RegulatorySourceItem? @relation(fields: [primaryRegulatorySourceItemId], references: [id], onDelete: SetNull)
@@ -2380,8 +2503,8 @@ model RegulatorySource {
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @updatedAt
 
-  snapshots             RegulatorySourceSnapshot[]
-  items                 RegulatorySourceItem[]
+  snapshots RegulatorySourceSnapshot[]
+  items     RegulatorySourceItem[]
 
   @@index([jurisdictionCode])
   @@index([regulatoryBody])
@@ -2390,29 +2513,29 @@ model RegulatorySource {
 }
 
 model RegulatorySourceSnapshot {
-  id                    String                  @id @default(cuid())
-  sourceId              String
-  sourceUrl             String
-  canonicalUrl          String
-  contentHash           String
-  hashVersion           Int                     @default(1)
-  normalizationVersion  Int                     @default(1)
-  contentLength         Int                     @default(0)
-  httpStatus            Int?
-  contentType           String?
-  etag                  String?
-  lastModified          String?
-  rawText               String?                 @db.Text
-  rawPayload            String?                 @db.Text
-  rawStorageKey         String?
-  title                 String?
-  metadata              Json?
-  retrievedAt           DateTime                @default(now())
-  createdAt             DateTime                @default(now())
+  id                   String   @id @default(cuid())
+  sourceId             String
+  sourceUrl            String
+  canonicalUrl         String
+  contentHash          String
+  hashVersion          Int      @default(1)
+  normalizationVersion Int      @default(1)
+  contentLength        Int      @default(0)
+  httpStatus           Int?
+  contentType          String?
+  etag                 String?
+  lastModified         String?
+  rawText              String?  @db.Text
+  rawPayload           String?  @db.Text
+  rawStorageKey        String?
+  title                String?
+  metadata             Json?
+  retrievedAt          DateTime @default(now())
+  createdAt            DateTime @default(now())
 
-  source                RegulatorySource        @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  primaryItems          RegulatorySourceItem[]  @relation("RegulatorySourceItemPrimarySnapshot")
-  evidenceLinks         RegulatorySourceItemEvidence[]
+  source        RegulatorySource               @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  primaryItems  RegulatorySourceItem[]         @relation("RegulatorySourceItemPrimarySnapshot")
+  evidenceLinks RegulatorySourceItemEvidence[]
 
   @@unique([sourceId, canonicalUrl, contentHash])
   @@index([sourceId])
@@ -2422,40 +2545,40 @@ model RegulatorySourceSnapshot {
 }
 
 model RegulatorySourceItem {
-  id                    String                      @id @default(cuid())
-  dedupeKey             String                      @unique
-  sourceId              String
-  primarySnapshotId     String?
-  jurisdictionCode      String                      @default("KE")
-  regulator             String
-  title                 String
-  officialTitle         String?
-  summary               String                      @db.Text
-  informationType       RegulatoryInformationType   @default(NOTICE)
-  regulatoryStage       RegulatoryStage             @default(ISSUED)
-  verificationState     RegulatoryVerificationState @default(UNVERIFIED)
-  materiality           RegulatoryMateriality       @default(MEDIUM)
-  relevanceScore        Float?
-  publicationDate       DateTime?
-  effectiveDate         DateTime?
-  consultationDeadline  DateTime?
-  complianceDeadline    DateTime?
-  affectedSectors       Json                        @default("[]")
-  affectedEntityTypes   Json                        @default("[]")
-  topics                Json                        @default("[]")
-  firstDetectedAt       DateTime                    @default(now())
-  lastObservedAt        DateTime                    @default(now())
-  supersededById        String?
-  metadata              Json?
-  createdAt             DateTime                    @default(now())
-  updatedAt             DateTime                    @updatedAt
+  id                   String                      @id @default(cuid())
+  dedupeKey            String                      @unique
+  sourceId             String
+  primarySnapshotId    String?
+  jurisdictionCode     String                      @default("KE")
+  regulator            String
+  title                String
+  officialTitle        String?
+  summary              String                      @db.Text
+  informationType      RegulatoryInformationType   @default(NOTICE)
+  regulatoryStage      RegulatoryStage             @default(ISSUED)
+  verificationState    RegulatoryVerificationState @default(UNVERIFIED)
+  materiality          RegulatoryMateriality       @default(MEDIUM)
+  relevanceScore       Float?
+  publicationDate      DateTime?
+  effectiveDate        DateTime?
+  consultationDeadline DateTime?
+  complianceDeadline   DateTime?
+  affectedSectors      Json                        @default("[]")
+  affectedEntityTypes  Json                        @default("[]")
+  topics               Json                        @default("[]")
+  firstDetectedAt      DateTime                    @default(now())
+  lastObservedAt       DateTime                    @default(now())
+  supersededById       String?
+  metadata             Json?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
 
-  source                RegulatorySource            @relation(fields: [sourceId], references: [id], onDelete: Restrict)
-  primarySnapshot       RegulatorySourceSnapshot?   @relation("RegulatorySourceItemPrimarySnapshot", fields: [primarySnapshotId], references: [id], onDelete: SetNull)
-  evidenceLinks         RegulatorySourceItemEvidence[]
-  alerts                RegulatoryAlert[]
-  supersededBy          RegulatorySourceItem?       @relation("RegulatoryItemSupersession", fields: [supersededById], references: [id], onDelete: SetNull)
-  supersedes            RegulatorySourceItem[]      @relation("RegulatoryItemSupersession")
+  source          RegulatorySource               @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  primarySnapshot RegulatorySourceSnapshot?      @relation("RegulatorySourceItemPrimarySnapshot", fields: [primarySnapshotId], references: [id], onDelete: SetNull)
+  evidenceLinks   RegulatorySourceItemEvidence[]
+  alerts          RegulatoryAlert[]
+  supersededBy    RegulatorySourceItem?          @relation("RegulatoryItemSupersession", fields: [supersededById], references: [id], onDelete: SetNull)
+  supersedes      RegulatorySourceItem[]         @relation("RegulatoryItemSupersession")
 
   @@index([jurisdictionCode])
   @@index([regulator])
@@ -2469,16 +2592,16 @@ model RegulatorySourceItem {
 }
 
 model RegulatorySourceItemEvidence {
-  id            String                  @id @default(cuid())
-  sourceItemId  String
-  snapshotId    String
-  role          RegulatoryEvidenceRole  @default(SUPPORTING)
-  isPrimary     Boolean                 @default(false)
-  notes         String?                 @db.Text
-  createdAt     DateTime                @default(now())
+  id           String                 @id @default(cuid())
+  sourceItemId String
+  snapshotId   String
+  role         RegulatoryEvidenceRole @default(SUPPORTING)
+  isPrimary    Boolean                @default(false)
+  notes        String?                @db.Text
+  createdAt    DateTime               @default(now())
 
-  sourceItem    RegulatorySourceItem    @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
-  snapshot      RegulatorySourceSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  sourceItem RegulatorySourceItem     @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+  snapshot   RegulatorySourceSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
 
   @@unique([sourceItemId, snapshotId])
   @@index([sourceItemId])
@@ -2527,55 +2650,55 @@ model AlertNotification {
 // =============================================================================
 
 model Company {
-  id           String    @id @default(cuid())
+  id           String   @id @default(cuid())
   name         String
-  domain       String?   @unique
+  domain       String?  @unique
   industry     String?
-  regulatorMix String[]  @default([])
+  regulatorMix String[] @default([])
   notes        String?
 
   // Origin & Discovery Metadata
-  origin             CompanyOrigin     @default(MANUAL_CRM)
-  leadStatus         LeadStatus        @default(UNASSESSED)
-  salesStage         SalesStage        @default(PROSPECT)
-  icpTier            IcpTier           @default(UNASSESSED)
-  leadScore          Int?
-  sizeClass          CompanySizeClass  @default(UNKNOWN)
+  origin     CompanyOrigin    @default(MANUAL_CRM)
+  leadStatus LeadStatus       @default(UNASSESSED)
+  salesStage SalesStage       @default(PROSPECT)
+  icpTier    IcpTier          @default(UNASSESSED)
+  leadScore  Int?
+  sizeClass  CompanySizeClass @default(UNKNOWN)
 
   // Jurisdiction & Regulatory Specifics
-  country            String            @default("Kenya")
-  regulatoryBody     String?
-  licenceType        String?
-  licenceNumber      String?
-  licenceStatus      String?
+  country        String  @default("Kenya")
+  regulatoryBody String?
+  licenceType    String?
+  licenceNumber  String?
+  licenceStatus  String?
 
   // Source Provenance
   primarySourceUrl       String?
   primarySourceAuthority String?
 
   // Qualification & Review Audit
-  discoveredAt       DateTime?
-  lastVerifiedAt     DateTime?
-  confidence         Float?
-  reviewReason       String?
-  rejectionReason    String?
+  discoveredAt    DateTime?
+  lastVerifiedAt  DateTime?
+  confidence      Float?
+  reviewReason    String?
+  rejectionReason String?
 
   // Ownership & Review Assignment
-  ownerId            String?
-  owner              User?             @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  reviewedById       String?
-  reviewedBy         User?             @relation("CompanyReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
-  reviewedAt         DateTime?
+  ownerId      String?
+  owner        User?     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  reviewedById String?
+  reviewedBy   User?     @relation("CompanyReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
 
-  createdById        String
-  createdBy          User              @relation("CompanyCreatedBy", fields: [createdById], references: [id])
-  contacts           Contact[]
-  evidence           DiscoveryEvidence[]
-  discoveryRuns      DiscoveryRunCompany[]
+  createdById   String
+  createdBy     User                  @relation("CompanyCreatedBy", fields: [createdById], references: [id])
+  contacts      Contact[]
+  evidence      DiscoveryEvidence[]
+  discoveryRuns DiscoveryRunCompany[]
 
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  deletedAt          DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   @@index([name])
   @@index([createdById])
@@ -2591,11 +2714,11 @@ model Company {
 }
 
 model DiscoveryEvidence {
-  id                String                    @id @default(cuid())
-  companyId         String
-  company           Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  discoveryRunId    String?
-  discoveryRun      DiscoveryRun?             @relation(fields: [discoveryRunId], references: [id], onDelete: SetNull)
+  id             String        @id @default(cuid())
+  companyId      String
+  company        Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  discoveryRunId String?
+  discoveryRun   DiscoveryRun? @relation(fields: [discoveryRunId], references: [id], onDelete: SetNull)
 
   field             String
   extractedValue    String
@@ -2606,17 +2729,17 @@ model DiscoveryEvidence {
   sourceRecordId    String?
   evidenceSnippet   String?                   @db.Text
   verificationState EvidenceVerificationState @default(UNVERIFIED)
-  evidenceHash      String                    // SHA-256 for duplicate protection
+  evidenceHash      String // SHA-256 for duplicate protection
 
   // AI Extraction Metadata
-  extractionMethod  String?                   // e.g. "AI_SCRAPE", "REGULATOR_SYNC", "MANUAL"
-  modelProvider     String?                   // e.g. "openai", "anthropic"
-  modelName         String?                   // e.g. "gpt-4o", "claude-3-5-sonnet"
-  extractorVersion  String?                   // e.g. "v1.2.0"
-  retrievedAt       DateTime                  @default(now())
+  extractionMethod String? // e.g. "AI_SCRAPE", "REGULATOR_SYNC", "MANUAL"
+  modelProvider    String? // e.g. "openai", "anthropic"
+  modelName        String? // e.g. "gpt-4o", "claude-3-5-sonnet"
+  extractorVersion String? // e.g. "v1.2.0"
+  retrievedAt      DateTime @default(now())
 
-  createdAt         DateTime                  @default(now())
-  updatedAt         DateTime                  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([companyId, evidenceHash])
   @@index([companyId])
@@ -2627,26 +2750,26 @@ model DiscoveryEvidence {
 }
 
 model DiscoveryRun {
-  id                 String                @id @default(cuid())
-  runIdempotencyKey  String                @unique
-  workflowName       String                // e.g. "W-SALES-LEADS-01"
-  sourceAuthority    String                // e.g. "CBK_DCP_DIRECTORY"
-  sourceUrl          String
-  status             DiscoveryRunStatus    @default(RUNNING)
-  totalDiscovered    Int                   @default(0)
-  totalQualified     Int                   @default(0)
-  totalDeduplicated  Int                   @default(0)
-  totalRejected      Int                   @default(0)
-  totalCreated       Int                   @default(0)
-  totalUpdated       Int                   @default(0)
-  errorMessage       String?               @db.Text
-  metadata           Json?
+  id                String             @id @default(cuid())
+  runIdempotencyKey String             @unique
+  workflowName      String // e.g. "W-SALES-LEADS-01"
+  sourceAuthority   String // e.g. "CBK_DCP_DIRECTORY"
+  sourceUrl         String
+  status            DiscoveryRunStatus @default(RUNNING)
+  totalDiscovered   Int                @default(0)
+  totalQualified    Int                @default(0)
+  totalDeduplicated Int                @default(0)
+  totalRejected     Int                @default(0)
+  totalCreated      Int                @default(0)
+  totalUpdated      Int                @default(0)
+  errorMessage      String?            @db.Text
+  metadata          Json?
 
-  startedAt          DateTime              @default(now())
-  completedAt        DateTime?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
 
-  evidence           DiscoveryEvidence[]
-  companies          DiscoveryRunCompany[]
+  evidence  DiscoveryEvidence[]
+  companies DiscoveryRunCompany[]
 
   @@index([workflowName])
   @@index([sourceAuthority])
@@ -2655,18 +2778,18 @@ model DiscoveryRun {
 }
 
 model DiscoveryRunCompany {
-  id              String        @id @default(cuid())
-  discoveryRunId  String
-  discoveryRun    DiscoveryRun  @relation(fields: [discoveryRunId], references: [id], onDelete: Cascade)
-  companyId       String
-  company         Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  id             String       @id @default(cuid())
+  discoveryRunId String
+  discoveryRun   DiscoveryRun @relation(fields: [discoveryRunId], references: [id], onDelete: Cascade)
+  companyId      String
+  company        Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  action          String        // "CREATED" | "UPDATED" | "MATCHED" | "REJECTED" | "DUPLICATE"
+  action          String // "CREATED" | "UPDATED" | "MATCHED" | "REJECTED" | "DUPLICATE"
   scoreAtRun      Int?
   icpTierAtRun    IcpTier?
   leadStatusAtRun LeadStatus?
   reason          String?
-  createdAt       DateTime      @default(now())
+  createdAt       DateTime    @default(now())
 
   @@unique([discoveryRunId, companyId])
   @@index([discoveryRunId])

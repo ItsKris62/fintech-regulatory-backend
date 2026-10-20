@@ -1,4 +1,8 @@
 import { prisma } from '@/lib/prisma/client';
+import {
+  AiJobLeaseLostError,
+  type AiJobExecutionLease,
+} from '@/modules/ai-jobs/ai-job-lease';
 
 export class GapAnalysisCancelledError extends Error {
   readonly retryable = false;
@@ -19,43 +23,62 @@ export function isGapAnalysisCancelledError(error: unknown): error is GapAnalysi
  */
 export async function assertGapAnalysisStillActive(
   analysisId: string,
-  jobId?: string,
+  execution?: string | AiJobExecutionLease,
 ): Promise<void> {
+  const jobId = typeof execution === 'string' ? execution : execution?.jobId;
   const [analysis, job] = await Promise.all([
     prisma.gapAnalysis.findUnique({
       where: { id: analysisId },
       select: { deletedAt: true, status: true },
     }),
     jobId
-      ? prisma.aiJob.findUnique({ where: { id: jobId }, select: { status: true } })
+      ? prisma.aiJob.findUnique({
+          where: { id: jobId },
+          select: { status: true, lockedBy: true, attempts: true },
+        })
       : Promise.resolve(null),
   ]);
 
   if (
     !analysis ||
     analysis.deletedAt !== null ||
-    analysis.status === 'CANCELLED' ||
+    ['CANCELLED', 'COMPLETED', 'FAILED'].includes(analysis.status) ||
     (jobId && (!job || job.status === 'CANCELLED'))
   ) {
     throw new GapAnalysisCancelledError();
+  }
+
+  if (
+    typeof execution !== 'string' &&
+    execution &&
+    (
+      job?.status !== 'RUNNING' ||
+      job.lockedBy !== execution.workerId ||
+      job.attempts !== execution.attempt
+    )
+  ) {
+    throw new AiJobLeaseLostError();
   }
 }
 
 export function monitorGapAnalysisCancellation(
   analysisId: string,
-  jobId?: string,
+  execution?: string | AiJobExecutionLease,
   intervalMs = 1000,
 ): { signal: AbortSignal; stop: () => void } {
   const controller = new AbortController();
+  const jobId = typeof execution === 'string' ? execution : execution?.jobId;
   if (!jobId) return { signal: controller.signal, stop: () => undefined };
 
   let checking = false;
   const timer = setInterval(() => {
     if (checking || controller.signal.aborted) return;
     checking = true;
-    void assertGapAnalysisStillActive(analysisId, jobId)
+    void assertGapAnalysisStillActive(analysisId, execution)
       .catch((error: unknown) => {
-        if (isGapAnalysisCancelledError(error)) controller.abort(error);
+        if (isGapAnalysisCancelledError(error) || error instanceof AiJobLeaseLostError) {
+          controller.abort(error);
+        }
       })
       .finally(() => {
         checking = false;
@@ -68,4 +91,3 @@ export function monitorGapAnalysisCancellation(
     stop: () => clearInterval(timer),
   };
 }
-

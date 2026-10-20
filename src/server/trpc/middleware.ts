@@ -19,6 +19,7 @@ import type { TrialFeature } from '@/types/plan.types';
 import { FREE_TRIAL_LIMITS } from '@/types/plan.types';
 import {
   checkTrialLimit,
+  decrementTrialUsageAtomic,
   incrementTrialUsageAtomic,
 } from '@/modules/trial';
 import { resolveEffectivePlan } from '@/modules/billing/resolve-effective-plan';
@@ -668,6 +669,13 @@ export interface UsageLimitPatch {
   incrementUsage?: () => Promise<void>;
   /** Reverses a successful deferred reservation before durable work exists. */
   rollbackUsage?: () => Promise<void>;
+  reservation?: UsageReservationDescriptor;
+}
+
+export interface UsageReservationDescriptor {
+  scope: 'TRIAL' | 'REDIS' | 'UNLIMITED';
+  units: number;
+  counterKey?: string;
 }
 
 /**
@@ -749,6 +757,8 @@ export async function resolveUsageLimit(
         user,
         usageInfo: { metric, current: featureIncrement.newCount, limit: featureIncrement.limit },
         incrementUsage: async () => {},
+        rollbackUsage: () => decrementTrialUsageAtomic(user.id, trialFeature, units),
+        reservation: { scope: 'TRIAL', units },
       };
     }
 
@@ -767,7 +777,7 @@ export async function resolveUsageLimit(
 
   // Unlimited: skip all Redis I/O
   if (limit === -1) {
-    return { user, usageInfo: { metric, current: -1, limit: -1 } };
+    return { user, usageInfo: { metric, current: -1, limit: -1 }, reservation: { scope: 'UNLIMITED', units } };
   }
 
   // Feature unavailable on this plan -- FORBIDDEN (plan issue, not quota issue)
@@ -780,7 +790,7 @@ export async function resolveUsageLimit(
   }
 
   // Build the Redis key using the correct period bucket
-  const scopeId   = user.organizationId ?? user.id;
+  const scopeId   = ctx.orgMembership?.organizationId ?? user.organizationId ?? user.id;
   const periodKey = period === 'lifetime'
     ? 'lifetime'
     : new Date().toISOString().slice(0, 7); // 'YYYY-MM'
@@ -878,6 +888,7 @@ export async function resolveUsageLimit(
       usageInfo: { metric, current, limit },
       incrementUsage: doIncrement,
       rollbackUsage: rollbackIncrement,
+      reservation: { scope: 'REDIS', units, counterKey: usageKey },
     };
   }
 

@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { SourceInsufficiencyError } from '@/lib/source-grounding/source-insufficiency';
 import { isGapAnalysisCancelledError } from './gap-analysis-cancellation';
+import { isAIProviderFailure, type AIProviderFailureCategory } from '@/lib/ai/provider-failure';
 
 export type GapAnalysisFailureClass =
   | 'VALIDATION'
@@ -15,7 +16,24 @@ export type GapAnalysisFailureClass =
   | 'DATABASE'
   | 'INTERNAL';
 
-export function classifyGapAnalysisFailure(error: unknown): { failureClass: GapAnalysisFailureClass; retryable: boolean } {
+export interface GapAnalysisFailureClassification {
+  failureClass: GapAnalysisFailureClass;
+  retryable: boolean;
+  providerFailureCategory?: AIProviderFailureCategory;
+  provider?: string;
+  providerStatus?: number;
+}
+
+export function classifyGapAnalysisFailure(error: unknown): GapAnalysisFailureClassification {
+  if (isAIProviderFailure(error)) {
+    return {
+      failureClass: error.category === 'TIMEOUT' ? 'TIMEOUT' : 'AI_PROVIDER',
+      retryable: error.retryable,
+      providerFailureCategory: error.category,
+      provider: error.provider,
+      providerStatus: error.providerStatus,
+    };
+  }
   if (error instanceof SourceInsufficiencyError) return { failureClass: 'SOURCE_INSUFFICIENCY', retryable: false };
   if (isGapAnalysisCancelledError(error)) return { failureClass: 'CANCELLED', retryable: false };
   const named = error as { name?: string; code?: string; retryable?: boolean };

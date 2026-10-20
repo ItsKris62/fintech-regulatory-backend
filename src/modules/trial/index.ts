@@ -2,6 +2,7 @@ export {
   activateTrial,
   getTrialStatus,
   incrementTrialUsageAtomic,
+  decrementTrialUsageAtomic,
   incrementTrialUsage,
   checkTrialLimit,
   fireTrialExpiredEmail,

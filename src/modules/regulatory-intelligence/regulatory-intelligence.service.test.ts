@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchResult } from '@/lib/rag/rag.service';
 import type { JurisdictionContext } from '@/types/jurisdiction';
+import { AIProviderFailure } from '@/lib/ai/provider-failure';
 
 const chunks = vi.hoisted(() => ({
   accepted: {
@@ -36,6 +37,13 @@ vi.mock('@/lib/rag/rag.service', () => ({
   searchAndGetRegulatoryEvidenceContext,
 }));
 vi.mock('@/modules/compliance/orchestrator/grader.agent', () => ({ runGraderAgent }));
+vi.mock('@/lib/source-grounding/approved-evidence', () => ({
+  partitionEvidenceBySourceApproval: vi.fn(async (results: SearchResult[]) => ({
+    eligible: results,
+    ineligible: [],
+    enforcementApplied: true,
+  })),
+}));
 
 describe('RegulatoryIntelligenceService', () => {
   beforeEach(() => {
@@ -80,6 +88,10 @@ describe('RegulatoryIntelligenceService', () => {
     expect(result.grounded).toBe(true);
     expect(result.evidence).toEqual([chunks.accepted]);
     expect(result.rejectedEvidence).toEqual([chunks.rejected]);
+    expect(result.retrievedCount).toBe(2);
+    expect(result.acceptedCount).toBe(1);
+    expect(result.acceptedCount).toBe(result.evidence.length);
+    expect(result.retrievedCount).toBeGreaterThanOrEqual(result.acceptedCount);
     expect(result.citations).toHaveLength(1);
     expect(result.citations[0]).toMatchObject({
       vectorId: 'doc-1:chunk-2',
@@ -87,5 +99,70 @@ describe('RegulatoryIntelligenceService', () => {
       documentId: 'doc-1',
       jurisdictionCode: 'KE',
     });
+  });
+
+  it('guarantees acceptedCount=0 and evidence=[] when retrieval fails or is ungrounded', async () => {
+    const { regulatoryIntelligenceService } = await import('./regulatory-intelligence.service');
+    searchAndGetRegulatoryEvidenceContext.mockResolvedValueOnce({
+      results: [],
+      context: '',
+      citations: [],
+      corpusVersions: { KE: 'test-v1' },
+      retrievalVersion: 'regulatory-evidence-v1',
+    });
+
+    const result = await regulatoryIntelligenceService.retrieveAndGrade({
+      question: 'What is required for nonexistent regulation?',
+      feature: 'GAP_ANALYSIS',
+      jurisdictionContext: {
+        mode: 'SINGLE',
+        jurisdictions: ['KE'],
+        primaryJurisdiction: 'KE',
+        jurisdictionSource: 'REQUEST',
+      },
+    });
+
+    expect(result.grounded).toBe(false);
+    expect(result.evidence).toHaveLength(0);
+    expect(result.acceptedCount).toBe(0);
+    expect(result.acceptedCount).toBe(result.evidence.length);
+    expect(result.failureReason).toBe('RAG_NO_EVIDENCE');
+  });
+
+  it('passes the explicit corpus namespace through to the canonical RAG call', async () => {
+    const { regulatoryIntelligenceService } = await import('./regulatory-intelligence.service');
+
+    await regulatoryIntelligenceService.retrieveAndGrade({
+      question: 'What DPA controls are required?',
+      feature: 'GAP_ANALYSIS',
+      jurisdictionContext: {
+        mode: 'SINGLE',
+        jurisdictions: ['KE'],
+        primaryJurisdiction: 'KE',
+        jurisdictionSource: 'REQUEST',
+      },
+      retrievalProfile: {
+        namespace: 'batch63-development-uat',
+        filter: { frameworkSlug: 'dpa-2019' },
+        frameworkScope: 'DOMESTIC',
+      },
+    });
+
+    expect(searchAndGetRegulatoryEvidenceContext).toHaveBeenCalledWith(expect.objectContaining({
+      namespace: 'batch63-development-uat',
+      filter: { frameworkSlug: 'dpa-2019' },
+      frameworkScope: 'DOMESTIC',
+    }));
+  });
+
+  it('propagates a Gap Analysis provider billing failure instead of converting it to missing evidence', async () => {
+    const { regulatoryIntelligenceService } = await import('./regulatory-intelligence.service');
+    runGraderAgent.mockRejectedValueOnce(new AIProviderFailure({ provider: 'anthropic', category: 'BILLING', retryable: false }));
+
+    await expect(regulatoryIntelligenceService.retrieveAndGrade({
+      question: 'What CDD controls are required?',
+      feature: 'GAP_ANALYSIS',
+      jurisdictionContext: { mode: 'SINGLE', jurisdictions: ['KE'], primaryJurisdiction: 'KE', jurisdictionSource: 'REQUEST' },
+    })).rejects.toMatchObject({ category: 'BILLING', retryable: false });
   });
 });

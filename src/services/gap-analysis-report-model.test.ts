@@ -21,6 +21,7 @@ function result(overrides: Partial<GapAnalysisResult> = {}): GapAnalysisResult {
       complianceAlignmentScore: 78,
       assessmentCoverageScore: 34,
       coverageStatus: 'PARTIAL',
+      inventoryCompleteness: 'PARTIAL',
       selectedBenchmarkDocuments: [],
     },
     ...overrides,
@@ -40,5 +41,12 @@ describe('buildGapAnalysisReportMetrics', () => {
     value.metadata.coverageStatus = 'COMPLETE';
     value.metadata.assessmentCoverageScore = 100;
     expect(buildGapAnalysisReportMetrics(value).assessmentCoverage).toBe('100% (Complete)');
+  });
+
+  it('does not manufacture a percentage when the reviewed inventory is unknown', () => {
+    const value = result();
+    value.metadata.coverageStatus = 'UNKNOWN';
+    value.metadata.inventoryCompleteness = 'UNKNOWN';
+    expect(buildGapAnalysisReportMetrics(value).assessmentCoverage).toContain('Unavailable');
   });
 });

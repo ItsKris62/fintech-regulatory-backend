@@ -85,6 +85,19 @@ vi.mock('@/modules/compliance', () => ({
   },
 }));
 
+vi.mock('@/modules/compliance/gap-analysis-corpus-readiness', () => ({
+  getGapAnalysisFrameworkReadiness: vi.fn(async (jurisdictionCode: string, frameworkSlugs: string[]) =>
+    frameworkSlugs.map((frameworkSlug) => ({
+      jurisdictionCode,
+      frameworkSlug,
+      state: 'READY',
+      corpusVersion: 'contract-test-corpus',
+      sourceCount: 1,
+      reviewedAt: new Date('2026-10-20T00:00:00.000Z'),
+      reason: 'Reviewed contract fixture.',
+    }))),
+}));
+
 vi.mock('../../services/benchmark-document.service', () => ({
   validateAuthorizedBenchmarkDocumentIds: mocks.validateBenchmarks,
 }));

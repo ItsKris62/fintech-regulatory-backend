@@ -4,7 +4,7 @@ export interface GapAnalysisReportMetrics {
   complianceAlignment: number;
   assessmentCoverage: string;
   assessedObligations: number;
-  coverageStatus: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT';
+  coverageStatus: 'UNKNOWN' | 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT';
 }
 
 /**
@@ -23,8 +23,10 @@ export function buildGapAnalysisReportMetrics(result: GapAnalysisResult): GapAna
     complianceAlignment: result.metadata.complianceAlignmentScore ?? result.overallScore,
     assessedObligations,
     coverageStatus,
-    assessmentCoverage: coverageStatus === 'COMPLETE' && typeof score === 'number'
-      ? `${score}% (Complete)`
-      : `Partial - ${assessedObligations} evidence-backed obligations evaluated. This is not a complete framework inventory.`,
+    assessmentCoverage: coverageStatus === 'UNKNOWN'
+      ? 'Unavailable - reviewed requirement inventory scope is not established.'
+      : coverageStatus === 'COMPLETE' && typeof score === 'number'
+        ? `${score}% (Complete)`
+        : `Partial - ${assessedObligations} evidence-backed obligations evaluated. This is not a complete framework inventory.`,
   };
 }

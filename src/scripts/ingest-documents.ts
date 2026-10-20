@@ -179,6 +179,7 @@ function registryEntryFromManifest(entry: CorpusManifestEntry): RegistryEntry {
     version: entry.version ?? undefined,
     authorityStatus,
     isBinding: entry.isBinding,
+    frameworkSlug: entry.frameworkSlugs?.[0],
   };
 }
 
@@ -202,6 +203,11 @@ function loadManifestRegistryEntries(country: ManifestCountry): RegistryEntry[] 
     // become production evidence before document-specific approval.
     .filter((entry) => entry.reviewStatus === 'APPROVED')
     .map(registryEntryFromManifest);
+}
+
+function parseDocumentFilter(): string | null {
+  const arg = process.argv.slice(2).find((value) => value.startsWith('--document='));
+  return arg ? arg.slice('--document='.length).trim() : null;
 }
 
 export function buildRegistry(countryFilter: ManifestCountry | null): RegistryEntry[] {
@@ -231,7 +237,12 @@ const DOCUMENT_REGISTRY: RegistryEntry[] = [
     jurisdiction: 'Kenya',
     documentType: 'act',
     effectiveDate: new Date('2019-11-08'),
-    version: '2019',
+    version: 'eng@2019-11-15',
+    authorityStatus: 'IN_FORCE',
+    isBinding: true,
+    officialUrl: 'https://new.kenyalaw.org/akn/ke/act/2019/24/eng@2019-11-15',
+    sourceRegistryId: 'ke-kenya-law',
+    frameworkSlug: 'dpa-2019',
   },
   {
     // ✅ File present
@@ -879,12 +890,21 @@ process.on('SIGTERM', () => {
 
 async function main(): Promise<void> {
   const countryFilter = parseCountryFilter();
-  const registry = buildRegistry(countryFilter);
+  const documentFilter = parseDocumentFilter();
+  const registry = buildRegistry(countryFilter).filter((entry) =>
+    !documentFilter || entry.fileName === documentFilter || entry.manifestId === documentFilter,
+  );
+  if (documentFilter && registry.length === 0) {
+    throw new Error(`No registry entry matched --document=${documentFilter}`);
+  }
 
   console.log('\n🚀 SheriaBot  -  Regulatory Document Ingestion Pipeline\n');
   console.log(`📁 Documents folder: ${DOCS_ROOT}`);
   if (countryFilter) {
     console.log(`🌍 Country filter: ${countryFilter}`);
+  }
+  if (documentFilter) {
+    console.log(`Document filter: ${documentFilter}`);
   }
   console.log(`📋 Registry entries: ${registry.length}\n`);
 
@@ -930,6 +950,9 @@ async function main(): Promise<void> {
         publicationDate: entry.publicationDate,
         retrievedAt: entry.retrievedAt,
         officialUrl: entry.officialUrl,
+        sourceRegistryId: entry.sourceRegistryId,
+        sourceDocumentVersionId: entry.sourceDocumentVersionId,
+        frameworkSlug: entry.frameworkSlug,
         version: entry.version,
       authorityStatus: entry.authorityStatus ?? 'IN_FORCE',
       isBinding: entry.isBinding ?? (entry.authorityStatus ?? 'IN_FORCE') === 'IN_FORCE',
@@ -995,14 +1018,16 @@ async function main(): Promise<void> {
 // ============================================================================
 
 if (require.main === module) {
+let exitCode = 0;
 main()
   .catch((error: unknown) => {
     const err = error as Error;
     logger.error({ type: 'ingestion_script_fatal', error: err.message });
     console.error('\n💥 Fatal error:', err.message);
-    process.exit(1);
+    exitCode = 1;
   })
   .finally(async () => {
     await (prisma as any).$disconnect();
+    process.exit(exitCode);
   });
 }

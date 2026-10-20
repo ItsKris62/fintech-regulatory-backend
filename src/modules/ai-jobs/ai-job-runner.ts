@@ -9,6 +9,14 @@ import {
   scrubLegacyDocumentFields,
 } from './gap-analysis-payload-cleanup';
 import { isGapAnalysisCancelledError } from '@/modules/compliance/gap-analysis-cancellation';
+import { classifyGapAnalysisFailure } from '@/modules/compliance/gap-analysis-observability';
+import {
+  AiJobLeaseLostError,
+  aiJobLeaseWhere,
+  isAiJobLeaseLostError,
+  renewAiJobLease,
+  type AiJobExecutionLease,
+} from './ai-job-lease';
 
 type ClaimedJob = {
   id: string;
@@ -37,13 +45,35 @@ export type EnqueueAiJobInput = {
 };
 
 const WORKER_ID = `${os.hostname()}:${process.pid}`;
-const POLL_INTERVAL_MS = Number(process.env.AI_JOB_POLL_INTERVAL_MS ?? 5000);
-const STALE_LOCK_MS = Number(process.env.AI_JOB_STALE_LOCK_MS ?? 15 * 60 * 1000);
+function positiveDuration(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 100 ? parsed : fallback;
+}
+
+const POLL_INTERVAL_MS = positiveDuration(process.env.AI_JOB_POLL_INTERVAL_MS, 5000);
+export const AI_JOB_STALE_LOCK_MS = positiveDuration(
+  process.env.AI_JOB_STALE_LOCK_MS,
+  15 * 60 * 1000,
+);
+export const AI_JOB_HEARTBEAT_MS = Math.min(
+  positiveDuration(process.env.AI_JOB_HEARTBEAT_MS, 30_000),
+  Math.max(100, Math.floor(AI_JOB_STALE_LOCK_MS / 3)),
+);
+const GAP_ANALYSIS_RECOVERY_INTERVAL_MS = positiveDuration(
+  process.env.GAP_ANALYSIS_RECOVERY_INTERVAL_MS,
+  60_000,
+);
+const GAP_ANALYSIS_OBJECT_CLEANUP_INTERVAL_MS = positiveDuration(
+  process.env.GAP_ANALYSIS_OBJECT_CLEANUP_INTERVAL_MS,
+  60_000,
+);
 
 class AiJobRunner {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private stopped = true;
+  private lastGapAnalysisRecoveryAt = 0;
+  private lastGapAnalysisObjectCleanupAt = 0;
 
   async enqueue(input: EnqueueAiJobInput) {
     const job = await prisma.aiJob.upsert({
@@ -109,6 +139,28 @@ class AiJobRunner {
     this.running = true;
     try {
       await this.requeueStaleLocks();
+      if (Date.now() - this.lastGapAnalysisRecoveryAt >= GAP_ANALYSIS_RECOVERY_INTERVAL_MS) {
+        this.lastGapAnalysisRecoveryAt = Date.now();
+        try {
+          const { recoverAbandonedGapAnalyses } = await import('@/modules/compliance/gap-analysis-recovery');
+          await recoverAbandonedGapAnalyses();
+        } catch (error: unknown) {
+          logger.error({
+            type: 'gap_analysis_abandoned_recovery_failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (Date.now() - this.lastGapAnalysisObjectCleanupAt >= GAP_ANALYSIS_OBJECT_CLEANUP_INTERVAL_MS) {
+        this.lastGapAnalysisObjectCleanupAt = Date.now();
+        try {
+          const { recoverStaleGapAnalysisObjectDeletionClaims, processGapAnalysisObjectDeletionBatch } = await import('@/modules/compliance/gap-analysis-object-deletion');
+          await recoverStaleGapAnalysisObjectDeletionClaims();
+          await processGapAnalysisObjectDeletionBatch(10);
+        } catch (error: unknown) {
+          logger.error({ type: 'gap_analysis_object_cleanup_failed', error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       const job = await this.claimNextJob();
       if (job) {
         await this.execute(job);
@@ -155,29 +207,63 @@ class AiJobRunner {
   }
 
   private async execute(job: ClaimedJob): Promise<void> {
+    const lease: AiJobExecutionLease = {
+      jobId: job.id,
+      workerId: WORKER_ID,
+      attempt: job.attempts,
+    };
     await this.recordEvent(job.id, 'STARTED', `Attempt ${job.attempts} started.`, undefined, {
       workerId: WORKER_ID,
       type: job.type,
+      fencingToken: job.attempts,
     });
+
+    let heartbeatInFlight: Promise<void> | null = null;
+    const heartbeatTimer = setInterval(() => {
+      if (heartbeatInFlight) return;
+      heartbeatInFlight = renewAiJobLease(lease)
+        .catch((error: unknown) => {
+          if (isAiJobLeaseLostError(error)) {
+            logger.warn({
+              type: 'ai_job_lease_lost',
+              jobId: job.id,
+              workerId: WORKER_ID,
+              fencingToken: job.attempts,
+            });
+            return;
+          }
+          logger.error({
+            type: 'ai_job_heartbeat_failed',
+            jobId: job.id,
+            workerId: WORKER_ID,
+            fencingToken: job.attempts,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          heartbeatInFlight = null;
+        });
+    }, AI_JOB_HEARTBEAT_MS);
+    heartbeatTimer.unref?.();
 
     try {
       if (job.type === 'GENERATED_POLICY_PIPELINE') {
         await runEnterprisePolicyJob(job, (progress, message, metadata) =>
-          this.updateProgress(job.id, progress, message, metadata),
+          this.updateProgress(lease, progress, message, metadata),
         );
       } else if (job.type === 'POLICY_GENERATION') {
         await runPolicyGenerationJob(job, (progress, message, metadata) =>
-          this.updateProgress(job.id, progress, message, metadata),
+          this.updateProgress(lease, progress, message, metadata),
         );
       } else if (job.type === 'GAP_ANALYSIS_PIPELINE') {
         const { executeGapAnalysisPipeline } = await import('@/modules/compliance/compliance.module');
-        await executeGapAnalysisPipeline(job.payload as never, { jobId: job.id });
+        await executeGapAnalysisPipeline(job.payload as never, lease);
       } else {
         throw new Error(`No handler registered for AI job type: ${job.type}`);
       }
 
       const completed = await prisma.aiJob.updateMany({
-        where: { id: job.id, status: 'RUNNING' },
+        where: aiJobLeaseWhere(lease),
         data: {
           status: 'COMPLETED',
           progress: 100,
@@ -188,15 +274,23 @@ class AiJobRunner {
         },
       });
       if (completed.count !== 1) {
-        const { GapAnalysisCancelledError } = await import('@/modules/compliance/gap-analysis-cancellation');
-        throw new GapAnalysisCancelledError();
+        // Gap Analysis commits its result and job completion atomically. Treat
+        // that same fenced attempt as success; every other zero-row CAS means
+        // this worker no longer owns the execution.
+        const terminal = await prisma.aiJob.findUnique({
+          where: { id: job.id },
+          select: { status: true, attempts: true },
+        });
+        if (terminal?.status !== 'COMPLETED' || terminal.attempts !== job.attempts) {
+          throw new AiJobLeaseLostError();
+        }
       }
       await scrubAiJobPayload(job.id);
       await this.recordEvent(job.id, 'COMPLETED', 'Job completed successfully.', 100);
     } catch (error) {
       if (isGapAnalysisCancelledError(error)) {
-        await prisma.aiJob.updateMany({
-          where: { id: job.id, status: { in: ['QUEUED', 'RUNNING', 'RETRYING'] } },
+        const cancelled = await prisma.aiJob.updateMany({
+          where: aiJobLeaseWhere(lease),
           data: {
             status: 'CANCELLED',
             lockedAt: null,
@@ -204,9 +298,32 @@ class AiJobRunner {
             lastError: null,
           },
         });
-        await scrubAiJobPayload(job.id);
-        await this.recordEvent(job.id, 'CANCELLED', 'Job cancelled before completion.');
-        logger.info({ type: 'ai_job_cancelled', jobId: job.id, jobType: job.type });
+        if (cancelled.count === 1) {
+          if (job.targetEntityType === 'GapAnalysis' && job.userId && job.organizationId) {
+            const { compensateGapAnalysisUsage } = await import('@/modules/compliance/gap-analysis-usage-accounting');
+            await compensateGapAnalysisUsage({
+              analysisId: job.targetEntityId,
+              organizationId: job.organizationId,
+              userId: job.userId,
+              failureClass: 'CANCELLED',
+            }).catch((compensationError: unknown) => {
+              logger.error({ type: 'gap_analysis_usage_compensation_failed', analysisId: job.targetEntityId, error: compensationError instanceof Error ? compensationError.message : String(compensationError) });
+            });
+          }
+          await scrubAiJobPayload(job.id);
+          await this.recordEvent(job.id, 'CANCELLED', 'Job cancelled before completion.');
+          logger.info({ type: 'ai_job_cancelled', jobId: job.id, jobType: job.type });
+        }
+        return;
+      }
+      if (isAiJobLeaseLostError(error)) {
+        logger.warn({
+          type: 'ai_job_stale_attempt_fenced',
+          jobId: job.id,
+          jobType: job.type,
+          workerId: WORKER_ID,
+          fencingToken: job.attempts,
+        });
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -216,7 +333,7 @@ class AiJobRunner {
       const retryDelayMs = Math.min(60 * 60 * 1000, 30_000 * Math.pow(2, Math.max(job.attempts - 1, 0)));
 
       const failureTransition = await prisma.aiJob.updateMany({
-        where: { id: job.id, status: 'RUNNING' },
+        where: aiJobLeaseWhere(lease),
         data: {
           status: exhausted ? 'DEAD_LETTERED' : 'RETRYING',
           runAfter: exhausted ? new Date() : new Date(Date.now() + retryDelayMs),
@@ -228,9 +345,13 @@ class AiJobRunner {
         },
       });
       if (failureTransition.count !== 1) {
-        await scrubAiJobPayload(job.id);
-        await this.recordEvent(job.id, 'CANCELLED', 'Job cancellation won the failure transition race.');
-        logger.info({ type: 'ai_job_cancelled', jobId: job.id, jobType: job.type });
+        logger.warn({
+          type: 'ai_job_failure_transition_fenced',
+          jobId: job.id,
+          jobType: job.type,
+          workerId: WORKER_ID,
+          fencingToken: job.attempts,
+        });
         return;
       }
       if (exhausted) {
@@ -272,11 +393,19 @@ class AiJobRunner {
           });
         });
       } else if (job.targetEntityType === 'GapAnalysis') {
-        await prisma.gapAnalysis.update({
-          where: { id: job.targetEntityId },
+        const failure = classifyGapAnalysisFailure(error);
+        await prisma.gapAnalysis.updateMany({
+          where: {
+            id: job.targetEntityId,
+            userId: job.userId ?? undefined,
+            organizationId: job.organizationId,
+            deletedAt: null,
+            status: { in: ['UPLOADING', 'QUEUED', 'EXTRACTING', 'ANALYZING', 'COMPLETING'] },
+          },
           data: {
             status: exhausted ? 'FAILED' : 'QUEUED',
             errorMessage: exhausted ? message : `Retry scheduled: ${message}`,
+            failureClass: exhausted ? failure.providerFailureCategory ?? failure.failureClass : null,
           },
         }).catch((recoveryError: unknown) => {
           logger.error({
@@ -285,6 +414,17 @@ class AiJobRunner {
             error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
           });
         });
+        if (exhausted && job.userId && job.organizationId) {
+          const { compensateGapAnalysisUsage } = await import('@/modules/compliance/gap-analysis-usage-accounting');
+          await compensateGapAnalysisUsage({
+            analysisId: job.targetEntityId,
+            organizationId: job.organizationId,
+            userId: job.userId,
+            failureClass: failure.providerFailureCategory ?? failure.failureClass,
+          }).catch((compensationError: unknown) => {
+            logger.error({ type: 'gap_analysis_usage_compensation_failed', analysisId: job.targetEntityId, error: compensationError instanceof Error ? compensationError.message : String(compensationError) });
+          });
+        }
       }
 
       await this.recordEvent(
@@ -303,20 +443,24 @@ class AiJobRunner {
         exhausted,
         error: message,
       });
+    } finally {
+      clearInterval(heartbeatTimer);
+      if (heartbeatInFlight) await heartbeatInFlight;
     }
   }
 
   private async updateProgress(
-    jobId: string,
+    lease: AiJobExecutionLease,
     progress: number,
     message: string,
     metadata?: Prisma.InputJsonValue,
   ): Promise<void> {
-    await prisma.aiJob.update({
-      where: { id: jobId },
-      data: { progress },
+    const updated = await prisma.aiJob.updateMany({
+      where: aiJobLeaseWhere(lease),
+      data: { progress, lockedAt: new Date() },
     });
-    await this.recordEvent(jobId, 'PROGRESS', message, progress, metadata);
+    if (updated.count !== 1) throw new AiJobLeaseLostError();
+    await this.recordEvent(lease.jobId, 'PROGRESS', message, progress, metadata);
   }
 
   private async recordEvent(
@@ -338,7 +482,7 @@ class AiJobRunner {
   }
 
   private async requeueStaleLocks(): Promise<void> {
-    const staleBefore = new Date(Date.now() - STALE_LOCK_MS);
+    const staleBefore = new Date(Date.now() - AI_JOB_STALE_LOCK_MS);
     const result = await prisma.aiJob.updateMany({
       where: {
         status: 'RUNNING',
@@ -355,7 +499,7 @@ class AiJobRunner {
     });
 
     if (result.count > 0) {
-      logger.warn({ type: 'ai_job_stale_locks_requeued', count: result.count, staleLockMs: STALE_LOCK_MS });
+      logger.warn({ type: 'ai_job_stale_locks_requeued', count: result.count, staleLockMs: AI_JOB_STALE_LOCK_MS });
     }
   }
 }

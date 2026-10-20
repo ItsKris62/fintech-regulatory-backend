@@ -109,6 +109,8 @@ export interface RequirementAssessment {
 // ─── DETERMINISTIC SCORING ENGINE ───────────────────────────────────────────
 
 export const SCORING_VERSION_V2 = 'v2.0-evidence-backed';
+export const SCORING_VERSION_V3 = 'v3.0-reviewed-inventory';
+export type InventoryCompleteness = 'UNKNOWN' | 'PARTIAL' | 'COMPLETE';
 
 export const OUTCOME_SCORES: Record<RequirementOutcome, number> = {
   COMPLIANT: 1.0,
@@ -131,8 +133,9 @@ export interface CalculatedScoringResult {
   complianceAlignmentScore: number; // 0 - 100
   assessmentCoverageScore: number;   // 0 - 100
   overallScore: number;             // Alias for alignment score
-  coverageStatus: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT';
-  assessmentCoverage: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT'; // Alias for coverageStatus
+  coverageStatus: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT' | 'UNKNOWN';
+  assessmentCoverage: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT' | 'UNKNOWN'; // Alias for coverageStatus
+  inventoryCompleteness: InventoryCompleteness;
   assessedCount: number;
   validAssessedCount: number;
   totalCount: number;
@@ -161,16 +164,21 @@ export interface CalculatedScoringResult {
  * 5. NOT_ASSESSED and INSUFFICIENT_EVIDENCE do not count toward alignment points, but reduce coverage.
  * 6. Assessment Coverage accounts for document completeness (processed / total chunks) and
  *    the proportion of requirements with sufficient regulatory and policy evidence.
- * 7. If hasKnownRequirementInventory is false (no exhaustive statutory provision registry loaded),
- *    coverage can NEVER claim COMPLETE and is capped at PARTIAL.
+ * 7. A percentage coverage is unavailable without an explicit reviewed scope;
+ *    model-selected findings can never become its denominator.
  */
 export function calculateComplianceAlignmentScore(params: {
   assessments: RequirementAssessment[];
   documentCoverage: DocumentCoverage;
   expectedRequirementCount?: number;
   hasKnownRequirementInventory?: boolean;
+  inventoryCompleteness?: InventoryCompleteness;
 }): CalculatedScoringResult {
   const { assessments, documentCoverage, expectedRequirementCount, hasKnownRequirementInventory } = params;
+  // Omitted is legacy compatibility only. New Gap Analysis callers must pass
+  // inventoryCompleteness explicitly; they use UNKNOWN until reviewed scope is loaded.
+  const inventoryCompleteness: InventoryCompleteness = params.inventoryCompleteness
+    ?? (hasKnownRequirementInventory === false ? 'UNKNOWN' : 'COMPLETE');
 
   let totalWeightedScore = 0;
   let totalWeight = 0;
@@ -235,11 +243,10 @@ export function calculateComplianceAlignmentScore(params: {
     totalWeight > 0 ? Math.round((totalWeightedScore / totalWeight) * 100) : 0;
 
   // 2. Assessment Coverage (0-100)
-  const denominatorRequirements = Math.max(
-    expectedRequirementCount ?? assessments.length,
-    assessments.length,
-    1,
-  );
+  const hasDeclaredDenominator = inventoryCompleteness !== 'UNKNOWN';
+  const denominatorRequirements = hasDeclaredDenominator
+    ? Math.max(expectedRequirementCount ?? assessments.length, 1)
+    : 0;
 
   const requirementCoverageFactor =
     denominatorRequirements > 0
@@ -252,44 +259,44 @@ export function calculateComplianceAlignmentScore(params: {
         documentCoverage.totalChunks
       : 1.0;
 
-  let rawCoverage = Math.round(
+  const rawCoverage = Math.round(
     requirementCoverageFactor * docProcessingFactor * 100,
   );
 
-  // If no known requirement inventory exists, cannot display 100% complete framework assessment
-  if (hasKnownRequirementInventory === false && rawCoverage === 100) {
-    rawCoverage = 90;
-  }
-
-  const assessmentCoverageScore = Math.max(0, Math.min(100, rawCoverage));
+  // Preserve the numeric field for additive backward compatibility, but the
+  // UNKNOWN status makes it unavailable to presentation layers.
+  const assessmentCoverageScore = hasDeclaredDenominator ? Math.max(0, Math.min(100, rawCoverage)) : 0;
 
   // Determine coverage qualitative status
-  let coverageStatus: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT' = 'COMPLETE';
-  if (
+  let coverageStatus: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT' | 'UNKNOWN' = inventoryCompleteness === 'UNKNOWN' ? 'UNKNOWN' : 'COMPLETE';
+  if (coverageStatus !== 'UNKNOWN' && (
     documentCoverage.failedChunks > 0 ||
     insufficientEvidenceCount > 0 ||
     unsupportedQuarantinedCount > 0 ||
     notVerifiableCount > 0 ||
     !documentCoverage.extractionComplete ||
     assessmentCoverageScore < 60
-  ) {
+  )) {
     coverageStatus = 'INSUFFICIENT';
-  } else if (
+  } else if (coverageStatus !== 'UNKNOWN' && (
     assessmentCoverageScore < 95 ||
     notAssessedCount > 0 ||
     documentCoverage.skippedChunks > 0 ||
-    hasKnownRequirementInventory === false
-  ) {
+    inventoryCompleteness !== 'COMPLETE'
+  )) {
     coverageStatus = 'PARTIAL';
   }
 
   return {
-    scoringVersion: SCORING_VERSION_V2,
+    scoringVersion: params.inventoryCompleteness !== undefined || hasKnownRequirementInventory === false
+      ? SCORING_VERSION_V3
+      : SCORING_VERSION_V2,
     complianceAlignmentScore: alignmentScore,
     assessmentCoverageScore,
     overallScore: alignmentScore,
     coverageStatus,
     assessmentCoverage: coverageStatus,
+    inventoryCompleteness,
     assessedCount: assessments.length,
     validAssessedCount,
     totalCount: denominatorRequirements,

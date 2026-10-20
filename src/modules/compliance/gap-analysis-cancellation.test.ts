@@ -17,6 +17,7 @@ import {
   GapAnalysisCancelledError,
   monitorGapAnalysisCancellation,
 } from './gap-analysis-cancellation';
+import { AiJobLeaseLostError } from '@/modules/ai-jobs/ai-job-lease';
 
 describe('Batch 4.1 Gap Analysis cooperative cancellation', () => {
   beforeEach(() => {
@@ -56,5 +57,37 @@ describe('Batch 4.1 Gap Analysis cooperative cancellation', () => {
     monitor.stop();
     vi.useRealTimers();
   });
-});
 
+  it('permits only the current worker and fencing token', async () => {
+    mocks.jobFindUnique.mockResolvedValue({ status: 'RUNNING', lockedBy: 'worker-2', attempts: 2 });
+
+    await expect(assertGapAnalysisStillActive('ga-1', {
+      jobId: 'job-1',
+      workerId: 'worker-2',
+      attempt: 2,
+    })).resolves.toBeUndefined();
+
+    await expect(assertGapAnalysisStillActive('ga-1', {
+      jobId: 'job-1',
+      workerId: 'worker-1',
+      attempt: 1,
+    })).rejects.toBeInstanceOf(AiJobLeaseLostError);
+  });
+
+  it('aborts a stale attempt after a newer worker reclaims the job', async () => {
+    vi.useFakeTimers();
+    mocks.jobFindUnique.mockResolvedValue({ status: 'RUNNING', lockedBy: 'worker-2', attempts: 2 });
+    const monitor = monitorGapAnalysisCancellation('ga-1', {
+      jobId: 'job-1',
+      workerId: 'worker-1',
+      attempt: 1,
+    }, 10);
+
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(monitor.signal.aborted).toBe(true);
+    expect(monitor.signal.reason).toBeInstanceOf(AiJobLeaseLostError);
+    monitor.stop();
+    vi.useRealTimers();
+  });
+});

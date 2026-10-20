@@ -564,7 +564,7 @@ describe('Batch 3 Remediation: Finding-Level Evidence Lineage, Claim Verificatio
       });
 
       const parsed = parseGapAnalysisOutput(rawOutput);
-      expect((parsed as any).scoringVersion).toBe('v2.0-evidence-backed');
+      expect((parsed as any).scoringVersion).toBe('v3.0-reviewed-inventory');
       expect((parsed as any).complianceAlignmentScore).toBeDefined();
       expect(parsed.assessmentCoverage).toBeDefined();
     });
@@ -965,7 +965,8 @@ describe('Batch 3 Remediation: Finding-Level Evidence Lineage, Claim Verificatio
         hasKnownRequirementInventory: false,
       });
       expect(res.coverageStatus).not.toBe('COMPLETE');
-      expect(res.coverageStatus).toBe('PARTIAL');
+      expect(res.coverageStatus).toBe('UNKNOWN');
+      expect(res.assessmentCoverageScore).toBe(0);
     });
 
     it('19. all known requirements assessed => COMPLETE only if a real deterministic requirement inventory exists', () => {
@@ -1153,8 +1154,8 @@ describe('Batch 3 Remediation: Finding-Level Evidence Lineage, Claim Verificatio
       });
       expect(res.complianceAlignmentScore).toBe(100);
       expect(res.coverageStatus).not.toBe('COMPLETE');
-      expect(res.coverageStatus).toBe('PARTIAL');
-      expect(res.assessmentCoverageScore).toBeLessThanOrEqual(90);
+      expect(res.coverageStatus).toBe('UNKNOWN');
+      expect(res.assessmentCoverageScore).toBe(0);
     });
 
     it('29. same valid assessments remain deterministic', () => {

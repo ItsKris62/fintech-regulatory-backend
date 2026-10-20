@@ -35,6 +35,40 @@ const mocks = vi.hoisted(() => {
   const auditLogCreate = vi.fn();
   const orgMemberFindUnique = vi.fn();
   const regulatoryFrameworkFindMany = vi.fn();
+  const gapAnalysisObjectDeletionUpsert = vi.fn();
+  const gapAnalysisUsageLedgerCreate = vi.fn();
+
+  const prisma: Record<string, any> = {
+    gapAnalysis: {
+      create: gapCreate,
+      update: gapUpdate,
+      updateMany: gapUpdateMany,
+      findUnique: gapFindUnique,
+      findMany: gapFindMany,
+    },
+    aiJob: {
+      update: aiJobUpdate,
+      updateMany: aiJobUpdateMany,
+      findUnique: aiJobFindUnique,
+      findMany: aiJobFindMany,
+    },
+    auditLog: { create: auditLogCreate },
+    organizationMember: { findUnique: orgMemberFindUnique },
+    regulatoryFramework: { findMany: regulatoryFrameworkFindMany },
+    gapAnalysisFramework: {
+      createMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
+    gapAnalysisObjectDeletion: { upsert: gapAnalysisObjectDeletionUpsert },
+    gapAnalysisUsageLedger: { create: gapAnalysisUsageLedgerCreate },
+    user: {
+      findUnique: vi.fn().mockResolvedValue({ id: 'user-sec-1', role: 'STARTUP', fullName: 'Test Security User' }),
+    },
+    organization: {
+      findUnique: vi.fn().mockResolvedValue({ id: 'org-sec-1', name: 'Test Org' }),
+    },
+  };
+  const transaction = vi.fn(async (callback: (tx: typeof prisma) => Promise<unknown>) => callback(prisma));
+  prisma.$transaction = transaction;
 
   return {
     redisGet: vi.fn(),
@@ -56,43 +90,14 @@ const mocks = vi.hoisted(() => {
     auditLogCreate,
     orgMemberFindUnique,
     regulatoryFrameworkFindMany,
+    gapAnalysisObjectDeletionUpsert,
+    gapAnalysisUsageLedgerCreate,
+    transaction,
     loggerInfo: vi.fn(),
     loggerWarn: vi.fn(),
     loggerError: vi.fn(),
     aiPerformGapAnalysis: vi.fn(),
-    prisma: {
-      gapAnalysis: {
-        create: gapCreate,
-        update: gapUpdate,
-        updateMany: gapUpdateMany,
-        findUnique: gapFindUnique,
-        findMany: gapFindMany,
-      },
-      aiJob: {
-        update: aiJobUpdate,
-        updateMany: aiJobUpdateMany,
-        findUnique: aiJobFindUnique,
-        findMany: aiJobFindMany,
-      },
-      auditLog: {
-        create: auditLogCreate,
-      },
-      organizationMember: {
-        findUnique: orgMemberFindUnique,
-      },
-      regulatoryFramework: {
-        findMany: regulatoryFrameworkFindMany,
-      },
-      gapAnalysisFramework: {
-        createMany: vi.fn().mockResolvedValue({ count: 1 }),
-      },
-      user: {
-        findUnique: vi.fn().mockResolvedValue({ id: 'user-sec-1', role: 'STARTUP', fullName: 'Test Security User' }),
-      },
-      organization: {
-        findUnique: vi.fn().mockResolvedValue({ id: 'org-sec-1', name: 'Test Org' }),
-      },
-    },
+    prisma,
   };
 });
 
@@ -154,6 +159,19 @@ vi.mock('@/modules/regulatory-intelligence/regulatory-intelligence.service', () 
       ],
     }),
   },
+}));
+
+vi.mock('@/modules/compliance/gap-analysis-corpus-readiness', () => ({
+  getGapAnalysisFrameworkReadiness: vi.fn(async (jurisdictionCode: string, frameworkSlugs: string[]) =>
+    frameworkSlugs.map((frameworkSlug) => ({
+      jurisdictionCode,
+      frameworkSlug,
+      state: 'READY',
+      corpusVersion: 'security-test-corpus',
+      sourceCount: 1,
+      reviewedAt: new Date('2026-10-20T00:00:00.000Z'),
+      reason: 'Reviewed test fixture.',
+    }))),
 }));
 
 vi.mock('@/lib/ai/ai.service', () => ({
@@ -834,7 +852,7 @@ describe('BATCH 4: DOCUMENT SECURITY, PRIVACY, RETENTION, CONSENT & SAFE FILE PR
       const scanner = new DisabledDevelopmentScanner();
       expect(scanner.providerName).toBe('disabled-development');
       expect(scanner.status).toBe('DISABLED_DEVELOPMENT');
-      await expect(scanner.scan(Buffer.from('synthetic clean fixture'))).resolves.toEqual({ status: 'CLEAN' });
+      await expect(scanner.scan()).resolves.toEqual({ status: 'CLEAN' });
       await expect(scanner.health()).resolves.toEqual(expect.objectContaining({
         provider: 'disabled-development',
         timeoutMs: expect.any(Number),
@@ -1193,7 +1211,7 @@ describe('BATCH 4: DOCUMENT SECURITY, PRIVACY, RETENTION, CONSENT & SAFE FILE PR
       );
     });
 
-    it('39. deleteGapAnalysis removes customer source artifact from R2 storage and soft-deletes row', async () => {
+    it('39. deleteGapAnalysis durably queues the customer source artifact and soft-deletes the row', async () => {
       mocks.gapFindUnique.mockResolvedValue({
         userId: 'user-sec-1',
         organizationId: 'org-sec-1',
@@ -1204,14 +1222,21 @@ describe('BATCH 4: DOCUMENT SECURITY, PRIVACY, RETENTION, CONSENT & SAFE FILE PR
 
       await complianceModule.deleteGapAnalysis('user-sec-1', 'org-sec-1', 'analysis-sec-123');
 
-      expect(mocks.storageDelete).toHaveBeenCalledWith('gap-analysis/org-sec-1/analysis-sec-123/source.pdf');
+      expect(mocks.gapAnalysisObjectDeletionUpsert).toHaveBeenCalledWith(expect.objectContaining({
+        create: expect.objectContaining({
+          objectKey: 'gap-analysis/org-sec-1/analysis-sec-123/source.pdf',
+          objectType: 'SOURCE',
+          reason: 'EXPLICIT_DELETE',
+        }),
+      }));
+      expect(mocks.storageDelete).not.toHaveBeenCalled();
       expect(mocks.gapUpdate).toHaveBeenCalledWith({
         where: { id: 'analysis-sec-123' },
         data: { deletedAt: expect.any(Date) },
       });
     });
 
-    it('40. deleteGapAnalysis removes generated report R2 artifact when present', async () => {
+    it('40. deleteGapAnalysis durably queues a legacy generated report artifact', async () => {
       mocks.gapFindUnique.mockResolvedValue({
         userId: 'user-sec-1',
         organizationId: 'org-sec-1',
@@ -1222,10 +1247,16 @@ describe('BATCH 4: DOCUMENT SECURITY, PRIVACY, RETENTION, CONSENT & SAFE FILE PR
 
       await complianceModule.deleteGapAnalysis('user-sec-1', 'org-sec-1', 'analysis-sec-123');
 
-      expect(mocks.storageDelete).toHaveBeenCalledWith('reports/org-sec-1/analysis-sec-123/gap-analysis-report.docx');
+      expect(mocks.gapAnalysisObjectDeletionUpsert).toHaveBeenCalledWith(expect.objectContaining({
+        create: expect.objectContaining({
+          objectKey: 'reports/org-sec-1/analysis-sec-123/gap-analysis-report.docx',
+          objectType: 'REPORT',
+        }),
+      }));
+      expect(mocks.storageDelete).not.toHaveBeenCalled();
     });
 
-    it('40a. deleteGapAnalysis removes a current tenant-partitioned DOCX export', async () => {
+    it('40a. deleteGapAnalysis durably queues a current tenant-partitioned DOCX export', async () => {
       const reportUrl = 'gap-analysis-exports/org-sec-1/analysis-sec-123/gap-analysis-report.docx';
       mocks.gapFindUnique.mockResolvedValue({
         userId: 'user-sec-1',
@@ -1237,7 +1268,10 @@ describe('BATCH 4: DOCUMENT SECURITY, PRIVACY, RETENTION, CONSENT & SAFE FILE PR
 
       await complianceModule.deleteGapAnalysis('user-sec-1', 'org-sec-1', 'analysis-sec-123');
 
-      expect(mocks.storageDelete).toHaveBeenCalledWith(reportUrl);
+      expect(mocks.gapAnalysisObjectDeletionUpsert).toHaveBeenCalledWith(expect.objectContaining({
+        create: expect.objectContaining({ objectKey: reportUrl, objectType: 'REPORT' }),
+      }));
+      expect(mocks.storageDelete).not.toHaveBeenCalled();
     });
   });
 
@@ -1336,7 +1370,9 @@ describe('BATCH 4: DOCUMENT SECURITY, PRIVACY, RETENTION, CONSENT & SAFE FILE PR
       expect(completedWrite).toBeDefined();
       expect(completedWrite?.[0].where).toEqual(expect.objectContaining({
         deletedAt: null,
-        status: { not: 'CANCELLED' },
+        status: {
+          in: ['UPLOADING', 'QUEUED', 'EXTRACTING', 'ANALYZING', 'COMPLETING'],
+        },
       }));
     });
   });

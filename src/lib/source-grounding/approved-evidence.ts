@@ -18,12 +18,24 @@ export interface ApprovedEvidencePartition {
   enforcementApplied: boolean;
 }
 
+export interface SourceApprovalOptions {
+  /**
+   * Gap Analysis makes legal findings and must never use legacy evidence that
+   * has not been linked to an active ApprovedSource and source version.
+   * Other RAG features retain their certified migration behaviour.
+   */
+  enforceAllJurisdictions?: boolean;
+}
+
 export async function partitionEvidenceBySourceApproval(
   results: SearchResult[],
   jurisdictionCodes: readonly JurisdictionCode[],
   db: ApprovalLookupClient = prisma,
+  options: SourceApprovalOptions = {},
 ): Promise<ApprovedEvidencePartition> {
-  const strictCodes = jurisdictionCodes.filter((code) => STRICT_APPROVAL_JURISDICTIONS.has(code));
+  const strictCodes = options.enforceAllJurisdictions
+    ? [...jurisdictionCodes]
+    : jurisdictionCodes.filter((code) => STRICT_APPROVAL_JURISDICTIONS.has(code));
   if (strictCodes.length === 0 || results.length === 0) {
     return { eligible: results, ineligible: [], enforcementApplied: false };
   }

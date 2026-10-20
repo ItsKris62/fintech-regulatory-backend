@@ -9,7 +9,6 @@ import { PLAN_ENTITLEMENTS } from '@/config/entitlements.config';
 import { complianceModule } from '@/modules/compliance';
 import { logger } from '@/utils/logger';
 import { NotFoundError, ForbiddenError } from '@/utils/error';
-import { redis } from '@/lib/redis/client';
 import {
   GAP_ANALYSIS_DEPTHS,
   GAP_ANALYSIS_DEPTH_UNIT_COST,
@@ -47,8 +46,20 @@ import {
   getFrameworkMetadata,
   isFrameworkApplicableToJurisdiction,
 } from '@/config/framework-metadata.config';
+import { getGapAnalysisProviderReadiness } from '@/modules/compliance/gap-analysis-provider-readiness';
+import { compensateGapAnalysisUsage } from '@/modules/compliance/gap-analysis-usage-accounting';
+import { getGapAnalysisFrameworkReadiness } from '@/modules/compliance/gap-analysis-corpus-readiness';
 
 export const gapAnalysisRouter = router({
+  getProviderAvailability: protectedProcedure.query(async () => {
+    const readiness = await getGapAnalysisProviderReadiness();
+    return {
+      available: readiness.state === 'AVAILABLE',
+      state: readiness.state,
+      reason: readiness.reason ?? null,
+      retryAfter: readiness.retryAfter ?? null,
+    };
+  }),
   /**
    * Return the list of regulatory frameworks available to the current user.
    * Each framework carries a `locked` flag when the framework's tier exceeds
@@ -80,6 +91,13 @@ export const gapAnalysisRouter = router({
         select: { slug: true, name: true, category: true, description: true, tier: true },
       });
 
+      // Readiness is only meaningful for an explicit jurisdiction. Do not
+      // advertise a catalog entry as corpus-ready before that context exists.
+      const dynamicReadiness = input?.jurisdiction
+        ? await getGapAnalysisFrameworkReadiness(input.jurisdiction, frameworks.map((fw) => fw.slug))
+        : [];
+      const readinessBySlug = new Map(dynamicReadiness.map((item) => [item.frameworkSlug, item]));
+
       return frameworks.map((fw) => {
         const meta = getFrameworkMetadata(fw.slug);
         const scope = meta?.scope ?? 'DOMESTIC';
@@ -88,6 +106,7 @@ export const gapAnalysisRouter = router({
           ? isFrameworkApplicableToJurisdiction(fw.slug, input.jurisdiction)
           : true;
         const pilot = getPilotFrameworkAvailability(fw.slug, input?.jurisdiction);
+        const corpusReadiness = readinessBySlug.get(fw.slug.toLowerCase());
 
         return {
           slug: fw.slug,
@@ -99,8 +118,12 @@ export const gapAnalysisRouter = router({
           scope,
           jurisdictions,
           applicable,
-          pilotEnabled: pilot.pilotEnabled,
-          readiness: pilot.readiness,
+          // Catalog/pilot configuration is not an evidence assertion. A
+          // selected jurisdiction is ready only when its matching snapshot is.
+          pilotEnabled: corpusReadiness ? corpusReadiness.state === 'READY' : false,
+          readiness: corpusReadiness?.state ?? 'UNVERIFIED',
+          readinessReason: corpusReadiness?.reason ?? 'Select a jurisdiction to check corpus readiness.',
+          configuredForPilot: pilot.pilotEnabled,
         };
       });
     }),
@@ -184,6 +207,22 @@ export const gapAnalysisRouter = router({
         const plan = ctx.plan;
         const contract = getGapAnalysisContract(plan, ctx.entitlements);
         const benchmarkDocumentIds = [...new Set(input.benchmarkDocumentIds ?? [])];
+
+        const providerReadiness = await getGapAnalysisProviderReadiness();
+        if (providerReadiness.state !== 'AVAILABLE') {
+          logger.warn({
+            type: 'gap_analysis_provider_gate_blocked',
+            userId: ctx.user!.id,
+            orgId: ctx.orgMembership!.organizationId,
+            provider: providerReadiness.provider,
+            providerCircuitState: providerReadiness.state,
+            failureClass: providerReadiness.reason,
+          });
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'AI analysis is temporarily unavailable. Existing analyses remain available.',
+          });
+        }
 
         if (benchmarkDocumentIds.length > 0) {
           requireEntitlementFeature(
@@ -382,6 +421,26 @@ export const gapAnalysisRouter = router({
           }
         }
 
+        const corpusReadiness = await getGapAnalysisFrameworkReadiness(
+          analysisJurisdiction,
+          orderedFrameworks.map((framework) => framework.slug),
+        );
+        const unavailableCorpus = corpusReadiness.filter((item) => item.state !== 'READY');
+        if (unavailableCorpus.length > 0) {
+          logger.warn({
+            type: 'gap_analysis_corpus_readiness_gate_blocked',
+            userId,
+            orgId,
+            jurisdiction: analysisJurisdiction,
+            frameworks: unavailableCorpus.map((item) => item.frameworkSlug),
+            states: unavailableCorpus.map((item) => item.state),
+          });
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Regulatory corpus readiness is not verified for the selected framework. New Gap Analysis submissions are temporarily unavailable; existing analyses remain available.',
+          });
+        }
+
         const frameworkNames = orderedFrameworks.map((f) => f.name);
         const frameworkSlugs = orderedFrameworks.map((f) => f.slug);
 
@@ -478,6 +537,9 @@ export const gapAnalysisRouter = router({
             documentChecksum,
             executionIdentity: executionIdentity.key,
             executionIdentityMetadata: executionIdentity.canonical,
+            usageReservation: usagePatch.reservation
+              ? { ...usagePatch.reservation, reservationKey: executionIdentity.key }
+              : undefined,
           });
           if (result.reused && usageReserved) {
             await usagePatch.rollbackUsage?.();
@@ -487,7 +549,25 @@ export const gapAnalysisRouter = router({
             logger.info({ type: 'gap_analysis_created', userId, orgId, analysisId: result.id });
           }
         } catch (error) {
-          if (usageReserved) await usagePatch.rollbackUsage?.();
+          if (usageReserved) {
+            try {
+              const compensated = await compensateGapAnalysisUsage({
+                reservationKey: executionIdentity.key,
+                organizationId: orgId,
+                userId,
+                failureClass: 'SUBMISSION_FAILED',
+              });
+              if (!compensated) await usagePatch.rollbackUsage?.();
+            } catch (compensationError) {
+              logger.error({
+                type: 'gap_analysis_submission_compensation_failed',
+                orgId,
+                userId,
+                reservationKey: executionIdentity.key,
+                error: compensationError instanceof Error ? compensationError.message : String(compensationError),
+              });
+            }
+          }
           throw error;
         }
 
@@ -580,6 +660,7 @@ export const gapAnalysisRouter = router({
           progress: true,
           overallScore: true,
           errorMessage: true,
+          failureClass: true,
         },
       });
       if (!result) throw new TRPCError({ code: 'NOT_FOUND', message: 'Gap analysis not found' });

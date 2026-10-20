@@ -266,6 +266,25 @@ export async function incrementTrialUsageAtomic(
   return { allowed: false, newCount: usage[feature], limit };
 }
 
+export async function decrementTrialUsageAtomic(
+  userId: string,
+  feature: TrialFeature,
+  decrementBy = 1,
+  tx: Pick<typeof prisma, '$executeRaw'> = prisma,
+): Promise<void> {
+  if (!Number.isInteger(decrementBy) || decrementBy < 1) throw new Error('decrementBy must be a positive integer.');
+  await tx.$executeRaw`
+    UPDATE "User"
+    SET "freeTrialUsage" = jsonb_set(
+      COALESCE("freeTrialUsage", '{}'::jsonb),
+      ARRAY[${feature}]::text[],
+      to_jsonb(GREATEST(COALESCE("freeTrialUsage"->>${feature}, '0')::int - ${decrementBy}, 0)),
+      true
+    )
+    WHERE id = ${userId}
+  `;
+}
+
 /**
  * Increments a trial usage counter after a successful feature execution.
  *

@@ -63,4 +63,19 @@ describe('partitionEvidenceBySourceApproval', () => {
     expect(partition.enforcementApplied).toBe(false);
     expect(findMany).not.toHaveBeenCalled();
   });
+
+  it('enforces source approval for every Gap Analysis jurisdiction without changing shared RAG defaults', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const partition = await partitionEvidenceBySourceApproval(
+      [result('ke-unapproved', 'KE'), result('rw-unapproved', 'NG')],
+      ['KE', 'NG'],
+      { regulatoryDocument: { findMany } } as never,
+      { enforceAllJurisdictions: true },
+    );
+
+    expect(partition.eligible).toEqual([]);
+    expect(partition.ineligible).toHaveLength(2);
+    expect(partition.enforcementApplied).toBe(true);
+    expect(findMany).toHaveBeenCalledOnce();
+  });
 });

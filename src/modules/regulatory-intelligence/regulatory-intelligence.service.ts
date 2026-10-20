@@ -34,6 +34,7 @@ export type RegulatoryFailureClassification =
   | GraderFailureClassification
   | 'RAG_NO_EVIDENCE'
   | 'RAG_CORPUS_GAP'
+  | 'RAG_PROVENANCE_REJECTED'
   | 'GRADER_REJECTED_ALL'
   | 'ANTHROPIC_BILLING_BLOCKED'
   | 'ANTHROPIC_RATE_LIMIT'
@@ -128,6 +129,8 @@ export class RegulatoryIntelligenceService {
     const approvalPartition = await partitionEvidenceBySourceApproval(
       ragContext.results,
       input.jurisdictionContext.jurisdictions,
+      undefined,
+      { enforceAllJurisdictions: input.feature === 'GAP_ANALYSIS' },
     );
     const approvedResults = approvalPartition.eligible;
 
@@ -141,7 +144,11 @@ export class RegulatoryIntelligenceService {
         verifierVerdict: 'FAIL',
         unsupportedClaims: [],
         abstained: true,
-        failureReason: ragContext.results.length === 0 ? 'RAG_NO_EVIDENCE' : 'RAG_CORPUS_GAP',
+        failureReason: ragContext.results.length === 0
+          ? 'RAG_NO_EVIDENCE'
+          : approvalPartition.enforcementApplied && approvalPartition.ineligible.length === ragContext.results.length
+          ? 'RAG_PROVENANCE_REJECTED'
+          : 'RAG_CORPUS_GAP',
         retrievedCount: ragContext.results.length,
         acceptedCount: 0,
         rejectedCount: approvalPartition.ineligible.length,
@@ -159,7 +166,13 @@ export class RegulatoryIntelligenceService {
       return result;
     }
 
-    const grade = await runGraderAgent(input.question, approvedResults, input.jurisdictionContext, topK);
+    const grade = await runGraderAgent(
+      input.question,
+      approvedResults,
+      input.jurisdictionContext,
+      topK,
+      { propagateProviderFailures: input.feature === 'GAP_ANALYSIS' },
+    );
     const acceptedContext = ragService.getContextForPrompt(grade.accepted, topK, 4000);
     const citations = buildCitationsFromChunks(grade.accepted, 'verified');
     const citationValidation = validateCitationsForJurisdiction(citations, input.jurisdictionContext);

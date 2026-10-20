@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { jurisdictionLabel, type JurisdictionContext } from '@/types/jurisdiction';
 import {
   calculateComplianceAlignmentScore,
-  SCORING_VERSION_V2,
+  SCORING_VERSION_V3,
   type RequirementAssessment,
   type DocumentCoverage,
 } from '@/modules/compliance/scoring/gap-analysis-scoring';
@@ -201,7 +201,8 @@ export const GapAnalysisResultSchema = z.object({
     calculatedScore: z.number().min(0).max(100).optional(),
     complianceAlignmentScore: z.number().min(0).max(100).optional(),
     assessmentCoverageScore: z.number().min(0).max(100).optional(),
-    coverageStatus: z.enum(['COMPLETE', 'PARTIAL', 'INSUFFICIENT']).default('COMPLETE'),
+    coverageStatus: z.enum(['COMPLETE', 'PARTIAL', 'INSUFFICIENT', 'UNKNOWN']).default('UNKNOWN'),
+    inventoryCompleteness: z.enum(['UNKNOWN', 'PARTIAL', 'COMPLETE']).default('UNKNOWN'),
     scoringVersion: z.string().optional(),
     modelSuggestedScore: z.number().min(0).max(100).optional(),
     documentCoverage: DocumentCoverageSchema.optional(),
@@ -517,7 +518,7 @@ function buildRequiredJsonSchema(params: {
     "criticalGaps": 0,
     "highGaps": 0,
     "selectedBenchmarkDocuments": [],
-    "scoringVersion": "${SCORING_VERSION_V2}",
+    "scoringVersion": "${SCORING_VERSION_V3}",
     "analysisDate": "${new Date().toISOString()}"
   }
 }`;
@@ -633,7 +634,7 @@ ${JSON.stringify(rawGaps, null, 2)}
 3. Write a concise executiveSummary (2-4 sentences).
 4. Build a prioritised actionPlan.
 5. Set metadata.chunksProcessed = ${params.chunkCount}.
-6. Set metadata.scoringVersion = "${SCORING_VERSION_V2}".
+6. Set metadata.scoringVersion = "${SCORING_VERSION_V3}".
 
 ## REQUIRED JSON SCHEMA
 \`\`\`json
@@ -872,7 +873,7 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
   // Determine scoring engine: use v2 if explicitly requested as v2 or if findings have v2 evidence/verification, unless explicitly v1
   if (
     validated.metadata.scoringVersion !== 'v1.0-deterministic' &&
-    (validated.metadata.scoringVersion === SCORING_VERSION_V2 || hasV2EvidenceOrVerification)
+    (validated.metadata.scoringVersion === SCORING_VERSION_V3 || hasV2EvidenceOrVerification)
   ) {
     const docCoverage: DocumentCoverage = validated.metadata.documentCoverage ?? {
       totalChunks: validated.metadata.chunksProcessed ?? 1,
@@ -885,14 +886,16 @@ export function parseGapAnalysisOutput(rawContent: string): GapAnalysisResult {
     const scoringResult = calculateComplianceAlignmentScore({
       assessments,
       documentCoverage: docCoverage,
+      inventoryCompleteness: 'UNKNOWN',
     });
 
-    validated.metadata.scoringVersion = SCORING_VERSION_V2;
+    validated.metadata.scoringVersion = SCORING_VERSION_V3;
     validated.metadata.calculatedScore = scoringResult.complianceAlignmentScore;
     validated.metadata.complianceAlignmentScore = scoringResult.complianceAlignmentScore;
     validated.metadata.assessmentCoverageScore = scoringResult.assessmentCoverageScore;
     validated.metadata.coverageStatus = scoringResult.coverageStatus;
-    (validated as any).scoringVersion = SCORING_VERSION_V2;
+    validated.metadata.inventoryCompleteness = scoringResult.inventoryCompleteness;
+    (validated as any).scoringVersion = SCORING_VERSION_V3;
     (validated as any).complianceAlignmentScore = scoringResult.complianceAlignmentScore;
     (validated as any).assessmentCoverageScore = scoringResult.assessmentCoverageScore;
     (validated as any).coverageStatus = scoringResult.coverageStatus;
