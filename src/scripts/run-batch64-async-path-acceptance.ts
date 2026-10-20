@@ -14,7 +14,6 @@ const puppeteer = require('../../../fintech-regulatory-platform/node_modules/pup
 
 const EDGE_PATH = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const FRONTEND_URL = process.env.GAP_ANALYSIS_UAT_FRONTEND_URL ?? 'http://localhost:3000';
-const BACKEND_URL = process.env.GAP_ANALYSIS_UAT_BACKEND_URL ?? 'http://localhost:4600';
 
 async function main() {
   console.log('======================================================================');

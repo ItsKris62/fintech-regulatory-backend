@@ -252,19 +252,6 @@ async function invokeMutation(session: Session, procedure: string, input: Record
   return { status: raw.status, data: envelope?.result?.data?.json ?? envelope?.result?.data, errorCode: envelope?.error?.json?.data?.code ?? envelope?.error?.data?.code };
 }
 
-async function invokeQuery(session: Session, procedure: string, input: Record<string, unknown>): Promise<{ status: number; data?: any; errorCode?: string }> {
-  const raw = await session.page.evaluate(async ({ endpoint, bearer, procedureName, body }: any) => {
-    const encoded = encodeURIComponent(JSON.stringify({ '0': { json: body } }));
-    const response = await fetch(`${endpoint}/${procedureName}?batch=1&input=${encoded}`, {
-      credentials: 'include', headers: { authorization: bearer },
-    });
-    return { status: response.status, text: await response.text() };
-  }, { endpoint: BACKEND_TRPC_URL, bearer: session.bearer, procedureName: procedure, body: input });
-  const parsed = JSON.parse(raw.text);
-  const envelope = Array.isArray(parsed) ? parsed[0] : parsed;
-  return { status: raw.status, data: envelope?.result?.data?.json ?? envelope?.result?.data, errorCode: envelope?.error?.json?.data?.code ?? envelope?.error?.data?.code };
-}
-
 async function provisionSession(browser: any, organizationId: string, label: string): Promise<Session> {
   const email = `qa-ga14-${label}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}@sheriabot.test`;
   const password = `${crypto.randomBytes(24).toString('base64')}!Aa1`;

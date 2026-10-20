@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { PrismaClient, ComplianceCategory } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { findKenyaBaselineByTitleAndCategory } from '../../modules/compliance/baseline-requirements';
 
@@ -74,7 +74,7 @@ export async function runComplianceJurisdictionBackfill(execute: boolean = false
         groups.get(groupKey)!.push(item);
       }
 
-      for (const [groupKey, groupItems] of groups.entries()) {
+      for (const [, groupItems] of groups.entries()) {
         const canonicalRow = groupItems[0]; // Candidate with isCompleted: true, latest updatedAt
         const baselineDef = findKenyaBaselineByTitleAndCategory(canonicalRow.title, canonicalRow.category);
 

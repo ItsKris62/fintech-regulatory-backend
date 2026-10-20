@@ -283,6 +283,7 @@ async function runSingleAnalysis(fixture: SyntheticPolicyFixture): Promise<TestR
         mode: 'SINGLE',
         jurisdictions: [fixture.jurisdiction],
         primaryJurisdiction: fixture.jurisdiction,
+        jurisdictionSource: 'REQUEST',
       },
       retrievalNamespace: resolvePineconeNamespace(),
       analysisDepth: 'quick',
@@ -332,7 +333,7 @@ async function runSingleAnalysis(fixture: SyntheticPolicyFixture): Promise<TestR
       status: completed.status,
       overallScore: completed.overallScore,
       findingsCount: gaps.length,
-      acceptedEvidenceCount: (completed.metadata as any)?.executionTelemetry?.acceptedEvidenceCount ?? citations.length,
+      acceptedEvidenceCount: resultsData?.metadata?.executionTelemetry?.acceptedEvidenceCount ?? citations.length,
       evidenceJurisdictions: [...evidenceJurisdictions],
       evidenceFrameworks: [...evidenceFrameworks],
       foreignLeakCount: foreignLeaks.length,
@@ -353,8 +354,8 @@ async function runSingleAnalysis(fixture: SyntheticPolicyFixture): Promise<TestR
 async function main() {
   console.log('=== MULTI-COUNTRY REPRESENTATIVE GAP ANALYSIS VALIDATION ===\n');
 
-  // We test ALIGNED and DELIBERATE_GAPS for all 4 countries
-  const targets = PILOT_SYNTHETIC_POLICIES.filter(p => p.type === 'ALIGNED' || p.type === 'DELIBERATE_GAPS');
+  // We test the partially aligned and deliberate-gap fixtures for all 4 countries.
+  const targets = PILOT_SYNTHETIC_POLICIES.filter(p => p.type === 'PARTIALLY_ALIGNED' || p.type === 'DELIBERATE_GAPS');
   const results: TestRunResult[] = [];
 
   for (const fixture of targets) {

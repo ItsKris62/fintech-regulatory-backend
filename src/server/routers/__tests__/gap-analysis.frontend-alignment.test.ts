@@ -3,7 +3,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 function frontend(relativePath: string): string {
-  return readFileSync(resolve(__dirname, '../../../../../fintech-regulatory-platform', relativePath), 'utf8');
+  const frontendRoot = process.env.SHERIABOT_FRONTEND_ROOT
+    ? resolve(process.env.SHERIABOT_FRONTEND_ROOT)
+    : resolve(__dirname, '../../../../../fintech-regulatory-platform');
+  return readFileSync(resolve(frontendRoot, relativePath), 'utf8');
 }
 
 describe('Gap Analysis frontend/server contract alignment', () => {
