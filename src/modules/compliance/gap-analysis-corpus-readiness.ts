@@ -11,6 +11,8 @@ export interface GapAnalysisFrameworkReadiness {
   corpusVersion: string;
   sourceCount: number;
   reviewedAt: Date | null;
+  reviewedBy: string | null;
+  manifestChecksum: string | null;
   reason: string;
 }
 
@@ -19,6 +21,8 @@ type ReadinessRow = {
   corpusVersion: string;
   sourceCount: number;
   reviewedAt: Date | null;
+  reviewedBy: string | null;
+  manifestChecksum: string | null;
 };
 
 type ReadinessClient = {
@@ -42,7 +46,15 @@ export function evaluateGapAnalysisCorpusReadiness(
   corpusVersion: string,
   record?: ReadinessRow,
 ): GapAnalysisFrameworkReadiness {
-  const base = { jurisdictionCode, frameworkSlug, corpusVersion, sourceCount: record?.sourceCount ?? 0, reviewedAt: record?.reviewedAt ?? null };
+  const base = {
+    jurisdictionCode,
+    frameworkSlug,
+    corpusVersion,
+    sourceCount: record?.sourceCount ?? 0,
+    reviewedAt: record?.reviewedAt ?? null,
+    reviewedBy: record?.reviewedBy ?? null,
+    manifestChecksum: record?.manifestChecksum ?? null,
+  };
   if (corpusVersion === CORPUS_VERSION_FALLBACK) {
     return { ...base, state: 'UNVERIFIED', reason: 'The corpus version could not be resolved.' };
   }
@@ -52,7 +64,13 @@ export function evaluateGapAnalysisCorpusReadiness(
   if (record.corpusVersion !== corpusVersion) {
     return { ...base, state: 'STALE', reason: 'The reviewed readiness snapshot does not match the active corpus version.' };
   }
-  if (record.status !== 'READY' || record.sourceCount < 1 || !record.reviewedAt) {
+  if (
+    record.status !== 'READY' ||
+    record.sourceCount < 1 ||
+    !record.reviewedAt ||
+    !record.reviewedBy ||
+    !record.manifestChecksum
+  ) {
     return { ...base, state: 'NOT_READY', reason: 'The matching readiness snapshot is not a reviewed READY attestation.' };
   }
   return { ...base, state: 'READY', reason: 'Reviewed corpus readiness attestation matches the active corpus version.' };
@@ -68,7 +86,15 @@ export async function getGapAnalysisFrameworkReadiness(
   const corpusVersion = snapshot[jurisdictionCode] ?? CORPUS_VERSION_FALLBACK;
   const records = normalizedSlugs.length === 0 ? [] : await db.gapAnalysisCorpusReadinessSnapshot.findMany({
     where: { jurisdictionCode, frameworkSlug: { in: normalizedSlugs } },
-    select: { frameworkSlug: true, status: true, corpusVersion: true, sourceCount: true, reviewedAt: true },
+    select: {
+      frameworkSlug: true,
+      status: true,
+      corpusVersion: true,
+      sourceCount: true,
+      reviewedAt: true,
+      reviewedBy: true,
+      manifestChecksum: true,
+    },
   });
   const byFramework = new Map(records.map((record) => [record.frameworkSlug.toLowerCase(), record]));
   return normalizedSlugs.map((frameworkSlug) => evaluateGapAnalysisCorpusReadiness(

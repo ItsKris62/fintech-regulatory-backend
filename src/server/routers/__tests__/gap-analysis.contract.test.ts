@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   runGapAnalysis: vi.fn(),
   validateBenchmarks: vi.fn(),
   trialIncrement: vi.fn(),
+  requirementReadiness: 'READY' as 'READY' | 'UNVERIFIED' | 'NOT_READY',
   prisma: {
     organizationMember: { findUnique: vi.fn() },
     auditLog: { create: vi.fn() },
@@ -94,7 +95,26 @@ vi.mock('@/modules/compliance/gap-analysis-corpus-readiness', () => ({
       corpusVersion: 'contract-test-corpus',
       sourceCount: 1,
       reviewedAt: new Date('2026-10-20T00:00:00.000Z'),
+      reviewedBy: 'reviewer-1',
+      manifestChecksum: 'contract-manifest',
       reason: 'Reviewed contract fixture.',
+    }))),
+}));
+
+vi.mock('@/modules/compliance/regulatory-requirement-inventory', () => ({
+  getGapAnalysisRequirementInventoryReadiness: vi.fn(async (jurisdictionCode: string, frameworkSlugs: string[]) =>
+    frameworkSlugs.map((frameworkSlug) => ({
+      jurisdictionCode,
+      frameworkSlug,
+      state: mocks.requirementReadiness,
+      inventoryId: mocks.requirementReadiness === 'READY' ? 'inventory-1' : null,
+      inventoryVersion: mocks.requirementReadiness === 'READY' ? '2026-10-21' : null,
+      completeness: mocks.requirementReadiness === 'READY' ? 'COMPLETE' : 'UNKNOWN',
+      approvedRequirementCount: mocks.requirementReadiness === 'READY' ? 1 : 0,
+      reviewedAt: mocks.requirementReadiness === 'READY' ? new Date('2026-10-21T00:00:00.000Z') : null,
+      reason: mocks.requirementReadiness === 'READY'
+        ? 'Reviewed contract fixture.'
+        : 'No reviewed requirement inventory exists.',
     }))),
 }));
 
@@ -205,7 +225,9 @@ const matrix: MatrixCase[] = [
 describe('Gap Analysis direct backend contract', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('GAP_ANALYSIS_PILOT_ENABLED_JURISDICTIONS', 'KE');
     vi.stubEnv('GAP_ANALYSIS_PILOT_VALIDATED_FRAMEWORKS', '*');
+    mocks.requirementReadiness = 'READY';
     mocks.prisma.organizationMember.findUnique.mockResolvedValue({
       userId: 'user-1',
       organizationId: 'org-1',
@@ -274,6 +296,20 @@ describe('Gap Analysis direct backend contract', () => {
     expect(mocks.redisIncr).not.toHaveBeenCalled();
     expect(mocks.redisIncrby).not.toHaveBeenCalled();
     expect(mocks.trialIncrement).not.toHaveBeenCalled();
+  });
+
+  it('does not let UI-only pilot access bypass reviewed requirement readiness', async () => {
+    mocks.plan = 'BUSINESS';
+    mocks.source = 'PILOT';
+    mocks.entitlements = PILOT_ENTITLEMENT_PROFILES.PILOT_FULL;
+    mocks.requirementReadiness = 'UNVERIFIED';
+
+    await expect(caller().runGapAnalysis(input('quick', false))).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    expect(mocks.runGapAnalysis).not.toHaveBeenCalled();
+    expect(mocks.redisIncr).not.toHaveBeenCalled();
+    expect(mocks.redisIncrby).not.toHaveBeenCalled();
   });
 
   it('rejects a handcrafted Starter benchmark request before usage is consumed', async () => {

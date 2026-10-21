@@ -1446,9 +1446,9 @@ model GapAnalysisCorpusReadinessSnapshot {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  @@unique([jurisdictionCode, frameworkSlug, corpusVersion])
-  @@index([jurisdictionCode, frameworkSlug, status])
-  @@index([updatedAt])
+  @@unique([jurisdictionCode, frameworkSlug, corpusVersion], map: "GapCorpusReady_scope_version_key")
+  @@index([jurisdictionCode, frameworkSlug, status], map: "GapCorpusReady_scope_status_idx")
+  @@index([updatedAt], map: "GapCorpusReady_updatedAt_idx")
 }
 
 // Reviewed regulatory obligations for Gap Analysis. This registry intentionally
@@ -1467,14 +1467,14 @@ model RegulatoryRequirementInventory {
   updatedAt              DateTime                @updatedAt
   requirements           RegulatoryRequirement[]
 
-  @@unique([jurisdictionCode, frameworkSlug, version])
-  @@index([jurisdictionCode, frameworkSlug, completeness])
+  @@unique([jurisdictionCode, frameworkSlug, version], map: "RegReqInventory_scope_version_key")
+  @@index([jurisdictionCode, frameworkSlug, completeness], map: "RegReqInventory_scope_completeness_idx")
 }
 
 model RegulatoryRequirement {
   id                 String                         @id @default(cuid())
   inventoryId        String
-  stableKey          String                         @unique
+  stableKey          String                         @unique(map: "RegRequirement_stableKey_key")
   sourceDocumentId   String
   sourceVersionId    String?
   provisionReference String
@@ -1492,8 +1492,8 @@ model RegulatoryRequirement {
   updatedAt          DateTime                       @updatedAt
   inventory          RegulatoryRequirementInventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
 
-  @@index([inventoryId, approvalStatus])
-  @@index([sourceDocumentId, sourceVersionId])
+  @@index([inventoryId, approvalStatus], map: "RegRequirement_inventory_approval_idx")
+  @@index([sourceDocumentId, sourceVersionId], map: "RegRequirement_source_version_idx")
 }
 
 model ApprovedSource {

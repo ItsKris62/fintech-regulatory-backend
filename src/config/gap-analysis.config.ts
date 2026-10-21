@@ -166,36 +166,36 @@ export const GAP_ANALYSIS_PILOT_CONFIG: Readonly<{
 }> = {
   jurisdictions: {
     KE: {
-      pilotEnabled: true,
-      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
-      validatedFrameworks: ['dpa-2019'],
-      indexedPartialFrameworks: ['odpc-regs-2021', 'cbk-cyber', 'cbk-kyc', 'cbk-prudential', 'pocamla', 'nps-2011'],
+      pilotEnabled: false,
+      readiness: 'UNAVAILABLE',
+      validatedFrameworks: [],
+      indexedPartialFrameworks: ['dpa-2019', 'odpc-regs-2021', 'cbk-cyber', 'cbk-kyc', 'cbk-prudential', 'pocamla', 'nps-2011'],
       unavailableFrameworks: [],
-      message: 'Kenya corpus validated for pilot testing under Data Protection Act 2019.',
+      message: 'Kenya pilot UI access is not enabled by default. Execution requires reviewed corpus and requirement-inventory attestations.',
     },
     RW: {
-      pilotEnabled: true,
-      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
-      validatedFrameworks: ['rw-dpa-2021'],
-      indexedPartialFrameworks: ['bnr-cybersecurity-2021', 'bnr-psp-2018'],
+      pilotEnabled: false,
+      readiness: 'UNAVAILABLE',
+      validatedFrameworks: [],
+      indexedPartialFrameworks: ['rw-dpa-2021', 'bnr-cybersecurity-2021', 'bnr-psp-2018'],
       unavailableFrameworks: [],
-      message: 'Rwanda corpus validated for pilot testing under Law N° 058/2021 relating to Personal Data and Privacy.',
+      message: 'Rwanda pilot UI access is not enabled by default. Execution requires reviewed corpus and requirement-inventory attestations.',
     },
     MW: {
-      pilotEnabled: true,
-      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
-      validatedFrameworks: ['mw-cybersecurity-2016'],
-      indexedPartialFrameworks: ['mw-dpa-2024', 'rbm-payment-systems-2016'],
+      pilotEnabled: false,
+      readiness: 'UNAVAILABLE',
+      validatedFrameworks: [],
+      indexedPartialFrameworks: ['mw-cybersecurity-2016', 'mw-dpa-2024', 'rbm-payment-systems-2016'],
       unavailableFrameworks: [],
-      message: 'Malawi corpus validated for pilot testing under Electronic Transactions and Cyber Security Act 2016.',
+      message: 'Malawi pilot UI access is not enabled by default. Execution requires reviewed corpus and requirement-inventory attestations.',
     },
     NG: {
-      pilotEnabled: true,
-      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
-      validatedFrameworks: ['ndpa-2023'],
-      indexedPartialFrameworks: ['cbn-cybersecurity-2024', 'bofia-2020'],
+      pilotEnabled: false,
+      readiness: 'UNAVAILABLE',
+      validatedFrameworks: [],
+      indexedPartialFrameworks: ['ndpa-2023', 'cbn-cybersecurity-2024', 'bofia-2020'],
       unavailableFrameworks: [],
-      message: 'Nigeria corpus validated for pilot testing under Nigeria Data Protection Act 2023.',
+      message: 'Nigeria pilot UI access is not enabled by default. Execution requires reviewed corpus and requirement-inventory attestations.',
     },
   },
 };
@@ -231,23 +231,17 @@ export function getPilotJurisdictionAvailability(code: string): PilotJurisdictio
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean);
 
-  const isExplicitlyValidated = validatedList.includes(upper);
-  const isExplicitlyEnabled = enabledList.includes(upper) || isExplicitlyValidated;
-
-  if (isExplicitlyValidated) {
-    return {
-      jurisdiction: upper,
-      pilotEnabled: true,
-      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
-    };
-  }
+  // Legacy VALIDATED variables remain UI-access aliases during the
+  // coordinated rollout. Environment flags are never regulatory evidence.
+  const isLegacyValidated = validatedList.includes(upper);
+  const isExplicitlyEnabled = enabledList.includes(upper) || isLegacyValidated;
 
   if (isExplicitlyEnabled) {
     return {
       jurisdiction: upper,
       pilotEnabled: true,
       readiness: 'INDEXED_PARTIAL',
-      message: `Corpus validation in progress for ${upper}. Enabled for controlled pilot testing with partial coverage.`,
+      message: `Pilot UI access is enabled for ${upper}. New analyses still require matching reviewed corpus and requirement-inventory attestations.`,
     };
   }
 
@@ -305,16 +299,8 @@ export function getPilotFrameworkAvailability(
     .filter(Boolean);
 
   const lowerSlug = slug.toLowerCase().replace(/_/g, '-');
-  const isValidated = validatedSlugs.includes(lowerSlug) || validatedSlugs.includes('*');
-  const isEnabled = enabledSlugs.includes(lowerSlug) || enabledSlugs.includes('*') || isValidated;
-
-  if (isValidated) {
-    return {
-      slug,
-      pilotEnabled: true,
-      readiness: 'VALIDATED_FOR_GAP_ANALYSIS',
-    };
-  }
+  const isLegacyValidated = validatedSlugs.includes(lowerSlug) || validatedSlugs.includes('*');
+  const isEnabled = enabledSlugs.includes(lowerSlug) || enabledSlugs.includes('*') || isLegacyValidated;
 
   if (isEnabled) {
     return {

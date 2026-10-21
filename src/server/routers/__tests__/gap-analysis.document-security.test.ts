@@ -170,7 +170,24 @@ vi.mock('@/modules/compliance/gap-analysis-corpus-readiness', () => ({
       corpusVersion: 'security-test-corpus',
       sourceCount: 1,
       reviewedAt: new Date('2026-10-20T00:00:00.000Z'),
+      reviewedBy: 'reviewer-1',
+      manifestChecksum: 'security-manifest',
       reason: 'Reviewed test fixture.',
+    }))),
+}));
+
+vi.mock('@/modules/compliance/regulatory-requirement-inventory', () => ({
+  getGapAnalysisRequirementInventoryReadiness: vi.fn(async (jurisdictionCode: string, frameworkSlugs: string[]) =>
+    frameworkSlugs.map((frameworkSlug) => ({
+      jurisdictionCode,
+      frameworkSlug,
+      state: 'READY',
+      inventoryId: 'inventory-1',
+      inventoryVersion: '2026-10-21',
+      completeness: 'COMPLETE',
+      approvedRequirementCount: 1,
+      reviewedAt: new Date('2026-10-21T00:00:00.000Z'),
+      reason: 'Reviewed security fixture.',
     }))),
 }));
 
@@ -360,6 +377,8 @@ function createExcessiveEntriesZipBuffer(count = 505): Buffer {
 describe('BATCH 4: DOCUMENT SECURITY, PRIVACY, RETENTION, CONSENT & SAFE FILE PROCESSING', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('GAP_ANALYSIS_PILOT_ENABLED_JURISDICTIONS', 'KE');
+    vi.stubEnv('GAP_ANALYSIS_PILOT_ENABLED_FRAMEWORKS', '*');
     mocks.gapCreate.mockResolvedValue({
       id: 'analysis-sec-123',
       userId: 'user-sec-1',

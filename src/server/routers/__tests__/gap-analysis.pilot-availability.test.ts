@@ -61,14 +61,15 @@ describe('Gap Analysis Pilot Availability Contract', () => {
     const ke = getPilotJurisdictionAvailability('KE');
     expect(ke.pilotEnabled).toBe(true);
     expect(ke.readiness).toBe('INDEXED_PARTIAL');
-    expect(ke.message).toContain('partial coverage');
+    expect(ke.message).toContain('reviewed corpus and requirement-inventory attestations');
   });
 
-  it('4. formal release validation explicitly marks VALIDATED_FOR_GAP_ANALYSIS', () => {
+  it('4. legacy validated flags enable UI access but cannot assert regulatory readiness', () => {
     process.env.GAP_ANALYSIS_PILOT_VALIDATED_JURISDICTIONS = 'KE';
     const ke = getPilotJurisdictionAvailability('KE');
     expect(ke.pilotEnabled).toBe(true);
-    expect(ke.readiness).toBe('VALIDATED_FOR_GAP_ANALYSIS');
+    expect(ke.readiness).toBe('INDEXED_PARTIAL');
+    expect(ke.message).toContain('reviewed corpus and requirement-inventory attestations');
   });
 
   it('5. framework catalog presence does not imply pilot readiness', () => {
@@ -104,17 +105,17 @@ describe('Gap Analysis Pilot Availability Contract', () => {
     expect(contract.pilotAvailability.jurisdictions.RW).toBeDefined();
   });
 
-  it('9. all four pilot jurisdictions (KE, RW, MW, NG) are validated in release pilot configuration', () => {
+  it('9. release defaults do not grant UI access or claim regulatory validation', () => {
     delete process.env.GAP_ANALYSIS_PILOT_STRICT_GATE;
     for (const code of ['KE', 'RW', 'MW', 'NG']) {
       const avail = getPilotJurisdictionAvailability(code);
       expect(avail.jurisdiction).toBe(code);
-      expect(avail.pilotEnabled).toBe(true);
-      expect(avail.readiness).toBe('VALIDATED_FOR_GAP_ANALYSIS');
+      expect(avail.pilotEnabled).toBe(false);
+      expect(avail.readiness).toBe('UNAVAILABLE');
     }
   });
 
-  it('10. each pilot country exposes its validated framework pack', () => {
+  it('10. formerly configured framework packs remain unavailable without explicit UI access', () => {
     delete process.env.GAP_ANALYSIS_PILOT_STRICT_GATE;
     const validatedPacks = [
       { slug: 'dpa-2019', country: 'KE' },
@@ -126,8 +127,8 @@ describe('Gap Analysis Pilot Availability Contract', () => {
     for (const pack of validatedPacks) {
       const avail = getPilotFrameworkAvailability(pack.slug, pack.country);
       expect(avail.slug).toBe(pack.slug);
-      expect(avail.pilotEnabled).toBe(true);
-      expect(avail.readiness).toBe('VALIDATED_FOR_GAP_ANALYSIS');
+      expect(avail.pilotEnabled).toBe(false);
+      expect(avail.readiness).toBe('INDEXED_PARTIAL');
     }
   });
 

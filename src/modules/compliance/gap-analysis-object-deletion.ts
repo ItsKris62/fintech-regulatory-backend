@@ -1,4 +1,5 @@
 import os from "os";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma/client";
 import { storageService } from "@/lib/storage/storage.service";
 import { logger } from "@/utils/logger";
@@ -75,20 +76,31 @@ export async function enqueueGapAnalysisObjectDeletion(input: {
     throw new Error(
       "Refusing to enqueue an object outside the analysis-owned storage prefix.",
     );
-  await prisma.gapAnalysisObjectDeletion.upsert({
-    where: {
-      analysisId_objectKey: {
-        analysisId: input.analysisId,
-        objectKey: input.objectKey,
+  try {
+    await prisma.gapAnalysisObjectDeletion.upsert({
+      where: {
+        analysisId_objectKey: {
+          analysisId: input.analysisId,
+          objectKey: input.objectKey,
+        },
       },
-    },
-    create: {
-      ...input,
-      status: "PENDING",
-      runAfter: input.runAfter ?? new Date(),
-    },
-    update: {},
-  });
+      create: {
+        ...input,
+        status: "PENDING",
+        runAfter: input.runAfter ?? new Date(),
+      },
+      update: {},
+    });
+  } catch (error) {
+    // PostgreSQL can race two concurrent upserts after both observe no row.
+    // The composite unique constraint is the durable idempotency boundary, so
+    // only that expected duplicate is treated as a successful enqueue.
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) return;
+    throw error;
+  }
 }
 
 async function claimNextDeletion(): Promise<ClaimedDeletion | null> {

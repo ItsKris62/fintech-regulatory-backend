@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  evaluateRequirementInventoryReadiness,
   determineApplicability,
   isApprovedCurrentRequirement,
 } from "./regulatory-requirement-inventory";
@@ -32,6 +33,37 @@ describe("reviewed requirement inventory contract", () => {
       ),
     ).toBe(false);
     expect(isApprovedCurrentRequirement(current, "RW", "dpa-2019")).toBe(false);
+  });
+
+  it("requires a reviewed complete inventory bound to the active corpus manifest", () => {
+    const inventory = {
+      id: "inventory-1",
+      jurisdictionCode: "KE",
+      frameworkSlug: "dpa-2019",
+      version: "2026-10-21",
+      completeness: "COMPLETE",
+      reviewedAt: new Date("2026-10-21T00:00:00.000Z"),
+      reviewedBy: "reviewer-1",
+      sourceManifestChecksum: "manifest-1",
+      requirements: [{
+        stableKey: "ke-dpa-1",
+        approvalStatus: "APPROVED" as const,
+        sourceDocumentId: "document-1",
+        sourceVersionId: "version-1",
+        provisionReference: "Section 25",
+        reviewedAt: new Date("2026-10-21T00:00:00.000Z"),
+        reviewedBy: "reviewer-1",
+        supersededById: null,
+      }],
+    };
+
+    expect(evaluateRequirementInventoryReadiness("KE", "dpa-2019", "manifest-1", inventory).state).toBe("READY");
+    expect(evaluateRequirementInventoryReadiness("KE", "dpa-2019", "different-manifest", inventory).state).toBe("NOT_READY");
+    expect(evaluateRequirementInventoryReadiness("KE", "dpa-2019", "manifest-1", {
+      ...inventory,
+      completeness: "PARTIAL",
+    }).state).toBe("NOT_READY");
+    expect(evaluateRequirementInventoryReadiness("KE", "dpa-2019", "manifest-1").state).toBe("UNVERIFIED");
   });
   it("does not infer applicability or exclusion without organization evidence", () => {
     expect(determineApplicability({ hasRequiredOrganizationData: false })).toBe(

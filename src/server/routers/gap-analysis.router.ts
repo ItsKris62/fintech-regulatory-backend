@@ -49,6 +49,7 @@ import {
 import { getGapAnalysisProviderReadiness } from '@/modules/compliance/gap-analysis-provider-readiness';
 import { compensateGapAnalysisUsage } from '@/modules/compliance/gap-analysis-usage-accounting';
 import { getGapAnalysisFrameworkReadiness } from '@/modules/compliance/gap-analysis-corpus-readiness';
+import { getGapAnalysisRequirementInventoryReadiness } from '@/modules/compliance/regulatory-requirement-inventory';
 
 export const gapAnalysisRouter = router({
   getProviderAvailability: protectedProcedure.query(async () => {
@@ -97,6 +98,17 @@ export const gapAnalysisRouter = router({
         ? await getGapAnalysisFrameworkReadiness(input.jurisdiction, frameworks.map((fw) => fw.slug))
         : [];
       const readinessBySlug = new Map(dynamicReadiness.map((item) => [item.frameworkSlug, item]));
+      const inventoryReadiness = input?.jurisdiction
+        ? await getGapAnalysisRequirementInventoryReadiness(
+            input.jurisdiction,
+            frameworks.map((fw) => fw.slug),
+            new Map(dynamicReadiness.map((item) => [item.frameworkSlug, item.manifestChecksum])),
+            ctx.prisma as any,
+          )
+        : [];
+      const inventoryReadinessBySlug = new Map(
+        inventoryReadiness.map((item) => [item.frameworkSlug, item]),
+      );
 
       return frameworks.map((fw) => {
         const meta = getFrameworkMetadata(fw.slug);
@@ -107,6 +119,11 @@ export const gapAnalysisRouter = router({
           : true;
         const pilot = getPilotFrameworkAvailability(fw.slug, input?.jurisdiction);
         const corpusReadiness = readinessBySlug.get(fw.slug.toLowerCase());
+        const requirementReadiness = inventoryReadinessBySlug.get(fw.slug.toLowerCase());
+        const executionReady =
+          pilot.pilotEnabled &&
+          corpusReadiness?.state === 'READY' &&
+          requirementReadiness?.state === 'READY';
 
         return {
           slug: fw.slug,
@@ -120,9 +137,17 @@ export const gapAnalysisRouter = router({
           applicable,
           // Catalog/pilot configuration is not an evidence assertion. A
           // selected jurisdiction is ready only when its matching snapshot is.
-          pilotEnabled: corpusReadiness ? corpusReadiness.state === 'READY' : false,
-          readiness: corpusReadiness?.state ?? 'UNVERIFIED',
-          readinessReason: corpusReadiness?.reason ?? 'Select a jurisdiction to check corpus readiness.',
+          pilotEnabled: executionReady,
+          readiness: executionReady
+            ? 'READY'
+            : corpusReadiness?.state !== 'READY'
+              ? corpusReadiness?.state ?? 'UNVERIFIED'
+              : requirementReadiness?.state ?? 'UNVERIFIED',
+          readinessReason: executionReady
+            ? requirementReadiness.reason
+            : corpusReadiness?.state !== 'READY'
+              ? corpusReadiness?.reason ?? 'Select a jurisdiction to check corpus readiness.'
+              : requirementReadiness?.reason ?? 'No reviewed requirement inventory exists.',
           configuredForPilot: pilot.pilotEnabled,
         };
       });
@@ -438,6 +463,28 @@ export const gapAnalysisRouter = router({
           throw new TRPCError({
             code: 'PRECONDITION_FAILED',
             message: 'Regulatory corpus readiness is not verified for the selected framework. New Gap Analysis submissions are temporarily unavailable; existing analyses remain available.',
+          });
+        }
+
+        const requirementReadiness = await getGapAnalysisRequirementInventoryReadiness(
+          analysisJurisdiction,
+          orderedFrameworks.map((framework) => framework.slug),
+          new Map(corpusReadiness.map((item) => [item.frameworkSlug, item.manifestChecksum])),
+          ctx.prisma as any,
+        );
+        const unavailableInventories = requirementReadiness.filter((item) => item.state !== 'READY');
+        if (unavailableInventories.length > 0) {
+          logger.warn({
+            type: 'gap_analysis_requirement_inventory_gate_blocked',
+            userId,
+            orgId,
+            jurisdiction: analysisJurisdiction,
+            frameworks: unavailableInventories.map((item) => item.frameworkSlug),
+            states: unavailableInventories.map((item) => item.state),
+          });
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Regulatory requirement readiness is not verified for the selected framework. New Gap Analysis submissions are temporarily unavailable; existing analyses remain available.',
           });
         }
 

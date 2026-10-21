@@ -25,6 +25,8 @@ describe("Gap Analysis corpus readiness evaluation", () => {
         corpusVersion: "6:old",
         sourceCount: 2,
         reviewedAt: new Date(),
+        reviewedBy: "reviewer-1",
+        manifestChecksum: "manifest-1",
       }).state,
     ).toBe("STALE");
   });
@@ -36,6 +38,8 @@ describe("Gap Analysis corpus readiness evaluation", () => {
         corpusVersion: version,
         sourceCount: 0,
         reviewedAt: new Date(),
+        reviewedBy: "reviewer-1",
+        manifestChecksum: "manifest-1",
       }).state,
     ).toBe("NOT_READY");
     expect(
@@ -44,7 +48,32 @@ describe("Gap Analysis corpus readiness evaluation", () => {
         corpusVersion: version,
         sourceCount: 2,
         reviewedAt: new Date(),
+        reviewedBy: "reviewer-1",
+        manifestChecksum: "manifest-1",
       }).state,
     ).toBe("READY");
+  });
+
+  it("does not treat an anonymous or unbound snapshot as human-reviewed readiness", () => {
+    expect(
+      evaluateGapAnalysisCorpusReadiness("KE", "dpa-2019", version, {
+        status: "READY",
+        corpusVersion: version,
+        sourceCount: 2,
+        reviewedAt: new Date(),
+        reviewedBy: null,
+        manifestChecksum: "manifest-1",
+      }).state,
+    ).toBe("NOT_READY");
+    expect(
+      evaluateGapAnalysisCorpusReadiness("KE", "dpa-2019", version, {
+        status: "READY",
+        corpusVersion: version,
+        sourceCount: 2,
+        reviewedAt: new Date(),
+        reviewedBy: "reviewer-1",
+        manifestChecksum: null,
+      }).state,
+    ).toBe("NOT_READY");
   });
 });

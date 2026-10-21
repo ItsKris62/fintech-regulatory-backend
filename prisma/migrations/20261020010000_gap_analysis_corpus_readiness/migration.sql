@@ -17,9 +17,9 @@ CREATE TABLE "GapAnalysisCorpusReadinessSnapshot" (
     CONSTRAINT "GapAnalysisCorpusReadinessSnapshot_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "GapAnalysisCorpusReadinessSnapshot_jurisdictionCode_frameworkSlug_corpusVersion_key"
+CREATE UNIQUE INDEX "GapCorpusReady_scope_version_key"
 ON "GapAnalysisCorpusReadinessSnapshot"("jurisdictionCode", "frameworkSlug", "corpusVersion");
-CREATE INDEX "GapAnalysisCorpusReadinessSnapshot_jurisdictionCode_frameworkSlug_status_idx"
+CREATE INDEX "GapCorpusReady_scope_status_idx"
 ON "GapAnalysisCorpusReadinessSnapshot"("jurisdictionCode", "frameworkSlug", "status");
-CREATE INDEX "GapAnalysisCorpusReadinessSnapshot_updatedAt_idx"
+CREATE INDEX "GapCorpusReady_updatedAt_idx"
 ON "GapAnalysisCorpusReadinessSnapshot"("updatedAt");

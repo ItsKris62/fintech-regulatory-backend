@@ -111,6 +111,23 @@ vi.mock('@/modules/compliance/gap-analysis-corpus-readiness', () => ({
       corpusVersion: 'jurisdiction-test-corpus',
       sourceCount: 1,
       reviewedAt: new Date('2026-10-20T00:00:00.000Z'),
+      reviewedBy: 'reviewer-1',
+      manifestChecksum: 'jurisdiction-manifest',
+      reason: 'Reviewed jurisdiction fixture.',
+    }))),
+}));
+
+vi.mock('@/modules/compliance/regulatory-requirement-inventory', () => ({
+  getGapAnalysisRequirementInventoryReadiness: vi.fn(async (jurisdictionCode: string, frameworkSlugs: string[]) =>
+    frameworkSlugs.map((frameworkSlug) => ({
+      jurisdictionCode,
+      frameworkSlug,
+      state: 'READY',
+      inventoryId: 'inventory-1',
+      inventoryVersion: '2026-10-21',
+      completeness: 'COMPLETE',
+      approvedRequirementCount: 1,
+      reviewedAt: new Date('2026-10-21T00:00:00.000Z'),
       reason: 'Reviewed jurisdiction fixture.',
     }))),
 }));
@@ -162,6 +179,7 @@ function createCaller(userId = 'usr_batch2_test', orgId = 'org_batch2_test') {
 describe('Batch 2: Jurisdiction Architecture & Framework Scope', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('GAP_ANALYSIS_PILOT_ENABLED_JURISDICTIONS', 'KE,RW,MW,NG');
     vi.stubEnv('GAP_ANALYSIS_PILOT_VALIDATED_FRAMEWORKS', '*');
     mocks.plan = 'STARTER';
     mocks.source = 'SUBSCRIPTION';
